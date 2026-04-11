@@ -9,18 +9,27 @@ struct AuthSession: Codable {
     var user: AuthUser
 }
 
+// MARK: - Login Phase
+
+enum LoginPhase: Equatable {
+    case idle
+    case showingPIN(code: String, url: String, urlComplete: String)
+    case exchangingTokens
+    case failed(String)
+}
+
 // MARK: - AuthManager
 
 @Observable
 @MainActor
 final class AuthManager {
     private(set) var session: AuthSession?
-    private(set) var isLoading = false
-    private(set) var loginError: String?
+    private(set) var loginPhase: LoginPhase = .idle
 
     var isAuthenticated: Bool { session != nil }
 
     private let api = NVIDIAAuthAPI()
+    private var loginTask: Task<Void, Never>?
 
     // MARK: Lifecycle
 
@@ -32,48 +41,75 @@ final class AuthManager {
         await refreshIfNeeded()
     }
 
-    // MARK: Login
+    // MARK: Login (Device Flow)
 
-    func login(with provider: LoginProvider? = nil) async {
-        isLoading = true
-        loginError = nil
-        do {
-            let providers: [LoginProvider]
-            if let provider {
-                providers = [provider]
-            } else {
-                providers = (try? await api.fetchProviders()) ?? []
+    func login(with provider: LoginProvider? = nil) {
+        loginTask?.cancel()
+        loginTask = Task {
+            loginPhase = .idle
+            do {
+                let providers: [LoginProvider]
+                if let provider {
+                    providers = [provider]
+                } else {
+                    providers = (try? await api.fetchProviders()) ?? []
+                }
+                let selectedProvider = providers.first ?? LoginProvider(
+                    idpId: NVIDIAAuth.defaultIdpId,
+                    code: "NVIDIA",
+                    displayName: "NVIDIA",
+                    streamingServiceUrl: NVIDIAAuth.defaultStreamingUrl,
+                    priority: 0
+                )
+
+                // Request device authorization (get PIN)
+                let deviceAuth = try await api.requestDeviceAuthorization(idpId: selectedProvider.idpId)
+                loginPhase = .showingPIN(
+                    code: deviceAuth.userCode,
+                    url: deviceAuth.verificationUri
+                        .replacingOccurrences(of: "https://", with: ""),
+                    urlComplete: deviceAuth.verificationUriComplete
+                )
+
+                // Poll for user to complete login
+                var tokens = try await api.pollForDeviceToken(
+                    deviceCode: deviceAuth.deviceCode,
+                    interval: deviceAuth.interval,
+                    expiresIn: deviceAuth.expiresIn
+                )
+                loginPhase = .exchangingTokens
+
+                let user = try await api.fetchUserInfo(tokens: tokens)
+
+                // Bootstrap client token
+                if let ct = try? await api.fetchClientToken(accessToken: tokens.accessToken) {
+                    tokens.clientToken = ct.token
+                    tokens.clientTokenExpiresAt = ct.expiresAt
+                }
+
+                let newSession = AuthSession(provider: selectedProvider, tokens: tokens, user: user)
+                session = newSession
+                try persist(newSession)
+                loginPhase = .idle
+            } catch is CancellationError {
+                loginPhase = .idle
+            } catch {
+                loginPhase = .failed(error.localizedDescription)
             }
-            let selectedProvider = providers.first ?? LoginProvider(
-                idpId: NVIDIAAuth.defaultIdpId,
-                code: "NVIDIA",
-                displayName: "NVIDIA",
-                streamingServiceUrl: NVIDIAAuth.defaultStreamingUrl,
-                priority: 0
-            )
-            let pkce = PKCE.generate()
-            var tokens = try await api.login(provider: selectedProvider, pkce: pkce)
-            let user = try await api.fetchUserInfo(tokens: tokens)
-
-            // Bootstrap client token
-            if let ct = try? await api.fetchClientToken(accessToken: tokens.accessToken) {
-                tokens.clientToken = ct.token
-                tokens.clientTokenExpiresAt = ct.expiresAt
-            }
-
-            let newSession = AuthSession(provider: selectedProvider, tokens: tokens, user: user)
-            session = newSession
-            try persist(newSession)
-        } catch {
-            loginError = error.localizedDescription
         }
-        isLoading = false
+    }
+
+    func cancelLogin() {
+        loginTask?.cancel()
+        loginTask = nil
+        loginPhase = .idle
     }
 
     // MARK: Logout
 
     func logout() {
         session = nil
+        loginPhase = .idle
         KeychainService.delete()
     }
 

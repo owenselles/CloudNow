@@ -1,4 +1,3 @@
-import AuthenticationServices
 import CryptoKit
 import Foundation
 import Security
@@ -8,11 +7,13 @@ import Security
 enum NVIDIAAuth {
     static let authEndpoint    = "https://login.nvidia.com/authorize"
     static let tokenEndpoint   = "https://login.nvidia.com/token"
+    static let deviceAuthorizeEndpoint = "https://login.nvidia.com/device/authorize"
     static let clientTokenEndpoint = "https://login.nvidia.com/client_token"
     static let userinfoEndpoint = "https://login.nvidia.com/userinfo"
     static let serviceUrlsEndpoint = "https://pcs.geforcenow.com/v1/serviceUrls"
 
     static let clientID = "ZU7sPN-miLujMD95LfOQ453IB0AtjM8sMyvgJ9wCXEQ"
+    static let deviceFlowClientID = "zp4TWyCwtbLiUfcG0_ecveyZEK1OlNiee-8qthakGn8"
     static let scopes   = "openid consent email tk_client age"
     static let defaultIdpId = "PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg"
     static let defaultStreamingUrl = "https://prod.cloudmatchbeta.nvidiagrid.net/"
@@ -127,6 +128,15 @@ struct AuthUser: Codable {
     var membershipTier: String
 }
 
+struct DeviceFlowResponse: Codable {
+    let userCode: String
+    let deviceCode: String
+    let verificationUri: String
+    let verificationUriComplete: String
+    let expiresIn: Int
+    let interval: Int
+}
+
 struct LoginProvider: Codable {
     let idpId: String
     let code: String
@@ -161,52 +171,6 @@ actor NVIDIAAuthAPI {
                 priority: entry.loginProviderPriority ?? 0
             )
         }.sorted { $0.priority < $1.priority }
-    }
-
-    // MARK: OAuth PKCE Login (tvOS via ASWebAuthenticationSession → Handoff to iPhone)
-
-    @MainActor
-    func login(provider: LoginProvider, pkce: PKCE) async throws -> AuthTokens {
-        let nonce = randomHex(16)
-        let callbackURL = "http://localhost:2259"
-        var comps = URLComponents(string: NVIDIAAuth.authEndpoint)!
-        comps.queryItems = [
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: NVIDIAAuth.scopes),
-            URLQueryItem(name: "client_id", value: NVIDIAAuth.clientID),
-            URLQueryItem(name: "redirect_uri", value: callbackURL),
-            URLQueryItem(name: "ui_locales", value: "en_US"),
-            URLQueryItem(name: "nonce", value: nonce),
-            URLQueryItem(name: "prompt", value: "select_account"),
-            URLQueryItem(name: "code_challenge", value: pkce.challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "idp_id", value: provider.idpId),
-        ]
-        let authURL = comps.url!
-
-        // ASWebAuthenticationSession on tvOS 16+ presents via Handoff to a paired iPhone
-        let code: String = try await withCheckedThrowingContinuation { continuation in
-            let webAuthSession = ASWebAuthenticationSession(
-                url: authURL,
-                callbackURLScheme: NVIDIAAuth.callbackScheme
-            ) { callbackURL, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                guard let callbackURL,
-                      let comps = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
-                      let code = comps.queryItems?.first(where: { $0.name == "code" })?.value
-                else {
-                    continuation.resume(throwing: AuthError.noAuthCode)
-                    return
-                }
-                continuation.resume(returning: code)
-            }
-            webAuthSession.start()
-        }
-
-        return try await exchangeCode(code, verifier: pkce.verifier, redirectURI: callbackURL)
     }
 
     // MARK: Token Exchange
@@ -256,6 +220,69 @@ actor NVIDIAAuthAPI {
         let payload = try JSONDecoder().decode(ClientTokenResponse.self, from: data)
         let expiresAt = Date().addingTimeInterval(TimeInterval(payload.expires_in ?? 86400))
         return (payload.client_token, expiresAt)
+    }
+
+    // MARK: Device Flow (PIN-based login)
+
+    func requestDeviceAuthorization(idpId: String? = nil) async throws -> DeviceFlowResponse {
+        var request = URLRequest(url: URL(string: NVIDIAAuth.deviceAuthorizeEndpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        var params = "client_id=\(NVIDIAAuth.deviceFlowClientID)&scope=\(NVIDIAAuth.scopes.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? NVIDIAAuth.scopes)&device_id=\(UUID().uuidString)&display_name=Apple%20TV"
+        if let idpId {
+            params += "&idp_id=\(idpId)"
+        }
+        request.httpBody = params.data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw AuthError.deviceFlowFailed(String(data: data, encoding: .utf8) ?? "")
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(DeviceFlowResponse.self, from: data)
+    }
+
+    func pollForDeviceToken(deviceCode: String, interval: Int, expiresIn: Int) async throws -> AuthTokens {
+        let deadline = Date().addingTimeInterval(TimeInterval(expiresIn))
+        var pollInterval = TimeInterval(interval)
+
+        while Date() < deadline {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+            try Task.checkCancellation()
+
+            var request = URLRequest(url: URL(string: NVIDIAAuth.tokenEndpoint)!)
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&device_code=\(deviceCode)&client_id=\(NVIDIAAuth.deviceFlowClientID)"
+            request.httpBody = body.data(using: .utf8)
+            let (data, response) = try await session.data(for: request)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+
+            if statusCode == 200 {
+                return try parseTokenResponse(data)
+            }
+
+            // Parse error response
+            if let errorResp = try? JSONDecoder().decode(DeviceFlowErrorResponse.self, from: data) {
+                switch errorResp.error {
+                case "authorization_pending":
+                    continue
+                case "slow_down":
+                    pollInterval += 5
+                    continue
+                case "expired_token":
+                    throw AuthError.deviceFlowExpired
+                case "access_denied":
+                    throw AuthError.deviceFlowDenied
+                default:
+                    throw AuthError.deviceFlowFailed(errorResp.errorDescription ?? errorResp.error)
+                }
+            }
+        }
+        throw AuthError.deviceFlowExpired
     }
 
     // MARK: User Info
@@ -354,6 +381,15 @@ private struct UserinfoResponse: Decodable {
     let email: String?
 }
 
+private struct DeviceFlowErrorResponse: Decodable {
+    let error: String
+    let errorDescription: String?
+    enum CodingKeys: String, CodingKey {
+        case error
+        case errorDescription = "error_description"
+    }
+}
+
 private struct JWTPayload: Decodable {
     let sub: String?
     let email: String?
@@ -370,6 +406,9 @@ enum AuthError: Error, LocalizedError {
     case tokenRefreshFailed(String)
     case clientTokenFailed
     case noSession
+    case deviceFlowFailed(String)
+    case deviceFlowExpired
+    case deviceFlowDenied
 
     var errorDescription: String? {
         switch self {
@@ -378,6 +417,9 @@ enum AuthError: Error, LocalizedError {
         case .tokenRefreshFailed(let msg): return "Token refresh failed: \(msg)"
         case .clientTokenFailed: return "Failed to obtain client token."
         case .noSession: return "No authenticated session."
+        case .deviceFlowFailed(let msg): return "Device login failed: \(msg)"
+        case .deviceFlowExpired: return "Login code expired. Please try again."
+        case .deviceFlowDenied: return "Login was denied."
         }
     }
 }
