@@ -12,9 +12,20 @@ struct HomeView: View {
             Color.black.ignoresSafeArea()
 
             if viewModel.isLoading {
-                ProgressView()
-                    .scaleEffect(2)
-                    .tint(.white)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Color.gray.opacity(0.2)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 420)
+                            .shimmer()
+                        VStack(alignment: .leading, spacing: 48) {
+                            skeletonRow
+                            skeletonRow
+                        }
+                        .padding(.top, 48)
+                        .padding(.bottom, 60)
+                    }
+                }
             } else if viewModel.continuePlaying.isEmpty && viewModel.favoriteGames.isEmpty {
                 emptyState
             } else {
@@ -120,6 +131,27 @@ struct HomeView: View {
                 }
                 .padding(.horizontal, 60)
             }
+        }
+    }
+
+    // MARK: Skeleton Row
+
+    private var skeletonRow: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.gray.opacity(0.25))
+                .frame(width: 180, height: 24)
+                .shimmer()
+                .padding(.horizontal, 60)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 24) {
+                    ForEach(0..<6, id: \.self) { _ in
+                        GameCardSkeleton().frame(width: 200)
+                    }
+                }
+                .padding(.horizontal, 60)
+            }
+            .allowsHitTesting(false)
         }
     }
 

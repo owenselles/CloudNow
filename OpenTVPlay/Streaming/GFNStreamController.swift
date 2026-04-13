@@ -40,6 +40,9 @@ final class GFNStreamController: NSObject {
     private(set) var state: StreamState = .idle
     private(set) var stats = StreamStats()
     private(set) var videoTrack: LKRTCVideoTrack?
+    private(set) var pingHistory: [Double] = []
+    private(set) var fpsHistory: [Double] = []
+    private(set) var bitrateHistory: [Double] = []
 
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
@@ -93,6 +96,9 @@ final class GFNStreamController: NSObject {
         videoTrack = nil
         micAudioTrack = nil
         micAudioSource = nil
+        pingHistory = []
+        fpsHistory = []
+        bitrateHistory = []
         state = .idle
     }
 
@@ -170,6 +176,11 @@ final class GFNStreamController: NSObject {
            let numMatch = sdp[match].range(of: #"\d+"#, options: .regularExpression),
            let ms = Int(sdp[numMatch]) {
             partialReliableThresholdMs = ms
+        }
+
+        // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers)
+        if settings.codec == .av1 {
+            protocolVersion = 3
         }
 
         // Munge the remote offer: filter to preferred codec before setting remote description
@@ -329,6 +340,14 @@ final class GFNStreamController: NSObject {
                 stats.rttMs = (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000
             }
         }
+        appendHistory(&pingHistory, value: stats.rttMs)
+        appendHistory(&fpsHistory, value: stats.fps)
+        appendHistory(&bitrateHistory, value: Double(stats.bitrateKbps) / 1000.0)
+    }
+
+    private func appendHistory(_ history: inout [Double], value: Double) {
+        if history.count >= 30 { history.removeFirst() }
+        history.append(value)
     }
 }
 

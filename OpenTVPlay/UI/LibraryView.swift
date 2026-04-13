@@ -17,7 +17,15 @@ struct LibraryView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if games.isEmpty && viewModel.isLoading {
-                ProgressView().scaleEffect(2).tint(.white)
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 40) {
+                        ForEach(0..<12, id: \.self) { _ in
+                            GameCardSkeleton()
+                        }
+                    }
+                    .padding(60)
+                }
+                .allowsHitTesting(false)
             } else if games.isEmpty {
                 emptyState
             } else {

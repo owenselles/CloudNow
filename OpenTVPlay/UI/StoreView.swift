@@ -11,10 +11,23 @@ struct StoreView: View {
     @State private var notOwnedGame: GameInfo?
     @State private var showNotOwned = false
     @State private var searchText = ""
+    @State private var selectedStore: String? = nil
+
+    private var availableStores: [String] {
+        let stores = Set(games.flatMap { $0.variants.map { $0.appStore } }
+            .filter { $0 != "unknown" })
+        return stores.sorted()
+    }
 
     private var filteredGames: [GameInfo] {
-        guard !searchText.isEmpty else { return games }
-        return games.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        var result = games
+        if !searchText.isEmpty {
+            result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        }
+        if let store = selectedStore {
+            result = result.filter { $0.variants.contains { $0.appStore == store } }
+        }
+        return result
     }
 
     private let columns = [
@@ -25,7 +38,15 @@ struct StoreView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if games.isEmpty && viewModel.isLoading {
-                ProgressView().scaleEffect(2).tint(.white)
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 40) {
+                        ForEach(0..<12, id: \.self) { _ in
+                            GameCardSkeleton()
+                        }
+                    }
+                    .padding(60)
+                }
+                .allowsHitTesting(false)
             } else if filteredGames.isEmpty {
                 emptyState
             } else {
@@ -48,23 +69,62 @@ struct StoreView: View {
 
     private var gameGrid: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 40) {
-                ForEach(filteredGames) { game in
-                    Button {
-                        if game.isInLibrary {
-                            selectedGame = game
-                            showStream = true
-                        } else {
-                            notOwnedGame = game
-                            showNotOwned = true
+            VStack(alignment: .leading, spacing: 0) {
+                if availableStores.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            filterChip("All", isSelected: selectedStore == nil) { selectedStore = nil }
+                            ForEach(availableStores, id: \.self) { store in
+                                filterChip(storeName(store), isSelected: selectedStore == store) {
+                                    selectedStore = selectedStore == store ? nil : store
+                                }
+                            }
                         }
-                    } label: {
-                        StoreCardLabel(game: game)
+                        .padding(.horizontal, 60)
                     }
-                    .buttonStyle(.card)
+                    .padding(.vertical, 32)
                 }
+                LazyVGrid(columns: columns, spacing: 40) {
+                    ForEach(filteredGames) { game in
+                        Button {
+                            if game.isInLibrary {
+                                selectedGame = game
+                                showStream = true
+                            } else {
+                                notOwnedGame = game
+                                showNotOwned = true
+                            }
+                        } label: {
+                            StoreCardLabel(game: game)
+                        }
+                        .buttonStyle(.card)
+                    }
+                }
+                .padding(60)
+                .padding(.top, 0)
             }
-            .padding(60)
+        }
+    }
+
+    private func filterChip(_ label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.bordered)
+        .tint(isSelected ? .blue : nil)
+    }
+
+    private func storeName(_ store: String) -> String {
+        switch store {
+        case "STEAM": return "Steam"
+        case "EPIC_GAMES_STORE": return "Epic"
+        case "GOG": return "GOG"
+        case "EA_APP": return "EA"
+        case "UBISOFT": return "Ubisoft"
+        case "MICROSOFT": return "Xbox"
+        case "BATTLENET": return "Battle.net"
+        default: return store.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 

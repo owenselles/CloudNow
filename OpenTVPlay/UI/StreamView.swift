@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 private enum LoadingPhase: Equatable {
@@ -133,10 +134,30 @@ struct StreamView: View {
     // MARK: Stats Overlay
 
     private var statsOverlay: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            metricRow(
+                icon: "network",
+                label: "RTT",
+                value: "\(Int(streamController.stats.rttMs)) ms",
+                history: streamController.pingHistory,
+                color: pingColor(streamController.stats.rttMs)
+            )
+            metricRow(
+                icon: "speedometer",
+                label: "FPS",
+                value: "\(Int(streamController.stats.fps))",
+                history: streamController.fpsHistory,
+                color: fpsColor(streamController.stats.fps)
+            )
+            metricRow(
+                icon: "wifi",
+                label: "Bitrate",
+                value: "\(streamController.stats.bitrateKbps / 1000) Mbps",
+                history: streamController.bitrateHistory,
+                color: .cyan
+            )
+            Divider().overlay(.white.opacity(0.4))
             Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
-            Label("\(streamController.stats.bitrateKbps / 1000) Mbps", systemImage: "wifi")
-            Label("RTT \(Int(streamController.stats.rttMs)) ms", systemImage: "network")
             Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
             if !streamController.stats.gpuType.isEmpty {
                 Label(streamController.stats.gpuType, systemImage: "cpu")
@@ -148,6 +169,41 @@ struct StreamView: View {
         .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(40)
+    }
+
+    private func metricRow(icon: String, label: String, value: String, history: [Double], color: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+                .frame(width: 16)
+            Text("\(label): \(value)")
+                .foregroundStyle(color)
+                .frame(width: 130, alignment: .leading)
+            if history.count > 1 {
+                Chart {
+                    ForEach(Array(history.enumerated()), id: \.offset) { (idx, val) in
+                        LineMark(x: .value("t", idx), y: .value("v", val))
+                            .foregroundStyle(color)
+                    }
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .frame(width: 80, height: 24)
+            }
+        }
+    }
+
+    private func pingColor(_ ms: Double) -> Color {
+        if ms < 30  { return .green }
+        if ms < 80  { return .yellow }
+        if ms < 150 { return .orange }
+        return .red
+    }
+
+    private func fpsColor(_ fps: Double) -> Color {
+        if fps >= 55 { return .green }
+        if fps >= 30 { return .yellow }
+        return .red
     }
 
     // MARK: Disconnected / Failed
