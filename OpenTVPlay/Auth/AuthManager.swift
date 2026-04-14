@@ -89,7 +89,9 @@ final class AuthManager {
                     tokens.clientToken = ct.token
                     tokens.clientTokenExpiresAt = ct.expiresAt
                     if let rebound = try? await api.refreshWithClientToken(ct.token, userId: user.userId) {
+                        let savedRefreshToken = tokens.refreshToken   // preserve device-flow refreshToken
                         tokens = rebound
+                        if tokens.refreshToken == nil { tokens.refreshToken = savedRefreshToken }
                         // Re-fetch clientToken for the re-bound session
                         if let ct2 = try? await api.fetchClientToken(accessToken: tokens.accessToken) {
                             tokens.clientToken = ct2.token
@@ -147,18 +149,40 @@ final class AuthManager {
 
     private func refresh(session s: AuthSession) async throws -> AuthSession {
         var updated = s
-        // Primary: client_token grant (re-binds to clientID, works cross-client)
-        if let clientToken = s.tokens.clientToken,
+        // Primary: client_token grant (re-binds to clientID, works cross-client).
+        // Skip if the stored clientToken is already past its expiry — treat it the same as absent.
+        let clientTokenUsable = s.tokens.clientToken != nil &&
+            (s.tokens.clientTokenExpiresAt.map { $0 > Date() } ?? true)
+        if !clientTokenUsable {
+            print("[Auth] clientToken absent or expired (expiresAt: \(s.tokens.clientTokenExpiresAt?.description ?? "nil")), skipping primary path")
+        }
+        if clientTokenUsable,
+           let clientToken = s.tokens.clientToken,
            let refreshed = try? await api.refreshWithClientToken(clientToken, userId: s.user.userId) {
+            print("[Auth] refresh via client_token grant succeeded")
+            let savedRefreshToken = updated.tokens.refreshToken
             updated.tokens = refreshed
+            if updated.tokens.refreshToken == nil {
+                print("[Auth] client_token grant did not return a refreshToken — preserving previous one")
+                updated.tokens.refreshToken = savedRefreshToken
+            }
         } else if let refreshToken = s.tokens.refreshToken {
-            // Fallback: standard refresh_token grant
+            print("[Auth] client_token path unavailable or failed, falling back to refresh_token grant")
             updated.tokens = try await api.refreshTokens(refreshToken)
+            print("[Auth] refresh via refresh_token grant succeeded")
+        } else {
+            // Neither path available — surface a real error so the UI can prompt re-login
+            // instead of silently returning the expired token to callers.
+            print("[Auth] refresh failed: no usable clientToken or refreshToken available")
+            throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
         }
         // Re-bootstrap client token
         if let ct = try? await api.fetchClientToken(accessToken: updated.tokens.accessToken) {
+            print("[Auth] client_token re-bootstrapped, expires: \(ct.expiresAt)")
             updated.tokens.clientToken = ct.token
             updated.tokens.clientTokenExpiresAt = ct.expiresAt
+        } else {
+            print("[Auth] warning: failed to re-bootstrap client_token after refresh")
         }
         session = updated
         try persist(updated)
