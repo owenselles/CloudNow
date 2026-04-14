@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 // MARK: - Signaling Events
 
@@ -12,16 +13,25 @@ enum SignalingEvent {
 }
 
 // MARK: - GFN Signaling Client
+//
+// Uses NWConnection + NWProtocolWebSocket (system WebSocket) so Apple handles the HTTP/1.1
+// upgrade handshake and RFC 6455 framing automatically.
+//
+// Key points:
+//  • NWEndpoint.url(_:) with ws:// (not wss://) passes path+query to the upgrade GET request
+//    without triggering NWConnection's own TLS layer (we add TLS manually via NWParameters).
+//  • No ALPN is set in TLS options — GFN's WebSocket server doesn't register any ALPN token.
+//  • .legacy cipher suite group + min TLS 1.0 allows older/RSA-based cipher negotiation.
+//  • Certificate validation is bypassed (mirrors OpenNOW rejectUnauthorized:false).
+//  • Old heartbeat/receive tasks are cancelled at connect() entry to prevent zombie writes.
 
-/// WebSocket-based signaling for GeForce NOW WebRTC sessions.
-/// Protocol: wss://{server}/nvst/sign_in?peer_id={name}&version=2
-/// WebSocket protocol header: x-nv-sessionid.{sessionId}
-final class GFNSignalingClient: NSObject {
+final class GFNSignalingClient {
     private let signalingUrl: String
     private let sessionId: String
 
-    private var webSocketTask: URLSessionWebSocketTask?
+    private var connection: NWConnection?
     private var heartbeatTask: Task<Void, Never>?
+    private var receiveTask: Task<Void, Never>?
     private var ackCounter = 0
     private let peerId = 2
     private let peerName: String
@@ -37,32 +47,99 @@ final class GFNSignalingClient: NSObject {
     // MARK: Connect
 
     func connect() async throws {
-        guard let baseUrl = URL(string: signalingUrl) else {
+        // Cancel any zombie tasks / previous connection before starting fresh.
+        heartbeatTask?.cancel()
+        receiveTask?.cancel()
+        connection?.cancel()
+        connection = nil
+
+        guard let url = URL(string: signalingUrl), let host = url.host else {
             throw SignalingError.invalidUrl(signalingUrl)
         }
-        var comps = URLComponents(url: baseUrl, resolvingAgainstBaseURL: false)!
+
+        // Build the full WebSocket URL including path and peer_id / version query params.
+        // NWEndpoint.url(_:) passes this path to NWProtocolWebSocket's HTTP upgrade GET request.
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         comps.path = (comps.path.hasSuffix("/") ? comps.path : comps.path + "/") + "sign_in"
         comps.queryItems = [
             URLQueryItem(name: "peer_id", value: peerName),
             URLQueryItem(name: "version", value: "2"),
         ]
-        let url = comps.url!
+        guard let requestUrl = comps.url else { throw SignalingError.invalidUrl(signalingUrl) }
 
-        var request = URLRequest(url: url)
-        // GFN signaling server requires the session ID in the Sec-WebSocket-Protocol header
-        request.setValue("x-nv-sessionid.\(sessionId)", forHTTPHeaderField: "Sec-WebSocket-Protocol")
-        request.setValue("https://play.geforcenow.com", forHTTPHeaderField: "Origin")
-        request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
+        let port = url.port ?? 443
+        let useTLS = url.scheme == "wss" || url.scheme == "https"
 
-        let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
-        let task = session.webSocketTask(with: request)
-        webSocketTask = task
-        task.resume()
+        // TLS options — no ALPN, legacy cipher suites, cert bypass.
+        let tlsOpts = NWProtocolTLS.Options()
+        sec_protocol_options_append_tls_ciphersuite_group(tlsOpts.securityProtocolOptions, .legacy)
+        sec_protocol_options_set_min_tls_protocol_version(tlsOpts.securityProtocolOptions, .TLSv10)
+        sec_protocol_options_set_verify_block(tlsOpts.securityProtocolOptions,
+                                              { _, _, complete in complete(true) },
+                                              .global(qos: .userInitiated))
 
-        // Send peer_info immediately after connecting
+        // WebSocket options — system handles HTTP upgrade, framing, and ping/pong.
+        let wsOpts = NWProtocolWebSocket.Options()
+        wsOpts.autoReplyPing = true
+        wsOpts.setAdditionalHeaders([
+            ("Sec-WebSocket-Protocol", "x-nv-sessionid.\(sessionId)"),
+            ("Origin", "https://play.geforcenow.com"),
+            ("User-Agent", NVIDIAAuth.userAgent),
+        ])
+
+        // Stack: WebSocket → TLS → TCP
+        let params: NWParameters
+        if useTLS {
+            params = NWParameters(tls: tlsOpts, tcp: NWProtocolTCP.Options())
+        } else {
+            params = NWParameters.tcp
+        }
+        params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
+
+        // Use NWEndpoint.url so the path+query go into the WebSocket upgrade request.
+        // Fall back to host:port endpoint if the URL can't be used (non-wss scheme etc.)
+        let endpoint: NWEndpoint
+        if let wsUrl = makeWebSocketURL(from: requestUrl) {
+            endpoint = NWEndpoint.url(wsUrl)
+        } else {
+            endpoint = NWEndpoint.hostPort(
+                host: NWEndpoint.Host(host),
+                port: NWEndpoint.Port(rawValue: UInt16(port))!
+            )
+        }
+
+        let conn = NWConnection(to: endpoint, using: params)
+        connection = conn
+
+        print("[Signaling] Connecting → \(requestUrl.absoluteString)")
+
+        // .ready fires only after TLS handshake AND WebSocket HTTP upgrade both complete.
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            conn.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    conn.stateUpdateHandler = nil
+                    print("[Signaling] Connected (WebSocket ready)")
+                    cont.resume()
+                case .failed(let err):
+                    conn.stateUpdateHandler = nil
+                    print("[Signaling] Connection failed: \(err)")
+                    cont.resume(throwing: err)
+                case .cancelled:
+                    conn.stateUpdateHandler = nil
+                    cont.resume(throwing: SignalingError.cancelled)
+                case .waiting(let err):
+                    print("[Signaling] Waiting: \(err)")
+                default:
+                    break
+                }
+            }
+            conn.start(queue: .global(qos: .userInitiated))
+        }
+
+        startReceiving()
         sendPeerInfo()
         startHeartbeat()
-        startReceiving()
         onEvent?(.connected)
     }
 
@@ -71,11 +148,10 @@ final class GFNSignalingClient: NSObject {
     func sendAnswer(sdp: String, nvstSdp: String? = nil) {
         var payload: [String: Any] = ["type": "answer", "sdp": sdp]
         if let nvstSdp { payload["nvstSdp"] = nvstSdp }
-        let msg: [String: Any] = [
+        sendJson([
             "peer_msg": ["from": peerId, "to": 1, "msg": jsonString(payload)],
             "ackid": nextAckId(),
-        ]
-        sendJson(msg)
+        ])
     }
 
     // MARK: Send ICE Candidate
@@ -84,37 +160,39 @@ final class GFNSignalingClient: NSObject {
         var payload: [String: Any] = ["candidate": candidate]
         if let sdpMid { payload["sdpMid"] = sdpMid }
         if let sdpMLineIndex { payload["sdpMLineIndex"] = sdpMLineIndex }
-        let msg: [String: Any] = [
+        sendJson([
             "peer_msg": ["from": peerId, "to": 1, "msg": jsonString(payload)],
             "ackid": nextAckId(),
-        ]
-        sendJson(msg)
+        ])
     }
 
     // MARK: Request Keyframe
 
     func requestKeyframe(reason: String = "decoder_recovery", backlogFrames: Int = 0, attempt: Int = 1) {
-        let payload: [String: Any] = [
-            "type": "request_keyframe",
-            "reason": reason,
-            "backlogFrames": backlogFrames,
-            "attempt": attempt,
-        ]
-        sendJson(["peer_msg": ["from": peerId, "to": 1, "msg": jsonString(payload)], "ackid": nextAckId()])
+        sendJson([
+            "peer_msg": ["from": peerId, "to": 1, "msg": jsonString([
+                "type": "request_keyframe",
+                "reason": reason,
+                "backlogFrames": backlogFrames,
+                "attempt": attempt,
+            ])],
+            "ackid": nextAckId(),
+        ])
     }
 
     // MARK: Disconnect
 
     func disconnect() {
         heartbeatTask?.cancel()
-        webSocketTask?.cancel(with: .normalClosure, reason: nil)
-        webSocketTask = nil
+        receiveTask?.cancel()
+        connection?.cancel()
+        connection = nil
     }
 
-    // MARK: Private
+    // MARK: Private — Peer Info / Heartbeat
 
     private func sendPeerInfo() {
-        let msg: [String: Any] = [
+        sendJson([
             "ackid": nextAckId(),
             "peer_info": [
                 "browser": "Chrome",
@@ -126,40 +204,86 @@ final class GFNSignalingClient: NSObject {
                 "resolution": "1920x1080",
                 "version": 2,
             ],
-        ]
-        sendJson(msg)
+        ])
     }
 
     private func startHeartbeat() {
         heartbeatTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
                 sendJson(["hb": 1])
             }
         }
     }
 
+    // MARK: Private — WebSocket Receive Loop
+
     private func startReceiving() {
-        Task { [weak self] in
+        receiveTask = Task { [weak self] in
             guard let self else { return }
-            while let task = self.webSocketTask {
+            while !Task.isCancelled {
                 do {
-                    let message = try await task.receive()
-                    switch message {
-                    case .string(let text): self.handleMessage(text)
-                    case .data(let data):
-                        if let text = String(data: data, encoding: .utf8) {
-                            self.handleMessage(text)
-                        }
-                    @unknown default: break
+                    if let text = try await self.receiveTextMessage() {
+                        self.handleMessage(text)
                     }
                 } catch {
-                    self.onEvent?(.disconnected(reason: error.localizedDescription))
+                    if !Task.isCancelled {
+                        print("[Signaling] Receive error: \(error)")
+                        self.onEvent?(.disconnected(reason: error.localizedDescription))
+                    }
                     return
                 }
             }
         }
     }
+
+    /// Reads one WebSocket message from the server. Returns the UTF-8 text payload for text
+    /// frames, nil for control frames (ping is handled automatically by autoReplyPing).
+    private func receiveTextMessage() async throws -> String? {
+        guard let conn = connection else { throw SignalingError.cancelled }
+        return try await withCheckedThrowingContinuation { cont in
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { content, context, isComplete, error in
+                if let error {
+                    cont.resume(throwing: error)
+                    return
+                }
+                if isComplete {
+                    cont.resume(throwing: SignalingError.remoteClosed)
+                    return
+                }
+                let meta = context?.protocolMetadata(
+                    definition: NWProtocolWebSocket.definition
+                ) as? NWProtocolWebSocket.Metadata
+
+                switch meta?.opcode {
+                case .text:
+                    let str = content.flatMap { String(data: $0, encoding: .utf8) }
+                    cont.resume(returning: str)
+                case .close:
+                    cont.resume(throwing: SignalingError.remoteClosed)
+                default:
+                    // Binary, ping (handled by autoReplyPing), pong, continuation — skip.
+                    cont.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    // MARK: Private — Send
+
+    private func sendJson(_ obj: [String: Any]) {
+        guard let conn = connection,
+              let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+        let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
+        conn.send(content: data, contentContext: ctx, isComplete: true,
+                  completion: .contentProcessed { err in
+            if let err { print("[Signaling] Send error: \(err)") }
+        })
+    }
+
+    // MARK: Private — Message Handling
 
     private func handleMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
@@ -202,18 +326,9 @@ final class GFNSignalingClient: NSObject {
         onEvent?(.log("Unhandled peer message keys: \(payload.keys.joined(separator: ", "))"))
     }
 
-    private func sendJson(_ obj: [String: Any]) {
-        guard let task = webSocketTask,
-              let data = try? JSONSerialization.data(withJSONObject: obj),
-              let text = String(data: data, encoding: .utf8)
-        else { return }
-        task.send(.string(text)) { _ in }
-    }
-
     private func jsonString(_ obj: [String: Any]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: obj),
-              let str = String(data: data, encoding: .utf8)
-        else { return "{}" }
+              let str = String(data: data, encoding: .utf8) else { return "{}" }
         return str
     }
 
@@ -221,14 +336,16 @@ final class GFNSignalingClient: NSObject {
         ackCounter += 1
         return ackCounter
     }
-}
 
-extension GFNSignalingClient: URLSessionWebSocketDelegate {
-    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
-                    didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        heartbeatTask?.cancel()
-        let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "socket closed"
-        onEvent?(.disconnected(reason: reasonStr))
+    // MARK: Private — URL helpers
+
+    /// NWEndpoint.url with a wss:// URL causes NWConnection to add its own TLS layer,
+    /// which would conflict with our explicit NWParameters(tls:).  Use ws:// instead so
+    /// NWConnection does not auto-add TLS; our params provide TLS with custom options.
+    private func makeWebSocketURL(from url: URL) -> URL? {
+        guard var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        if comps.scheme == "wss" { comps.scheme = "ws" }
+        return comps.url
     }
 }
 
@@ -236,4 +353,7 @@ extension GFNSignalingClient: URLSessionWebSocketDelegate {
 
 enum SignalingError: Error {
     case invalidUrl(String)
+    case handshakeFailed(String)
+    case remoteClosed
+    case cancelled
 }

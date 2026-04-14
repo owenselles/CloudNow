@@ -129,8 +129,8 @@ extension [GFNZone] {
     /// Best zone by weighted score: 40% ping + 60% queue position.
     var autoZone: GFNZone? {
         guard !isEmpty else { return nil }
-        let maxPing  = max(compactMap(\.pingMs).max() ?? 1, 1)
-        let maxQueue = max(map(\.queuePosition).max() ?? 1, 1)
+        let maxPing  = Swift.max(compactMap(\.pingMs).max() ?? 1, 1)
+        let maxQueue = Swift.max(map(\.queuePosition).max() ?? 1, 1)
         return min {
             let ls = (Double($0.pingMs ?? maxPing) / Double(maxPing)) * 0.4
                    + (Double($0.queuePosition) / Double(maxQueue)) * 0.6

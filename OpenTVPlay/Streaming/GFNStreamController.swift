@@ -200,7 +200,7 @@ final class GFNStreamController: NSObject {
                 for mLineIndex in 0...3 {
                     let sdp = "candidate:1 1 UDP 2130706431 \(directIp) 49100 typ host"
                     let candidate = LKRTCIceCandidate(sdp: sdp, sdpMLineIndex: Int32(mLineIndex), sdpMid: "\(mLineIndex)")
-                    pc.add(candidate)
+                    try? await pc.add(candidate)
                 }
             }
         }
@@ -264,9 +264,13 @@ final class GFNStreamController: NSObject {
     // MARK: Private — Microphone
 
     private func attachMicrophone(to pc: LKRTCPeerConnection) async {
+        #if os(tvOS)
+        let granted = true
+        #else
         let granted = await withCheckedContinuation { cont in
             AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
         }
+        #endif
         guard granted else { return }
 
         let audioConstraints = LKRTCMediaConstraints(

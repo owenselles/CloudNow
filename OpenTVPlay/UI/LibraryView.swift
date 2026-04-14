@@ -2,12 +2,9 @@ import SwiftUI
 
 struct LibraryView: View {
     let games: [GameInfo]
+    let onPlay: (GameInfo) -> Void
 
-    @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
-
-    @State private var selectedGame: GameInfo?
-    @State private var showStream = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40)
@@ -32,12 +29,6 @@ struct LibraryView: View {
                 gameGrid
             }
         }
-        .fullScreenCover(isPresented: $showStream) {
-            if let game = selectedGame {
-                StreamView(game: game, settings: viewModel.streamSettings, onDismiss: { showStream = false })
-                    .environment(authManager)
-            }
-        }
     }
 
     private var gameGrid: some View {
@@ -45,8 +36,7 @@ struct LibraryView: View {
             LazyVGrid(columns: columns, spacing: 40) {
                 ForEach(games) { game in
                     Button {
-                        selectedGame = game
-                        showStream = true
+                        onPlay(game)
                     } label: {
                         GameCardLabel(game: game)
                     }
@@ -59,16 +49,23 @@ struct LibraryView: View {
 
     private var emptyState: some View {
         VStack(spacing: 24) {
-            Image(systemName: "books.vertical")
+            Image(systemName: viewModel.libraryError != nil ? "exclamationmark.triangle" : "books.vertical")
                 .font(.system(size: 60))
                 .foregroundStyle(.secondary)
-            Text("Library Empty")
+            Text(viewModel.libraryError != nil ? "Library Failed to Load" : "Library Empty")
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Games you own or have linked will appear here.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if let err = viewModel.libraryError ?? viewModel.error {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red.opacity(0.8))
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("Games you own or have linked will appear here.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(60)
     }

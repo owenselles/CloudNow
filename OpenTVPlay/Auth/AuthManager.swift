@@ -81,10 +81,21 @@ final class AuthManager {
 
                 let user = try await api.fetchUserInfo(tokens: tokens)
 
-                // Bootstrap client token
+                // Bootstrap client token, then immediately use it to re-bind all
+                // tokens under the main clientID. Device flow issues tokens under
+                // deviceFlowClientID; games.geforce.com only accepts tokens from
+                // clientID. The client_token grant works cross-client.
                 if let ct = try? await api.fetchClientToken(accessToken: tokens.accessToken) {
                     tokens.clientToken = ct.token
                     tokens.clientTokenExpiresAt = ct.expiresAt
+                    if let rebound = try? await api.refreshWithClientToken(ct.token, userId: user.userId) {
+                        tokens = rebound
+                        // Re-fetch clientToken for the re-bound session
+                        if let ct2 = try? await api.fetchClientToken(accessToken: tokens.accessToken) {
+                            tokens.clientToken = ct2.token
+                            tokens.clientTokenExpiresAt = ct2.expiresAt
+                        }
+                    }
                 }
 
                 let newSession = AuthSession(provider: selectedProvider, tokens: tokens, user: user)
@@ -136,10 +147,15 @@ final class AuthManager {
 
     private func refresh(session s: AuthSession) async throws -> AuthSession {
         var updated = s
-        if let refreshToken = s.tokens.refreshToken {
+        // Primary: client_token grant (re-binds to clientID, works cross-client)
+        if let clientToken = s.tokens.clientToken,
+           let refreshed = try? await api.refreshWithClientToken(clientToken, userId: s.user.userId) {
+            updated.tokens = refreshed
+        } else if let refreshToken = s.tokens.refreshToken {
+            // Fallback: standard refresh_token grant
             updated.tokens = try await api.refreshTokens(refreshToken)
         }
-        // Re-bootstrap client token after refresh
+        // Re-bootstrap client token
         if let ct = try? await api.fetchClientToken(accessToken: updated.tokens.accessToken) {
             updated.tokens.clientToken = ct.token
             updated.tokens.clientTokenExpiresAt = ct.expiresAt

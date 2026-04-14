@@ -83,11 +83,18 @@ struct SessionInfo {
     let signalingUrl: String
     let gpuType: String?
     let queuePosition: Int?
+    let seatSetupStep: Int?
     let iceServers: [IceServer]
     let mediaConnectionInfo: MediaConnectionInfo?
     let clientId: String
     let deviceId: String
     let adState: SessionAdState?
+
+    /// True while the session is sitting in the GFN queue (no timeout applies).
+    var isInQueue: Bool {
+        if seatSetupStep == 1 { return true }
+        return (queuePosition ?? 0) > 1
+    }
 }
 
 struct MediaConnectionInfo {

@@ -2,12 +2,10 @@ import SwiftUI
 
 struct StoreView: View {
     let games: [GameInfo]
+    let onPlay: (GameInfo) -> Void
 
-    @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
 
-    @State private var selectedGame: GameInfo?
-    @State private var showStream = false
     @State private var notOwnedGame: GameInfo?
     @State private var showNotOwned = false
     @State private var searchText = ""
@@ -54,12 +52,6 @@ struct StoreView: View {
             }
         }
         .searchable(text: $searchText, prompt: "Search games")
-        .fullScreenCover(isPresented: $showStream) {
-            if let game = selectedGame {
-                StreamView(game: game, settings: viewModel.streamSettings, onDismiss: { showStream = false })
-                    .environment(authManager)
-            }
-        }
         .alert("Not in Your Library", isPresented: $showNotOwned, presenting: notOwnedGame) { _ in
             Button("OK") { }
         } message: { game in
@@ -88,8 +80,7 @@ struct StoreView: View {
                     ForEach(filteredGames) { game in
                         Button {
                             if game.isInLibrary {
-                                selectedGame = game
-                                showStream = true
+                                onPlay(game)
                             } else {
                                 notOwnedGame = game
                                 showNotOwned = true
@@ -130,13 +121,20 @@ struct StoreView: View {
 
     private var emptyState: some View {
         VStack(spacing: 24) {
-            Image(systemName: "bag")
+            Image(systemName: viewModel.error != nil ? "exclamationmark.triangle" : "bag")
                 .font(.system(size: 60))
                 .foregroundStyle(.secondary)
-            Text("No games available")
+            Text(viewModel.error != nil ? "Failed to Load Games" : "No games available")
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
+            if let err = viewModel.error {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red.opacity(0.8))
+                    .multilineTextAlignment(.center)
+            }
         }
+        .padding(60)
     }
 }
 

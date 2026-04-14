@@ -213,6 +213,7 @@ actor NVIDIAAuthAPI {
         var request = URLRequest(url: URL(string: NVIDIAAuth.clientTokenEndpoint)!)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("https://nvfile", forHTTPHeaderField: "Origin")
+        request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         let (data, response) = try await session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw AuthError.clientTokenFailed
@@ -220,6 +221,25 @@ actor NVIDIAAuthAPI {
         let payload = try JSONDecoder().decode(ClientTokenResponse.self, from: data)
         let expiresAt = Date().addingTimeInterval(TimeInterval(payload.expires_in ?? 86400))
         return (payload.client_token, expiresAt)
+    }
+
+    /// Exchanges a client_token for fresh OAuth tokens bound to the main clientID.
+    /// This is the primary refresh mechanism used by the official GFN client and
+    /// re-binds tokens regardless of which OAuth client originally issued them
+    /// (e.g. device flow client → main client).
+    func refreshWithClientToken(_ clientToken: String, userId: String) async throws -> AuthTokens {
+        var request = URLRequest(url: URL(string: NVIDIAAuth.tokenEndpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        request.setValue("https://nvfile", forHTTPHeaderField: "Origin")
+        request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
+        let body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Aclient_token&client_token=\(clientToken)&client_id=\(NVIDIAAuth.clientID)&sub=\(userId)"
+        request.httpBody = body.data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw AuthError.clientTokenFailed
+        }
+        return try parseTokenResponse(data)
     }
 
     // MARK: Device Flow (PIN-based login)

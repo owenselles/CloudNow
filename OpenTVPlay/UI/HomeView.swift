@@ -1,11 +1,9 @@
 import SwiftUI
 
 struct HomeView: View {
-    @Environment(AuthManager.self) var authManager
-    @Environment(GamesViewModel.self) var viewModel
+    let onPlay: (GameInfo) -> Void
 
-    @State private var selectedGame: GameInfo?
-    @State private var showStream = false
+    @Environment(GamesViewModel.self) var viewModel
 
     var body: some View {
         ZStack {
@@ -50,12 +48,6 @@ struct HomeView: View {
                 }
             }
         }
-        .fullScreenCover(isPresented: $showStream) {
-            if let game = selectedGame {
-                StreamView(game: game, settings: viewModel.streamSettings, onDismiss: { showStream = false })
-                    .environment(authManager)
-            }
-        }
     }
 
     // MARK: Hero Banner
@@ -95,8 +87,7 @@ struct HomeView: View {
 
                     if viewModel.continuePlaying.contains(where: { $0.id == game.id }) {
                         Button {
-                            selectedGame = game
-                            showStream = true
+                            onPlay(game)
                         } label: {
                             Label("Resume", systemImage: "play.fill")
                         }
@@ -123,8 +114,7 @@ struct HomeView: View {
                 HStack(spacing: 24) {
                     ForEach(games) { game in
                         GameCardView(game: game) {
-                            selectedGame = game
-                            showStream = true
+                            onPlay(game)
                         }
                         .frame(width: 200)
                     }

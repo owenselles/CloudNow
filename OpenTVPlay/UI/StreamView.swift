@@ -296,21 +296,23 @@ struct StreamView: View {
             var sessionInfo = try await cloudMatchClient.createSession(request)
             createdSession = sessionInfo
 
-            // Poll with readyPollStreak confirmation (requires 2 consecutive ready polls)
-            // and a 90-second overall timeout to prevent infinite waiting.
+            // Poll with readyPollStreak confirmation (requires 2 consecutive ready polls).
+            // While in queue: no timeout — user waits indefinitely with position updates.
+            // After queue clears: 180-second setup timeout applies.
             var readyPollStreak = 0
-            let startTime = Date()
+            var setupStartTime: Date? = nil
 
             while readyPollStreak < 2 {
-                guard Date().timeIntervalSince(startTime) < 90 else {
-                    loadingPhase = .timedOut
-                    return
-                }
-
-                // Update loading phase
-                if let pos = sessionInfo.queuePosition, pos > 0 {
-                    loadingPhase = .inQueue(pos)
+                // Update loading phase and apply timeout only outside the queue
+                if sessionInfo.isInQueue {
+                    loadingPhase = .inQueue(sessionInfo.queuePosition)
+                    setupStartTime = nil
                 } else {
+                    if setupStartTime == nil { setupStartTime = Date() }
+                    if let t = setupStartTime, Date().timeIntervalSince(t) > 180 {
+                        loadingPhase = .timedOut
+                        return
+                    }
                     loadingPhase = .preparing
                 }
 

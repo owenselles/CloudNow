@@ -8,6 +8,7 @@ class GamesViewModel {
     var activeSessions: [ActiveSessionInfo] = []
     var isLoading = false
     var error: String?
+    var libraryError: String?
 
     var favoriteIds: Set<String> = []
     var streamSettings: StreamSettings = StreamSettings()
@@ -47,6 +48,7 @@ class GamesViewModel {
     func load(authManager: AuthManager) async {
         isLoading = true
         error = nil
+        libraryError = nil
         do {
             let token = try await authManager.resolveToken()
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
@@ -55,7 +57,12 @@ class GamesViewModel {
             mainGames = try await gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
 
             // Non-fatal — may be empty if no games are linked to account
-            libraryGames = (try? await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)) ?? []
+            do {
+                libraryGames = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
+            } catch {
+                libraryError = error.localizedDescription
+                libraryGames = []
+            }
 
             // Non-fatal — may fail if no active sessions or server returns 404
             activeSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []

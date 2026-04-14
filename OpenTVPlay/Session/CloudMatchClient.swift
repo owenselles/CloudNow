@@ -34,6 +34,7 @@ private struct CloudMatchResponse: Decodable {
         let status: Int
         let gpuType: String?
         let queuePosition: Int?
+        let seatSetupStep: Int?
         let connectionInfo: [ConnectionInfo]?
         let iceServerConfiguration: IceServerConfig?
         let sessionControlInfo: SessionControlInfo?
@@ -239,7 +240,7 @@ actor CloudMatchClient {
             throw CloudMatchError.sessionCreateFailed(msg)
         }
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: base, payload: payload, clientId: clientId, deviceId: deviceId)
+        return try toSessionInfo(base: base, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
     }
 
     // MARK: Poll Session
@@ -254,7 +255,7 @@ actor CloudMatchClient {
         }
         let (data, _) = try await urlSession.data(for: request)
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: effectiveBase, payload: payload, clientId: clientId, deviceId: deviceId)
+        return try toSessionInfo(base: effectiveBase, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
     }
 
     // MARK: Stop Session
@@ -284,7 +285,7 @@ actor CloudMatchClient {
 
     // MARK: Private
 
-    private func toSessionInfo(base: String, payload: CloudMatchResponse, clientId: String, deviceId: String) throws -> SessionInfo {
+    private func toSessionInfo(base: String, payload: CloudMatchResponse, rawData: Data, clientId: String, deviceId: String) throws -> SessionInfo {
         let s = payload.session
         let connections = s.connectionInfo ?? []
 
@@ -310,7 +311,7 @@ actor CloudMatchClient {
         }
 
         // Ad state — parse raw JSON for flexibility since ad schema varies
-        let adState = extractAdState(from: payload)
+        let adState = extractAdState(from: rawData)
 
         return SessionInfo(
             sessionId: s.sessionId,
@@ -322,6 +323,7 @@ actor CloudMatchClient {
             signalingUrl: signalingUrl,
             gpuType: s.gpuType,
             queuePosition: s.queuePosition,
+            seatSetupStep: s.seatSetupStep,
             iceServers: iceServers,
             mediaConnectionInfo: media,
             clientId: clientId,
@@ -331,10 +333,8 @@ actor CloudMatchClient {
     }
 
     /// Parses ad state from the raw response JSON, handling schema variations across GFN API versions.
-    private func extractAdState(from payload: CloudMatchResponse) -> SessionAdState? {
-        // Re-decode as raw JSON to access ad fields not in our typed model
-        guard let data = try? JSONEncoder().encode(payload),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    private func extractAdState(from data: Data) -> SessionAdState? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let sessionObj = root["session"] as? [String: Any] else { return nil }
 
         // isAdsRequired lives in several possible places

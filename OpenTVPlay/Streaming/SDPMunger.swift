@@ -119,7 +119,7 @@ enum SDPMunger {
         for prefix in ["a=rtpmap:", "a=fmtp:", "a=rtcp-fb:"] {
             if line.hasPrefix(prefix) {
                 return line.dropFirst(prefix.count)
-                    .components(separatedBy: " ").first.map(String.init)
+                    .components(separatedBy: " ").first.map { String($0) }
             }
         }
         return nil
