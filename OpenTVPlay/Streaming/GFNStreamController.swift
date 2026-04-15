@@ -55,6 +55,7 @@ final class GFNStreamController: NSObject {
     private var settings = StreamSettings()
     private var micAudioSource: LKRTCAudioSource?
     private var micAudioTrack: LKRTCAudioTrack?
+    private var signalingComplete = false
 
     private static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
@@ -105,13 +106,18 @@ final class GFNStreamController: NSObject {
         pingHistory = []
         fpsHistory = []
         bitrateHistory = []
+        signalingComplete = false
         state = .idle
     }
 
     // MARK: Private — Signaling Setup
 
     private func setupSignaling(session: SessionInfo) {
-        let client = GFNSignalingClient(signalingUrl: session.signalingUrl, sessionId: session.sessionId)
+        let client = GFNSignalingClient(
+            signalingUrl: session.signalingUrl,
+            sessionId: session.sessionId,
+            serverIp: session.serverIp
+        )
         client.onEvent = { [weak self] event in
             Task { @MainActor [weak self] in self?.handleSignalingEvent(event) }
         }
@@ -127,7 +133,15 @@ final class GFNStreamController: NSObject {
         case .remoteICE(let candidate, let sdpMid, let sdpMLineIndex):
             addRemoteICE(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
         case .disconnected(let reason):
-            state = .disconnected(reason: reason)
+            // Always stop the signaling client — kills heartbeat and releases the connection.
+            signaling?.disconnect()
+            if signalingComplete {
+                // Server closes the WebSocket after answer + ICE exchange — expected GFN behavior.
+                // The media runs over WebRTC ICE/DTLS/SRTP; let ICE state drive the outcome.
+                print("[Stream] Signaling closed after setup (expected): \(reason)")
+            } else {
+                state = .disconnected(reason: reason)
+            }
         case .error(let msg):
             state = .failed(message: msg)
         case .log:
@@ -139,6 +153,8 @@ final class GFNStreamController: NSObject {
 
     private func handleOffer(sdp: String) async {
         guard let session = sessionInfo else { return }
+        print("[Stream] Offer SDP (\(sdp.count) chars):")
+        sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
 
         let iceServers: [LKRTCIceServer] = session.iceServers.map {
             LKRTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
@@ -156,6 +172,7 @@ final class GFNStreamController: NSObject {
             return
         }
         peerConnection = pc
+        print("[Stream] Peer connection created, starting offer handling")
 
         // Open input data channel (reliable + ordered)
         let dcConfig = LKRTCDataChannelConfiguration()
@@ -165,11 +182,6 @@ final class GFNStreamController: NSObject {
             inputDataChannel = dc
             dc.delegate = self
         }
-
-        // Add receive-only video transceiver
-        let transceiverInit = LKRTCRtpTransceiverInit()
-        transceiverInit.direction = .recvOnly
-        pc.addTransceiver(of: .video, init: transceiverInit)
 
         // Attach microphone audio track if enabled (must happen before answer creation
         // so the m=audio sendrecv line is included in the SDP)
@@ -189,26 +201,29 @@ final class GFNStreamController: NSObject {
             protocolVersion = 3
         }
 
-        // Munge the remote offer: filter to preferred codec before setting remote description
-        let filteredSdp = SDPMunger.preferCodec(sdp, codec: settings.codec)
-        let remoteSDP = LKRTCSessionDescription(type: .offer, sdp: filteredSdp)
-        try? await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            pc.setRemoteDescription(remoteSDP) { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
-            }
+        // Fix c= placeholder IPs with the real server IP. Do NOT filter codecs here —
+        // SDPMunger.preferCodec is applied to the ANSWER instead (below), because munging
+        // the offer leaves orphaned a=ssrc-group:FEC-FR lines that cause WebRTC to reject
+        // the video m-line (port 0) when generating the answer.
+        let serverMediaIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
+            ?? Self.extractIpFromHost(signaling?.connectedHost ?? "")
+        let fixedSdp = serverMediaIp.map { ip in
+            sdp.replacingOccurrences(of: "c=IN IP4 0.0.0.0", with: "c=IN IP4 \(ip)")
+        } ?? sdp
+        if let ip = serverMediaIp {
+            print("[Stream] Fixed c= lines in offer SDP: 0.0.0.0 → \(ip)")
+        } else {
+            print("[Stream] Warning: no server IP available — offer c= lines left as 0.0.0.0")
         }
-
-        // Inject a direct host ICE candidate from the server IP extracted from the hostname.
-        // GFN hostnames encode the IP as "10-1-2-3.zone.nvidiagrid.net"; extracting it ensures
-        // a direct candidate is available even if STUN traversal fails.
-        if let serverHost = session.serverIp.isEmpty ? nil : session.serverIp {
-            if let directIp = Self.extractIpFromHost(serverHost) {
-                for mLineIndex in 0...3 {
-                    let sdp = "candidate:1 1 UDP 2130706431 \(directIp) 49100 typ host"
-                    let candidate = LKRTCIceCandidate(sdp: sdp, sdpMLineIndex: Int32(mLineIndex), sdpMid: "\(mLineIndex)")
-                    try? await pc.add(candidate)
+        let remoteSDP = LKRTCSessionDescription(type: .offer, sdp: fixedSdp)
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                pc.setRemoteDescription(remoteSDP) { error in
+                    if let error { cont.resume(throwing: error) } else { cont.resume() }
                 }
             }
+        } catch {
+            print("[Stream] setRemoteDescription failed: \(error)")
         }
 
         // Create answer
@@ -223,18 +238,73 @@ final class GFNStreamController: NSObject {
                     if let sdp { cont.resume(returning: sdp) } else { cont.resume(throwing: StreamError.noSDP) }
                 }
             }
-            // Inject bandwidth hints into the answer
-            let maxBitrateKbps = settings.maxBitrateKbps / 1000
-            let mangledAnswerSdp = SDPMunger.injectBandwidth(answer.sdp, videoKbps: maxBitrateKbps)
+            // Apply codec preference to the answer (not the offer) — avoids the
+            // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
+            let codecFilteredSdp = SDPMunger.preferCodec(answer.sdp, codec: settings.codec)
+            let mangledAnswerSdp = SDPMunger.injectBandwidth(codecFilteredSdp, videoKbps: settings.maxBitrateKbps)
+            print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
+            mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
 
             // Set local description
             let localSDP = LKRTCSessionDescription(type: .answer, sdp: mangledAnswerSdp)
-            try? await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                pc.setLocalDescription(localSDP) { error in
-                    if let error { cont.resume(throwing: error) } else { cont.resume() }
+            do {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    pc.setLocalDescription(localSDP) { error in
+                        if let error { cont.resume(throwing: error) } else { cont.resume() }
+                    }
                 }
+            } catch {
+                print("[Stream] setLocalDescription failed: \(error)")
             }
             signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp())
+            signalingComplete = true
+
+            // Inject the server's ICE host candidate AFTER sending the answer (matching OpenNOW timing).
+            // GFN offers have no a=candidate: lines — the server relies on the client to probe it.
+            // Primary source: mediaConnectionInfo (usage=2, or usage=14 highest-port fallback).
+            // Fallback: all DNS-resolved IPs for the signaling hostname + SDP m-line port.
+            let mciIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
+            let mciPort = session.mediaConnectionInfo?.port ?? 0
+
+            let sdpPort = sdp.components(separatedBy: "\r\n").compactMap { line -> Int? in
+                guard line.hasPrefix("m=") else { return nil }
+                let p = line.components(separatedBy: " ")
+                guard p.count >= 2, let port = Int(p[1]), port > 9 else { return nil }
+                return port
+            }.first ?? 0
+
+            if let ip = mciIp, mciPort > 0 {
+                // Primary: mediaConnectionInfo (dedicated media server IP/port)
+                print("[ICE] Injecting server candidate (mediaConnectionInfo): \(ip):\(mciPort)")
+                let cand = LKRTCIceCandidate(
+                    sdp: "candidate:1 1 UDP 2130706431 \(ip) \(mciPort) typ host",
+                    sdpMLineIndex: 0, sdpMid: "0")
+                try? await pc.add(cand)
+            } else if sdpPort > 0 {
+                // Fallback: all DNS-resolved IPs at the SDP m-line port
+                let resolvedIps = signaling?.resolvedIPs ?? []
+                let connectedHost = signaling?.connectedHost ?? ""
+                var allIps = resolvedIps.isEmpty
+                    ? (connectedHost.isEmpty ? [] : [connectedHost])
+                    : resolvedIps
+                if !connectedHost.isEmpty, !allIps.contains(connectedHost) {
+                    allIps.append(connectedHost)
+                }
+                if allIps.isEmpty {
+                    print("[ICE] No server IPs available — ICE candidate injection skipped")
+                } else {
+                    print("[ICE] Injecting server candidates for \(allIps.count) IP(s) port=\(sdpPort) (signalingPool+sdpPort)")
+                    for (i, ip) in allIps.enumerated() {
+                        let cand = LKRTCIceCandidate(
+                            sdp: "candidate:\(i + 1) 1 UDP 2130706431 \(ip) \(sdpPort) typ host",
+                            sdpMLineIndex: 0, sdpMid: "0")
+                        try? await pc.add(cand)
+                        print("[ICE]   → \(ip):\(sdpPort)")
+                    }
+                }
+            } else {
+                print("[ICE] No server IP or SDP port available — ICE candidate injection skipped")
+            }
         } catch {
             state = .failed(message: "Answer creation failed: \(error.localizedDescription)")
         }
@@ -298,13 +368,20 @@ final class GFNStreamController: NSObject {
     /// e.g. "10-1-2-3.zone.nvidiagrid.net" → "10.1.2.3".
     /// Returns nil if the host is already a plain IP or doesn't match the pattern.
     private static func extractIpFromHost(_ host: String) -> String? {
-        let label = host.components(separatedBy: ".").first ?? host
-        let parts = label.components(separatedBy: "-")
-        guard parts.count == 4, parts.allSatisfy({ Int($0) != nil }) else { return nil }
-        return parts.joined(separator: ".")
+        // Already a plain dotted-decimal IP (e.g. "80.250.97.40")
+        let dotParts = host.components(separatedBy: ".")
+        if dotParts.count == 4, dotParts.allSatisfy({ Int($0) != nil }) {
+            return host
+        }
+        // Dash-encoded IP in hostname (e.g. "80-250-97-40.cloudmatchbeta.nvidiagrid.net")
+        let label = dotParts.first ?? host
+        let dashParts = label.components(separatedBy: "-")
+        guard dashParts.count == 4, dashParts.allSatisfy({ Int($0) != nil }) else { return nil }
+        return dashParts.joined(separator: ".")
     }
 
     private func addRemoteICE(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
+        print("[ICE] Adding remote candidate: \(candidate) mid=\(sdpMid ?? "nil") mLineIndex=\(sdpMLineIndex ?? -1)")
         let ice = LKRTCIceCandidate(
             sdp: candidate,
             sdpMLineIndex: Int32(sdpMLineIndex ?? 0),
@@ -366,13 +443,27 @@ final class GFNStreamController: NSObject {
 extension GFNStreamController: LKRTCPeerConnectionDelegate {
     nonisolated func peerConnectionShouldNegotiate(_ peerConnection: LKRTCPeerConnection) {}
 
-    nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange stateChanged: LKRTCSignalingState) {}
+    nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange stateChanged: LKRTCSignalingState) {
+        print("[Stream] Signaling state → \(stateChanged.rawValue)")
+    }
 
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didAdd stream: LKRTCMediaStream) {}
 
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove stream: LKRTCMediaStream) {}
 
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {
+        let name: String
+        switch newState {
+        case .new:          name = "new"
+        case .checking:     name = "checking"
+        case .connected:    name = "connected"
+        case .completed:    name = "completed"
+        case .failed:       name = "failed"
+        case .disconnected: name = "disconnected"
+        case .closed:       name = "closed"
+        @unknown default:   name = "unknown(\(newState.rawValue))"
+        }
+        print("[ICE] State → \(name)")
         Task { @MainActor [weak self] in
             switch newState {
             case .connected, .completed:
@@ -388,7 +479,16 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         }
     }
 
-    nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {}
+    nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {
+        let name: String
+        switch newState {
+        case .new:       name = "new"
+        case .gathering: name = "gathering"
+        case .complete:  name = "complete"
+        @unknown default: name = "unknown(\(newState.rawValue))"
+        }
+        print("[ICE] Gathering → \(name)")
+    }
 
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {
         Task { @MainActor [weak self] in
@@ -407,7 +507,9 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection,
                                     didAdd rtpReceiver: LKRTCRtpReceiver,
                                     streams mediaStreams: [LKRTCMediaStream]) {
+        print("[Stream] Received RTP receiver: kind=\(rtpReceiver.track?.kind ?? "nil")")
         guard let track = rtpReceiver.track as? LKRTCVideoTrack else { return }
+        print("[Stream] Got video track")
         Task { @MainActor [weak self] in
             self?.videoTrack = track
         }

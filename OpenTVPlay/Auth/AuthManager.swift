@@ -141,9 +141,18 @@ final class AuthManager {
 
     private func refreshIfNeeded() async {
         guard let s = session, s.tokens.isNearExpiry else { return }
-        if let refreshed = try? await refresh(session: s) {
+        do {
+            let refreshed = try await refresh(session: s)
             session = refreshed
             try? persist(refreshed)
+        } catch AuthError.tokenRefreshFailed {
+            // Both clientToken and refreshToken are gone — the stored session is unusable.
+            // Clear it so the login screen appears rather than silently producing bad sessions.
+            print("[Auth] All tokens exhausted on launch — clearing session, re-login required")
+            session = nil
+            KeychainService.delete()
+        } catch {
+            // Network failures, server errors, etc. — keep the session and try again later.
         }
     }
 
@@ -168,7 +177,12 @@ final class AuthManager {
             }
         } else if let refreshToken = s.tokens.refreshToken {
             print("[Auth] client_token path unavailable or failed, falling back to refresh_token grant")
+            let savedRefreshToken = updated.tokens.refreshToken
             updated.tokens = try await api.refreshTokens(refreshToken)
+            if updated.tokens.refreshToken == nil {
+                print("[Auth] refresh_token grant did not return a new refreshToken — preserving previous one")
+                updated.tokens.refreshToken = savedRefreshToken
+            }
             print("[Auth] refresh via refresh_token grant succeeded")
         } else {
             // Neither path available — surface a real error so the UI can prompt re-login

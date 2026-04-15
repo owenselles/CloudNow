@@ -6,7 +6,7 @@ struct StreamSettings: Codable, Equatable {
     var resolution: String = "1920x1080"
     var fps: Int = 60
     var maxBitrateKbps: Int = 50_000
-    var codec: VideoCodec = .h265
+    var codec: VideoCodec = .h264
     var colorQuality: ColorQuality = .sdr8bit
     var keyboardLayout: String = "en-US"
     var gameLanguage: String = "en_US"

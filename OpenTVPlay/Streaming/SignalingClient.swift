@@ -30,6 +30,7 @@ enum SignalingEvent {
 final class GFNSignalingClient {
     private let signalingUrl: String
     private let sessionId: String
+    private let serverIp: String
 
     private var connection: NWConnection?
     private var heartbeatTask: Task<Void, Never>?
@@ -37,12 +38,15 @@ final class GFNSignalingClient {
     private var ackCounter = 0
     private let peerId = 2
     private let peerName: String
+    private(set) var connectedHost: String = ""
+    private(set) var resolvedIPs: [String] = []
 
     var onEvent: ((SignalingEvent) -> Void)?
 
-    init(signalingUrl: String, sessionId: String) {
+    init(signalingUrl: String, sessionId: String, serverIp: String = "") {
         self.signalingUrl = signalingUrl
         self.sessionId = sessionId
+        self.serverIp = serverIp
         self.peerName = "peer-\(Int.random(in: 0..<10_000_000_000))"
     }
 
@@ -67,72 +71,105 @@ final class GFNSignalingClient {
             URLQueryItem(name: "peer_id", value: peerName),
             URLQueryItem(name: "version", value: "2"),
         ]
-        guard let requestUrl = comps.url else { throw SignalingError.invalidUrl(signalingUrl) }
+        guard comps.url != nil else { throw SignalingError.invalidUrl(signalingUrl) }
 
-        let port = url.port ?? 443
         let useTLS = url.scheme == "wss" || url.scheme == "https"
 
-        // TLS options — no cipher group restriction (system defaults include TLS 1.3),
-        // min TLS 1.2, no ALPN, cert bypass.
-        let tlsOpts = NWProtocolTLS.Options()
-        sec_protocol_options_set_min_tls_protocol_version(tlsOpts.securityProtocolOptions, .TLSv12)
-        sec_protocol_options_set_verify_block(tlsOpts.securityProtocolOptions,
-                                              { _, _, complete in complete(true) },
-                                              .global(qos: .userInitiated))
+        // Resolve all IPs for the signaling hostname upfront so we can try each one
+        // directly. NWConnection's Happy Eyeballs cache locks subsequent retries onto the
+        // same "preferred" address — explicit enumeration bypasses that.
+        let resolvedIPs = await resolveIPs(hostname: host)
+        self.resolvedIPs = resolvedIPs   // expose for ICE injection
+        // Append the hostname itself as a final fallback in case direct IP connections fail.
+        let candidates: [String] = resolvedIPs.isEmpty ? [host] : (resolvedIPs + [host])
+        print("[Signaling] Resolved \(resolvedIPs.count) IPs for '\(host)': \(resolvedIPs.joined(separator: ", "))")
 
-        // WebSocket options — system handles HTTP upgrade, framing, and ping/pong.
-        let wsOpts = NWProtocolWebSocket.Options()
-        wsOpts.autoReplyPing = true
-        // Register GFN session subprotocol — server echoes x-nv-sessionid.{id} in its 101;
-        // RFC 6455 §4.1 requires we offer it or NWProtocolWebSocket aborts (ECONNABORTED).
-        wsOpts.setSubprotocols(["x-nv-sessionid.\(sessionId)"])
-        wsOpts.setAdditionalHeaders([
-            ("Origin", "https://play.geforcenow.com"),
-            ("User-Agent", NVIDIAAuth.userAgent),
-        ])
-
-        // Stack: WebSocket → TLS → TCP
-        let params: NWParameters
-        if useTLS {
-            params = NWParameters(tls: tlsOpts, tcp: NWProtocolTCP.Options())
-        } else {
-            params = NWParameters.tcp
-        }
-        params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
-
-        // NWEndpoint.url passes the full path+query into the WebSocket HTTP upgrade GET.
-        // wss:// here is correct: NWParameters(tls:) configures the single TLS layer;
-        // it does not add a second one. Using ws:// was a misdiagnosis.
-        let endpoint = NWEndpoint.url(requestUrl)
-
-        let conn = NWConnection(to: endpoint, using: params)
-        connection = conn
-
-        print("[Signaling] Connecting → \(requestUrl.absoluteString)")
-
-        // .ready fires only after TLS handshake AND WebSocket HTTP upgrade both complete.
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            conn.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    conn.stateUpdateHandler = nil
-                    print("[Signaling] Connected (WebSocket ready)")
-                    cont.resume()
-                case .failed(let err):
-                    conn.stateUpdateHandler = nil
-                    print("[Signaling] Connection failed: \(err)")
-                    cont.resume(throwing: err)
-                case .cancelled:
-                    conn.stateUpdateHandler = nil
-                    cont.resume(throwing: SignalingError.cancelled)
-                case .waiting(let err):
-                    print("[Signaling] Waiting: \(err)")
-                default:
-                    break
-                }
+        var lastError: Error?
+        for (i, candidateHost) in candidates.prefix(8).enumerated() {
+            // Fresh TLS/WS/params per attempt — each NWConnection needs its own option objects.
+            // SNI is always set to the original hostname since we're connecting by IP.
+            let tlsOpts = NWProtocolTLS.Options()
+            sec_protocol_options_set_min_tls_protocol_version(tlsOpts.securityProtocolOptions, .TLSv12)
+            if useTLS {
+                sec_protocol_options_set_tls_server_name(tlsOpts.securityProtocolOptions, host)
             }
-            conn.start(queue: .global(qos: .userInitiated))
+            sec_protocol_options_set_verify_block(tlsOpts.securityProtocolOptions,
+                                                  { _, _, complete in complete(true) },
+                                                  .global(qos: .userInitiated))
+            // WebSocket options — system handles HTTP upgrade, framing, and ping/pong.
+            // Register GFN session subprotocol — server echoes x-nv-sessionid.{id} in its 101;
+            // RFC 6455 §4.1 requires we offer it or NWProtocolWebSocket aborts (ECONNABORTED).
+            let wsOpts = NWProtocolWebSocket.Options()
+            wsOpts.autoReplyPing = true
+            wsOpts.setSubprotocols(["x-nv-sessionid.\(sessionId)"])
+            wsOpts.setAdditionalHeaders([
+                ("Origin", "https://play.geforcenow.com"),
+                ("User-Agent", NVIDIAAuth.userAgent),
+            ])
+            let params: NWParameters = useTLS
+                ? NWParameters(tls: tlsOpts, tcp: NWProtocolTCP.Options())
+                : .tcp
+            params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
+
+            var epComps = comps
+            epComps.host = candidateHost
+            guard let candidateUrl = epComps.url else { continue }
+            let candidateEndpoint = NWEndpoint.url(candidateUrl)
+
+            if i == 0 {
+                print("[Signaling] Connecting → \(candidateUrl.absoluteString)")
+            } else {
+                print("[Signaling] Trying candidate \(i + 1)/\(min(candidates.count, 8)) → \(candidateUrl.absoluteString)")
+            }
+
+            let conn = NWConnection(to: candidateEndpoint, using: params)
+            connection = conn
+
+            do {
+                // .ready fires only after TLS handshake AND WebSocket HTTP upgrade both complete.
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    conn.stateUpdateHandler = { state in
+                        switch state {
+                        case .ready:
+                            conn.stateUpdateHandler = nil
+                            print("[Signaling] Connected (WebSocket ready) via \(candidateHost)")
+                            cont.resume()
+                        case .failed(let err):
+                            conn.stateUpdateHandler = nil
+                            print("[Signaling] Connection failed (\(candidateHost)): \(err)")
+                            cont.resume(throwing: err)
+                        case .cancelled:
+                            conn.stateUpdateHandler = nil
+                            cont.resume(throwing: SignalingError.cancelled)
+                        case .waiting(let err):
+                            let desc = "\(err)"
+                            if desc.contains("53") || desc.contains("ECONNABORTED") {
+                                // ECONNABORTED = server rejected WS handshake — try the next IP.
+                                conn.stateUpdateHandler = nil
+                                print("[Signaling] ECONNABORTED (\(candidateHost)) — trying next IP")
+                                cont.resume(throwing: err)
+                            } else {
+                                print("[Signaling] Waiting: \(err)")
+                            }
+                        default:
+                            break
+                        }
+                    }
+                    conn.start(queue: .global(qos: .userInitiated))
+                }
+                lastError = nil
+                connectedHost = candidateHost
+                break  // connected — stop trying candidates
+            } catch {
+                lastError = error
+                let desc = "\(error)"
+                guard desc.contains("53") || desc.contains("ECONNABORTED") else { break }
+                conn.cancel()
+                connection = nil
+                try? await Task.sleep(for: .milliseconds(200))
+            }
         }
+        if let e = lastError { throw e }
 
         startReceiving()
         sendPeerInfo()
@@ -235,34 +272,50 @@ final class GFNSignalingClient {
         }
     }
 
-    /// Reads one WebSocket message from the server. Returns the UTF-8 text payload for text
-    /// frames, nil for control frames (ping is handled automatically by autoReplyPing).
+    /// Reads one complete WebSocket message from the server. Accumulates chunks across
+    /// multiple receive() callbacks until isComplete=true (NWConnection delivers large
+    /// messages in partial deliveries). Returns the UTF-8 text payload for text frames,
+    /// nil for control frames (ping is handled automatically by autoReplyPing).
     private func receiveTextMessage() async throws -> String? {
         guard let conn = connection else { throw SignalingError.cancelled }
-        return try await withCheckedThrowingContinuation { cont in
-            conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { content, context, isComplete, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                if isComplete {
-                    cont.resume(throwing: SignalingError.remoteClosed)
-                    return
-                }
-                let meta = context?.protocolMetadata(
-                    definition: NWProtocolWebSocket.definition
-                ) as? NWProtocolWebSocket.Metadata
+        var buffer = Data()
+        var messageOpcode: NWProtocolWebSocket.Opcode? = nil
 
-                switch meta?.opcode {
-                case .text:
-                    let str = content.flatMap { String(data: $0, encoding: .utf8) }
-                    cont.resume(returning: str)
-                case .close:
-                    cont.resume(throwing: SignalingError.remoteClosed)
-                default:
-                    // Binary, ping (handled by autoReplyPing), pong, continuation — skip.
-                    cont.resume(returning: nil)
+        while true {
+            let (chunk, opcode, isComplete) = try await withCheckedThrowingContinuation {
+                (cont: CheckedContinuation<(Data?, NWProtocolWebSocket.Opcode?, Bool), Error>) in
+                conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { content, context, isComplete, error in
+                    if let error { cont.resume(throwing: error); return }
+                    let meta = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                               as? NWProtocolWebSocket.Metadata
+                    cont.resume(returning: (content, meta?.opcode, isComplete))
                 }
+            }
+
+            if let data = chunk { buffer.append(data) }
+            if messageOpcode == nil, let op = opcode { messageOpcode = op }
+            guard isComplete else { continue }  // more chunks coming for this message
+
+            switch messageOpcode {
+            case .text:
+                return String(data: buffer, encoding: .utf8)
+            case .close:
+                if buffer.count >= 2 {
+                    let code = UInt16(buffer[0]) << 8 | UInt16(buffer[1])
+                    let reason = buffer.count > 2
+                        ? String(data: buffer.subdata(in: 2..<buffer.count), encoding: .utf8) ?? "<non-UTF8>"
+                        : ""
+                    print("[Signaling] Server closed: code=\(code) reason=\(reason.isEmpty ? "(none)" : reason)")
+                } else {
+                    print("[Signaling] Server closed: no close-frame data")
+                }
+                throw SignalingError.remoteClosed
+            case nil:
+                // isComplete with no WS metadata = TCP stream closed without a CLOSE frame
+                throw SignalingError.remoteClosed
+            default:
+                // Binary, ping (handled by autoReplyPing), pong — skip
+                return nil
             }
         }
     }
@@ -272,6 +325,7 @@ final class GFNSignalingClient {
     private func sendJson(_ obj: [String: Any]) {
         guard let conn = connection,
               let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        if let str = String(data: data, encoding: .utf8) { print("[Signaling] → \(str.prefix(300))") }
         let meta = NWProtocolWebSocket.Metadata(opcode: .text)
         let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
         conn.send(content: data, contentContext: ctx, isComplete: true,
@@ -283,6 +337,7 @@ final class GFNSignalingClient {
     // MARK: Private — Message Handling
 
     private func handleMessage(_ text: String) {
+        print("[Signaling] ← \(text.prefix(300))")
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
@@ -332,6 +387,40 @@ final class GFNSignalingClient {
     private func nextAckId() -> Int {
         ackCounter += 1
         return ackCounter
+    }
+
+    // MARK: Private — DNS Resolution
+
+    /// Returns all IPv4/IPv6 addresses for `hostname` via getaddrinfo, deduplicated.
+    /// Called before the connection loop so we can try each IP directly, bypassing
+    /// NWConnection's Happy Eyeballs preference cache that would lock all retries onto
+    /// the same address after the first connection attempt to a given hostname.
+    private func resolveIPs(hostname: String) async -> [String] {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var hints = addrinfo()
+                hints.ai_family = AF_UNSPEC
+                hints.ai_socktype = SOCK_STREAM
+                var res: UnsafeMutablePointer<addrinfo>? = nil
+                guard getaddrinfo(hostname, nil, &hints, &res) == 0 else {
+                    cont.resume(returning: [])
+                    return
+                }
+                defer { freeaddrinfo(res) }
+                var ips: [String] = []
+                var cur = res
+                while let info = cur {
+                    var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen,
+                                   &buf, socklen_t(NI_MAXHOST), nil, 0, NI_NUMERICHOST) == 0 {
+                        let ip = String(cString: buf)
+                        if !ips.contains(ip) { ips.append(ip) }
+                    }
+                    cur = info.pointee.ai_next
+                }
+                cont.resume(returning: ips)
+            }
+        }
     }
 
 }

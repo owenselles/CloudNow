@@ -70,10 +70,26 @@ enum AdAction: Int {
     case cancel = 5
 }
 
-// GFN API returns ip as either a string or array of strings
+// GFN API returns ip as a string, array of strings, 32-bit integer, or {"value": ...} object
 private struct AnyCodableString: Decodable {
     let value: String?
     init(from decoder: Decoder) throws {
+        // Nested object: {"value": "80.84.170.152"} or {"value": 1345682432}
+        struct Nested: Decodable { let value: AnyCodableString? }
+        if let nested = try? Nested(from: decoder), let v = nested.value?.value {
+            value = v
+            return
+        }
+        // Integer IP (32-bit big-endian, e.g. 1345682432 → "80.84.170.152")
+        if let intVal = try? UInt32(from: decoder) {
+            let b1 = (intVal >> 24) & 0xFF
+            let b2 = (intVal >> 16) & 0xFF
+            let b3 = (intVal >> 8)  & 0xFF
+            let b4 =  intVal        & 0xFF
+            value = "\(b1).\(b2).\(b3).\(b4)"
+            return
+        }
+        // String array or plain string
         if let arr = try? [String].init(from: decoder) {
             value = arr.first
         } else {
@@ -288,6 +304,30 @@ actor CloudMatchClient {
     private func toSessionInfo(base: String, payload: CloudMatchResponse, rawData: Data, clientId: String, deviceId: String) throws -> SessionInfo {
         let s = payload.session
         let connections = s.connectionInfo ?? []
+        let connInfoLog = connections.map { c -> String in
+            let ipStr = c.ip.map { $0.value ?? "value_nil" } ?? "field_nil"
+            return "usage=\(c.usage) ip=\(ipStr) port=\(c.port) path=\(c.resourcePath ?? "nil")"
+        }.joined(separator: " | ")
+        print("[CloudMatch] connectionInfo: \(connInfoLog)")
+
+        // Diagnostic raw JSON dump (once per active session — status==2 or 3)
+        if s.status == 2 || s.status == 3,
+           let root = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any],
+           let sess = root["session"] as? [String: Any] {
+            if let iceConfig = sess["iceServerConfiguration"] {
+                if let iceData = try? JSONSerialization.data(withJSONObject: iceConfig, options: .prettyPrinted),
+                   let iceStr = String(data: iceData, encoding: .utf8) {
+                    print("[CloudMatch] iceServerConfiguration:\n\(iceStr)")
+                } else {
+                    print("[CloudMatch] iceServerConfiguration: \(iceConfig)")
+                }
+            } else {
+                print("[CloudMatch] iceServerConfiguration: absent")
+            }
+            if let sci = sess["sessionControlInfo"] {
+                print("[CloudMatch] sessionControlInfo: \(sci)")
+            }
+        }
 
         // Signaling server: usage=14
         let sigConn = connections.first { $0.usage == 14 && $0.ip?.value != nil }
@@ -302,13 +342,14 @@ actor CloudMatchClient {
             ? defaultIceServers()
             : rawIceServers.map { IceServer(urls: $0.urls.values, username: $0.username, credential: $0.credential) }
 
-        // Media connection
+        // Media connection — priority: usage=2 → usage=17 → usage=14 highest-port (IP from resourcePath)
         let mediaConn = connections.first { $0.usage == 2 }
                      ?? connections.first { $0.usage == 17 }
-        let media = mediaConn.flatMap { mc -> MediaConnectionInfo? in
+        let media: MediaConnectionInfo? = mediaConn.flatMap { mc -> MediaConnectionInfo? in
             guard let ip = mc.ip?.value, mc.port > 0 else { return nil }
             return MediaConnectionInfo(ip: ip, port: mc.port)
-        }
+        } ?? extractMediaFromUsage14(connections)
+        print("[CloudMatch] mediaConnectionInfo: \(media.map { "\($0.ip):\($0.port)" } ?? "nil")")
 
         // Ad state — parse raw JSON for flexibility since ad schema varies
         let adState = extractAdState(from: rawData)
@@ -420,6 +461,40 @@ actor CloudMatchClient {
         }
         request.httpBody = bodyData
         _ = try? await urlSession.data(for: request)
+    }
+
+    /// For sessions without usage=2/17 connectionInfo, derive media IP+port from usage=14 entries.
+    /// The highest-port usage=14 entry is the media endpoint (e.g. 48322);
+    /// the lowest-port entry (e.g. 322) is the RTSPS signaling port.
+    /// IP is extracted from the dash-encoded hostname in the rtsps:// resourcePath when the ip
+    /// field is absent (e.g. "rtsps://80-84-170-153.cloudmatchbeta.nvidiagrid.net:48322").
+    private func extractMediaFromUsage14(
+        _ connections: [CloudMatchResponse.SessionPayload.ConnectionInfo]
+    ) -> MediaConnectionInfo? {
+        let candidates = connections
+            .filter { $0.usage == 14 }
+            .compactMap { conn -> MediaConnectionInfo? in
+                if let ip = conn.ip?.value, conn.port > 0 {
+                    return MediaConnectionInfo(ip: ip, port: conn.port)
+                }
+                guard let path = conn.resourcePath,
+                      let host = URL(string: path)?.host,
+                      let ip = extractIpFromDashHost(host),
+                      conn.port > 0 else { return nil }
+                return MediaConnectionInfo(ip: ip, port: conn.port)
+            }
+        return candidates.max(by: { $0.port < $1.port })
+    }
+
+    /// Extracts a dotted-decimal IP from a dash-encoded hostname label.
+    /// "80-84-170-153.cloudmatchbeta.nvidiagrid.net" → "80.84.170.153"
+    private func extractIpFromDashHost(_ host: String) -> String? {
+        let label = host.components(separatedBy: ".").first ?? host
+        let parts = label.components(separatedBy: "-")
+        guard parts.count == 4,
+              parts.allSatisfy({ Int($0) != nil && (Int($0)! >= 0) && (Int($0)! <= 255) })
+        else { return nil }
+        return parts.joined(separator: ".")
     }
 
     private func defaultIceServers() -> [IceServer] {
