@@ -104,10 +104,30 @@ struct MediaConnectionInfo {
 
 // MARK: - Active Session Info
 
-struct ActiveSessionInfo: Decodable {
+struct ActiveSessionInfo {
     let sessionId: String
     let status: Int
     let appId: String?
+    let serverIp: String?
+    let signalingUrl: String?
+}
+
+// MARK: - Subscription / Entitlements
+
+struct EntitledResolution: Equatable {
+    let widthInPixels: Int
+    let heightInPixels: Int
+    let framesPerSecond: Int
+
+    var resolutionLabel: String { "\(widthInPixels)x\(heightInPixels)" }
+}
+
+struct SubscriptionInfo {
+    let membershipTier: String
+    let isUnlimited: Bool
+    let remainingMinutes: Int?
+    let totalMinutes: Int?
+    let entitledResolutions: [EntitledResolution]
 }
 
 // MARK: - Games

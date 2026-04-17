@@ -11,6 +11,7 @@ private enum LoadingPhase: Equatable {
 struct StreamView: View {
     let game: GameInfo
     var settings: StreamSettings = StreamSettings()
+    var existingSession: ActiveSessionInfo? = nil
     let onDismiss: () -> Void
 
     @Environment(AuthManager.self) var authManager
@@ -312,8 +313,9 @@ struct StreamView: View {
         // Reset stream controller (handles retry from failed/disconnected state)
         streamController.disconnect()
 
-        // Stop any previously created server session before opening a new one
-        if let session = createdSession, let token = sessionToken {
+        // Stop any previously created server session before opening a new one.
+        // Skip for resume — we want to keep the existing session alive.
+        if let session = createdSession, let token = sessionToken, existingSession == nil {
             try? await cloudMatchClient.stopSession(
                 sessionId: session.sessionId, token: token, base: session.streamingBaseUrl
             )
@@ -327,31 +329,44 @@ struct StreamView: View {
             let streamingBaseUrl = provider?.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingBaseUrl.hasSuffix("/") ? String(streamingBaseUrl.dropLast()) : streamingBaseUrl
 
-            guard let appId = game.variants.first?.appId ?? game.variants.first?.id else { return }
-
-            // Prefer the user-selected zone URL; fall back to the provider's default.
-            let sessionBase = settings.preferredZoneUrl ?? base
-
-            let request = SessionCreateRequest(
-                appId: appId,
-                internalTitle: game.title,
-                token: token,
-                zone: "",
-                streamingBaseUrl: sessionBase,
-                settings: settings,
-                accountLinked: true
-            )
-
             var sessionInfo: SessionInfo
-            do {
-                sessionInfo = try await cloudMatchClient.createSession(request)
-            } catch CloudMatchError.sessionCreateFailed(let msg) where msg.contains("SESSION_LIMIT_EXCEEDED") {
-                // Stale server session is blocking creation — stop all active sessions and retry once.
-                let staleSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
-                for stale in staleSessions {
-                    try? await cloudMatchClient.stopSession(sessionId: stale.sessionId, token: token, base: base)
+
+            if let existing = existingSession, let serverIp = existing.serverIp {
+                // Resume path: attach to the existing session without creating a new one
+                sessionInfo = try await cloudMatchClient.claimSession(
+                    sessionId: existing.sessionId,
+                    serverIp: serverIp,
+                    token: token,
+                    base: base,
+                    settings: settings
+                )
+            } else {
+                // New session path
+                guard let appId = game.variants.first?.appId ?? game.variants.first?.id else { return }
+
+                // Prefer the user-selected zone URL; fall back to the provider's default.
+                let sessionBase = settings.preferredZoneUrl ?? base
+
+                let request = SessionCreateRequest(
+                    appId: appId,
+                    internalTitle: game.title,
+                    token: token,
+                    zone: "",
+                    streamingBaseUrl: sessionBase,
+                    settings: settings,
+                    accountLinked: true
+                )
+
+                do {
+                    sessionInfo = try await cloudMatchClient.createSession(request)
+                } catch CloudMatchError.sessionCreateFailed(let msg) where msg.contains("SESSION_LIMIT_EXCEEDED") {
+                    // Stale server session is blocking creation — stop all active sessions and retry once.
+                    let staleSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+                    for stale in staleSessions {
+                        try? await cloudMatchClient.stopSession(sessionId: stale.sessionId, token: token, base: base)
+                    }
+                    sessionInfo = try await cloudMatchClient.createSession(request)
                 }
-                sessionInfo = try await cloudMatchClient.createSession(request)
             }
             createdSession = sessionInfo
 

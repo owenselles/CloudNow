@@ -92,14 +92,26 @@ enum SDPMunger {
     // MARK: - Bandwidth Injection
 
     /// Appends b=AS: bandwidth hints after each m=video and m=audio line.
-    /// Helps the server avoid overshooting available bandwidth.
+    /// Skips injection if a b= line already follows (idempotent).
+    /// Also appends stereo=1 to the opus fmtp line for stereo audio.
     static func injectBandwidth(_ sdp: String, videoKbps: Int, audioKbps: Int = 128) -> String {
         let sep = sdp.contains("\r\n") ? "\r\n" : "\n"
+        let lines = sdp.components(separatedBy: sep)
         var result: [String] = []
-        for line in sdp.components(separatedBy: sep) {
+        for (i, line) in lines.enumerated() {
+            // Append stereo=1 to the opus fmtp line if not already present
+            if line.hasPrefix("a=fmtp:") && line.contains("minptime=") && !line.contains("stereo=1") {
+                result.append(line + ";stereo=1")
+                continue
+            }
             result.append(line)
-            if line.hasPrefix("m=video")      { result.append("b=AS:\(videoKbps)") }
-            else if line.hasPrefix("m=audio") { result.append("b=AS:\(audioKbps)") }
+            // Inject b=AS: only if the very next line doesn't already start with b=
+            let next = i + 1 < lines.count ? lines[i + 1] : ""
+            if line.hasPrefix("m=video") && !next.hasPrefix("b=") {
+                result.append("b=AS:\(videoKbps)")
+            } else if line.hasPrefix("m=audio") && !next.hasPrefix("b=") {
+                result.append("b=AS:\(audioKbps)")
+            }
         }
         return result.joined(separator: sep)
     }

@@ -13,6 +13,7 @@ class GamesViewModel {
     var favoriteIds: Set<String> = []
     var recentlyPlayedIds: [String] = []
     var streamSettings: StreamSettings = StreamSettings()
+    var subscription: SubscriptionInfo? = nil
 
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
@@ -32,7 +33,36 @@ class GamesViewModel {
         }
     }
 
-    // MARK: Computed
+    // MARK: Computed — Entitled Resolutions & FPS
+
+    /// Resolution strings available to the current account tier.
+    /// Falls back to a standard preset if no subscription data is available.
+    var availableResolutions: [String] {
+        guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
+            return ["1280x720", "1920x1080", "2560x1440", "3840x2160"]
+        }
+        let unique = Array(Set(resos.map(\.resolutionLabel)))
+        return unique.sorted {
+            let lw = Int($0.split(separator: "x").first ?? "") ?? 0
+            let rw = Int($1.split(separator: "x").first ?? "") ?? 0
+            return lw < rw
+        }
+    }
+
+    /// FPS values available for the currently selected resolution.
+    var availableFps: [Int] {
+        guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
+            return [30, 60, 120]
+        }
+        let parts = streamSettings.resolution.split(separator: "x").compactMap { Int($0) }
+        let w = parts.first ?? 1920
+        let h = parts.last  ?? 1080
+        let matching = resos.filter { $0.widthInPixels == w && $0.heightInPixels == h }
+        let source = matching.isEmpty ? resos : matching
+        return Array(Set(source.map(\.framesPerSecond))).sorted()
+    }
+
+    // MARK: Computed — Games
 
     var continuePlaying: [GameInfo] {
         let sessionAppIds = Set(activeSessions.compactMap { $0.appId })
@@ -78,6 +108,12 @@ class GamesViewModel {
 
             // Non-fatal — may fail if no active sessions or server returns 404
             activeSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+
+            // Non-fatal — fetch subscription tier and entitled resolutions
+            if let userId = authManager.session?.user.userId {
+                let vpcId = (try? await MESClient.shared.fetchVpcId(token: token, base: base)) ?? ""
+                subscription = try? await MESClient.shared.fetchSubscription(token: token, vpcId: vpcId, userId: userId)
+            }
         } catch {
             self.error = error.localizedDescription
         }

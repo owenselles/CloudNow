@@ -121,7 +121,13 @@ private struct GetSessionsResponse: Decodable {
     struct SessionEntry: Decodable {
         let sessionId: String
         let status: Int
-        let appId: String?
+        let sessionRequestData: SessionRequestData?
+        let connectionInfo: [ConnEntry]?
+        let sessionControlInfo: CtrlEntry?
+
+        struct SessionRequestData: Decodable { let appId: String? }
+        struct ConnEntry: Decodable { let ip: AnyCodableString?; let port: Int?; let usage: Int? }
+        struct CtrlEntry: Decodable { let ip: AnyCodableString? }
     }
 }
 
@@ -294,9 +300,77 @@ actor CloudMatchClient {
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, _) = try await urlSession.data(for: request)
         let resp = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
-        return (resp.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map {
-            ActiveSessionInfo(sessionId: $0.sessionId, status: $0.status, appId: $0.appId)
+        return (resp.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
+            let appId = entry.sessionRequestData?.appId
+            let sigConn = entry.connectionInfo?.first { $0.usage == 14 && $0.ip?.value != nil }
+                       ?? entry.connectionInfo?.first { $0.ip?.value != nil }
+            let serverIp = sigConn?.ip?.value ?? entry.sessionControlInfo?.ip?.value
+            let signalingUrl = serverIp.map { "wss://\($0):443/nvst/" }
+            return ActiveSessionInfo(
+                sessionId: entry.sessionId,
+                status: entry.status,
+                appId: appId,
+                serverIp: serverIp,
+                signalingUrl: signalingUrl
+            )
         }
+    }
+
+    // MARK: Claim / Resume Session
+
+    /// Attaches to an existing session. Sends a RESUME PUT for ready sessions (status 2/3),
+    /// or returns current state for sessions still in queue (status 1).
+    /// The caller should continue polling via pollSession() until the session is streaming.
+    func claimSession(
+        sessionId: String,
+        serverIp: String,
+        token: String,
+        base: String,
+        settings: StreamSettings
+    ) async throws -> SessionInfo {
+        let clientId = UUID().uuidString
+        let deviceId = UUID().uuidString
+        let effectiveBase = "https://\(serverIp)"
+
+        // Pre-flight: get current session state
+        let preflight = try await pollSession(
+            sessionId: sessionId,
+            token: token,
+            base: effectiveBase,
+            serverIp: nil,
+            clientId: clientId,
+            deviceId: deviceId
+        )
+
+        // If still queuing, return as-is — caller polls from here
+        if preflight.status == 1 || preflight.isInQueue { return preflight }
+
+        // Status 2 or 3: send RESUME PUT
+        var comps = URLComponents(string: "\(effectiveBase)/v2/session/\(sessionId)")!
+        comps.queryItems = [
+            URLQueryItem(name: "keyboardLayout", value: settings.keyboardLayout),
+            URLQueryItem(name: "languageCode", value: settings.gameLanguage),
+        ]
+        guard let url = comps.url else { throw CloudMatchError.sessionCreateFailed("Invalid resume URL") }
+        let body: [String: Any] = [
+            "action": 2,
+            "data": "RESUME",
+            "sessionRequestData": [String: Any](),
+        ]
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        for (k, v) in gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: true) {
+            request.setValue(v, forHTTPHeaderField: k)
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, resp) = try await urlSession.data(for: request)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw CloudMatchError.sessionCreateFailed("Resume failed: \(msg)")
+        }
+        let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+        return try toSessionInfo(base: effectiveBase, payload: payload, rawData: data,
+                                 clientId: clientId, deviceId: deviceId)
     }
 
     // MARK: Private

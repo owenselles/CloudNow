@@ -6,9 +6,6 @@ struct SettingsView: View {
 
     @State private var showZonePicker = false
 
-    private let resolutions = ["1280x720", "1920x1080", "3840x2160"]
-    private let fpsOptions = [30, 60, 120]
-
     var body: some View {
         @Bindable var vm = viewModel
 
@@ -16,13 +13,13 @@ struct SettingsView: View {
             Form {
                 Section("Stream Quality") {
                     Picker("Resolution", selection: $vm.streamSettings.resolution) {
-                        ForEach(resolutions, id: \.self) { res in
+                        ForEach(viewModel.availableResolutions, id: \.self) { res in
                             Text(res).tag(res)
                         }
                     }
 
                     Picker("Frame Rate", selection: $vm.streamSettings.fps) {
-                        ForEach(fpsOptions, id: \.self) { fps in
+                        ForEach(viewModel.availableFps, id: \.self) { fps in
                             Text("\(fps) fps").tag(fps)
                         }
                     }
@@ -83,7 +80,16 @@ struct SettingsView: View {
                         if let email = user.email {
                             LabeledContent("Email", value: email)
                         }
-                        LabeledContent("Membership", value: user.membershipTier)
+                        if let sub = viewModel.subscription {
+                            LabeledContent("Membership", value: sub.membershipTier)
+                            if !sub.isUnlimited, let remaining = sub.remainingMinutes {
+                                let hours = remaining / 60
+                                let mins  = remaining % 60
+                                LabeledContent("Time Remaining", value: hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m")
+                            }
+                        } else {
+                            LabeledContent("Membership", value: user.membershipTier)
+                        }
                     }
 
                     Button(role: .destructive) {
