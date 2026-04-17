@@ -547,8 +547,12 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                 self?.state = .streaming
                 self?.startStatsTimer()
             case .disconnected:
+                self?.statsTimer?.invalidate()
+                self?.statsTimer = nil
                 self?.state = .disconnected(reason: "ICE disconnected")
             case .failed:
+                self?.statsTimer?.invalidate()
+                self?.statsTimer = nil
                 self?.state = .failed(message: "ICE connection failed")
             default:
                 break
