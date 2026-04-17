@@ -56,6 +56,11 @@ final class GFNStreamController: NSObject {
     private var micAudioSource: LKRTCAudioSource?
     private var micAudioTrack: LKRTCAudioTrack?
     private var signalingComplete = false
+    private var partiallyReliableDataChannel: LKRTCDataChannel?
+    private var controlChannel: LKRTCDataChannel?
+    private var inputReady = false
+    private var lastBytesReceived: Double = 0
+    private var lastStatsTime: Date = .distantPast
 
     private static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
@@ -100,6 +105,8 @@ final class GFNStreamController: NSObject {
         peerConnection?.close()
         peerConnection = nil
         inputDataChannel = nil
+        partiallyReliableDataChannel = nil
+        controlChannel = nil
         videoTrack = nil
         micAudioTrack = nil
         micAudioSource = nil
@@ -107,6 +114,9 @@ final class GFNStreamController: NSObject {
         fpsHistory = []
         bitrateHistory = []
         signalingComplete = false
+        inputReady = false
+        lastBytesReceived = 0
+        lastStatsTime = .distantPast
         state = .idle
     }
 
@@ -174,13 +184,22 @@ final class GFNStreamController: NSObject {
         peerConnection = pc
         print("[Stream] Peer connection created, starting offer handling")
 
-        // Open input data channel (reliable + ordered)
+        // Reliable ordered input channel — label must match OpenNOW's "input_channel_v1"
         let dcConfig = LKRTCDataChannelConfiguration()
         dcConfig.isOrdered = true
         dcConfig.isNegotiated = false
-        if let dc = pc.dataChannel(forLabel: "input", configuration: dcConfig) {
+        if let dc = pc.dataChannel(forLabel: "input_channel_v1", configuration: dcConfig) {
             inputDataChannel = dc
             dc.delegate = self
+        }
+
+        // Partially-reliable gamepad channel — server expects this alongside the reliable one
+        let prConfig = LKRTCDataChannelConfiguration()
+        prConfig.isOrdered = false
+        prConfig.maxPacketLifeTime = Int32(partialReliableThresholdMs)
+        prConfig.isNegotiated = false
+        if let dc = pc.dataChannel(forLabel: "input_channel_partially_reliable", configuration: prConfig) {
+            partiallyReliableDataChannel = dc
         }
 
         // Attach microphone audio track if enabled (must happen before answer creation
@@ -454,8 +473,18 @@ final class GFNStreamController: NSObject {
     private func parseStats(_ report: LKRTCStatisticsReport) {
         for (_, stat) in report.statistics {
             if stat.type == "inbound-rtp", stat.values["kind"] as? String == "video" {
-                let bitsPerSecond = stat.values["bytesReceived"] as? Double ?? 0
-                stats.bitrateKbps = Int(bitsPerSecond * 8 / 1000)
+                let bytesReceived = stat.values["bytesReceived"] as? Double ?? 0
+                let framesReceived = stat.values["framesReceived"] as? Double ?? 0
+                let framesDecoded  = stat.values["framesDecoded"]  as? Double ?? 0
+                let now = Date()
+                let elapsed = now.timeIntervalSince(lastStatsTime)
+                if elapsed > 0 && lastBytesReceived > 0 {
+                    let deltaBytes = bytesReceived - lastBytesReceived
+                    stats.bitrateKbps = Int(max(0, deltaBytes) * 8 / elapsed / 1000)
+                }
+                lastBytesReceived = bytesReceived
+                lastStatsTime = now
+
                 stats.fps = stat.values["framesPerSecond"] as? Double ?? 0
                 if let w = stat.values["frameWidth"] as? Double,
                    let h = stat.values["frameHeight"] as? Double {
@@ -469,6 +498,7 @@ final class GFNStreamController: NSObject {
                 if lost + received > 0 {
                     stats.packetLossPercent = lost / (lost + received) * 100
                 }
+                print("[Stats] framesReceived=\(Int(framesReceived)) framesDecoded=\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps)")
             }
             if stat.type == "candidate-pair", stat.values["state"] as? String == "succeeded" {
                 stats.rttMs = (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000
@@ -549,7 +579,15 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove candidates: [LKRTCIceCandidate]) {}
 
-    nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {}
+    nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {
+        print("[DataChannel] Server opened channel: label=\(dataChannel.label)")
+        if dataChannel.label == "control_channel" {
+            dataChannel.delegate = self
+            Task { @MainActor [weak self] in
+                self?.controlChannel = dataChannel
+            }
+        }
+    }
 
     nonisolated func peerConnection(_ peerConnection: LKRTCPeerConnection,
                                     didAdd rtpReceiver: LKRTCRtpReceiver,
@@ -567,28 +605,48 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 
 extension GFNStreamController: LKRTCDataChannelDelegate {
     nonisolated func dataChannelDidChangeState(_ dataChannel: LKRTCDataChannel) {
-        if dataChannel.readyState == .open {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let sender = InputSender(channel: self)
-                sender.setProtocolVersion(self.protocolVersion)
-                sender.start()
-                self.inputSender = sender
-            }
-        }
+        print("[DataChannel] State → \(dataChannel.readyState.rawValue) label=\(dataChannel.label)")
+        // InputSender is NOT started here — it starts only after the server sends its
+        // handshake message on input_channel_v1 (handled in dataChannel(_:didReceiveMessageWith:))
     }
 
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
-        // Parse any incoming protocol version negotiation if present
-        if buffer.data.count >= 2 {
-            let byte0 = buffer.data[0]
-            let byte1 = buffer.data[1]
-            if byte0 == 0x01 { // hypothetical version negotiation byte
-                Task { @MainActor [weak self] in
-                    self?.protocolVersion = Int(byte1)
-                    self?.inputSender?.setProtocolVersion(Int(byte1))
-                }
-            }
+        // Log all control channel messages from server (JSON timerNotification etc.)
+        if dataChannel.label == "control_channel" {
+            let text = String(data: buffer.data, encoding: .utf8) ?? "<binary \(buffer.data.count)B>"
+            print("[ControlChannel] Message: \(text)")
+            return
+        }
+
+        // OpenNOW onInputHandshakeMessage: parse protocol version from server's first message.
+        // firstWord==526 (0x020e) → version in bytes[2:3]; bytes[0]==0x0e → version==firstWord.
+        // Do NOT echo the handshake back — official GFN client doesn't.
+        let bytes = buffer.data
+        guard bytes.count >= 2 else { return }
+
+        let firstWord = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
+        var version = 2
+
+        if firstWord == 526 {
+            version = bytes.count >= 4 ? Int(UInt16(bytes[2]) | (UInt16(bytes[3]) << 8)) : 2
+            print("[DataChannel] Handshake: firstWord=526 (0x020e), version=\(version)")
+        } else if bytes[0] == 0x0e {
+            version = Int(firstWord)
+            print("[DataChannel] Handshake: byte[0]=0x0e, version=\(version)")
+        } else {
+            print("[DataChannel] Non-handshake message on \(dataChannel.label): firstWord=\(firstWord) (0x\(String(firstWord, radix: 16)))")
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self, !self.inputReady else { return }
+            self.inputReady = true
+            self.protocolVersion = version
+            print("[DataChannel] Input ready — starting InputSender (protocol v\(version))")
+            let sender = InputSender(channel: self)
+            sender.setProtocolVersion(version)
+            sender.start()
+            self.inputSender = sender
         }
     }
 }

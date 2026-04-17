@@ -11,11 +11,18 @@ import LiveKitWebRTC
 /// Falls back to AVSampleBufferDisplayLayer if needed.
 final class VideoSurfaceView: UIView {
     private let rtcView = LKRTCMTLVideoView(frame: .zero)
+    // Deferred track: held until layoutSubviews gives rtcView non-zero bounds,
+    // because Metal creates a zero-size drawable if add() is called before layout.
+    private var pendingTrack: LKRTCVideoTrack?
 
     var videoTrack: LKRTCVideoTrack? {
         didSet {
+            guard oldValue !== videoTrack else { return }
             oldValue?.remove(rtcView)
-            videoTrack?.add(rtcView)
+            pendingTrack = videoTrack
+            if videoTrack != nil {
+                setNeedsLayout()
+            }
         }
     }
 
@@ -31,15 +38,16 @@ final class VideoSurfaceView: UIView {
 
     private func setup() {
         backgroundColor = .black
-        rtcView.translatesAutoresizingMaskIntoConstraints = false
         rtcView.videoContentMode = .scaleAspectFill
         addSubview(rtcView)
-        NSLayoutConstraint.activate([
-            rtcView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            rtcView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            rtcView.topAnchor.constraint(equalTo: topAnchor),
-            rtcView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        rtcView.frame = bounds
+        guard let track = pendingTrack, !bounds.isEmpty else { return }
+        track.add(rtcView)
+        pendingTrack = nil
     }
 }
 

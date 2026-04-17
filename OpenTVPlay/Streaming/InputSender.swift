@@ -197,8 +197,8 @@ final class InputSender {
 
     func start() {
         registerControllerNotifications()
-        // Heartbeat at 10Hz
-        sendTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        // Heartbeat at 0.5Hz — matches OpenNOW's 2-second interval
+        sendTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
     }
