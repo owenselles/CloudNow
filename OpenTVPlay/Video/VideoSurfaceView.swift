@@ -131,7 +131,7 @@ final class VideoSurfaceView: UIView {
     // MARK: - HID → (VK, Scancode) Table
     //
     // Maps UIKeyboardHIDUsage (USB HID Usage codes) to Windows Virtual Key codes
-    // and PS/2 Set-1 scancodes. Derived from the TS inputProtocol.ts tables in OpenNOW.
+    // and PS/2 Set-1 scancodes.
     // Extended scancodes (0xE0 prefix) are stored as-is in the UInt16 high byte (0xE0__).
 
     private static let hidToKeyMapping: [UIKeyboardHIDUsage: (vk: UInt16, scancode: UInt16)] = [

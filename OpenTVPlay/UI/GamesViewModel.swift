@@ -39,7 +39,7 @@ class GamesViewModel {
     /// Falls back to a standard preset if no subscription data is available.
     var availableResolutions: [String] {
         guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
-            return ["1280x720", "1920x1080", "2560x1440", "3840x2160"]
+            return ["1280x720", "1920x1080"]
         }
         let unique = Array(Set(resos.map(\.resolutionLabel)))
         return unique.sorted {
@@ -52,7 +52,7 @@ class GamesViewModel {
     /// FPS values available for the currently selected resolution.
     var availableFps: [Int] {
         guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
-            return [30, 60, 120]
+            return [30, 60]
         }
         let parts = streamSettings.resolution.split(separator: "x").compactMap { Int($0) }
         let w = parts.first ?? 1920

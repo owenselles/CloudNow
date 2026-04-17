@@ -1,10 +1,9 @@
 import Foundation
 import GameController
 
-// MARK: - GFN Input Protocol Constants (from OpenNOW inputProtocol.ts)
+// MARK: - GFN Input Protocol Constants
 
 private enum GFNInput {
-    static let heartbeat: UInt8    = 2
     static let keyDown: UInt8      = 3
     static let keyUp: UInt8        = 4
     static let mouseRel: UInt8     = 7
@@ -99,12 +98,6 @@ final class InputEncoder {
         return protocolVersion >= 3
             ? wrapGamepadPartiallyReliable(buf, gamepadIndex: controllerId)
             : buf
-    }
-
-    // MARK: Heartbeat
-
-    func encodeHeartbeat() -> Data {
-        Data([GFNInput.heartbeat])
     }
 
     // MARK: Keyboard
@@ -324,10 +317,6 @@ final class InputSender {
     private var lastMicroDpad: (x: Float, y: Float) = (0, 0)
     private var lastMicroButtonA = false
 
-    // Heartbeat at ~0.5 Hz (every 120 frames) when no controllers are present
-    private var heartbeatTick = 0
-    private let heartbeatEveryN = 120
-
     init(channel: DataChannelSender) {
         self.channel = channel
     }
@@ -367,15 +356,7 @@ final class InputSender {
         let extended = controllers.filter { $0.extendedGamepad != nil }
         let micro    = controllers.filter { $0.extendedGamepad == nil && $0.microGamepad != nil }
 
-        if extended.isEmpty && micro.isEmpty {
-            heartbeatTick += 1
-            if heartbeatTick >= heartbeatEveryN {
-                heartbeatTick = 0
-                channel?.sendData(encoder.encodeHeartbeat())
-            }
-            return
-        }
-        heartbeatTick = 0
+        if extended.isEmpty && micro.isEmpty { return }
 
         // Extended gamepads — existing XInput encoding
         for (idx, controller) in extended.prefix(4).enumerated() {

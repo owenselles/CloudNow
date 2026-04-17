@@ -222,7 +222,7 @@ final class GFNStreamController: NSObject {
         peerConnection = pc
         print("[Stream] Peer connection created, starting offer handling")
 
-        // Reliable ordered input channel — label must match OpenNOW's "input_channel_v1"
+        // Reliable ordered input channel — label must match the GFN server's expected "input_channel_v1"
         let dcConfig = LKRTCDataChannelConfiguration()
         dcConfig.isOrdered = true
         dcConfig.isNegotiated = false
@@ -319,7 +319,7 @@ final class GFNStreamController: NSObject {
             signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp(iceUfrag: iceUfrag, icePwd: icePwd, dtlsFingerprint: dtlsFingerprint))
             signalingComplete = true
 
-            // Inject the server's ICE host candidate AFTER sending the answer (matching OpenNOW timing).
+            // Inject the server's ICE host candidate AFTER sending the answer.
             // GFN offers have no a=candidate: lines — the server relies on the client to probe it.
             // Primary source: mediaConnectionInfo (usage=2, or usage=14 highest-port fallback).
             // Fallback: all DNS-resolved IPs for the signaling hostname + SDP m-line port.
@@ -380,7 +380,7 @@ final class GFNStreamController: NSObject {
     }
 
     /// Builds the NVIDIA streaming protocol capability descriptor sent alongside the WebRTC answer.
-    /// Mirrors OpenNOW's buildNvstSdp() — critically includes the client's ICE credentials so the
+    /// Builds the NVST SDP capability descriptor — critically includes the client's ICE credentials so the
     /// GFN server can validate STUN MESSAGE-INTEGRITY on incoming binding requests.
     private func buildNvstSdp(iceUfrag: String, icePwd: String, dtlsFingerprint: String) -> String {
         let resolutionParts = settings.resolution.split(separator: "x")
@@ -660,7 +660,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             return
         }
 
-        // OpenNOW onInputHandshakeMessage: parse protocol version from server's first message.
+        // Parse protocol version from the server's first handshake message on the input channel.
         // firstWord==526 (0x020e) → version in bytes[2:3]; bytes[0]==0x0e → version==firstWord.
         // Do NOT echo the handshake back — official GFN client doesn't.
         let bytes = buffer.data

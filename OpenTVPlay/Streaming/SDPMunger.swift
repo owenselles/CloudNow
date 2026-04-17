@@ -1,7 +1,7 @@
 import Foundation
 
 /// SDP manipulation for GeForce NOW WebRTC sessions.
-/// Ported from OpenNOW's sdp.ts — filters codec choice and injects bandwidth hints.
+/// Filters codec choice and injects bandwidth hints into the SDP answer.
 enum SDPMunger {
 
     // MARK: - Codec Preference

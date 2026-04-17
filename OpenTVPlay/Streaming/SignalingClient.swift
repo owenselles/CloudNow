@@ -24,7 +24,7 @@ enum SignalingEvent {
 //  • No ALPN is set in TLS options — GFN's WebSocket server doesn't register any ALPN token.
 //  • No cipher suite group restriction — system defaults include TLS 1.3 which the server requires.
 //    (The old .legacy group excluded TLS 1.3 and caused HANDSHAKE_FAILURE_ON_CLIENT_HELLO.)
-//  • Certificate validation is bypassed (mirrors OpenNOW rejectUnauthorized:false).
+//  • Certificate validation is bypassed — GFN signaling endpoints use non-standard TLS configs.
 //  • Old heartbeat/receive tasks are cancelled at connect() entry to prevent zombie writes.
 
 final class GFNSignalingClient {

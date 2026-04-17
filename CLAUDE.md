@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**OpenTVPlay** (branded OpenNowTV) is a native tvOS app — a reverse-engineered GeForce NOW client for Apple TV. It streams PC games over WebRTC using NVIDIA's GFN protocol, ported from the TypeScript [OpenNOW](https://github.com/unkn0wn-root/OpenNOW) project.
+**OpenTVPlay** (branded OpenNowTV) is a native tvOS app — a reverse-engineered GeForce NOW client for Apple TV. It streams PC games over WebRTC using NVIDIA's GFN protocol over WebRTC, using [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) as the WebRTC transport.
 
 ## Building
 
@@ -33,7 +33,7 @@ All source lives in `OpenTVPlay/`. Five functional areas:
 - `GFNStreamController.swift` — `@Observable` WebRTC peer connection lifecycle. Opens the signaling WebSocket, negotiates SDP (server offer → munged answer), injects ICE candidates, attaches the video track, and collects live stats. Manages three data channels: `input_channel_v1` (reliable ordered), `input_channel_partially_reliable` (unordered, timed), and a server-opened `control_channel`. `InputSender` is started after receiving the server handshake on `input_channel_v1`.
 - `SignalingClient.swift` — Low-level WebSocket via `NWConnection` + `NWProtocolWebSocket`. Manages TLS options (cipher negotiation, cert bypass for GFN endpoints) and the JSON signaling message protocol.
 - `SDPMunger.swift` — Rewrites the SDP offer before sending: filters to preferred codec (H.264/H.265/AV1), clamps H.265 to Main profile, injects max bitrate.
-- `InputSender.swift` — Encodes GCController/keyboard/mouse/Siri Remote input into GFN binary protocol packets (XInput for gamepads; protocol v2 plain or v3 partially-reliable wrapping) and sends over the WebRTC data channel. Starts only after receiving the server handshake on `input_channel_v1`. Manages heartbeats when no controllers are connected.
+- `InputSender.swift` — Encodes GCController/keyboard/mouse/Siri Remote input into GFN binary protocol packets (XInput for gamepads; protocol v2 plain or v3 partially-reliable wrapping) and sends over the WebRTC data channel. Starts only after receiving the server handshake on `input_channel_v1`.
 
 ### Video
 - `VideoSurfaceView.swift` — `UIView` backed by `AVSampleBufferDisplayLayer` that receives decoded WebRTC frames via a `WebRTCFrameRenderer` (CVPixelBuffer → CMSampleBuffer). Also acts as first responder for hardware keyboard and Bluetooth mouse input, forwarding events to `InputSender` as GFN protocol packets.

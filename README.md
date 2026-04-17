@@ -17,7 +17,7 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 - **Tab bar navigation** — Home, Library, Store, and Settings; fully focus-engine compatible
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
 - **Library & Store** — browse your linked games separately from the full public catalog; Store has search
-- **Stream quality settings** — resolution (720p/1080p/4K), frame rate, codec (H.264/H.265/AV1), and color quality (SDR/HDR) from the Settings tab
+- **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), and color quality (SDR/HDR) from the Settings tab
 - **Codec-aware SDP negotiation** — offer is filtered to your chosen codec before WebRTC negotiation; H.265 prefers Main profile; bandwidth hints sent to prevent server overshoot
 - **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"); waits indefinitely in queue with position updates; 180-second setup timeout after queue clears; requires two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
 - **Zone/region selection** — Settings → Server Region shows live queue depths and ping per zone; Automatic mode picks the best zone by weighted score (40% ping + 60% queue depth); powered by the PrintedWaste community API
@@ -96,7 +96,7 @@ OpenNowTV/
 
 ### Protocol
 
-The GFN streaming protocol was reverse-engineered by [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) (TypeScript/Electron). This project ports their work to native Swift/tvOS.
+The GFN streaming protocol was independently reverse-engineered from NVIDIA's network traffic. The WebRTC transport is provided by [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework).
 
 | Layer | Implementation |
 |-------|---------------|
@@ -132,6 +132,5 @@ MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgements
 
-- [OpenNOW](https://github.com/OpenCloudGaming/OpenNOW) — GFN protocol reverse engineering; the [iOS branch](https://github.com/OpenCloudGaming/OpenNOW/tree/kief5555/ios) informed the queue ad playback and zone selection implementation
 - [PrintedWaste](https://printedwaste.com) — community API for GFN zone queue depths and region mapping
 - [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) — WebRTC for Apple platforms
