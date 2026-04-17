@@ -407,14 +407,21 @@ final class InputSender {
 
         let curX = pad.dpad.xAxis.value
         let curY = pad.dpad.yAxis.value
+        // Treat the touchpad as "not being touched" when position is near centre.
+        // This prevents a snap-back mouseRel when the finger lifts and dpad returns to (0,0).
+        let isTouching  = abs(curX) > 0.02 || abs(curY) > 0.02
+        let wasTouching = abs(lastMicroDpad.x) > 0.02 || abs(lastMicroDpad.y) > 0.02
+        // Compute delta before updating the reference so we don't compare a value with itself.
         let dx = curX - lastMicroDpad.x
         let dy = curY - lastMicroDpad.y
         lastMicroDpad = (curX, curY)
 
         switch remoteMode {
         case .mouse:
-            // Touchpad delta → relative mouse move. Negate Y: remote up → cursor up (negative screen Y).
-            if abs(dx) > 0.0005 || abs(dy) > 0.0005 {
+            // Only send delta while the finger is continuously on the pad.
+            // Ignore the first frame of a new touch (wasTouching=false) and the
+            // release frame (isTouching=false) to avoid jump artefacts.
+            if isTouching && wasTouching && (abs(dx) > 0.0005 || abs(dy) > 0.0005) {
                 let pxDx = Int16(clamping: Int((dx * Self.remoteSensitivity).rounded()))
                 let pxDy = Int16(clamping: Int((-dy * Self.remoteSensitivity).rounded()))
                 sendMouseMove(dx: pxDx, dy: pxDy)

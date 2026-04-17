@@ -21,6 +21,11 @@ final class VideoSurfaceView: UIView {
     /// Set by GFNStreamController once the input data channel handshake completes.
     weak var inputHandler: InputEventHandler?
 
+    /// Called when the user presses the Menu button on the Siri Remote.
+    /// GFNStreamController sets this to toggle the overlay rather than letting
+    /// the press bubble up to the system (which opens the Apple TV control center).
+    var menuPressHandler: (() -> Void)?
+
     var videoTrack: LKRTCVideoTrack? {
         didSet {
             guard oldValue !== videoTrack else { return }
@@ -73,7 +78,13 @@ final class VideoSurfaceView: UIView {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if let key = press.key, let mapping = Self.hidToKeyMapping[key.keyCode] {
+            if press.type == .menu {
+                // Intercept Menu before it reaches the system (which would open Control Center).
+                // Invoke the handler — GFNStreamController increments menuPressCount so SwiftUI
+                // can react via .onChange without relying on the tvOS focus engine.
+                menuPressHandler?()
+                handled = true
+            } else if let key = press.key, let mapping = Self.hidToKeyMapping[key.keyCode] {
                 inputHandler?.sendKeyEvent(
                     down: true,
                     vk: mapping.vk,

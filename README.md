@@ -15,13 +15,13 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 - **Library & Store** — browse your linked games separately from the full public catalog; Store has search
 - **Stream quality settings** — resolution (720p/1080p/4K), frame rate, codec (H.264/H.265/AV1), and color quality (SDR/HDR) from the Settings tab
 - **Codec-aware SDP negotiation** — offer is filtered to your chosen codec before WebRTC negotiation; H.265 prefers Main profile; bandwidth hints sent to prevent server overshoot
-- **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"), 90-second timeout, two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
+- **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"); waits indefinitely in queue with position updates; 180-second setup timeout after queue clears; requires two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
 - **Zone/region selection** — Settings → Server Region shows live queue depths and ping per zone; Automatic mode picks the best zone by weighted score (40% ping + 60% queue depth); powered by the PrintedWaste community API
 - **Microphone support** — voice chat via AirPods or any Bluetooth headset; toggle in Settings; permission requested on first use
 - **Favorites** — heart any game in your Library; persisted locally
 - **Full GFN streaming** — WebRTC-based, up to 4K@60fps (subject to your GFN subscription tier)
 - **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework
-- **NVIDIA OAuth login** — PKCE flow; authentication completes on your paired iPhone via Handoff
+- **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
 - **Live stats overlay** — bitrate, resolution, FPS, RTT, real packet loss % — toggle with the Menu button
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
 
@@ -31,7 +31,6 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 - Xcode 16+ on a Mac
 - Active GeForce NOW account (Free, Priority, or Ultimate)
 - Apple Developer account (free tier works for sideloading)
-- iPhone paired with your Apple TV (for initial login via Handoff)
 
 ## Getting Started
 
@@ -58,7 +57,7 @@ Xcode → OpenNowTV target → **Signing & Capabilities** → select your Apple 
 
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
-On first launch the app prompts you to sign in. A notification appears on your paired iPhone — tap it to complete OAuth in Safari, then return to the TV.
+On first launch the app prompts you to sign in. A QR code and PIN are displayed — scan the QR code or visit the URL on any device and enter the PIN to complete sign-in, then return to the TV.
 
 ---
 
@@ -77,9 +76,9 @@ OpenNowTV/
 │   ├── GFNStreamController.swift   WebRTC peer connection lifecycle (@Observable)
 │   ├── SignalingClient.swift        WebSocket signaling — SDP offer/answer + ICE
 │   ├── SDPMunger.swift             Codec filtering + bandwidth injection for WebRTC SDP
-│   └── InputSender.swift           GCController → XInput binary protocol → data channel
+│   └── InputSender.swift           GCController/keyboard/mouse/Siri Remote → XInput + GFN protocol (v2/v3) → data channel
 ├── Video/
-│   └── VideoSurfaceView.swift      Metal-backed video surface (UIViewRepresentable)
+│   └── VideoSurfaceView.swift      AVSampleBufferDisplayLayer video surface + keyboard/mouse first responder
 └── UI/
     ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings
     ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings)
@@ -87,7 +86,7 @@ OpenNowTV/
     ├── LibraryView.swift           LIBRARY panel grid with favorite toggles
     ├── StoreView.swift             MAIN catalog grid with "In Library" badges
     ├── SettingsView.swift          Stream quality pickers + account info + sign out
-    ├── LoginView.swift             Sign-in screen with Handoff instructions
+    ├── LoginView.swift             Sign-in screen with QR code + PIN display
     └── StreamView.swift            Full-screen player + HUD stats overlay
 ```
 
@@ -111,13 +110,10 @@ The GFN streaming protocol was reverse-engineered by [OpenNOW](https://github.co
 - **No App Store.** NVIDIA has not published a public API for third-party GFN clients. Sideloading only.
 - **Queue ad playback.** During high demand GFN shows ads while in queue. The app plays them via AVPlayer and reports lifecycle events (start/pause/finish) back to CloudMatch.
 - **Zone/region selection.** Settings → Server Region lets you pick a specific zone or leave it on Automatic (40% ping + 60% queue depth scoring). Zone list + queue depths fetched from the PrintedWaste community API.
-- **AV1 partial reliability not fully ported.** The input data channel uses reliable ordered delivery; the partially-reliable gamepad channel from OpenNOW's `sdp.ts` is not yet implemented.
-
 ## Contributing
 
 PRs welcome, especially for:
 
-- AV1 partial-reliability input data channel
 - macOS Catalyst or visionOS port
 
 ## Sponsoring

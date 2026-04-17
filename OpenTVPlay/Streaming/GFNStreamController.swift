@@ -43,6 +43,9 @@ final class GFNStreamController: NSObject {
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
     private(set) var bitrateHistory: [Double] = []
+    /// Incremented each time the user presses Menu while VideoSurfaceView is first responder.
+    /// SwiftUI observes this via .onChange to toggle the HUD overlay.
+    private(set) var menuPressCount: Int = 0
 
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
@@ -99,6 +102,14 @@ final class GFNStreamController: NSObject {
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
         view.inputHandler = inputSender
+        view.menuPressHandler = { [weak self] in self?.handleMenuPress() }
+    }
+
+    /// Invoked by VideoSurfaceView when the user presses Menu.
+    /// Incrementing the counter lets SwiftUI's .onChange react without depending
+    /// on the tvOS focus engine (which is suppressed when UIKit holds first responder).
+    func handleMenuPress() {
+        menuPressCount += 1
     }
 
     // MARK: Input Control
@@ -140,8 +151,10 @@ final class GFNStreamController: NSObject {
         lastBytesReceived = 0
         lastStatsTime = .distantPast
         videoView?.inputHandler = nil
+        videoView?.menuPressHandler = nil
         videoView = nil
         remoteMode = .mouse
+        menuPressCount = 0
         state = .idle
     }
 
