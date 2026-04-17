@@ -276,6 +276,9 @@ struct StreamView: View {
         if raw.uppercased().contains("ENTITLEMENT") || raw.contains("3237093650") {
             return "\(game.title) is not in your GeForce NOW library."
         }
+        if raw.contains("SESSION_LIMIT_EXCEEDED") {
+            return "A previous session is still active. Please wait a moment and try again."
+        }
         return raw
     }
 
@@ -339,7 +342,17 @@ struct StreamView: View {
                 accountLinked: true
             )
 
-            var sessionInfo = try await cloudMatchClient.createSession(request)
+            var sessionInfo: SessionInfo
+            do {
+                sessionInfo = try await cloudMatchClient.createSession(request)
+            } catch CloudMatchError.sessionCreateFailed(let msg) where msg.contains("SESSION_LIMIT_EXCEEDED") {
+                // Stale server session is blocking creation — stop all active sessions and retry once.
+                let staleSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+                for stale in staleSessions {
+                    try? await cloudMatchClient.stopSession(sessionId: stale.sessionId, token: token, base: base)
+                }
+                sessionInfo = try await cloudMatchClient.createSession(request)
+            }
             createdSession = sessionInfo
 
             // Poll with readyPollStreak confirmation (requires 2 consecutive ready polls).

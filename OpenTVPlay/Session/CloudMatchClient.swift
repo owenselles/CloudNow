@@ -294,7 +294,7 @@ actor CloudMatchClient {
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, _) = try await urlSession.data(for: request)
         let resp = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
-        return (resp.sessions ?? []).filter { $0.status == 2 || $0.status == 3 }.map {
+        return (resp.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map {
             ActiveSessionInfo(sessionId: $0.sessionId, status: $0.status, appId: $0.appId)
         }
     }
