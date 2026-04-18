@@ -51,7 +51,7 @@ actor GamesClient {
         return games.map { game in
             guard let meta = metaById[game.id] else { return game }
             let boxArt = meta.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) }
-            let hero   = (meta.images?.TV_BANNER ?? meta.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0) }
+            let hero   = (meta.images?.TV_BANNER ?? meta.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) }
             return GameInfo(
                 id: game.id,
                 title: meta.title ?? game.title,
@@ -156,7 +156,7 @@ actor GamesClient {
             id: id,
             title: app.title ?? id,
             boxArtUrl: app.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) },
-            heroBannerUrl: (app.images?.TV_BANNER ?? app.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0) },
+            heroBannerUrl: (app.images?.TV_BANNER ?? app.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) },
             isInLibrary: app.variants?.contains { $0.gfn?.library?.selected == true } ?? false,
             variants: variants.map {
                 GameVariant(id: $0.id, appStore: $0.appStore, appId: appId)
@@ -166,10 +166,10 @@ actor GamesClient {
 
     // MARK: - Helpers
 
-    private func optimizeImageUrl(_ url: String) -> String? {
+    private func optimizeImageUrl(_ url: String, width: Int = 272) -> String? {
         guard !url.isEmpty else { return nil }
         if url.contains("img.nvidiagrid.net") {
-            return "\(url);f=webp;w=272"
+            return "\(url);f=webp;w=\(width)"
         }
         return url
     }
