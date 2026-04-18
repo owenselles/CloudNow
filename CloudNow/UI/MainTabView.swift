@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MainTabView: View {
     @Environment(AuthManager.self) var authManager
-    @State private var viewModel = GamesViewModel()
+    @Environment(GamesViewModel.self) var viewModel
     @State private var gameToPlay: GameInfo?
     @State private var sessionToResume: ActiveSessionInfo? = nil
     @State private var directSessionToResume: SessionInfo? = nil
@@ -23,7 +23,7 @@ struct MainTabView: View {
                                 return appId == sessionAppId
                             }
                         }
-                        gameToPlay = game
+                        play(game, session: sessionToResume)
                     },
                     onResume: { rs in
                         directSessionToResume = rs.session
@@ -33,16 +33,15 @@ struct MainTabView: View {
                 )
             }
             Tab("Library", systemImage: "books.vertical.fill") {
-                LibraryView(games: viewModel.libraryGames, onPlay: { gameToPlay = $0 })
+                LibraryView(games: viewModel.libraryGames, onPlay: { play($0) })
             }
             Tab("Store", systemImage: "bag.fill") {
-                StoreView(games: viewModel.mainGames, onPlay: { gameToPlay = $0 })
+                StoreView(games: viewModel.mainGames, onPlay: { play($0) })
             }
             Tab("Settings", systemImage: "gearshape.fill") {
                 SettingsView()
             }
         }
-        .environment(viewModel)
         .task { await viewModel.load(authManager: authManager) }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
@@ -52,15 +51,12 @@ struct MainTabView: View {
             }
         }
         #if os(visionOS)
-        // On visionOS, open a full ImmersiveSpace instead of a modal cover.
-        // pendingGame/pendingSession are read by ImmersiveStreamView inside the space.
         .onChange(of: gameToPlay) { _, game in
             guard let game else { return }
             viewModel.pendingGame = game
             viewModel.pendingSession = sessionToResume
             Task { await openImmersiveSpace(id: "stream") }
         }
-        // When ImmersiveStreamView clears pendingGame on dismiss, sync gameToPlay back to nil.
         .onChange(of: viewModel.pendingGame) { _, pending in
             if pending == nil {
                 gameToPlay = nil
@@ -90,5 +86,10 @@ struct MainTabView: View {
             .environment(viewModel)
         }
         #endif
+    }
+
+    private func play(_ game: GameInfo, session: ActiveSessionInfo? = nil) {
+        sessionToResume = session
+        gameToPlay = game
     }
 }
