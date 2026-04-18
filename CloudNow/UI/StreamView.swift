@@ -132,7 +132,14 @@ struct StreamView: View {
                 pauseMenu
                     .transition(.opacity)
             }
+
+            if let warning = streamController.timeWarning, !showOverlay {
+                timeWarningBanner(warning)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
         }
+        .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
         .animation(.easeInOut(duration: 0.2), value: showOverlay)
         .alert("Exit Game?", isPresented: $showExitConfirmation) {
             Button("Exit", role: .destructive) { disconnect() }
@@ -251,6 +258,26 @@ struct StreamView: View {
         if fps >= 55 { return .green }
         if fps >= 30 { return .yellow }
         return .red
+    }
+
+    // MARK: Time Warning Banner
+
+    private func timeWarningBanner(_ warning: StreamTimeWarning) -> some View {
+        let (color, icon, message): (Color, String, String) = {
+            let timeText = warning.secondsLeft.map { " (\($0)s left)" } ?? ""
+            switch warning.code {
+            case 3: return (.red,    "clock.badge.xmark",     "Session ending soon\(timeText)")
+            case 2: return (.orange, "clock.badge.exclamationmark", "~5 minutes remaining\(timeText)")
+            default: return (.yellow, "clock",                "Session limit approaching\(timeText)")
+            }
+        }()
+        return Label(message, systemImage: icon)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(color.opacity(0.85), in: Capsule())
+            .padding(.top, 40)
     }
 
     // MARK: Disconnected / Failed

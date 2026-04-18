@@ -116,6 +116,81 @@ enum SDPMunger {
         return result.joined(separator: sep)
     }
 
+    // MARK: - H.265 Safety Rewrites
+
+    /// Rewrites `tier-flag=1` → `tier-flag=0` in all H.265 fmtp lines.
+    /// The server may advertise High tier which Apple's hardware decoder may reject.
+    static func rewriteH265TierFlag(_ sdp: String) -> String {
+        let sep = sdp.contains("\r\n") ? "\r\n" : "\n"
+        let lines = sdp.components(separatedBy: sep)
+        var h265PTs = Set<String>()
+        var inVideo = false
+
+        for line in lines {
+            if line.hasPrefix("m=video") { inVideo = true; continue }
+            if line.hasPrefix("m=") { inVideo = false }
+            guard inVideo, line.hasPrefix("a=rtpmap:") else { continue }
+            let rest = String(line.dropFirst("a=rtpmap:".count))
+            let parts = rest.components(separatedBy: " ")
+            guard parts.count >= 2 else { continue }
+            let name = parts[1].components(separatedBy: "/").first?.uppercased() ?? ""
+            if name == "H265" || name == "HEVC" { h265PTs.insert(String(parts[0])) }
+        }
+
+        guard !h265PTs.isEmpty else { return sdp }
+
+        let rewritten = lines.map { line -> String in
+            guard line.hasPrefix("a=fmtp:") else { return line }
+            let pt = String(line.dropFirst("a=fmtp:".count)).components(separatedBy: " ").first ?? ""
+            guard h265PTs.contains(pt) else { return line }
+            return line.replacingOccurrences(of: "tier-flag=1", with: "tier-flag=0",
+                                             options: .caseInsensitive)
+        }
+        return rewritten.joined(separator: sep)
+    }
+
+    /// Caps H.265 `level-id` values to hardware-safe maximums per profile.
+    /// Apple TV hardware decoder: Profile 1 (Main) → max 183 (L5.1); Profile 2 (Main10) → max 153 (L5.0).
+    static func rewriteH265LevelId(_ sdp: String) -> String {
+        let maxLevelByProfile: [Int: Int] = [1: 183, 2: 153]
+        let sep = sdp.contains("\r\n") ? "\r\n" : "\n"
+        let lines = sdp.components(separatedBy: sep)
+        var h265PTs = Set<String>()
+        var inVideo = false
+
+        for line in lines {
+            if line.hasPrefix("m=video") { inVideo = true; continue }
+            if line.hasPrefix("m=") { inVideo = false }
+            guard inVideo, line.hasPrefix("a=rtpmap:") else { continue }
+            let rest = String(line.dropFirst("a=rtpmap:".count))
+            let parts = rest.components(separatedBy: " ")
+            guard parts.count >= 2 else { continue }
+            let name = parts[1].components(separatedBy: "/").first?.uppercased() ?? ""
+            if name == "H265" || name == "HEVC" { h265PTs.insert(String(parts[0])) }
+        }
+
+        guard !h265PTs.isEmpty else { return sdp }
+
+        let rewritten = lines.map { line -> String in
+            guard line.hasPrefix("a=fmtp:") else { return line }
+            let afterColon = String(line.dropFirst("a=fmtp:".count))
+            let parts = afterColon.components(separatedBy: " ")
+            guard let pt = parts.first, h265PTs.contains(pt) else { return line }
+            let params = parts.dropFirst().joined(separator: " ")
+
+            guard let profileMatch = params.range(of: #"profile-id=(\d+)"#, options: .regularExpression),
+                  let levelMatch  = params.range(of: #"level-id=(\d+)"#,   options: .regularExpression) else {
+                return line
+            }
+            let profileNum = Int(String(params[profileMatch]).components(separatedBy: "=").last ?? "") ?? 0
+            let levelNum   = Int(String(params[levelMatch]).components(separatedBy: "=").last ?? "") ?? 0
+            guard let maxLevel = maxLevelByProfile[profileNum], levelNum > maxLevel else { return line }
+            return line.replacingOccurrences(of: "level-id=\(levelNum)", with: "level-id=\(maxLevel)",
+                                             options: .caseInsensitive)
+        }
+        return rewritten.joined(separator: sep)
+    }
+
     // MARK: - Private
 
     private static func rtpName(for codec: VideoCodec) -> String {

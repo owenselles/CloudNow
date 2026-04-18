@@ -11,6 +11,8 @@ private enum GFNInput {
     static let mouseBtnUp: UInt8   = 9
     static let mouseWheel: UInt8   = 10
     static let gamepad: UInt8      = 12
+    // Heartbeat type (u32 LE value 2) — keeps the server's virtual gamepad alive
+    static let heartbeatU32: UInt32 = 2
 
     // Gamepad packet is 38 bytes with 1-byte type (proven working format)
     static let gamepadPacketSize = 38
@@ -65,8 +67,20 @@ final class InputEncoder {
 
     func setProtocolVersion(_ v: Int) { protocolVersion = v }
 
+    // MARK: Heartbeat
+
+    /// Sends a keep-alive to hold the server's virtual gamepad state between real input events.
+    /// Encoded as a raw 4-byte u32 LE value 2 — no v3 wrapper (matches official client's Jc()).
+    func encodeHeartbeat() -> Data {
+        var buf = Data(count: 4)
+        writeUInt32LE(&buf, offset: 0, value: GFNInput.heartbeatU32)
+        return buf
+    }
+
     // MARK: Gamepad
 
+    /// Encodes a gamepad state packet.
+    /// - Parameter gamepadBitmap: Bitmask of connected controller slots (bit i = controller i active).
     func encodeGamepad(
         controllerId: Int,
         buttons: UInt16,
@@ -76,12 +90,12 @@ final class InputEncoder {
         leftStickY: Int16,
         rightStickX: Int16,
         rightStickY: Int16,
-        connected: Bool
+        gamepadBitmap: UInt8
     ) -> Data {
         var buf = Data(count: GFNInput.gamepadPacketSize)
         buf[0] = GFNInput.gamepad
         buf[1] = UInt8(controllerId & 0xFF)
-        buf[2] = connected ? 1 : 0
+        buf[2] = gamepadBitmap  // Connected-controller bitmask (bit i = controller i active)
         // buttons (little-endian uint16)
         buf[3] = UInt8(buttons & 0xFF)
         buf[4] = UInt8(buttons >> 8)
@@ -311,7 +325,11 @@ final class InputSender {
     private weak var channel: DataChannelSender?
     let encoder = InputEncoder()
     private var sendTimer: Timer?
+    private var heartbeatTimer: Timer?
     private var observations: [NSObjectProtocol] = []
+
+    // Gamepad bitmap: bit i = extended gamepad i is connected (matches official GFN protocol)
+    private var gamepadBitmap: UInt8 = 0
 
     // Siri Remote state tracking
     private var lastMicroDpad: (x: Float, y: Float) = (0, 0)
@@ -329,10 +347,18 @@ final class InputSender {
         sendTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.tick()
         }
+        // Heartbeat every 2 s — keeps the server's virtual gamepad alive between real inputs.
+        // Sent unconditionally (not gated on isPaused) to maintain the connection.
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.channel?.sendData(self.encoder.encodeHeartbeat())
+        }
     }
 
     func stop() {
         sendTimer?.invalidate()
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
         observations.forEach { NotificationCenter.default.removeObserver($0) }
         observations.removeAll()
     }
@@ -370,7 +396,7 @@ final class InputSender {
                 leftStickY: ly,
                 rightStickX: rx,
                 rightStickY: ry,
-                connected: true
+                gamepadBitmap: gamepadBitmap
             )
             channel?.sendData(data)
         }
@@ -431,7 +457,7 @@ final class InputSender {
                 leftTrigger: 0, rightTrigger: 0,
                 leftStickX: 0, leftStickY: 0,
                 rightStickX: 0, rightStickY: 0,
-                connected: true
+                gamepadBitmap: gamepadBitmap | 1  // Siri Remote acts as slot 0
             )
             channel?.sendData(data)
         }
@@ -523,10 +549,11 @@ final class InputSender {
     private func controllerConnected(_ controller: GCController) {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
+        gamepadBitmap |= (1 << UInt8(idx & 3))
         let data = encoder.encodeGamepad(
             controllerId: idx, buttons: 0, leftTrigger: 0, rightTrigger: 0,
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
-            connected: true
+            gamepadBitmap: gamepadBitmap
         )
         channel?.sendData(data)
     }
@@ -534,10 +561,11 @@ final class InputSender {
     private func controllerDisconnected(_ controller: GCController) {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
+        gamepadBitmap &= ~(1 << UInt8(idx & 3))
         let data = encoder.encodeGamepad(
             controllerId: idx, buttons: 0, leftTrigger: 0, rightTrigger: 0,
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
-            connected: false
+            gamepadBitmap: gamepadBitmap
         )
         channel?.sendData(data)
     }

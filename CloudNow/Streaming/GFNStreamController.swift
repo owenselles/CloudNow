@@ -8,6 +8,16 @@ import Foundation
 import LiveKitWebRTC
 import Observation
 
+// MARK: - Session Time Warning
+
+/// Severity levels for GFN session time-limit notifications from the control channel.
+struct StreamTimeWarning: Equatable {
+    /// 1 = approaching limit, 2 = 5 minutes left, 3 = last warning (imminent kick)
+    var code: Int
+    /// Seconds remaining as reported by the server, if available.
+    var secondsLeft: Int?
+}
+
 // MARK: - Stream State
 
 enum StreamState: Equatable {
@@ -43,6 +53,8 @@ final class GFNStreamController: NSObject {
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
     private(set) var bitrateHistory: [Double] = []
+    /// Active time-limit warning from the GFN server (nil when no warning is in effect).
+    private(set) var timeWarning: StreamTimeWarning?
     /// Incremented each time the user presses Menu while VideoSurfaceView is first responder.
     /// SwiftUI observes this via .onChange to toggle the HUD overlay.
     private(set) var menuPressCount: Int = 0
@@ -155,6 +167,7 @@ final class GFNStreamController: NSObject {
         videoView = nil
         remoteMode = .mouse
         menuPressCount = 0
+        timeWarning = nil
         state = .idle
     }
 
@@ -203,6 +216,20 @@ final class GFNStreamController: NSObject {
         guard let session = sessionInfo else { return }
         print("[Stream] Offer SDP (\(sdp.count) chars):")
         sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+
+        // Configure audio session for real-time streaming before creating the peer connection.
+        // .playback + .moviePlayback gives the lowest latency path; allowBluetooth covers
+        // Bluetooth headsets paired to Apple TV.
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playback,
+                mode: .moviePlayback,
+                options: [.allowBluetooth, .allowBluetoothA2DP]
+            )
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("[Stream] AVAudioSession configuration failed (non-fatal): \(error)")
+        }
 
         let iceServers: [LKRTCIceServer] = session.iceServers.map {
             LKRTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
@@ -300,7 +327,12 @@ final class GFNStreamController: NSObject {
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
             let codecFilteredSdp = SDPMunger.preferCodec(answer.sdp, codec: settings.codec)
-            let mangledAnswerSdp = SDPMunger.injectBandwidth(codecFilteredSdp, videoKbps: settings.maxBitrateKbps)
+            // For H.265: rewrite tier-flag=1→0 and cap level-id to hardware-safe values.
+            // Apple's decoder may reject High-tier or above-spec level-id advertisements.
+            let h265SafeSdp = settings.codec == .h265
+                ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(codecFilteredSdp))
+                : codecFilteredSdp
+            let mangledAnswerSdp = SDPMunger.injectBandwidth(h265SafeSdp, videoKbps: settings.maxBitrateKbps)
             print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
             mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
 
@@ -509,6 +541,20 @@ final class GFNStreamController: NSObject {
     }
 
     private func parseStats(_ report: LKRTCStatisticsReport) {
+        // Build codec name lookup: stat ID → human-readable name (e.g. "H.265", "AV1")
+        var codecNames: [String: String] = [:]
+        for (id, stat) in report.statistics where stat.type == "codec" {
+            if let mime = stat.values["mimeType"] as? String {
+                let raw = mime.components(separatedBy: "/").last ?? mime
+                switch raw.uppercased() {
+                case "H264":         codecNames[id] = "H.264"
+                case "H265", "HEVC": codecNames[id] = "H.265"
+                case "AV01", "AV1":  codecNames[id] = "AV1"
+                default:             codecNames[id] = raw
+                }
+            }
+        }
+
         for (_, stat) in report.statistics {
             if stat.type == "inbound-rtp", stat.values["kind"] as? String == "video" {
                 let bytesReceived = stat.values["bytesReceived"] as? Double ?? 0
@@ -529,14 +575,16 @@ final class GFNStreamController: NSObject {
                     stats.resolutionWidth  = Int(w)
                     stats.resolutionHeight = Int(h)
                 }
-                stats.codec = stat.values["codecId"] as? String ?? ""
+                // Resolve the codec name from the codecId reference (e.g. "RTCCodec_V_Inbound_127" → "H.265")
+                let codecId = stat.values["codecId"] as? String ?? ""
+                stats.codec = codecNames[codecId] ?? codecId
                 stats.jitterMs = (stat.values["jitter"] as? Double ?? 0) * 1000
                 let lost = stat.values["packetsLost"] as? Double ?? 0
                 let received = stat.values["packetsReceived"] as? Double ?? 0
                 if lost + received > 0 {
                     stats.packetLossPercent = lost / (lost + received) * 100
                 }
-                print("[Stats] framesReceived=\(Int(framesReceived)) framesDecoded=\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps)")
+                print("[Stats] framesReceived=\(Int(framesReceived)) framesDecoded=\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps) codec=\(stats.codec)")
             }
             if stat.type == "candidate-pair", stat.values["state"] as? String == "succeeded" {
                 stats.rttMs = (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000
@@ -653,10 +701,29 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
     }
 
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
-        // Log all control channel messages from server (JSON timerNotification etc.)
+        // Handle control channel messages (timerNotification etc.)
         if dataChannel.label == "control_channel" {
             let text = String(data: buffer.data, encoding: .utf8) ?? "<binary \(buffer.data.count)B>"
             print("[ControlChannel] Message: \(text)")
+
+            // Parse timerNotification — maps server codes to severity levels (matches OpenNOW)
+            if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
+               let notification = json["timerNotification"] as? [String: Any],
+               let rawCode = notification["code"] as? Int {
+                let mappedCode: Int?
+                switch rawCode {
+                case 1, 2: mappedCode = 1  // approaching limit
+                case 4:    mappedCode = 2  // ~5 minutes left
+                case 6:    mappedCode = 3  // last warning, kick imminent
+                default:   mappedCode = nil
+                }
+                if let code = mappedCode {
+                    let secondsLeft = notification["secondsLeft"] as? Int
+                    Task { @MainActor [weak self] in
+                        self?.timeWarning = StreamTimeWarning(code: code, secondsLeft: secondsLeft)
+                    }
+                }
+            }
             return
         }
 
