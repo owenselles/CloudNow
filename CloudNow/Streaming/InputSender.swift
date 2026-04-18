@@ -14,7 +14,7 @@ private enum GFNInput {
     // Heartbeat type (u32 LE value 2) — keeps the server's virtual gamepad alive
     static let heartbeatU32: UInt32 = 2
 
-    // Gamepad packet is 38 bytes with 1-byte type (proven working format)
+    // Gamepad packet: 38 bytes, u32 LE type per GFN protocol
     static let gamepadPacketSize = 38
     // Keyboard/mouse packets use 4-byte UInt32 LE type (matches TS InputEncoder)
     static let keyboardPacketSize    = 18
@@ -93,22 +93,22 @@ final class InputEncoder {
         gamepadBitmap: UInt8
     ) -> Data {
         var buf = Data(count: GFNInput.gamepadPacketSize)
-        buf[0] = GFNInput.gamepad
-        buf[1] = UInt8(controllerId & 0xFF)
-        buf[2] = gamepadBitmap  // Connected-controller bitmask (bit i = controller i active)
-        // buttons (little-endian uint16)
-        buf[3] = UInt8(buttons & 0xFF)
-        buf[4] = UInt8(buttons >> 8)
-        buf[5] = leftTrigger
-        buf[6] = rightTrigger
-        // axes (little-endian int16)
-        writeInt16LE(&buf, offset: 7, value: leftStickX)
-        writeInt16LE(&buf, offset: 9, value: leftStickY)
-        writeInt16LE(&buf, offset: 11, value: rightStickX)
-        writeInt16LE(&buf, offset: 13, value: rightStickY)
-        // timestamp (8 bytes, big-endian microseconds at offset 15)
-        writeTimestampBE(&buf, offset: 15)
-        // remaining bytes are zero padding to reach 38 bytes
+        writeUInt32LE(&buf, offset: 0,  value: 12)                        // type
+        writeUInt16LE(&buf, offset: 4,  value: 26)                        // payload size
+        writeUInt16LE(&buf, offset: 6,  value: UInt16(controllerId & 3))  // gamepad index
+        writeUInt16LE(&buf, offset: 8,  value: UInt16(gamepadBitmap))     // connected-controller bitmask
+        writeUInt16LE(&buf, offset: 10, value: 20)                        // inner payload size
+        writeUInt16LE(&buf, offset: 12, value: buttons)                   // XInput buttons
+        buf[14] = leftTrigger
+        buf[15] = rightTrigger
+        writeInt16LE(&buf, offset: 16, value: leftStickX)
+        writeInt16LE(&buf, offset: 18, value: leftStickY)
+        writeInt16LE(&buf, offset: 20, value: rightStickX)
+        writeInt16LE(&buf, offset: 22, value: rightStickY)
+        // buf[24–25]: reserved (zero)
+        buf[26] = 0x55  // magic constant required by GFN protocol
+        // buf[27–29]: reserved (zero)
+        writeTimestampLE(&buf, offset: 30)                                 // u64 LE microseconds
         return protocolVersion >= 3
             ? wrapGamepadPartiallyReliable(buf, gamepadIndex: controllerId)
             : buf
@@ -216,6 +216,23 @@ final class InputEncoder {
     }
 
     // MARK: Write Helpers
+
+    private func writeUInt16LE(_ buf: inout Data, offset: Int, value: UInt16) {
+        buf[offset]     = UInt8(value & 0xFF)
+        buf[offset + 1] = UInt8(value >> 8)
+    }
+
+    private func writeTimestampLE(_ buf: inout Data, offset: Int) {
+        let tsUs = UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        buf[offset]     = UInt8(tsUs        & 0xFF)
+        buf[offset + 1] = UInt8((tsUs >> 8)  & 0xFF)
+        buf[offset + 2] = UInt8((tsUs >> 16) & 0xFF)
+        buf[offset + 3] = UInt8((tsUs >> 24) & 0xFF)
+        buf[offset + 4] = UInt8((tsUs >> 32) & 0xFF)
+        buf[offset + 5] = UInt8((tsUs >> 40) & 0xFF)
+        buf[offset + 6] = UInt8((tsUs >> 48) & 0xFF)
+        buf[offset + 7] = UInt8((tsUs >> 56) & 0xFF)
+    }
 
     private func writeUInt32LE(_ buf: inout Data, offset: Int, value: UInt32) {
         buf[offset]     = UInt8(value & 0xFF)
