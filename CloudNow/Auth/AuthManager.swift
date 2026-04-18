@@ -30,6 +30,7 @@ final class AuthManager {
 
     private let api = NVIDIAAuthAPI()
     private var loginTask: Task<Void, Never>?
+    private var activeRefreshTask: Task<AuthSession, Error>?
 
     // MARK: Lifecycle
 
@@ -162,11 +163,27 @@ final class AuthManager {
     }
 
     private func refresh(session s: AuthSession) async throws -> AuthSession {
+        // Coalesce: if a refresh is already in-flight, wait for it instead of
+        // starting a second one (which would try to use an already-rotated token).
+        if let existing = activeRefreshTask {
+            return try await existing.value
+        }
+        let task = Task<AuthSession, Error> { @MainActor [weak self] in
+            guard let self else { throw AuthError.noSession }
+            defer { self.activeRefreshTask = nil }
+            return try await self.performRefresh(session: s)
+        }
+        activeRefreshTask = task
+        return try await task.value
+    }
+
+    private func performRefresh(session s: AuthSession) async throws -> AuthSession {
         var updated = s
         // Primary: client_token grant (re-binds to clientID, works cross-client).
         // Skip if the stored clientToken is already past its expiry — treat it the same as absent.
+        // Use ?? false so a missing expiry date is treated conservatively as expired.
         let clientTokenUsable = s.tokens.clientToken != nil &&
-            (s.tokens.clientTokenExpiresAt.map { $0 > Date() } ?? true)
+            (s.tokens.clientTokenExpiresAt.map { $0 > Date() } ?? false)
         if !clientTokenUsable {
             print("[Auth] clientToken absent or expired (expiresAt: \(s.tokens.clientTokenExpiresAt?.description ?? "nil")), skipping primary path")
         }
