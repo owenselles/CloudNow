@@ -90,6 +90,8 @@ struct StoreView: View {
                         }
                         #if os(tvOS)
                         .buttonStyle(.card)
+                        #else
+                        .buttonStyle(.plain)
                         #endif
                         .contextMenu {
                             if game.isInLibrary {

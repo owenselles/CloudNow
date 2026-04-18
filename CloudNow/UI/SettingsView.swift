@@ -5,6 +5,9 @@ struct SettingsView: View {
     @Environment(GamesViewModel.self) var viewModel
 
     @State private var showZonePicker = false
+    #if os(visionOS)
+    @AppStorage("gfn.immersionStyle") private var immersionStyleRaw: String = "full"
+    #endif
 
     var body: some View {
         @Bindable var vm = viewModel
@@ -99,6 +102,18 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                #if os(visionOS)
+                Section("Display") {
+                    Picker("Immersion Style", selection: $immersionStyleRaw) {
+                        Text("Full (Cinema)").tag("full")
+                        Text("Mixed (Floating)").tag("mixed")
+                    }
+                    Text("Full replaces your surroundings with a cinema-black background. Mixed keeps the game floating in your real environment. You can also switch between them with the Digital Crown while streaming.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                #endif
 
                 Section("Controller") {
                     LabeledContent("Deadzone") {

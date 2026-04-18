@@ -15,6 +15,12 @@ class GamesViewModel {
     var streamSettings: StreamSettings = StreamSettings()
     var subscription: SubscriptionInfo? = nil
 
+    #if os(visionOS)
+    /// Set before opening the ImmersiveSpace so the content view can read the pending game.
+    var pendingGame: GameInfo? = nil
+    var pendingSession: ActiveSessionInfo? = nil
+    #endif
+
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
 
