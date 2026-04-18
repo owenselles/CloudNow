@@ -26,7 +26,7 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 - **Full GFN streaming** — WebRTC-based, up to 4K@60fps or 1080p@120fps depending on your GFN plan
 - **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework
 - **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
-- **Live stats overlay** — bitrate, resolution, FPS, RTT, real packet loss % — toggle with the Menu button
+- **Live stats overlay** — bitrate, resolution, FPS, RTT, real packet loss % — toggle with the Play/Pause button
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
 
 ## Requirements
