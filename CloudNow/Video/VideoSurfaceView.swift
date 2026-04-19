@@ -267,23 +267,39 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     }
 }
 
+// MARK: - Streaming View Controller
+
+import GameController
+
+/// GCEventViewController subclass whose view IS the VideoSurfaceView.
+/// controllerUserInteractionEnabled = false prevents tvOS from routing any
+/// game-controller button (especially O/Circle → system back) through the
+/// focus engine while this VC is in the hierarchy.
+final class StreamingViewController: GCEventViewController {
+    let videoSurface = VideoSurfaceView()
+
+    override func loadView() {
+        controllerUserInteractionEnabled = false
+        view = videoSurface
+    }
+}
+
 // MARK: - SwiftUI Wrapper
 
 import SwiftUI
 
-struct VideoSurfaceViewRepresentable: UIViewRepresentable {
+struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
     let streamController: GFNStreamController
 
-    func makeUIView(context: Context) -> VideoSurfaceView {
-        let view = VideoSurfaceView()
-        // Bind on the next main-actor turn (makeUIView is not @MainActor but runs on main thread)
+    func makeUIViewController(context: Context) -> StreamingViewController {
+        let vc = StreamingViewController()
         Task { @MainActor in
-            streamController.bindVideoView(view)
+            streamController.bindVideoView(vc.videoSurface)
         }
-        return view
+        return vc
     }
 
-    func updateUIView(_ uiView: VideoSurfaceView, context: Context) {
-        uiView.videoTrack = streamController.videoTrack
+    func updateUIViewController(_ vc: StreamingViewController, context: Context) {
+        vc.videoSurface.videoTrack = streamController.videoTrack
     }
 }
