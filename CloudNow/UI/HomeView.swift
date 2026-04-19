@@ -6,7 +6,7 @@ struct HomeView: View {
 
     @Environment(GamesViewModel.self) var viewModel
     @Environment(AuthManager.self) var authManager
-    @State private var now = Date()
+    @State private var tick = 0
 
     var body: some View {
         ZStack {
@@ -59,11 +59,15 @@ struct HomeView: View {
         .onAppear {
             Task { await viewModel.refreshActiveSessions(authManager: authManager) }
         }
-        // Tick every second so the countdown stays live and we expire on time
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { t in
-            now = t
-            if viewModel.resumableSession?.isExpired == true {
-                viewModel.resumableSession = nil
+        .task(id: viewModel.resumableSession?.sessionId) {
+            guard viewModel.resumableSession != nil else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                tick &+= 1
+                if viewModel.resumableSession?.isExpired == true {
+                    viewModel.resumableSession = nil
+                    return
+                }
             }
         }
     }
