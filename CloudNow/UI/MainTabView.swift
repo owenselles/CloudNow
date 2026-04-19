@@ -57,7 +57,6 @@ struct MainTabView: View {
                 onDismiss: {
                     gameToPlay = nil
                     sessionToResume = nil
-                    viewModel.resumableSession = nil
                 },
                 onLeave: { leftGame, session in
                     viewModel.resumableSession = ResumableSession(
