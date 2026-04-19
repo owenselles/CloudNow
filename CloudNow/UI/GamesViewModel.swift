@@ -4,8 +4,7 @@ import UIKit
 
 struct ResumableSession {
     let game: GameInfo
-    let sessionId: String
-    let serverIp: String
+    let session: SessionInfo
     let leftAt: Date
     /// Grace window before we stop offering to resume (GFN keeps the session ~2 min).
     static let gracePeriod: TimeInterval = 110
@@ -14,16 +13,6 @@ struct ResumableSession {
         max(0, Int(Self.gracePeriod - Date().timeIntervalSince(leftAt)))
     }
     var isExpired: Bool { secondsRemaining == 0 }
-
-    var asActiveSessionInfo: ActiveSessionInfo {
-        ActiveSessionInfo(
-            sessionId: sessionId,
-            status: 2,
-            appId: game.variants.first?.appId,
-            serverIp: serverIp,
-            signalingUrl: "wss://\(serverIp):443/nvst/"
-        )
-    }
 }
 
 @Observable

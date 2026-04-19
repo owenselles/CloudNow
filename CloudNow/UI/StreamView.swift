@@ -12,6 +12,8 @@ struct StreamView: View {
     let game: GameInfo
     var settings: StreamSettings = StreamSettings()
     var existingSession: ActiveSessionInfo? = nil
+    /// When set, skips CloudMatch entirely and reconnects WebRTC directly using the stored session.
+    var directSession: SessionInfo? = nil
     let onDismiss: () -> Void
     /// Called when the user leaves without ending the session so the caller can offer a resume.
     var onLeave: ((GameInfo, SessionInfo) -> Void)? = nil
@@ -360,6 +362,15 @@ struct StreamView: View {
     private func startSession() async {
         // Reset stream controller (handles retry from failed/disconnected state)
         streamController.disconnect()
+
+        // Direct reconnect path — session is still live, skip CloudMatch and re-attach WebRTC.
+        if let direct = directSession {
+            loadingPhase = .preparing
+            createdSession = direct
+            viewModel.recordPlayed(game)
+            await streamController.connect(session: direct, settings: settings)
+            return
+        }
 
         // Stop any previously created server session before opening a new one.
         // Skip for resume — we want to keep the existing session alive.
