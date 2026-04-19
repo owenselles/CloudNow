@@ -82,7 +82,12 @@ final class VideoSurfaceView: UIView {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if press.type == .playPause && !gamepadModeActive {
+            if press.type == .menu && gamepadModeActive {
+                // In gamepad mode, O/Circle generates a .menu UIKit press that would trigger
+                // system back navigation. Consume it here so the OS never sees it.
+                // The button input still reaches the game via GCController polling.
+                handled = true
+            } else if press.type == .playPause && !gamepadModeActive {
                 // Play/Pause toggles the HUD overlay (Siri Remote only).
                 // Suppressed when a gamepad is in control — the overlay is toggled there
                 // via Options long press detected in InputSender.tick().
