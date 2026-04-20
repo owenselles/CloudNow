@@ -5,7 +5,7 @@ import Foundation
 struct StreamSettings: Codable, Equatable {
     var resolution: String = "1920x1080"
     var fps: Int = 60
-    var maxBitrateKbps: Int = 20_000 { didSet { maxBitrateKbps = min(maxBitrateKbps, 35_000) } }
+    var maxBitrateKbps: Int = 20_000 { didSet { maxBitrateKbps = max(15_000, min(100_000, maxBitrateKbps)) } }
     var codec: VideoCodec = .h264
     var colorQuality: ColorQuality = .sdr8bit
     var keyboardLayout: String = "en-US"

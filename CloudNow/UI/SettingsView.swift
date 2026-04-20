@@ -62,6 +62,12 @@ struct SettingsView: View {
                         Text("Korean").tag("ko_KR")
                     }
 
+                    Picker("Max Bitrate", selection: $vm.streamSettings.maxBitrateKbps) {
+                        ForEach([15_000, 20_000, 25_000, 30_000, 35_000, 40_000, 50_000, 60_000, 80_000, 100_000], id: \.self) { kbps in
+                            Text("\(kbps / 1_000) Mbps").tag(kbps)
+                        }
+                    }
+
                     Toggle("Low Latency Mode (L4S)", isOn: $vm.streamSettings.enableL4S)
                     Text("Reduces buffering on networks with L4S support (requires a compatible router and ISP).")
                         .font(.caption)

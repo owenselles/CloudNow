@@ -209,28 +209,31 @@ struct StreamView: View {
                     history: streamController.bitrateHistory,
                     color: .cyan
                 )
-                Divider().overlay(.white.opacity(0.4))
+                Divider().overlay(.white.opacity(0.5))
                 Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
+                    .foregroundStyle(.white)
                 Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(streamController.stats.packetLossPercent > 2 ? Color.orange : Color.white)
                 if !streamController.stats.gpuType.isEmpty {
                     Label(streamController.stats.gpuType, systemImage: "cpu")
+                        .foregroundStyle(.white)
                 }
                 if let sub = viewModel.subscription, !sub.isUnlimited, let rem = sub.remainingMinutes {
-                    Divider().overlay(.white.opacity(0.4))
+                    Divider().overlay(.white.opacity(0.5))
                     Label {
                         Text(rem >= 60 ? "\(rem / 60)h \(rem % 60)m remaining" : "\(rem)m remaining")
                     } icon: {
                         Image(systemName: "clock")
-                            .foregroundStyle(rem < 30 ? .orange : .white.opacity(0.7))
+                            .foregroundStyle(rem < 30 ? .orange : .white)
                     }
                     .foregroundStyle(rem < 30 ? .orange : .white)
                 }
             }
-            .font(.caption.weight(.medium))
+            .font(.callout.weight(.medium))
             .foregroundStyle(.white)
         }
         .padding(32)
-        .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 16))
+        .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 16))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .padding(60)
     }

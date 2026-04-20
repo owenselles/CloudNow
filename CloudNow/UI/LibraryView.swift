@@ -59,6 +59,7 @@ struct LibraryView: View {
                     gameGrid
                 }
             }
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search library")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -73,7 +74,6 @@ struct LibraryView: View {
                 }
             }
         }
-        .searchable(text: $searchText, prompt: "Search library")
     }
 
     private var gameGrid: some View {
