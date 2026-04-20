@@ -758,6 +758,10 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             sender.setProtocolVersion(version)
             sender.deadzone = Float(self.settings.controllerDeadzone)
             sender.menuToggleHandler = { [weak self] in self?.handleMenuPress() }
+            sender.onRemoteModeChanged = { [weak self] mode in
+                self?.remoteMode = mode
+                self?.videoView?.gamepadModeActive = (mode == .gamepad)
+            }
             sender.start()
             self.inputSender = sender
             // Forward keyboard/mouse events from the video surface to the sender

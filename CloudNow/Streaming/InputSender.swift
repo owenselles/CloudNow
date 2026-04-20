@@ -344,6 +344,9 @@ final class InputSender {
     /// Called when the user long-presses the Options button to toggle the stats overlay.
     var menuToggleHandler: (() -> Void)?
 
+    /// Called when remoteMode changes due to controller connect/disconnect auto-switching.
+    var onRemoteModeChanged: ((RemoteInputMode) -> Void)?
+
     private weak var channel: DataChannelSender?
     let encoder = InputEncoder()
     private var sendTimer: Timer?
@@ -646,11 +649,15 @@ final class InputSender {
 
     private func controllerConnected(_ controller: GCController) {
         guard controller.extendedGamepad != nil else { return }
-        // Only take ownership of buttons when already in gamepad mode;
-        // in mouse mode the controller is left for tvOS system navigation.
-        if remoteMode == .gamepad { claimControllerInput(controller) }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
         gamepadBitmap |= (1 << UInt8(idx & 3))
+        // Auto-switch to gamepad mode when a real controller connects.
+        if remoteMode == .mouse {
+            toggleRemoteMode()
+            onRemoteModeChanged?(remoteMode)
+        } else {
+            claimControllerInput(controller)
+        }
         let data = encoder.encodeGamepad(
             controllerId: idx, buttons: 0, leftTrigger: 0, rightTrigger: 0,
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
@@ -663,6 +670,11 @@ final class InputSender {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
         gamepadBitmap &= ~(1 << UInt8(idx & 3))
+        // Revert to mouse mode when the last controller disconnects.
+        if gamepadBitmap == 0 && remoteMode == .gamepad {
+            toggleRemoteMode()
+            onRemoteModeChanged?(remoteMode)
+        }
         let data = encoder.encodeGamepad(
             controllerId: idx, buttons: 0, leftTrigger: 0, rightTrigger: 0,
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
