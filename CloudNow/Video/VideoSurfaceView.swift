@@ -78,10 +78,10 @@ final class VideoSurfaceView: UIView {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if press.type == .playPause {
-                // Play/Pause toggles the HUD overlay. Unlike Menu, this button has no
-                // OS-level override, so marking it handled here fully suppresses system action.
-                // GFNStreamController increments menuPressCount so SwiftUI reacts via .onChange.
+            if press.type == .menu || press.type == .playPause {
+                // Menu (Siri Remote back button, Xbox B) and Play/Pause both toggle the HUD overlay.
+                // Intercepting .menu here prevents tvOS from treating it as a system back gesture,
+                // which would dismiss StreamView. The game's back action is sent via XInput instead.
                 menuPressHandler?()
                 handled = true
             } else if let key = press.key, let mapping = Self.hidToKeyMapping[key.keyCode] {
@@ -100,7 +100,9 @@ final class VideoSurfaceView: UIView {
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if let key = press.key, let mapping = Self.hidToKeyMapping[key.keyCode] {
+            if press.type == .menu || press.type == .playPause {
+                handled = true
+            } else if let key = press.key, let mapping = Self.hidToKeyMapping[key.keyCode] {
                 inputHandler?.sendKeyEvent(
                     down: false,
                     vk: mapping.vk,
