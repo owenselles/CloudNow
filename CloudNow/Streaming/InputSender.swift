@@ -558,6 +558,9 @@ final class InputSender {
                 gamepadBitmap: gamepadBitmap | 1  // Siri Remote acts as slot 0
             )
             channel?.sendData(data)
+
+        case .dualsense:
+            break  // Siri Remote is suppressed in DualSense mode; touchpad handled separately
         }
     }
 
