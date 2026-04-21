@@ -129,7 +129,7 @@ struct StreamView: View {
 
     private var streamingView: some View {
         ZStack {
-            VideoSurfaceViewRepresentable(streamController: streamController)
+            VideoSurfaceViewRepresentable(streamController: streamController, showOverlay: showOverlay)
                 .ignoresSafeArea()
 
             if showOverlay {
@@ -145,6 +145,11 @@ struct StreamView: View {
         }
         .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
         .animation(.easeInOut(duration: 0.2), value: showOverlay)
+        .onChange(of: showOverlay) { _, showing in
+            // Pause game input while overlay is open in gamepad mode so D-pad
+            // navigates overlay buttons instead of moving the in-game character.
+            streamController.setInputPaused(showing && streamController.remoteMode == .gamepad)
+        }
         .alert("End Session?", isPresented: $showExitConfirmation) {
             Button("End Session", role: .destructive) { disconnect() }
             Button("Keep Playing", role: .cancel) { }

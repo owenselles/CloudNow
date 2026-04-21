@@ -199,6 +199,7 @@ struct SettingsView: View {
 private struct ZonePickerView: View {
     @Binding var selectedZoneUrl: String?
     @Environment(\.dismiss) private var dismiss
+    @Environment(GamesViewModel.self) private var viewModel
 
     @State private var zones: [GFNZone] = []
     @State private var isLoading = true
@@ -215,7 +216,7 @@ private struct ZonePickerView: View {
         }
     }
 
-    private var autoZone: GFNZone? { zones.autoZone }
+    private var autoZone: GFNZone? { zones.autoZone(isUnlimited: viewModel.subscription?.isUnlimited ?? false) }
 
     var body: some View {
         NavigationStack {

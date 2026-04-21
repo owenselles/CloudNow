@@ -9,67 +9,65 @@ struct HomeView: View {
     @State private var tick = 0
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack {
+            Color.black.ignoresSafeArea()
 
-                if viewModel.isLoading {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            Color.gray.opacity(0.2)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 420)
-                                .shimmer()
-                            VStack(alignment: .leading, spacing: 48) {
-                                skeletonRow
-                                skeletonRow
-                            }
-                            .padding(.top, 48)
-                            .padding(.bottom, 60)
+            if viewModel.isLoading {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Color.gray.opacity(0.2)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 420)
+                            .shimmer()
+                        VStack(alignment: .leading, spacing: 48) {
+                            skeletonRow
+                            skeletonRow
                         }
+                        .padding(.top, 48)
+                        .padding(.bottom, 60)
                     }
-                } else if viewModel.continuePlaying.isEmpty && viewModel.recentlyPlayedGames.isEmpty && viewModel.favoriteGames.isEmpty && activeResumable == nil {
-                    emptyState
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            // Hero banner: resumable → active session → recently played → favorite
-                            if let rs = activeResumable {
-                                resumeBanner(rs)
-                            } else if let hero = viewModel.continuePlaying.first ?? viewModel.recentlyPlayedGames.first ?? viewModel.favoriteGames.first {
-                                heroBanner(hero)
-                            }
-
-                            VStack(alignment: .leading, spacing: 48) {
-                                if !viewModel.continuePlaying.isEmpty {
-                                    gameRow(title: "Resume Stream", games: viewModel.continuePlaying, badge: "LIVE")
-                                }
-                                if !viewModel.recentlyPlayedGames.isEmpty {
-                                    gameRow(title: "Recently Played", games: viewModel.recentlyPlayedGames)
-                                }
-                                if !viewModel.favoriteGames.isEmpty {
-                                    gameRow(title: "Favorites", games: viewModel.favoriteGames)
-                                }
-                            }
-                            .padding(.top, 48)
-                            .padding(.bottom, 60)
+                }
+            } else if viewModel.continuePlaying.isEmpty && viewModel.recentlyPlayedGames.isEmpty && viewModel.favoriteGames.isEmpty && activeResumable == nil {
+                emptyState
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Hero banner: resumable → active session → recently played → favorite
+                        if let rs = activeResumable {
+                            resumeBanner(rs)
+                        } else if let hero = viewModel.continuePlaying.first ?? viewModel.recentlyPlayedGames.first ?? viewModel.favoriteGames.first {
+                            heroBanner(hero)
                         }
+
+                        VStack(alignment: .leading, spacing: 48) {
+                            if !viewModel.continuePlaying.isEmpty {
+                                gameRow(title: "Resume Stream", games: viewModel.continuePlaying, badge: "LIVE")
+                            }
+                            if !viewModel.recentlyPlayedGames.isEmpty {
+                                gameRow(title: "Recently Played", games: viewModel.recentlyPlayedGames)
+                            }
+                            if !viewModel.favoriteGames.isEmpty {
+                                gameRow(title: "Favorites", games: viewModel.favoriteGames)
+                            }
+                        }
+                        .padding(.top, 48)
+                        .padding(.bottom, 60)
                     }
                 }
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .onAppear {
-                Task { await viewModel.refreshActiveSessions(authManager: authManager) }
-            }
-            .task(id: viewModel.resumableSession?.session.sessionId) {
-                guard viewModel.resumableSession != nil else { return }
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(1))
-                    tick &+= 1
-                    if viewModel.resumableSession?.isExpired == true {
-                        viewModel.resumableSession = nil
-                        return
-                    }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            Task { await viewModel.refreshActiveSessions(authManager: authManager) }
+        }
+        .task(id: viewModel.resumableSession?.session.sessionId) {
+            guard viewModel.resumableSession != nil else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                tick &+= 1
+                if viewModel.resumableSession?.isExpired == true {
+                    viewModel.resumableSession = nil
+                    return
                 }
             }
         }

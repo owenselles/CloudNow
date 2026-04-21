@@ -126,9 +126,11 @@ actor ZoneClient {
 // MARK: - Auto-routing
 
 extension [GFNZone] {
-    /// Best zone by weighted score: 40% ping + 60% queue position.
-    var autoZone: GFNZone? {
+    /// Best zone by subscription tier. Unlimited subscribers always get a slot so
+    /// proximity dominates; free/priority users balance ping (40%) against queue depth (60%).
+    func autoZone(isUnlimited: Bool = false) -> GFNZone? {
         guard !isEmpty else { return nil }
+        if isUnlimited { return closestZone }
         let maxPing  = Swift.max(compactMap(\.pingMs).max() ?? 1, 1)
         let maxQueue = Swift.max(map(\.queuePosition).max() ?? 1, 1)
         return min {
