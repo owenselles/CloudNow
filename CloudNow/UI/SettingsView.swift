@@ -35,6 +35,15 @@ struct SettingsView: View {
                             Text(colorQualityLabel(q)).tag(q)
                         }
                     }
+                    if vm.streamSettings.colorQuality == .hdr10bit {
+                        Text("⚠️ Experimental — GFN may downscale the stream to ~540p when HDR is enabled.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else if vm.streamSettings.colorQuality == .sdr10bit {
+                        Text("Recommended — full resolution with better color than 8-bit, no server-side penalties.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     Picker("Keyboard Layout", selection: $vm.streamSettings.keyboardLayout) {
                         Text("English (US)").tag("en-US")
