@@ -160,6 +160,14 @@ struct SettingsView: View {
                     Text("Long-press this button during play to open the GFN overlay. Switch if it conflicts with an in-game action.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Picker("Default Input Mode", selection: $vm.streamSettings.defaultRemoteInputMode) {
+                        Text("Mouse").tag(RemoteInputMode.mouse)
+                        Text("Gamepad").tag(RemoteInputMode.gamepad)
+                        Text("DualSense").tag(RemoteInputMode.dualsense)
+                    }
+                    Text("Siri Remote mode at stream start. Can be changed mid-session from the overlay menu.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     LabeledContent("Protocol", value: "XInput v2/v3")
                 }
 

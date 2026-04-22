@@ -42,7 +42,7 @@ private enum GFNInput {
 
 // MARK: - Remote Input Mode
 
-enum RemoteInputMode {
+enum RemoteInputMode: String, Codable, Equatable {
     case mouse
     case gamepad
     case dualsense
@@ -334,7 +334,7 @@ final class InputSender {
     static let remoteSensitivity: Float = 250.0
 
     /// Siri Remote input mode. Defaults to .mouse so the touchpad drives the cursor.
-    private(set) var remoteMode: RemoteInputMode = .mouse
+    var remoteMode: RemoteInputMode = .mouse
 
     /// Radial deadzone for analog stick axes (0.0–1.0). Set from StreamSettings.controllerDeadzone.
     var deadzone: Float = 0.15

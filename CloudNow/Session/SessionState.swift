@@ -16,6 +16,8 @@ struct StreamSettings: Codable, Equatable {
     var controllerDeadzone: Double = 0.15
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
     var overlayTriggerButton: OverlayTriggerButton = .start
+    /// Default Siri Remote input mode when a stream session starts.
+    var defaultRemoteInputMode: RemoteInputMode = .mouse
     /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
     /// nil = let the GFN default VPC handle routing.
     var preferredZoneUrl: String? = nil
