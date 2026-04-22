@@ -196,7 +196,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("")
             .sheet(isPresented: $showZonePicker) {
                 ZonePickerView(selectedZoneUrl: $vm.streamSettings.preferredZoneUrl)
             }
