@@ -44,19 +44,27 @@ struct SettingsView: View {
                         }
                     }
 
-                    Picker("Color Quality", selection: $vm.streamSettings.colorQuality) {
+                    Picker(selection: $vm.streamSettings.colorQuality) {
                         ForEach(ColorQuality.allCases, id: \.self) { q in
                             Text(colorQualityLabel(q)).tag(q)
                         }
-                    }
-                    if vm.streamSettings.colorQuality == .hdr10bit {
-                        Text("⚠️ Experimental — GFN may downscale the stream to ~540p when HDR is enabled.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    } else if vm.streamSettings.colorQuality == .sdr10bit {
-                        Text("Recommended — full resolution with better color than 8-bit, no server-side penalties.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Color Quality")
+                            if vm.streamSettings.colorQuality == .hdr10bit {
+                                Text("⚠️ Experimental — GFN may downscale to ~540p when HDR is enabled.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            } else if vm.streamSettings.colorQuality == .sdr10bit {
+                                Text("Recommended — full resolution with better color than 8-bit.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Standard dynamic range, widely compatible.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
 
                     Picker("Keyboard Layout", selection: $vm.streamSettings.keyboardLayout) {
@@ -106,10 +114,14 @@ struct SettingsView: View {
                         }
                     }
 
-                    Toggle("Low Latency Mode (L4S)", isOn: $vm.streamSettings.enableL4S)
-                    Text("Reduces buffering on networks with L4S support (requires a compatible router and ISP).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Toggle(isOn: $vm.streamSettings.enableL4S) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Low Latency Mode (L4S)")
+                            Text("Reduces buffering on networks with L4S support (requires a compatible router and ISP).")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 Section("Server Region") {
@@ -117,7 +129,12 @@ struct SettingsView: View {
                         showZonePicker = true
                     } label: {
                         HStack {
-                            Text("Preferred Zone")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Preferred Zone")
+                                Text("Auto routing picks the best balance of ping and queue depth. Tap to pin a specific region.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text(zoneLabel(vm.streamSettings.preferredZoneUrl))
                                 .foregroundStyle(.secondary)
@@ -131,21 +148,21 @@ struct SettingsView: View {
                         }
                         .foregroundStyle(.secondary)
                     }
-
-                    Text("Auto routing selects the zone with the best balance of ping and queue depth. Manual zone selection lets you pin a specific region.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 Section("Microphone") {
-                    Toggle("Use Microphone", isOn: $vm.streamSettings.micEnabled)
-                    Text("Enables voice chat via a connected Bluetooth headset or AirPods. Requires microphone permission.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Toggle(isOn: $vm.streamSettings.micEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Use Microphone")
+                            Text("Enables voice chat via a connected Bluetooth headset or AirPods. Requires microphone permission.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 Section("Controller") {
-                    LabeledContent("Deadzone") {
+                    LabeledContent {
                         HStack(spacing: 16) {
                             Button {
                                 vm.streamSettings.controllerDeadzone = max(0.05, vm.streamSettings.controllerDeadzone - 0.01)
@@ -164,26 +181,38 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Deadzone")
+                            Text("Increase if your controller drifts at rest. Default: 15%.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    Text("Increase if your controller drifts at rest. Default: 15%.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("Overlay Button", selection: $vm.streamSettings.overlayTriggerButton) {
+                    Picker(selection: $vm.streamSettings.overlayTriggerButton) {
                         ForEach(OverlayTriggerButton.allCases, id: \.self) { btn in
                             Text(btn.rawValue).tag(btn)
                         }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Overlay Button")
+                            Text("Long-press this button during play to open the GFN overlay. Switch if it conflicts with an in-game action.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    Text("Long-press this button during play to open the GFN overlay. Switch if it conflicts with an in-game action.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("Default Input Mode", selection: $vm.streamSettings.defaultRemoteInputMode) {
+                    Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
                         Text("Mouse").tag(RemoteInputMode.mouse)
                         Text("Gamepad").tag(RemoteInputMode.gamepad)
                         Text("DualSense").tag(RemoteInputMode.dualsense)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Default Input Mode")
+                            Text("Siri Remote mode at stream start. Can be changed mid-session from the overlay menu.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    Text("Siri Remote mode at stream start. Can be changed mid-session from the overlay menu.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     LabeledContent("Protocol", value: "XInput v2/v3")
                 }
 
