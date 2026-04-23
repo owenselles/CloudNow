@@ -65,6 +65,7 @@ struct SettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .padding(.vertical, 8)
                     }
 
                     Picker("Keyboard Layout", selection: $vm.streamSettings.keyboardLayout) {
@@ -121,6 +122,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 8)
                     }
                 }
 
@@ -135,6 +137,7 @@ struct SettingsView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                            .padding(.vertical, 8)
                             Spacer()
                             Text(zoneLabel(vm.streamSettings.preferredZoneUrl))
                                 .foregroundStyle(.secondary)
@@ -158,6 +161,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 8)
                     }
                 }
 
@@ -188,6 +192,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 8)
                     }
                     Picker(selection: $vm.streamSettings.overlayTriggerButton) {
                         ForEach(OverlayTriggerButton.allCases, id: \.self) { btn in
@@ -200,6 +205,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 8)
                     }
                     Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
                         Text("Mouse").tag(RemoteInputMode.mouse)
@@ -212,6 +218,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 8)
                     }
                     LabeledContent("Protocol", value: "XInput v2/v3")
                 }
