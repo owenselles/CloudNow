@@ -79,7 +79,7 @@ struct LibraryView: View {
             LazyVGrid(columns: columns, spacing: 40) {
                 ForEach(filteredGames) { game in
                     Button {
-                        onPlay(game)
+                        onPlay(viewModel.gameWithPreferredStore(game))
                     } label: {
                         GameCardLabel(game: game)
                     }
@@ -98,13 +98,15 @@ struct LibraryView: View {
                         if game.variants.count > 1 {
                             Menu("Launch via...") {
                                 ForEach(game.variants, id: \.id) { variant in
-                                    Button(variant.storeName) {
-                                        var g = game
-                                        if let idx = g.variants.firstIndex(of: variant), idx != 0 {
-                                            g.variants.remove(at: idx)
-                                            g.variants.insert(variant, at: 0)
+                                    Button {
+                                        viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
+                                    } label: {
+                                        let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+                                        if isSelected {
+                                            Label(variant.storeName, systemImage: "checkmark")
+                                        } else {
+                                            Text(variant.storeName)
                                         }
-                                        onPlay(g)
                                     }
                                 }
                             }

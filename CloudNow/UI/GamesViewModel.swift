@@ -25,6 +25,7 @@ class GamesViewModel {
     var libraryError: String?
 
     var favoriteIds: Set<String> = []
+    var preferredStoreIds: [String: String] = [:]
     var recentlyPlayedIds: [String] = []
     var streamSettings: StreamSettings = StreamSettings()
     var subscription: SubscriptionInfo? = nil
@@ -38,6 +39,10 @@ class GamesViewModel {
         if let data = UserDefaults.standard.data(forKey: "gfn.favoriteIds"),
            let ids = try? JSONDecoder().decode([String].self, from: data) {
             self.favoriteIds = Set(ids)
+        }
+        if let data = UserDefaults.standard.data(forKey: "gfn.preferredStores"),
+           let stores = try? JSONDecoder().decode([String: String].self, from: data) {
+            self.preferredStoreIds = stores
         }
         if let data = UserDefaults.standard.data(forKey: "gfn.recentlyPlayed"),
            let ids = try? JSONDecoder().decode([String].self, from: data) {
@@ -163,6 +168,28 @@ class GamesViewModel {
         if recentlyPlayedIds.count > 10 { recentlyPlayedIds = Array(recentlyPlayedIds.prefix(10)) }
         let data = try? JSONEncoder().encode(recentlyPlayedIds)
         UserDefaults.standard.set(data, forKey: "gfn.recentlyPlayed")
+    }
+
+    // MARK: Preferred Store
+
+    func setPreferredStore(gameId: String, variantId: String) {
+        preferredStoreIds[gameId] = variantId
+        let data = try? JSONEncoder().encode(preferredStoreIds)
+        UserDefaults.standard.set(data, forKey: "gfn.preferredStores")
+    }
+
+    func preferredVariantId(for game: GameInfo) -> String? {
+        preferredStoreIds[game.id] ?? game.variants.first?.id
+    }
+
+    func gameWithPreferredStore(_ game: GameInfo) -> GameInfo {
+        guard let preferredId = preferredStoreIds[game.id],
+              let idx = game.variants.firstIndex(where: { $0.id == preferredId }),
+              idx != 0 else { return game }
+        var g = game
+        let preferred = g.variants.remove(at: idx)
+        g.variants.insert(preferred, at: 0)
+        return g
     }
 
     // MARK: Favorites
