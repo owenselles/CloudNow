@@ -91,17 +91,16 @@ struct SettingsView: View {
                                 vm.streamSettings.maxBitrateKbps = max(15_000, vm.streamSettings.maxBitrateKbps - 5_000)
                             } label: {
                                 Image(systemName: "minus.circle")
-                                    .padding(.horizontal, 16)
                             }
                             .buttonStyle(.plain)
                             Text("\(vm.streamSettings.maxBitrateKbps / 1000) Mbps")
                                 .monospacedDigit()
                                 .frame(minWidth: 72)
+                                .padding(.horizontal, 24)
                             Button {
                                 vm.streamSettings.maxBitrateKbps = min(100_000, vm.streamSettings.maxBitrateKbps + 5_000)
                             } label: {
                                 Image(systemName: "plus.circle")
-                                    .padding(.horizontal, 16)
                             }
                             .buttonStyle(.plain)
                         }
@@ -152,17 +151,16 @@ struct SettingsView: View {
                                 vm.streamSettings.controllerDeadzone = max(0.05, vm.streamSettings.controllerDeadzone - 0.01)
                             } label: {
                                 Image(systemName: "minus.circle")
-                                    .padding(.horizontal, 16)
                             }
                             .buttonStyle(.plain)
                             Text("\(Int(vm.streamSettings.controllerDeadzone * 100))%")
                                 .monospacedDigit()
                                 .frame(minWidth: 44)
+                                .padding(.horizontal, 24)
                             Button {
                                 vm.streamSettings.controllerDeadzone = min(0.30, vm.streamSettings.controllerDeadzone + 0.01)
                             } label: {
                                 Image(systemName: "plus.circle")
-                                    .padding(.horizontal, 16)
                             }
                             .buttonStyle(.plain)
                         }
