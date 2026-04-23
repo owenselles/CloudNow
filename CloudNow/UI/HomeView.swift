@@ -139,47 +139,7 @@ struct HomeView: View {
     // MARK: Hero Banner
 
     private func heroBanner(_ game: GameInfo) -> some View {
-        ZStack(alignment: .bottom) {
-            AsyncImage(url: game.heroBannerUrl.flatMap { URL(string: $0) }) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                case .failure, .empty:
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
-                @unknown default:
-                    Color.gray.opacity(0.2)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 420)
-
-            LinearGradient(
-                colors: [.black.opacity(0.85), .black.opacity(0.5), .clear],
-                startPoint: .bottom,
-                endPoint: UnitPoint(x: 0.5, y: 0.55)
-            )
-
-            HStack {
-                Button {
-                    onPlay(game)
-                } label: {
-                    Label("Play", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                Spacer()
-            }
-            .padding(.horizontal, 40)
-            .padding(.vertical, 28)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 420)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .padding(.horizontal, 60)
-        .focusSection()
+        HeroBannerView(game: game, onPlay: onPlay)
     }
 
     // MARK: Game Row
@@ -265,5 +225,70 @@ struct HomeView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 500)
         }
+    }
+}
+
+// MARK: - Hero Banner View
+
+private struct HeroBannerView: View {
+    let game: GameInfo
+    let onPlay: (GameInfo) -> Void
+    @State private var attempt = 0
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            AsyncImage(url: game.heroBannerUrl.flatMap { URL(string: $0) }) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                case .failure:
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.2))
+                        .shimmer()
+                        .onAppear {
+                            guard attempt < 3 else { return }
+                            Task {
+                                try? await Task.sleep(for: .seconds(pow(2.0, Double(attempt)) * 0.5))
+                                attempt += 1
+                            }
+                        }
+                case .empty:
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.2))
+                        .shimmer()
+                @unknown default:
+                    Color.gray.opacity(0.2)
+                }
+            }
+            .id(attempt)
+            .frame(maxWidth: .infinity)
+            .frame(height: 420)
+
+            LinearGradient(
+                colors: [.black.opacity(0.85), .black.opacity(0.5), .clear],
+                startPoint: .bottom,
+                endPoint: UnitPoint(x: 0.5, y: 0.55)
+            )
+
+            HStack {
+                Button {
+                    onPlay(game)
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                Spacer()
+            }
+            .padding(.horizontal, 40)
+            .padding(.vertical, 28)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 420)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .padding(.horizontal, 60)
+        .focusSection()
     }
 }
