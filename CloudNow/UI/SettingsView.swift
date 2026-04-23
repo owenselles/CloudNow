@@ -13,8 +13,22 @@ struct SettingsView: View {
             Form {
                 Section("Stream Quality") {
                     Picker("Resolution", selection: $vm.streamSettings.resolution) {
-                        ForEach(viewModel.availableResolutions, id: \.self) { res in
-                            Text(res).tag(res)
+                        let common = commonResolutions.filter { viewModel.availableResolutions.contains($0.res) }
+                        let other  = viewModel.availableResolutions.filter { res in !commonResolutions.map(\.res).contains(res) }
+                        if !common.isEmpty {
+                            Section("TV Standards") {
+                                ForEach(common, id: \.res) { item in
+                                    Label("\(item.res)  —  \(item.badge)", systemImage: item.symbol)
+                                        .tag(item.res)
+                                }
+                            }
+                        }
+                        if !other.isEmpty {
+                            Section("Other") {
+                                ForEach(other, id: \.self) { res in
+                                    Text(res).tag(res)
+                                }
+                            }
                         }
                     }
 
@@ -209,6 +223,14 @@ struct SettingsView: View {
         let host = URL(string: url)?.host ?? url
         return host.components(separatedBy: ".").first?.uppercased() ?? url
     }
+
+    private struct ResolutionEntry { let res: String; let badge: String; let symbol: String }
+    private let commonResolutions: [ResolutionEntry] = [
+        ResolutionEntry(res: "1280x720",  badge: "HD",      symbol: "tv"),
+        ResolutionEntry(res: "1920x1080", badge: "Full HD", symbol: "tv"),
+        ResolutionEntry(res: "2560x1440", badge: "2K",      symbol: "tv"),
+        ResolutionEntry(res: "3840x2160", badge: "4K",      symbol: "4k.tv"),
+    ]
 
     private func colorQualityLabel(_ q: ColorQuality) -> String {
         switch q {
