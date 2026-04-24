@@ -26,7 +26,10 @@ enum SDPMunger {
             if isMatch { allowedPTs.insert(pt) }
         }
 
-        guard !allowedPTs.isEmpty else { return sdp } // Codec not in offer; leave unchanged
+        guard !allowedPTs.isEmpty else {
+            if codec != .h264 { return preferCodec(sdp, codec: .h264) }
+            return sdp
+        }
 
         // Also include RTX payload types associated (via apt=) with allowed PTs
         for line in lines where line.hasPrefix("a=fmtp:") {

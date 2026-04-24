@@ -277,21 +277,36 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     private func i420ToCVPixelBuffer(_ i420: LKRTCI420Buffer) -> CVPixelBuffer? {
         let w = Int(i420.width), h = Int(i420.height)
         var pb: CVPixelBuffer?
+        // AVSampleBufferDisplayLayer on tvOS requires biplanar NV12, not three-plane I420
         guard CVPixelBufferCreate(kCFAllocatorDefault, w, h,
-                                  kCVPixelFormatType_420YpCbCr8Planar, nil, &pb) == kCVReturnSuccess,
+                                  kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &pb) == kCVReturnSuccess,
               let pb else { return nil }
         CVPixelBufferLockBaseAddress(pb, [])
         defer { CVPixelBufferUnlockBaseAddress(pb, []) }
-        func copyPlane(src: UnsafePointer<UInt8>?, srcStride: Int32, plane: Int, rows: Int, cols: Int) {
-            guard let src, let dst = CVPixelBufferGetBaseAddressOfPlane(pb, plane) else { return }
-            let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, plane)
-            for row in 0..<rows {
-                memcpy(dst.advanced(by: row * dstStride), src.advanced(by: row * Int(srcStride)), cols)
+
+        // Y plane
+        if let src = i420.dataY, let dst = CVPixelBufferGetBaseAddressOfPlane(pb, 0) {
+            let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+            for row in 0..<h {
+                memcpy(dst.advanced(by: row * dstStride), src.advanced(by: row * Int(i420.strideY)), w)
             }
         }
-        copyPlane(src: i420.dataY, srcStride: i420.strideY, plane: 0, rows: h,   cols: w)
-        copyPlane(src: i420.dataU, srcStride: i420.strideU, plane: 1, rows: h/2, cols: w/2)
-        copyPlane(src: i420.dataV, srcStride: i420.strideV, plane: 2, rows: h/2, cols: w/2)
+
+        // UV plane: interleave I420 U and V into NV12 UV
+        if let srcU = i420.dataU, let srcV = i420.dataV,
+           let dst = CVPixelBufferGetBaseAddressOfPlane(pb, 1)?.assumingMemoryBound(to: UInt8.self) {
+            let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
+            let uvRows = h / 2, uvCols = w / 2
+            for row in 0..<uvRows {
+                let uRow = srcU.advanced(by: row * Int(i420.strideU))
+                let vRow = srcV.advanced(by: row * Int(i420.strideV))
+                let dstRow = dst.advanced(by: row * dstStride)
+                for col in 0..<uvCols {
+                    dstRow[col * 2]     = uRow[col]
+                    dstRow[col * 2 + 1] = vRow[col]
+                }
+            }
+        }
         return pb
     }
 }
