@@ -55,11 +55,13 @@ struct StreamView: View {
         .onChange(of: streamController.menuPressCount) { _, _ in
             toggleOverlay()
         }
+        #if os(tvOS)
         .onExitCommand {
             if streamController.state != .streaming {
                 disconnect()
             }
         }
+        #endif
     }
 
     // MARK: Connecting
@@ -142,6 +144,24 @@ struct StreamView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+
+            #if !os(tvOS)
+            // On visionOS there is no Siri Remote, so provide an explicit menu button.
+            // Shown only when the overlay is hidden so it doesn't compete with pause menu controls.
+            if !showOverlay {
+                Button {
+                    toggleOverlay()
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .background(.black.opacity(0.55), in: Circle())
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(20)
+            }
+            #endif
         }
         .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
         .animation(.easeInOut(duration: 0.2), value: showOverlay)
@@ -173,6 +193,7 @@ struct StreamView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
 
+                #if os(tvOS)
                 Button {
                     streamController.toggleRemoteMode()
                 } label: {
@@ -181,6 +202,7 @@ struct StreamView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.white)
+                #endif
 
                 Button {
                     leave()
@@ -190,14 +212,16 @@ struct StreamView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.white)
+                #endif
 
                 Button(role: .destructive) {
                     showExitConfirmation = true
                 } label: {
                     Label("End Session", systemImage: "xmark.circle")
                         .frame(minWidth: 180)
+                        .foregroundStyle(.white)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .tint(.red)
             }
 

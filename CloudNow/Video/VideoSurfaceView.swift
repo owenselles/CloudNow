@@ -7,14 +7,20 @@ import LiveKitWebRTC
 // MARK: - VideoSurfaceView
 
 /// Full-screen video renderer.
-/// Uses AVSampleBufferDisplayLayer as the backing layer (reliable on tvOS).
+/// On tvOS, uses AVSampleBufferDisplayLayer as the UIView backing layer (layerClass override).
+/// On visionOS, adds AVSampleBufferDisplayLayer as a sublayer instead — layerClass override
+/// is not supported by the visionOS compositor.
 /// LKRTCMTLVideoView (MTKView wrapper) does not render on tvOS — bypassed entirely.
 ///
 /// Also acts as first responder for hardware keyboard input and pointer (mouse)
 /// input, forwarding events to `inputHandler` as GFN protocol packets.
 final class VideoSurfaceView: UIView {
+    #if os(tvOS)
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
     private var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
+    #else
+    private let displayLayer = AVSampleBufferDisplayLayer()
+    #endif
     private let renderer = WebRTCFrameRenderer()
     private var currentTrack: LKRTCVideoTrack?
 
@@ -52,8 +58,19 @@ final class VideoSurfaceView: UIView {
         setup()
     }
 
+    // On visionOS the displayLayer is a sublayer, so its frame must track the view bounds.
+    #if !os(tvOS)
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        displayLayer.frame = bounds
+    }
+    #endif
+
     private func setup() {
         backgroundColor = .black
+        #if !os(tvOS)
+        layer.addSublayer(displayLayer)
+        #endif
         displayLayer.videoGravity = .resizeAspectFill
         // Set timebase so the layer displays frames at host-clock time (real-time playback)
         var tb: CMTimebase?

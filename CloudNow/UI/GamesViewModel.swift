@@ -32,6 +32,18 @@ class GamesViewModel {
     /// Session the user left without ending — available to resume for ~2 minutes.
     var resumableSession: ResumableSession? = nil
 
+    #if os(visionOS)
+    /// Set before opening the ImmersiveSpace so the content view can read the pending game.
+    var pendingGame: GameInfo? = nil
+    var pendingSession: ActiveSessionInfo? = nil
+    #endif
+
+    #if os(visionOS)
+    /// Set before opening the ImmersiveSpace so the content view can read the pending game.
+    var pendingGame: GameInfo? = nil
+    var pendingSession: ActiveSessionInfo? = nil
+    #endif
+
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
 

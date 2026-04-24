@@ -40,13 +40,15 @@ private enum GFNInput {
     static let buttonY: UInt16   = 0x8000
 }
 
-// MARK: - Remote Input Mode
+// MARK: - Remote Input Mode (tvOS / Siri Remote only)
 
+#if os(tvOS)
 enum RemoteInputMode: String, Codable, Equatable {
     case mouse
     case gamepad
     case dualsense
 }
+#endif
 
 // MARK: - Input Event Handler
 
@@ -329,12 +331,13 @@ protocol DataChannelSender: AnyObject {
 /// Monitors connected GCControllers and keyboard/mouse events; sends encoded input
 /// over a WebRTC data channel at 60 Hz.
 final class InputSender {
+    #if os(tvOS)
     /// Pixel delta applied per unit of Siri Remote axis deflection per 60 Hz frame.
-    /// Tune this if the cursor feels too fast or too slow.
     static let remoteSensitivity: Float = 250.0
 
     /// Siri Remote input mode. Defaults to .mouse so the touchpad drives the cursor.
-    var remoteMode: RemoteInputMode = .mouse
+    private(set) var remoteMode: RemoteInputMode = .mouse
+    #endif
 
     /// Radial deadzone for analog stick axes (0.0–1.0). Set from StreamSettings.controllerDeadzone.
     var deadzone: Float = 0.15
@@ -348,8 +351,10 @@ final class InputSender {
     /// Which controller button triggers the overlay on long-press. Matches StreamSettings.overlayTriggerButton.
     var overlayTriggerButton: OverlayTriggerButton = .start
 
+    #if os(tvOS)
     /// Called when remoteMode changes due to controller connect/disconnect auto-switching.
     var onRemoteModeChanged: ((RemoteInputMode) -> Void)?
+    #endif
 
     private weak var channel: DataChannelSender?
     let encoder = InputEncoder()
@@ -360,9 +365,11 @@ final class InputSender {
     // Gamepad bitmap: bit i = extended gamepad i is connected (matches official GFN protocol)
     private var gamepadBitmap: UInt8 = 0
 
+    #if os(tvOS)
     // Siri Remote state tracking
     private var lastMicroDpad: (x: Float, y: Float) = (0, 0)
     private var lastMicroButtonA = false
+    #endif
 
     // DualSense touchpad state tracking
     private var lastDualSenseTouchpad: (x: Float, y: Float) = (0, 0)
@@ -405,6 +412,7 @@ final class InputSender {
         encoder.setProtocolVersion(v)
     }
 
+    #if os(tvOS)
     // MARK: Remote Mode
 
     func toggleRemoteMode() {
@@ -430,16 +438,22 @@ final class InputSender {
             }
         }
     }
+    #endif
 
     // MARK: Private — Tick
 
     private func tick() {
         let controllers = GCController.controllers()
         let extended = controllers.filter { $0.extendedGamepad != nil }
-        let micro    = controllers.filter { $0.extendedGamepad == nil && $0.microGamepad != nil }
 
+        #if os(tvOS)
+        let micro = controllers.filter { $0.extendedGamepad == nil && $0.microGamepad != nil }
         if extended.isEmpty && micro.isEmpty { return }
+        #else
+        if extended.isEmpty { return }
+        #endif
 
+        #if os(tvOS)
         if remoteMode == .gamepad || remoteMode == .dualsense {
             // Gamepad/DualSense mode: extended controller owns the game; remote is suppressed when
             // a real controller is present (otherwise the remote's empty state overwrites it).
@@ -503,8 +517,26 @@ final class InputSender {
                 handleMicroGamepad(remote)
             }
         }
+        #else
+        for (idx, controller) in extended.prefix(4).enumerated() {
+            let (btns, lt, rt, lx, ly, rx, ry) = mapGCControllerToXInput(controller, deadzone: deadzone)
+            let data = encoder.encodeGamepad(
+                controllerId: idx,
+                buttons: btns,
+                leftTrigger: lt,
+                rightTrigger: rt,
+                leftStickX: lx,
+                leftStickY: ly,
+                rightStickX: rx,
+                rightStickY: ry,
+                gamepadBitmap: gamepadBitmap
+            )
+            channel?.sendData(data)
+        }
+        #endif
     }
 
+    #if os(tvOS)
     private func handleMicroGamepad(_ controller: GCController) {
         guard let pad = controller.microGamepad else { return }
 
@@ -587,6 +619,7 @@ final class InputSender {
             sendMouseButton(down: clicked, button: 1)
         }
     }
+    #endif
 
     // MARK: Private — Controller Notifications
 
@@ -624,11 +657,13 @@ final class InputSender {
         GCController.startWirelessControllerDiscovery()
 
         // Seed gamepadBitmap for controllers already connected before InputSender started.
-        // System gesture ownership is only claimed when in gamepad mode (starts as .mouse).
         for controller in GCController.controllers() where controller.extendedGamepad != nil {
-            if remoteMode == .gamepad { claimControllerInput(controller) }
             let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
             gamepadBitmap |= (1 << UInt8(idx & 3))
+            #if os(tvOS)
+            // System gesture ownership is only claimed when in gamepad mode (starts as .mouse).
+            if remoteMode == .gamepad { claimControllerInput(controller) }
+            #endif
         }
 
         // Wire up any mice already connected at start time
@@ -713,6 +748,7 @@ final class InputSender {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
         gamepadBitmap |= (1 << UInt8(idx & 3))
+        #if os(tvOS)
         // Auto-switch to gamepad mode when a real controller connects.
         if remoteMode == .mouse {
             remoteMode = .gamepad
@@ -721,6 +757,7 @@ final class InputSender {
         } else {
             claimControllerInput(controller)
         }
+        #endif
         let data = encoder.encodeGamepad(
             controllerId: idx, buttons: 0, leftTrigger: 0, rightTrigger: 0,
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
@@ -733,12 +770,14 @@ final class InputSender {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
         gamepadBitmap &= ~(1 << UInt8(idx & 3))
+        #if os(tvOS)
         // Revert to mouse mode when the last controller disconnects.
         if gamepadBitmap == 0 && remoteMode != .mouse {
             remoteMode = .mouse
             applyRemoteMode()
             onRemoteModeChanged?(remoteMode)
         }
+        #endif
         let data = encoder.encodeGamepad(
             controllerId: idx, buttons: 0, leftTrigger: 0, rightTrigger: 0,
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,

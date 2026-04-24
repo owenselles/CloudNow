@@ -90,7 +90,11 @@ struct StoreView: View {
                             StoreCardLabel(game: game)
                         }
                         .aspectRatio(2/3, contentMode: .fit)
+                        #if os(tvOS)
                         .buttonStyle(.card)
+                        #else
+                        .buttonStyle(.plain)
+                        #endif
                         .contextMenu {
                             if game.isInLibrary {
                                 Button {

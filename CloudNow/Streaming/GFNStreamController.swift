@@ -64,7 +64,9 @@ final class GFNStreamController: NSObject {
     private var signaling: GFNSignalingClient?
     private var inputSender: InputSender?
     private(set) var videoView: VideoSurfaceView?
+    #if os(tvOS)
     private(set) var remoteMode: RemoteInputMode = .mouse
+    #endif
     private var statsTimer: Timer?
     private var protocolVersion = 2
     private var partialReliableThresholdMs = 300
@@ -126,11 +128,13 @@ final class GFNStreamController: NSObject {
 
     // MARK: Input Control
 
+    #if os(tvOS)
     func toggleRemoteMode() {
         inputSender?.toggleRemoteMode()
         remoteMode = inputSender?.remoteMode ?? .mouse
         videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
     }
+    #endif
 
     func setInputPaused(_ paused: Bool) {
         inputSender?.isPaused = paused
@@ -166,7 +170,9 @@ final class GFNStreamController: NSObject {
         videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
         videoView = nil
+        #if os(tvOS)
         remoteMode = .mouse
+        #endif
         menuPressCount = 0
         timeWarning = nil
         state = .idle
@@ -220,14 +226,18 @@ final class GFNStreamController: NSObject {
         sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
 
         // Configure audio session for real-time streaming before creating the peer connection.
-        // .playback + .moviePlayback gives the lowest latency path; allowBluetooth covers
-        // Bluetooth headsets paired to Apple TV.
+        // On tvOS, .moviePlayback + Bluetooth options give the lowest latency path.
+        // On visionOS, spatial audio routing is OS-managed — only setActive is needed.
         do {
+            #if os(tvOS)
             try AVAudioSession.sharedInstance().setCategory(
                 .playback,
                 mode: .moviePlayback,
                 options: [.allowBluetooth, .allowBluetoothA2DP]
             )
+            #else
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            #endif
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("[Stream] AVAudioSession configuration failed (non-fatal): \(error)")
@@ -483,6 +493,8 @@ final class GFNStreamController: NSObject {
     private func attachMicrophone(to pc: LKRTCPeerConnection) async {
         #if os(tvOS)
         let granted = true
+        #elseif os(visionOS)
+        let granted = await AVAudioApplication.requestRecordPermission()
         #else
         let granted = await withCheckedContinuation { cont in
             AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }

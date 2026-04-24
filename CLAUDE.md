@@ -27,6 +27,7 @@ All source lives in `CloudNow/`. Five functional areas:
 - `CloudMatchClient.swift` — REST client for session lifecycle: create → poll queue position → active session → stop. Also retrieves and reports queue-ad lifecycle events.
 - `GamesClient.swift` — GraphQL persisted queries for linked-library games and full store catalog.
 - `ZoneClient.swift` — Fetches regions from the PrintedWaste community API; ranks them by 40% ping + 60% queue depth score.
+- `MESClient.swift` — Fetches subscription tier and VPC region ID from NVIDIA's Membership Entitlement Service (MES). Required to determine stream resolution/FPS entitlements per tier.
 - `SessionState.swift` — All data models: `StreamSettings`, `SessionInfo`, `GameInfo`, `QueueInfo`, etc.
 
 ### Streaming
@@ -47,6 +48,8 @@ All source lives in `CloudNow/`. Five functional areas:
 - `SettingsView.swift` — Stream quality (resolution, FPS, codec, color, keyboard layout, game language, L4S), controller deadzone slider, zone picker, microphone toggle, account info.
 - `QueueAdPlayerView.swift` — AVPlayer-based queue ad playback; reports lifecycle events to CloudMatch.
 - `LoginView.swift` — Displays a QR code and PIN for NVIDIA device flow login; user scans the QR code or visits the URL on any device to complete OAuth.
+- `ImmersiveStreamView.swift` — visionOS-only (`#if os(visionOS)`) immersive space scene wrapper for full-passthrough streaming.
+- `SkeletonViews.swift` — Skeleton shimmer loading views used while game lists are fetching.
 
 ## Key Patterns
 
