@@ -30,6 +30,10 @@ final class VideoSurfaceView: UIView {
     /// (e.g. Options mapping to .playPause) are suppressed to avoid double-firing the overlay.
     var gamepadModeActive = false
 
+    /// Tracks whether the pause overlay is currently visible. Used to decide whether a
+    /// .menu press should close the overlay or be silently consumed.
+    var overlayVisible: Bool = false
+
     var videoTrack: LKRTCVideoTrack? {
         didSet {
             guard oldValue !== videoTrack else { return }
@@ -82,10 +86,11 @@ final class VideoSurfaceView: UIView {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if press.type == .menu && gamepadModeActive {
-                // In gamepad mode, O/Circle generates a .menu UIKit press that would trigger
-                // system back navigation. Consume it here so the OS never sees it.
-                // The button input still reaches the game via GCController polling.
+            if press.type == .menu {
+                // Always consume .menu — never let it bubble to the system as a back/dismiss
+                // gesture. The only valid exits are the in-overlay "Exit Session" button or
+                // force-quitting the app. If the overlay is open, treat this as "close overlay".
+                if overlayVisible { menuPressHandler?() }
                 handled = true
             } else if press.type == .playPause && !gamepadModeActive {
                 // Play/Pause toggles the HUD overlay (Siri Remote only).
@@ -349,5 +354,6 @@ struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: StreamingViewController, context: Context) {
         vc.videoSurface.videoTrack = streamController.videoTrack
         vc.controllerUserInteractionEnabled = showOverlay
+        vc.videoSurface.overlayVisible = showOverlay
     }
 }
