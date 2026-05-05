@@ -568,16 +568,22 @@ actor GamesClient {
     private func appToGame(_ app: AppData) -> GameInfo? {
         guard let rawId = app.id else { return nil }
         let id = rawId.stringValue
+        let selectedVariantId = app.variants?.first(where: { $0.gfn?.library?.selected == true })?.id
         var variants: [GameVariant] = app.variants?.compactMap { v in
             guard let vid = v.id else { return nil }
-            return GameVariant(id: vid, appStore: v.appStore ?? "unknown", appId: isNumericId(vid) ? vid : nil)
+            let appStore = (v.appStore ?? "unknown").trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedStore = appStore.lowercased()
+            guard !appStore.isEmpty, normalizedStore != "unknown", normalizedStore != "none" else {
+                return nil
+            }
+            return GameVariant(id: vid, appStore: appStore, appId: isNumericId(vid) ? vid : nil)
         } ?? []
 
         // Move the backend-selected variant to front so variants.first is the default launch store
-        let selectedIndex = app.variants?.firstIndex { $0.gfn?.library?.selected == true } ?? 0
-        let safeIndex = min(max(0, selectedIndex), max(0, variants.count - 1))
-        if safeIndex > 0 && safeIndex < variants.count {
-            let selected = variants.remove(at: safeIndex)
+        if let selectedVariantId,
+           let selectedIndex = variants.firstIndex(where: { $0.id == selectedVariantId }),
+           selectedIndex > 0 {
+            let selected = variants.remove(at: selectedIndex)
             variants.insert(selected, at: 0)
         }
 
