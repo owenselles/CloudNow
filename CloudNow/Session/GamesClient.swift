@@ -186,10 +186,16 @@ actor GamesClient {
         return GameInfo(
             id: id,
             title: item.title ?? id,
+            longDescription: nil,
+            genres: nil,
+            developer: nil,
+            publisher: nil,
+            contentRating: nil,
             boxArtUrl: item.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) },
             heroBannerUrl: (item.images?.TV_BANNER ?? item.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) },
             heroImageUrl: (item.images?.HERO_IMAGE ?? item.images?.TV_BANNER).flatMap { optimizeImageUrl($0, width: 1920) },
             supportedFeatures: Self.deriveFeatures(from: item.variants),
+            screenshots: [],
             isInLibrary: item.variants?.contains { $0.gfn?.library?.isOwned == true } ?? false,
             variants: variants
         )
@@ -297,10 +303,16 @@ actor GamesClient {
         return GameInfo(
             id: id,
             title: title,
+            longDescription: nil,
+            genres: nil,
+            developer: nil,
+            publisher: nil,
+            contentRating: nil,
             boxArtUrl: boxArt.flatMap { optimizeImageUrl($0) },
             heroBannerUrl: hero.flatMap { optimizeImageUrl($0, width: 1920) },
             heroImageUrl: heroImage.flatMap { optimizeImageUrl($0, width: 1920) },
             supportedFeatures: nil,
+            screenshots: [],
             isInLibrary: false,
             variants: variants
         )
@@ -359,13 +371,24 @@ actor GamesClient {
             let boxArt = meta.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) }
             let hero = (meta.images?.TV_BANNER ?? meta.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) }
             let heroImage = (meta.images?.HERO_IMAGE ?? meta.images?.TV_BANNER).flatMap { optimizeImageUrl($0, width: 1920) }
+            let shots = (meta.images?.screenshots ?? []).compactMap { optimizeImageUrl($0, width: 640) }
+            let rating: String? = {
+                guard let t = meta.contentRatings?.type, let k = meta.contentRatings?.categoryKey else { return game.contentRating }
+                return "\(t) \(k)"
+            }()
             return GameInfo(
                 id: game.id,
                 title: meta.title ?? game.title,
+                longDescription: meta.longDescription ?? game.longDescription,
+                genres: meta.genres ?? game.genres,
+                developer: meta.developerName ?? game.developer,
+                publisher: meta.publisherName ?? game.publisher,
+                contentRating: rating,
                 boxArtUrl: boxArt ?? game.boxArtUrl,
                 heroBannerUrl: hero ?? game.heroBannerUrl,
                 heroImageUrl: heroImage ?? game.heroImageUrl,
                 supportedFeatures: game.supportedFeatures,
+                screenshots: shots.isEmpty ? game.screenshots : shots,
                 isInLibrary: game.isInLibrary,
                 variants: game.variants
             )
@@ -540,6 +563,45 @@ actor GamesClient {
         let (data, _) = try await urlSession.data(for: request)
         let payload = try JSONDecoder().decode(ServerInfoResponse.self, from: data)
         return payload.requestStatus?.serverId ?? "GFN-PC"
+    }
+
+    private func appToGame(_ app: AppData) -> GameInfo? {
+        guard let rawId = app.id else { return nil }
+        let id = rawId.stringValue
+        var variants: [GameVariant] = app.variants?.compactMap { v in
+            guard let vid = v.id else { return nil }
+            return GameVariant(id: vid, appStore: v.appStore ?? "unknown", appId: isNumericId(vid) ? vid : nil)
+        } ?? []
+
+        // Move the backend-selected variant to front so variants.first is the default launch store
+        let selectedIndex = app.variants?.firstIndex { $0.gfn?.library?.selected == true } ?? 0
+        let safeIndex = min(max(0, selectedIndex), max(0, variants.count - 1))
+        if safeIndex > 0 && safeIndex < variants.count {
+            let selected = variants.remove(at: safeIndex)
+            variants.insert(selected, at: 0)
+        }
+
+        let rating: String? = {
+            guard let t = app.contentRatings?.type, let k = app.contentRatings?.categoryKey else { return nil }
+            return "\(t) \(k)"
+        }()
+        let shots = (app.images?.screenshots ?? []).compactMap { optimizeImageUrl($0, width: 640) }
+        return GameInfo(
+            id: id,
+            title: app.title ?? id,
+            longDescription: app.longDescription,
+            genres: app.genres,
+            developer: app.developerName,
+            publisher: app.publisherName,
+            contentRating: rating,
+            boxArtUrl: app.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) },
+            heroBannerUrl: (app.images?.TV_BANNER ?? app.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) },
+            heroImageUrl: (app.images?.HERO_IMAGE ?? app.images?.TV_BANNER).flatMap { optimizeImageUrl($0, width: 1920) },
+            supportedFeatures: nil,
+            screenshots: shots,
+            isInLibrary: app.variants?.contains { $0.gfn?.library?.selected == true } ?? false,
+            variants: variants
+        )
     }
 
     // MARK: - Helpers
@@ -738,13 +800,45 @@ private struct PageInfo: Decodable {
 private struct AppData: Decodable {
     let id: AnyCodableGameId?
     let title: String?
+    let longDescription: String?
+    let genres: [String]?
+    let developerName: String?
+    let publisherName: String?
+    let contentRatings: ContentRating?
     let images: Images?
     let variants: [Variant]?
+
+    struct ContentRating: Decodable {
+        let type: String?
+        let categoryKey: String?
+    }
 
     struct Images: Decodable {
         let GAME_BOX_ART: String?
         let TV_BANNER: String?
         let HERO_IMAGE: String?
+        let screenshots: [String]
+
+        private struct AnyKey: CodingKey {
+            var stringValue: String
+            var intValue: Int?
+            init?(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { return nil }
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: AnyKey.self)
+            GAME_BOX_ART = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "GAME_BOX_ART")!)
+            TV_BANNER    = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "TV_BANNER")!)
+            HERO_IMAGE   = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "HERO_IMAGE")!)
+            let allKeys = c.allKeys.map(\.stringValue).sorted()
+            print("[GamesClient] images keys: \(allKeys)")
+            screenshots = c.allKeys
+                .filter { $0.stringValue.hasPrefix("SCREENSHOT") }
+                .sorted { $0.stringValue < $1.stringValue }
+                .compactMap { try? c.decode(String.self, forKey: $0) }
+                .filter { !$0.isEmpty }
+        }
     }
 
     struct Variant: Decodable {

@@ -6,6 +6,10 @@ struct HomeView: View {
 
     @Environment(GamesViewModel.self) var viewModel
     @Environment(AuthManager.self) var authManager
+    @State private var tick = 0
+    @State private var carouselRequest: CarouselRequest?
+    @State private var restoreScrollId: String?
+    @Namespace private var carouselScope
 
     var body: some View {
         ZStack {
@@ -29,36 +33,59 @@ struct HomeView: View {
             } else if viewModel.continuePlaying.isEmpty, viewModel.recentlyPlayedGames.isEmpty, viewModel.favoriteGames.isEmpty, activeResumable == nil {
                 emptyState
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Hero banner: resumable → active session → recently played → favorite
-                        let heroGame: GameInfo? = activeResumable == nil
-                            ? (viewModel.continuePlaying.first ?? viewModel.recentlyPlayedGames.first ?? viewModel.favoriteGames.first)
-                            : nil
-                        if let rs = activeResumable {
-                            resumeBanner(rs)
-                        } else if let hero = heroGame {
-                            heroBanner(hero)
-                        }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            let heroGame: GameInfo? = activeResumable == nil
+                                ? (viewModel.continuePlaying.first ?? viewModel.recentlyPlayedGames.first ?? viewModel.favoriteGames.first)
+                                : nil
+                            if let rs = activeResumable {
+                                resumeBanner(rs)
+                            } else if let hero = heroGame {
+                                heroBanner(hero)
+                            }
 
-                        VStack(alignment: .leading, spacing: 48) {
-                            if !viewModel.continuePlaying.isEmpty {
-                                gameRow(title: L10n.text("resume_stream"), games: viewModel.continuePlaying, badge: L10n.text("live"))
+                            VStack(alignment: .leading, spacing: 48) {
+                                if !viewModel.continuePlaying.isEmpty {
+                                    gameRow(title: L10n.text("resume_stream"), games: viewModel.continuePlaying, badge: L10n.text("live"))
+                                }
+                                let recentWithoutHero = viewModel.recentlyPlayedGames.filter { $0.id != heroGame?.id }
+                                if !recentWithoutHero.isEmpty {
+                                    gameRow(title: L10n.text("recently_played"), games: recentWithoutHero)
+                                }
+                                if !viewModel.favoriteGames.isEmpty {
+                                    gameRow(title: L10n.text("favorites"), games: viewModel.favoriteGames, isFavoritesRow: true)
+                                }
                             }
-                            let recentWithoutHero = viewModel.recentlyPlayedGames.filter { $0.id != heroGame?.id }
-                            if !recentWithoutHero.isEmpty {
-                                gameRow(title: L10n.text("recently_played"), games: recentWithoutHero)
-                            }
-                            if !viewModel.favoriteGames.isEmpty {
-                                gameRow(title: L10n.text("favorites"), games: viewModel.favoriteGames, isFavoritesRow: true)
-                            }
+                            .padding(.top, 48)
+                            .padding(.bottom, 60)
                         }
-                        .padding(.top, 48)
-                        .padding(.bottom, 60)
+                    }
+                    .onChange(of: restoreScrollId) { _, newValue in
+                        guard let newValue else { return }
+                        withAnimation {
+                            proxy.scrollTo(newValue, anchor: .center)
+                        }
+                        restoreScrollId = nil
                     }
                 }
             }
         }
+        .overlay {
+            if let req = carouselRequest {
+                GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
+                    restoreScrollId = lastId
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        carouselRequest = nil
+                    }
+                })
+                .environment(viewModel)
+                .focusScope(carouselScope)
+                .transition(.opacity)
+                .ignoresSafeArea()
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             Task { await viewModel.refreshActiveSessions(authManager: authManager) }
@@ -162,20 +189,23 @@ struct HomeView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 24) {
                     ForEach(games) { game in
-                        if isFavoritesRow {
-                            GameCardView(game: game) { onPlay(game) }
-                                .frame(width: 200)
-                                .contextMenu {
+                        GameCardView(game: game) { onPlay(game) }
+                            .frame(width: 200)
+                            .id(game.id)
+                            .contextMenu {
+                                Button {
+                                    carouselRequest = CarouselRequest(games: games, startId: game.id)
+                                } label: {
+                                    Label("Info", systemImage: "info.circle")
+                                }
+                                if isFavoritesRow {
                                     Button {
                                         viewModel.toggleFavorite(game.id)
                                     } label: {
                                         Label(L10n.text("remove_from_favorites"), systemImage: "star.slash.fill")
                                     }
                                 }
-                        } else {
-                            GameCardView(game: game) { onPlay(game) }
-                                .frame(width: 200)
-                        }
+                            }
                     }
                 }
                 .padding(.horizontal, 60)

@@ -641,6 +641,11 @@ enum GameFeature: String, Codable, CaseIterable {
 struct GameInfo: Identifiable, Equatable, Codable {
     let id: String
     let title: String
+    let longDescription: String?
+    let genres: [String]?
+    let developer: String?
+    let publisher: String?
+    let contentRating: String?
     let boxArtUrl: String?
     /// Wide 16:9 banner (GFN TV_BANNER) for tiles and Home rows.
     let heroBannerUrl: String?
@@ -650,6 +655,7 @@ struct GameInfo: Identifiable, Equatable, Codable {
     /// Streaming features the game supports (RTX/HDR/Reflex), from GFN's per-variant feature flags.
     /// Optional Codable field: absent in older persisted JSON → nil.
     let supportedFeatures: [GameFeature]?
+    var screenshots: [String]
     var isInLibrary: Bool
     var variants: [GameVariant]
 
@@ -665,6 +671,34 @@ struct GameInfo: Identifiable, Equatable, Codable {
     /// Stores this game is owned through (drives the Library filter chips).
     var ownedStores: [String] {
         variants.filter(\.isOwned).map(\.appStore)
+    }
+}
+
+extension GameInfo {
+    var genreItems: [String] {
+        let mapped = (genres ?? []).map { GameInfo.genreLabel($0) }
+        return mapped.isEmpty ? variants.map(\.storeName) : mapped
+    }
+
+    static func genreLabel(_ code: String) -> String {
+        switch code {
+        case "ACTION":                return "Action"
+        case "ADVENTURE":             return "Adventure"
+        case "ROLE_PLAYING":          return "Role-Playing"
+        case "STRATEGY":              return "Strategy"
+        case "SPORTS":                return "Sports"
+        case "RACING":                return "Racing"
+        case "SIMULATION":            return "Simulation"
+        case "PUZZLE":                return "Puzzle"
+        case "SHOOTER":               return "Shooter"
+        case "FIGHTING":              return "Fighting"
+        case "PLATFORMER":            return "Platformer"
+        case "HORROR":                return "Horror"
+        case "CASUAL":                return "Casual"
+        case "INDIE":                 return "Indie"
+        case "MASSIVELY_MULTIPLAYER": return "MMO"
+        default: return code.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 }
 
