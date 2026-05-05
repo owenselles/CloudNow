@@ -1,11 +1,5 @@
 import SwiftUI
 
-private struct _PassthroughButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-    }
-}
-
 // MARK: - Request model
 
 struct CarouselRequest: Identifiable {
@@ -208,7 +202,7 @@ private struct CarouselCard: View {
                 y: isCurrent ? 10 : 2
             )
         }
-        .buttonStyle(_PassthroughButtonStyle())
+        .buttonStyle(PassthroughButtonStyle())
         .focusEffectDisabled()
         .focused(focusedId, equals: game.id)
         .contextMenu {

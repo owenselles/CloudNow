@@ -81,7 +81,7 @@ struct ExpandedDetailView: View {
                 dismiss()
             }
         }
-        .sheet(isPresented: $showFullDescription) {
+        .fullScreenCover(isPresented: $showFullDescription) {
             if let desc = game.longDescription { FullDescriptionView(description: desc) }
         }
     }
@@ -332,19 +332,45 @@ struct GameDetailBackground: View {
 
 struct FullDescriptionView: View {
     let description: String
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Text(description)
-                    .font(.callout)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineSpacing(6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .focusable()
+        GeometryReader { proxy in
+            let cardWidth = min(1400, max(proxy.size.width - 120, 320))
+            let cardHeight = min(920, max(proxy.size.height - 96, 320))
+            let cardColor = Color(white: 0.12)
+
+            ZStack {
+                Color.black.opacity(0.75).ignoresSafeArea()
+
+                ScrollableText(text: description)
+                .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
+                .background(cardColor)
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [cardColor.opacity(0.95), cardColor.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                        .frame(height: 64)
+                        .allowsHitTesting(false)
+                }
+                .overlay(alignment: .bottom) {
+                    LinearGradient(
+                        colors: [cardColor.opacity(0), cardColor],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                        .frame(height: 88)
+                        .allowsHitTesting(false)
+                }
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                .shadow(color: .black.opacity(0.5), radius: 30)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .padding(.horizontal, 60)
+                .padding(.vertical, 48)
             }
-            .padding(80)
         }
-        .background(Color.black.ignoresSafeArea())
+        .onExitCommand { dismiss() }
     }
 }
