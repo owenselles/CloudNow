@@ -82,6 +82,11 @@ All source lives in `CloudNow/`. Five functional areas:
 - `QueueAdPlayerView.swift` — AVPlayer-based queue ad playback; reports lifecycle events to CloudMatch.
 - `LoginView.swift` — Displays a QR code and PIN for NVIDIA device flow login; user scans the QR code or visits the URL on any device to complete OAuth.
 
+## Agent Rules
+
+- **Language**: All code, comments, commit messages, PR titles, and PR descriptions must be written in **English US**.
+- **Commits and PRs**: Do not add `Co-Authored-By: Claude` lines to commits. Do not add "🤖 Generated with Claude Code" footers to PR descriptions.
+
 ## Key Patterns
 
 - **State**: `@Observable + @MainActor` throughout (AuthManager, GFNStreamController, GamesViewModel). No Combine/Redux.
