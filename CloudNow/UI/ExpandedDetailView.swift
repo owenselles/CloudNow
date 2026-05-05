@@ -9,11 +9,24 @@ struct ExpandedDetailView: View {
     @Environment(GamesViewModel.self) var viewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showFullDescription = false
+    @State private var showFullDetails = false
     @FocusState private var heroFocused: Bool
-    @FocusState private var detailFocused: Bool
+    @FocusState private var aboutFocused: Bool
+    @FocusState private var detailsFocused: Bool
     @State private var backgroundBlurred = false
     @State private var appeared = false
     @State private var dismissing = false
+
+    private var detailItems: [(String, String)] {
+        let genres = game.genreItems
+        return [
+            game.contentRating.map { ("Rating", $0) },
+            game.developer.map { ("Developer", $0) },
+            game.publisher.flatMap { $0 != game.developer ? ("Publisher", $0) : nil },
+            genres.isEmpty ? nil : ("Genres", genres.joined(separator: ", ")),
+            game.variants.isEmpty ? nil : ("Available on", game.variants.map(\.storeName).joined(separator: ", ")),
+        ].compactMap { $0 }
+    }
 
     var body: some View {
         ZStack {
@@ -57,7 +70,13 @@ struct ExpandedDetailView: View {
                         withAnimation(.smooth) { proxy.scrollTo("hero", anchor: .top) }
                     }
                 }
-                .onChange(of: detailFocused) { _, focused in
+                .onChange(of: aboutFocused) { _, focused in
+                    if focused {
+                        backgroundBlurred = true
+                        withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
+                    }
+                }
+                .onChange(of: detailsFocused) { _, focused in
                     if focused {
                         backgroundBlurred = true
                         withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
@@ -83,6 +102,9 @@ struct ExpandedDetailView: View {
         }
         .fullScreenCover(isPresented: $showFullDescription) {
             if let desc = game.longDescription { FullDescriptionView(description: desc) }
+        }
+        .fullScreenCover(isPresented: $showFullDetails) {
+            FullDetailsView(title: game.title, items: detailItems)
         }
     }
 
@@ -186,28 +208,37 @@ struct ExpandedDetailView: View {
 
     @ViewBuilder
     private var infoGrid: some View {
-        let genres = game.genreItems
-        let items: [(String, String)] = [
-            game.contentRating.map { ("Rating", $0) },
-            game.developer.map { ("Developer", $0) },
-            game.publisher.flatMap { $0 != game.developer ? ("Publisher", $0) : nil },
-            genres.isEmpty ? nil : ("Genres", genres.joined(separator: ", ")),
-            game.variants.isEmpty ? nil : ("Available on", game.variants.map(\.storeName).joined(separator: ", ")),
-        ].compactMap { $0 }
+        if !detailItems.isEmpty {
+            HStack(alignment: .top, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Details").font(.title3.weight(.semibold))
 
-        if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Details").font(.title3.weight(.semibold))
-                LazyVGrid(columns: [GridItem(.flexible(), alignment: .topLeading)], alignment: .leading, spacing: 20) {
-                    ForEach(items, id: \.0) { label, value in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(label.uppercased())
-                                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).kerning(1)
-                            Text(value)
-                                .font(.callout).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        showFullDetails = true
+                    } label: {
+                        LazyVGrid(columns: [GridItem(.flexible(), alignment: .topLeading)], alignment: .leading, spacing: 20) {
+                            ForEach(detailItems, id: \.0) { label, value in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(label.uppercased())
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .kerning(1)
+                                    Text(value)
+                                        .font(.callout)
+                                        .foregroundStyle(.primary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(PassthroughButtonStyle())
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Color.clear.frame(maxWidth: .infinity)
+                Color.clear.frame(maxWidth: .infinity)
             }
         }
     }
@@ -233,7 +264,7 @@ struct ExpandedDetailView: View {
                 .frame(maxWidth: 600, alignment: .leading)
             }
             .buttonStyle(.card)
-            .focused($detailFocused)
+            .focused($aboutFocused)
         }
     }
 
@@ -365,6 +396,75 @@ struct FullDescriptionView: View {
                         .allowsHitTesting(false)
                 }
                     .clipShape(RoundedRectangle(cornerRadius: 20))
+                .shadow(color: .black.opacity(0.5), radius: 30)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .padding(.horizontal, 60)
+                .padding(.vertical, 48)
+            }
+        }
+        .onExitCommand { dismiss() }
+    }
+}
+
+struct FullDetailsView: View {
+    let title: String
+    let items: [(String, String)]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        GeometryReader { proxy in
+            let cardWidth = min(980, max(proxy.size.width - 120, 320))
+            let cardHeight = min(820, max(proxy.size.height - 96, 320))
+            let cardColor = Color(white: 0.12)
+
+            ZStack {
+                Color.black.opacity(0.75).ignoresSafeArea()
+
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 28) {
+                        Text(title)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(.white)
+
+                        ForEach(items, id: \.0) { label, value in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(label.uppercased())
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .kerning(1)
+                                Text(value)
+                                    .font(.body)
+                                    .foregroundStyle(.white.opacity(0.9))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 80)
+                    .padding(.top, 72)
+                    .padding(.bottom, 96)
+                }
+                .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
+                .background(cardColor)
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [cardColor.opacity(0.95), cardColor.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 64)
+                    .allowsHitTesting(false)
+                }
+                .overlay(alignment: .bottom) {
+                    LinearGradient(
+                        colors: [cardColor.opacity(0), cardColor],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 88)
+                    .allowsHitTesting(false)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 20))
                 .shadow(color: .black.opacity(0.5), radius: 30)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .padding(.horizontal, 60)
