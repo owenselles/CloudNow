@@ -53,7 +53,7 @@ struct GameCarouselView: View {
 
                 // Accordion layout : current 80%, neighbours 10% each side
                 // ZStack centres items → offset x = dist * (0.40W + 0.05W) = dist * 0.45W
-                ZStack(alignment: .center) {  // Garder l'alignement centre pour le ZStack principal
+                ZStack(alignment: .center) {
                     ForEach(request.games) { game in
                         let dist = distanceFromCurrent(game.id)
                         if abs(dist) <= 1 {
@@ -70,7 +70,7 @@ struct GameCarouselView: View {
                             .frame(
                                 width: dist == 0 ? geo.size.width * 0.90 : geo.size.width * 0.10,
                                 height: geo.size.height * 0.92,
-                                alignment: dist < 0 ? .leading : (dist > 0 ? .trailing : .center)  // Modifier l'alignement ici
+                                alignment: dist < 0 ? .leading : (dist > 0 ? .trailing : .center)
                             )
                             .clipShape(UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 20))
                             .offset(x: CGFloat(dist) * (geo.size.width * 0.50 + 20))
@@ -170,7 +170,7 @@ private struct CarouselCard: View {
     var body: some View {
         Button { onExpand() } label: {
             ZStack(alignment: .bottomLeading) {
-                // Image avec effet parallax
+                // Fixed height lets the image overflow its natural width; the outer frame clips to the aligned region for the parallax effect.
                 GeometryReader { geo in
                     AsyncImage(url: game.heroBannerUrl.flatMap(URL.init) ?? game.boxArtUrl.flatMap(URL.init)) { phase in
                         switch phase {
