@@ -15,13 +15,7 @@ struct CarouselRequest: Identifiable {
 
     init(games: [GameInfo], startId: String) {
         self.startId = startId
-        if let idx = games.firstIndex(where: { $0.id == startId }) {
-            let start = max(0, idx - 15)
-            let end = min(games.count, idx + 16)
-            self.games = Array(games[start..<end])
-        } else {
-            self.games = games
-        }
+        self.games = games
     }
 }
 
