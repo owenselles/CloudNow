@@ -31,7 +31,6 @@ struct GameCarouselView: View {
     @State private var expandedGame: GameInfo?
     @FocusState private var focusedId: String?
     @State private var directExpandedGame: GameInfo?
-    @State private var bounceOffset: CGFloat = 0
 
     init(request: CarouselRequest, onPlay: @escaping (GameInfo) -> Void, onDismiss: @escaping (String?) -> Void) {
         self.request = request
@@ -74,7 +73,6 @@ struct GameCarouselView: View {
                         }
                     }
                 }
-                .offset(x: bounceOffset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 .padding(.top, geo.size.height * 0.08)
             }
@@ -91,11 +89,6 @@ struct GameCarouselView: View {
             case .left:
                 if ci == 0 {
                     focusedId = currentId
-                    bounceOffset = -40
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(1))
-                        withAnimation(.spring(duration: 0.5, bounce: 0.65)) { bounceOffset = 0 }
-                    }
                 } else {
                     let newId = request.games[ci - 1].id
                     withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.8)) { currentId = newId }
@@ -104,11 +97,6 @@ struct GameCarouselView: View {
             case .right:
                 if ci == request.games.count - 1 {
                     focusedId = currentId
-                    bounceOffset = 40
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(1))
-                        withAnimation(.spring(duration: 0.5, bounce: 0.65)) { bounceOffset = 0 }
-                    }
                 } else {
                     let newId = request.games[ci + 1].id
                     withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.8)) { currentId = newId }
