@@ -182,11 +182,11 @@ private struct CarouselCard: View {
                 LinearGradient(
                     stops: [
                         .init(color: .black.opacity(0.92), location: 0),
-                        .init(color: .black.opacity(0.5), location: 0.45),
-                        .init(color: .clear, location: 0.75),
+                        .init(color: .black.opacity(0.55), location: 0.35),
+                        .init(color: .clear, location: 0.7),
                     ],
-                    startPoint: .bottom,
-                    endPoint: .top
+                    startPoint: .bottomLeading,
+                    endPoint: .topTrailing
                 )
 
                 if isCurrent && showContent {
@@ -257,37 +257,89 @@ private struct CarouselCard: View {
     }
 
     private var contentView: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(game.title)
-                .font(isCurrent ? .largeTitle.weight(.bold) : .title2.weight(.bold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 4)
+        HStack(alignment: .bottom, spacing: isCurrent ? 60 : 24) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(game.title)
+                    .font(isCurrent ? .largeTitle.weight(.bold) : .title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.5), radius: 4)
+
+                if isCurrent {
+                    genreLine
+
+                    if let desc = game.longDescription, !desc.isEmpty {
+                        Text(desc)
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(3)
+                            .frame(maxWidth: 560, alignment: .leading)
+                    }
+
+                    if game.isInLibrary {
+                        Label("In Library", systemImage: "checkmark.circle.fill")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("Not in your GeForce NOW library")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    heroActions
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if isCurrent {
-                genreLine
-
-                if let desc = game.longDescription, !desc.isEmpty {
-                    Text(desc)
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(2)
-                        .frame(maxWidth: 600, alignment: .leading)
-                }
-
-                if game.isInLibrary {
-                    Label("In Library", systemImage: "checkmark.circle.fill")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(.green)
-                } else {
-                    Text("Not in your Geforce NOW library")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+                rightColumn
+                    .frame(width: 240)
             }
         }
         .padding(isCurrent ? 50 : 25)
         .opacity(isCurrent ? 1.0 : 0.6)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var heroActions: some View {
+        HStack(spacing: 16) {
+            Button(action: {}) {
+                Label("Play", systemImage: "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+
+            Button(action: {}) {
+                Label(
+                    viewModel.favoriteIds.contains(game.id) ? "Remove from Favorites" : "Add to Favorites",
+                    systemImage: viewModel.favoriteIds.contains(game.id) ? "star.fill" : "star"
+                )
+            }
+            .buttonStyle(.bordered)
+        }
+        .allowsHitTesting(false)
+        .focusEffectDisabled()
+    }
+
+    @ViewBuilder
+    private var rightColumn: some View {
+        VStack(alignment: .trailing, spacing: 14) {
+            if let dev = game.developer { rightInfo("Developer", dev) }
+            if let pub = game.publisher, pub != game.developer { rightInfo("Publisher", pub) }
+            if let rating = game.contentRating { rightInfo("Rating", rating) }
+        }
+    }
+
+    private func rightInfo(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(label.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .kerning(1)
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.8))
+                .multilineTextAlignment(.trailing)
+        }
     }
 
     @ViewBuilder
