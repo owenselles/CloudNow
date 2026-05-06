@@ -9,7 +9,6 @@ struct HomeView: View {
     @State private var tick = 0
     @State private var carouselRequest: CarouselRequest?
     @State private var restoreScrollId: String?
-    @Namespace private var carouselScope
 
     var body: some View {
         ZStack {
@@ -71,19 +70,12 @@ struct HomeView: View {
                 }
             }
         }
-        .overlay {
-            if let req = carouselRequest {
-                GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
-                    restoreScrollId = lastId
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        carouselRequest = nil
-                    }
-                })
-                .environment(viewModel)
-                .focusScope(carouselScope)
-                .transition(.opacity)
-                .ignoresSafeArea()
-            }
+        .fullScreenCover(item: $carouselRequest) { req in
+            GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
+                restoreScrollId = lastId
+                carouselRequest = nil
+            })
+            .environment(viewModel)
         }
         .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
         .toolbar(.hidden, for: .navigationBar)

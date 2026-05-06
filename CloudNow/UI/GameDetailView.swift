@@ -1,10 +1,18 @@
 import SwiftUI
 
-// MARK: - ExpandedDetailView
+// MARK: - GameDetailView
 
-struct ExpandedDetailView: View {
+enum ExpandedDetailPresentationStyle {
+    case fullScreen
+    case embeddedCarousel
+    case carouselExpanded
+}
+
+struct GameDetailView: View {
     let game: GameInfo
     let onPlay: (GameInfo) -> Void
+    var presentationStyle: ExpandedDetailPresentationStyle = .fullScreen
+    var onCollapse: (() -> Void)? = nil
 
     @Environment(GamesViewModel.self) var viewModel
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +24,10 @@ struct ExpandedDetailView: View {
     @State private var backgroundBlurred = false
     @State private var appeared = false
     @State private var dismissing = false
+    @FocusState private var carouselExitCatcherFocused: Bool
+
+    private var isEmbeddedCarousel: Bool { presentationStyle == .embeddedCarousel }
+    private var isCarouselExpanded: Bool { presentationStyle == .carouselExpanded }
 
     private var detailItems: [(String, String)] {
         let genres = game.genreItems
@@ -29,39 +41,23 @@ struct ExpandedDetailView: View {
     }
 
     var body: some View {
+        Group {
+            if isEmbeddedCarousel {
+                embeddedBody
+            } else if isCarouselExpanded {
+                carouselExpandedBody
+            } else {
+                fullScreenBody
+            }
+        }
+    }
+
+    private var fullScreenBody: some View {
         ZStack {
             GameDetailBackground(game: game, blurred: backgroundBlurred)
 
             ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        heroSection
-                            .id("hero")
-
-                        VStack(alignment: .leading, spacing: 32) {
-                            Text(game.title)
-                                .font(.title2.weight(.bold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .opacity(backgroundBlurred ? 1 : 0)
-                                .offset(y: backgroundBlurred ? 0 : 30)
-                                .animation(.easeOut(duration: 0.35).delay(0.1), value: backgroundBlurred)
-
-                            if !game.screenshots.isEmpty { screenshotsRow }
-                            if let desc = game.longDescription, !desc.isEmpty { aboutPanel(desc) }
-                        }
-                        .padding(.horizontal, 80)
-                        .padding(.vertical, 60)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .id("detail")
-
-                        infoGrid
-                            .padding(.horizontal, 80)
-                            .padding(.vertical, 60)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.black.opacity(0.55))
-                    }
-                }
+                detailScrollContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
                 .onChange(of: heroFocused) { _, focused in
@@ -105,6 +101,109 @@ struct ExpandedDetailView: View {
         }
         .fullScreenCover(isPresented: $showFullDetails) {
             FullDetailsView(title: game.title, items: detailItems)
+        }
+    }
+
+    private var embeddedBody: some View {
+        ZStack {
+            GameDetailBackground(game: game, blurred: false)
+
+            detailScrollContent
+                .scrollDisabled(true)
+                .allowsHitTesting(false)
+            .padding(.top, 36)
+        }
+    }
+
+    private var carouselExpandedBody: some View {
+        ZStack {
+            GameDetailBackground(game: game, blurred: backgroundBlurred)
+
+            // Invisible focus catcher: guarantees that this subtree always has
+            // a focused descendant on tvOS, so onExitCommand below always fires
+            // (Menu/back), regardless of whether the hero buttons exist or are
+            // laid out yet.
+            Button(action: { onCollapse?() }) {
+                Color.clear.frame(width: 1, height: 1)
+            }
+            .buttonStyle(.plain)
+            .focused($carouselExitCatcherFocused)
+            .focusEffectDisabled()
+            .opacity(0.001)
+            .accessibilityHidden(true)
+
+            ScrollViewReader { proxy in
+                detailScrollContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                    .onChange(of: heroFocused) { _, focused in
+                        if focused {
+                            backgroundBlurred = false
+                            withAnimation(.smooth) { proxy.scrollTo("hero", anchor: .top) }
+                        }
+                    }
+                    .onChange(of: aboutFocused) { _, focused in
+                        if focused {
+                            backgroundBlurred = true
+                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
+                        }
+                    }
+                    .onChange(of: detailsFocused) { _, focused in
+                        if focused {
+                            backgroundBlurred = true
+                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
+                        }
+                    }
+            }
+        }
+        .ignoresSafeArea()
+        .onAppear {
+            carouselExitCatcherFocused = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(50))
+                heroFocused = true
+            }
+        }
+        .onExitCommand {
+            onCollapse?()
+        }
+        .fullScreenCover(isPresented: $showFullDescription) {
+            if let desc = game.longDescription { FullDescriptionView(description: desc) }
+        }
+        .fullScreenCover(isPresented: $showFullDetails) {
+            FullDetailsView(title: game.title, items: detailItems)
+        }
+    }
+
+    private var detailScrollContent: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                heroSection
+                    .id("hero")
+
+                VStack(alignment: .leading, spacing: 32) {
+                    Text(game.title)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .opacity(backgroundBlurred ? 1 : 0)
+                        .offset(y: backgroundBlurred ? 0 : 30)
+                        .animation(.easeOut(duration: 0.35).delay(0.1), value: backgroundBlurred)
+
+                    if !game.screenshots.isEmpty { screenshotsRow }
+                    if let desc = game.longDescription, !desc.isEmpty { aboutPanel(desc) }
+                }
+                .padding(.horizontal, 80)
+                .padding(.vertical, 60)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .id("detail")
+
+                infoGrid
+                    .padding(.horizontal, 80)
+                    .padding(.vertical, 60)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black.opacity(0.55))
+            }
         }
     }
 
@@ -163,6 +262,7 @@ struct ExpandedDetailView: View {
                             .buttonStyle(.bordered)
                             .focused($heroFocused)
                         }
+                        .allowsHitTesting(!isEmbeddedCarousel)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
