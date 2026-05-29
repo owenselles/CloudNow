@@ -320,8 +320,10 @@ private func normalizeAxis(_ v: Float, deadzone: Float) -> Int16 {
 // MARK: - DataChannelSender
 
 /// Abstracts the WebRTC data channel so the WebRTC dependency stays in GFNStreamController.
+/// `reliable: true` routes over the reliable/ordered `input_channel_v1`; `reliable: false`
+/// routes over the partially-reliable/unordered `input_channel_partially_reliable` (gamepad in v3).
 protocol DataChannelSender: AnyObject {
-    func sendData(_ data: Data)
+    func sendInput(_ data: Data, reliable: Bool)
 }
 
 // MARK: - InputSender
@@ -348,6 +350,10 @@ final class InputSender {
     /// Which controller button triggers the overlay on long-press. Matches StreamSettings.overlayTriggerButton.
     var overlayTriggerButton: OverlayTriggerButton = .start
 
+    /// When true, long-pressing the button that is NOT the overlay trigger sends Shift+Tab
+    /// (opens the Steam in-game overlay). Matches StreamSettings.enableSteamOverlayGesture.
+    var steamOverlayGestureEnabled: Bool = true
+
     /// Called when remoteMode changes due to controller connect/disconnect auto-switching.
     var onRemoteModeChanged: ((RemoteInputMode) -> Void)?
 
@@ -357,8 +363,30 @@ final class InputSender {
     private var heartbeatTimer: Timer?
     private var observations: [NSObjectProtocol] = []
 
+    // Negotiated input protocol version. v3 wraps gamepad packets with sequence numbers and
+    // routes them over the partially-reliable channel; v2 sends plain over the reliable channel.
+    private var protocolVersion = 2
+    private var partiallyReliableGamepadActive: Bool { protocolVersion >= 3 }
+
     // Gamepad bitmap: bit i = extended gamepad i is connected (matches official GFN protocol)
     private var gamepadBitmap: UInt8 = 0
+
+    // Send-on-change de-duplication: last gamepad frame sent per controller index, plus a tick
+    // counter so an unchanged state is still refreshed periodically (loss recovery / keep-alive).
+    private struct GamepadFrame: Equatable {
+        var buttons: UInt16; var lt: UInt8; var rt: UInt8
+        var lx: Int16; var ly: Int16; var rx: Int16; var ry: Int16
+    }
+    private var lastGamepadFrame: [Int: GamepadFrame] = [:]
+    private var ticksSinceGamepadSend: [Int: Int] = [:]
+    // Resend an unchanged frame at least this often (~4 Hz at 60 Hz tick) so a dropped final
+    // packet on the unordered channel can't leave the server stuck on a stale stick position.
+    private static let gamepadIdleRefreshTicks = 15
+
+    // Per-controller Steam-overlay (Shift+Tab) long-press hold duration (ticks at 60 Hz).
+    private var steamHoldTicks: [Int: Int] = [:]
+    // ~1 s at 60 Hz.
+    private static let steamLongPressThreshold = 60
 
     // Siri Remote state tracking
     private var lastMicroDpad: (x: Float, y: Float) = (0, 0)
@@ -389,7 +417,7 @@ final class InputSender {
         // Sent unconditionally (not gated on isPaused) to maintain the connection.
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.channel?.sendData(self.encoder.encodeHeartbeat())
+            self.channel?.sendInput(self.encoder.encodeHeartbeat(), reliable: true)
         }
     }
 
@@ -402,6 +430,7 @@ final class InputSender {
     }
 
     func setProtocolVersion(_ v: Int) {
+        protocolVersion = v
         encoder.setProtocolVersion(v)
     }
 
@@ -422,6 +451,9 @@ final class InputSender {
         lastDualSenseTouchpad = (0, 0)
         lastDualSenseTouchpadClick = false
         overlayHoldTicks.removeAll()
+        steamHoldTicks.removeAll()
+        lastGamepadFrame.removeAll()
+        ticksSinceGamepadSend.removeAll()
         for controller in GCController.controllers() where controller.extendedGamepad != nil {
             if remoteMode == .gamepad || remoteMode == .dualsense {
                 claimControllerInput(controller)
@@ -446,10 +478,11 @@ final class InputSender {
             for (idx, controller) in extended.prefix(4).enumerated() {
                 var (btns, lt, rt, lx, ly, rx, ry) = mapGCControllerToXInput(controller, deadzone: deadzone)
 
-                // Long-press overlay trigger → show GFN overlay.
-                // Runs before sendData so we can clear the triggering bit,
-                // preventing the in-game action from firing simultaneously.
+                // Long-press gestures → app HUD overlay (trigger button) and Steam overlay
+                // (the other button, Shift+Tab). Run before encoding so we can clear the
+                // triggering bit, preventing the in-game action from firing simultaneously.
                 if let pad = controller.extendedGamepad {
+                    // App HUD overlay on the configured trigger button.
                     let held: Bool
                     switch overlayTriggerButton {
                     case .start:   held = pad.buttonMenu.isPressed
@@ -468,7 +501,42 @@ final class InputSender {
                     } else {
                         overlayHoldTicks[idx] = 0
                     }
+
+                    // Steam overlay on the OTHER button (whichever isn't the HUD trigger).
+                    if steamOverlayGestureEnabled {
+                        let steamHeld: Bool
+                        switch overlayTriggerButton {
+                        case .start:   steamHeld = pad.buttonOptions?.isPressed ?? false
+                        case .options: steamHeld = pad.buttonMenu.isPressed
+                        }
+                        if steamHeld {
+                            let ticks = (steamHoldTicks[idx] ?? 0) + 1
+                            steamHoldTicks[idx] = ticks
+                            if ticks == Self.steamLongPressThreshold {
+                                switch overlayTriggerButton {
+                                case .start:   btns &= ~GFNInput.back   // clear View/Back
+                                case .options: btns &= ~GFNInput.start  // clear Start
+                                }
+                                sendSteamOverlayChord()
+                            }
+                        } else {
+                            steamHoldTicks[idx] = 0
+                        }
+                    }
                 }
+
+                // Send-on-change: only emit a gamepad packet when the frame differs from the
+                // last one sent, or after an idle-refresh interval. Cuts the 60 Hz flood to
+                // event-driven traffic, reducing channel pressure and loss exposure.
+                let frame = GamepadFrame(buttons: btns, lt: lt, rt: rt, lx: lx, ly: ly, rx: rx, ry: ry)
+                let elapsed = ticksSinceGamepadSend[idx] ?? Int.max
+                let changed = lastGamepadFrame[idx] != frame
+                guard changed || elapsed >= Self.gamepadIdleRefreshTicks else {
+                    ticksSinceGamepadSend[idx] = elapsed + 1
+                    continue
+                }
+                lastGamepadFrame[idx] = frame
+                ticksSinceGamepadSend[idx] = 0
 
                 let data = encoder.encodeGamepad(
                     controllerId: idx,
@@ -481,7 +549,7 @@ final class InputSender {
                     rightStickY: ry,
                     gamepadBitmap: gamepadBitmap
                 )
-                channel?.sendData(data)
+                channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
             }
 
             // DualSense mode: poll touchpad for mouse movement alongside regular gamepad packets
@@ -557,7 +625,7 @@ final class InputSender {
                 rightStickX: 0, rightStickY: 0,
                 gamepadBitmap: gamepadBitmap | 1  // Siri Remote acts as slot 0
             )
-            channel?.sendData(data)
+            channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
 
         case .dualsense:
             break  // Siri Remote is suppressed in DualSense mode; touchpad handled separately
@@ -726,13 +794,18 @@ final class InputSender {
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
             gamepadBitmap: gamepadBitmap
         )
-        channel?.sendData(data)
+        channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
     }
 
     private func controllerDisconnected(_ controller: GCController) {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
         gamepadBitmap &= ~(1 << UInt8(idx & 3))
+        // Clear per-controller send/gesture state so a reconnect starts fresh.
+        lastGamepadFrame[idx] = nil
+        ticksSinceGamepadSend[idx] = nil
+        overlayHoldTicks[idx] = nil
+        steamHoldTicks[idx] = nil
         // Revert to mouse mode when the last controller disconnects.
         if gamepadBitmap == 0 && remoteMode != .mouse {
             remoteMode = .mouse
@@ -744,7 +817,31 @@ final class InputSender {
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
             gamepadBitmap: gamepadBitmap
         )
-        channel?.sendData(data)
+        channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
+    }
+
+    // MARK: Private — Steam Overlay
+
+    /// Synthesizes a Shift+Tab keyboard chord (Steam's default in-game overlay hotkey).
+    /// Reuses the keyboard path, so it works without a physical keyboard attached.
+    ///
+    /// The keys are HELD for ~120 ms before release: sending down+up in the same instant
+    /// lets a frame-polling game miss the keypress entirely (down and up land between two
+    /// polls). A human-length hold spans several frames so Steam reliably registers it.
+    private func sendSteamOverlayChord() {
+        let shiftVK: UInt16 = 0xA0, shiftScan: UInt16 = 0x2A  // Left Shift
+        let tabVK: UInt16   = 0x09, tabScan: UInt16   = 0x0F  // Tab
+        let shiftMod: UInt16 = 0x0001
+        print("[Steam] Sending Shift+Tab overlay chord")
+        // Press: Shift down → Tab down.
+        channel?.sendInput(encoder.encodeKeyboard(down: true, vk: shiftVK, scancode: shiftScan, modifiers: shiftMod), reliable: true)
+        channel?.sendInput(encoder.encodeKeyboard(down: true, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod), reliable: true)
+        // Release after a real hold: Tab up → Shift up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            self.channel?.sendInput(self.encoder.encodeKeyboard(down: false, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod), reliable: true)
+            self.channel?.sendInput(self.encoder.encodeKeyboard(down: false, vk: shiftVK, scancode: shiftScan, modifiers: 0),        reliable: true)
+        }
     }
 }
 
@@ -753,21 +850,21 @@ final class InputSender {
 extension InputSender: InputEventHandler {
     func sendKeyEvent(down: Bool, vk: UInt16, scancode: UInt16, modifiers: UInt16) {
         guard !isPaused else { return }
-        channel?.sendData(encoder.encodeKeyboard(down: down, vk: vk, scancode: scancode, modifiers: modifiers))
+        channel?.sendInput(encoder.encodeKeyboard(down: down, vk: vk, scancode: scancode, modifiers: modifiers), reliable: true)
     }
 
     func sendMouseMove(dx: Int16, dy: Int16) {
         guard !isPaused else { return }
-        channel?.sendData(encoder.encodeMouseMove(dx: dx, dy: dy))
+        channel?.sendInput(encoder.encodeMouseMove(dx: dx, dy: dy), reliable: true)
     }
 
     func sendMouseButton(down: Bool, button: UInt8) {
         guard !isPaused else { return }
-        channel?.sendData(encoder.encodeMouseButton(down: down, button: button))
+        channel?.sendInput(encoder.encodeMouseButton(down: down, button: button), reliable: true)
     }
 
     func sendMouseWheel(delta: Int16) {
         guard !isPaused else { return }
-        channel?.sendData(encoder.encodeMouseWheel(delta: delta))
+        channel?.sendInput(encoder.encodeMouseWheel(delta: delta), reliable: true)
     }
 }

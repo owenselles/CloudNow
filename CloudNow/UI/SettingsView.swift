@@ -201,7 +201,25 @@ struct SettingsView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Overlay Button")
-                            Text("Long-press this button during play to open the GFN overlay. Switch if it conflicts with an in-game action.")
+                            Text("Long-press this button during play to open the app overlay. Switch if it conflicts with an in-game action.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    Toggle(isOn: $vm.streamSettings.enableSteamOverlayGesture) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Steam Overlay Gesture")
+                            Text("Long-press the OTHER button (the one not set as Overlay Button) to send Shift+Tab and open the Steam overlay. e.g. with Overlay on Start, long-press View/Back.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    Toggle(isOn: $vm.streamSettings.partiallyReliableInput) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Smooth Input (Partially-Reliable)")
+                            Text("Sends gamepad input over the unordered channel so a single lost packet can't freeze input and then snap. Recommended on. Disable to compare if you suspect input issues.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

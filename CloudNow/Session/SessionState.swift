@@ -21,6 +21,48 @@ struct StreamSettings: Codable, Equatable {
     /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
     /// nil = let the GFN default VPC handle routing.
     var preferredZoneUrl: String? = nil
+    /// Negotiate protocol v3 so gamepad input rides the partially-reliable, unordered data
+    /// channel instead of the reliable/ordered one. Avoids head-of-line blocking (a single
+    /// lost input packet freezing input until retransmit, then snapping). Independent of codec.
+    var partiallyReliableInput: Bool = true
+    /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
+    /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
+    var enableSteamOverlayGesture: Bool = true
+}
+
+// MARK: - StreamSettings: resilient decoding
+//
+// Synthesized Decodable throws keyNotFound when a newly-added field is missing from
+// previously-persisted JSON, which would silently reset ALL settings to defaults on upgrade.
+// decodeIfPresent + default fallbacks keep existing settings intact across versions.
+extension StreamSettings {
+    enum CodingKeys: String, CodingKey {
+        case resolution, fps, maxBitrateKbps, codec, colorQuality, keyboardLayout
+        case gameLanguage, enableL4S, micEnabled, controllerDeadzone, overlayTriggerButton
+        case defaultRemoteInputMode, preferredZoneUrl, partiallyReliableInput
+        case enableSteamOverlayGesture
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = StreamSettings()
+        self.init()
+        resolution            = try c.decodeIfPresent(String.self,            forKey: .resolution)            ?? d.resolution
+        fps                   = try c.decodeIfPresent(Int.self,               forKey: .fps)                   ?? d.fps
+        maxBitrateKbps        = try c.decodeIfPresent(Int.self,               forKey: .maxBitrateKbps)        ?? d.maxBitrateKbps
+        codec                 = try c.decodeIfPresent(VideoCodec.self,        forKey: .codec)                 ?? d.codec
+        colorQuality          = try c.decodeIfPresent(ColorQuality.self,      forKey: .colorQuality)          ?? d.colorQuality
+        keyboardLayout        = try c.decodeIfPresent(String.self,            forKey: .keyboardLayout)        ?? d.keyboardLayout
+        gameLanguage          = try c.decodeIfPresent(String.self,            forKey: .gameLanguage)          ?? d.gameLanguage
+        enableL4S             = try c.decodeIfPresent(Bool.self,              forKey: .enableL4S)             ?? d.enableL4S
+        micEnabled            = try c.decodeIfPresent(Bool.self,              forKey: .micEnabled)            ?? d.micEnabled
+        controllerDeadzone    = try c.decodeIfPresent(Double.self,            forKey: .controllerDeadzone)    ?? d.controllerDeadzone
+        overlayTriggerButton  = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
+        defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self,  forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
+        preferredZoneUrl      = try c.decodeIfPresent(String.self,            forKey: .preferredZoneUrl)
+        partiallyReliableInput = try c.decodeIfPresent(Bool.self,            forKey: .partiallyReliableInput) ?? d.partiallyReliableInput
+        enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self,         forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
+    }
 }
 
 enum OverlayTriggerButton: String, Codable, CaseIterable {
