@@ -303,18 +303,31 @@ func mapGCControllerToXInput(_ controller: GCController, deadzone: Float = 0.15)
     let lt = UInt8(clamping: Int(pad.leftTrigger.value * 255))
     let rt = UInt8(clamping: Int(pad.rightTrigger.value * 255))
 
-    let lx = normalizeAxis(pad.leftThumbstick.xAxis.value, deadzone: deadzone)
-    let ly = normalizeAxis(pad.leftThumbstick.yAxis.value, deadzone: deadzone)
-    let rx = normalizeAxis(pad.rightThumbstick.xAxis.value, deadzone: deadzone)
-    let ry = normalizeAxis(pad.rightThumbstick.yAxis.value, deadzone: deadzone)
+    let (lx, ly) = radialDeadzone(x: pad.leftThumbstick.xAxis.value,  y: pad.leftThumbstick.yAxis.value,  deadzone: deadzone)
+    let (rx, ry) = radialDeadzone(x: pad.rightThumbstick.xAxis.value, y: pad.rightThumbstick.yAxis.value, deadzone: deadzone)
 
     return (buttons, lt, rt, lx, ly, rx, ry)
 }
 
-private func normalizeAxis(_ v: Float, deadzone: Float) -> Int16 {
-    let clamped = max(-1.0, min(1.0, v))
-    if abs(clamped) < deadzone { return 0 }
-    return Int16(clamped < 0 ? clamped * 32768 : clamped * 32767)
+/// Radial, rescaled deadzone. Treats the stick as a 2D vector: anything inside the deadzone
+/// radius maps to zero, and everything outside is remapped so output ramps *smoothly* from 0
+/// at the deadzone edge to full at the stick edge — no step discontinuity when leaving rest.
+/// (The old per-axis hard cliff jumped straight to ~deadzone×full the instant you crossed it,
+/// which lurched the camera on every move-from-idle.)
+private func radialDeadzone(x: Float, y: Float, deadzone: Float) -> (Int16, Int16) {
+    let cx = max(-1.0, min(1.0, x))
+    let cy = max(-1.0, min(1.0, y))
+    let magnitude = (cx * cx + cy * cy).squareRoot()
+    guard magnitude > deadzone, magnitude > 0 else { return (0, 0) }
+    // Remap [deadzone, 1] → [0, 1] along the stick's direction.
+    let scaled = min(1.0, (magnitude - deadzone) / (1 - deadzone))
+    let factor = scaled / magnitude
+    return (axisToInt16(cx * factor), axisToInt16(cy * factor))
+}
+
+private func axisToInt16(_ v: Float) -> Int16 {
+    let c = max(-1.0, min(1.0, v))
+    return Int16(c < 0 ? c * 32768 : c * 32767)
 }
 
 // MARK: - DataChannelSender
@@ -367,6 +380,16 @@ final class InputSender {
     // routes them over the partially-reliable channel; v2 sends plain over the reliable channel.
     private var protocolVersion = 2
     private var partiallyReliableGamepadActive: Bool { protocolVersion >= 3 }
+
+    // MARK: Temporary input diagnostics — remove once the idle→move glitch is resolved.
+    static var debugInput = true
+    private var dbgLastTickNs: UInt64 = 0          // for tick-cadence gap detection
+    private var dbgReportNs: UInt64 = 0            // wall clock at last per-second report
+    private var dbgTickCount = 0                   // ticks since last report
+    private var dbgGamepadSends = 0                // gamepad packets sent since last report
+    private var dbgRightStickActive = false        // right-stick engaged last tick?
+    private var dbgIdleStartNs: UInt64 = 0         // when the right stick last went neutral
+    private var dbgLogFramesLeft = 0               // frames still to dump after an engage
 
     // Gamepad bitmap: bit i = extended gamepad i is connected (matches official GFN protocol)
     private var gamepadBitmap: UInt8 = 0
@@ -452,6 +475,8 @@ final class InputSender {
     // MARK: Private — Tick
 
     private func tick() {
+        if Self.debugInput { dbgTickCadence() }
+
         let controllers = GCController.controllers()
         let extended = controllers.filter { $0.extendedGamepad != nil }
         let micro    = controllers.filter { $0.extendedGamepad == nil && $0.microGamepad != nil }
@@ -511,6 +536,12 @@ final class InputSender {
                     }
                 }
 
+                if Self.debugInput, idx == 0 {
+                    let rawX = controller.extendedGamepad?.rightThumbstick.xAxis.value ?? 0
+                    let rawY = controller.extendedGamepad?.rightThumbstick.yAxis.value ?? 0
+                    dbgRightStick(rawX: rawX, rawY: rawY, rx: rx, ry: ry)
+                }
+
                 // Send the full gamepad state every tick (60 Hz). Packets carry ABSOLUTE stick
                 // state, so the server stays in sync only through continuous re-sends: on the
                 // unordered/partially-reliable channel a dropped packet is corrected by the next
@@ -528,6 +559,7 @@ final class InputSender {
                     gamepadBitmap: gamepadBitmap
                 )
                 channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
+                if Self.debugInput { dbgGamepadSends += 1 }
             }
 
             // DualSense mode: poll touchpad for mouse movement alongside regular gamepad packets
@@ -794,6 +826,51 @@ final class InputSender {
             gamepadBitmap: gamepadBitmap
         )
         channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
+    }
+
+    // MARK: Private — Temporary Input Diagnostics
+
+    /// Detects 60 Hz timer starvation (gaps) and reports tick rate + gamepad send count per second.
+    private func dbgTickCadence() {
+        let now = DispatchTime.now().uptimeNanoseconds
+        if dbgLastTickNs != 0 {
+            let gapMs = Double(now - dbgLastTickNs) / 1_000_000
+            if gapMs > 30 { print("[InputDbg] tick GAP \(String(format: "%.0f", gapMs))ms (expected ~16.7)") }
+        }
+        dbgLastTickNs = now
+        dbgTickCount += 1
+        if dbgTickCount >= 60 {
+            if dbgReportNs != 0 {
+                let elapsed = Double(now - dbgReportNs) / 1_000_000_000
+                print("[InputDbg] 60 ticks in \(String(format: "%.2f", elapsed))s → \(String(format: "%.0f", 60 / elapsed)) Hz, gamepadSends=\(dbgGamepadSends)")
+            }
+            dbgReportNs = now
+            dbgTickCount = 0
+            dbgGamepadSends = 0
+        }
+    }
+
+    /// Logs right-stick engage/release transitions (with preceding idle duration) and dumps the
+    /// first ~12 frames of stick values after an engage — so we can see exactly what the client
+    /// sends at the moment of the "wrong position" glitch.
+    private func dbgRightStick(rawX: Float, rawY: Float, rx: Int16, ry: Int16) {
+        let active = rx != 0 || ry != 0
+        if active != dbgRightStickActive {
+            dbgRightStickActive = active
+            let now = DispatchTime.now().uptimeNanoseconds
+            if active {
+                let idleMs = dbgIdleStartNs != 0 ? Double(now - dbgIdleStartNs) / 1_000_000 : 0
+                print("[InputDbg] RS ENGAGE raw=(\(String(format: "%.3f", rawX)),\(String(format: "%.3f", rawY))) → rx=\(rx) ry=\(ry) afterIdle=\(String(format: "%.0f", idleMs))ms")
+                dbgLogFramesLeft = 12
+            } else {
+                dbgIdleStartNs = now
+                print("[InputDbg] RS release")
+            }
+        }
+        if dbgLogFramesLeft > 0 {
+            print("[InputDbg]   RS frame raw=(\(String(format: "%.3f", rawX)),\(String(format: "%.3f", rawY))) → rx=\(rx) ry=\(ry)")
+            dbgLogFramesLeft -= 1
+        }
     }
 
     // MARK: Private — Steam Overlay
