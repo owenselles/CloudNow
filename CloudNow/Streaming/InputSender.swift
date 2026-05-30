@@ -371,18 +371,6 @@ final class InputSender {
     // Gamepad bitmap: bit i = extended gamepad i is connected (matches official GFN protocol)
     private var gamepadBitmap: UInt8 = 0
 
-    // Send-on-change de-duplication: last gamepad frame sent per controller index, plus a tick
-    // counter so an unchanged state is still refreshed periodically (loss recovery / keep-alive).
-    private struct GamepadFrame: Equatable {
-        var buttons: UInt16; var lt: UInt8; var rt: UInt8
-        var lx: Int16; var ly: Int16; var rx: Int16; var ry: Int16
-    }
-    private var lastGamepadFrame: [Int: GamepadFrame] = [:]
-    private var ticksSinceGamepadSend: [Int: Int] = [:]
-    // Resend an unchanged frame at least this often (~4 Hz at 60 Hz tick) so a dropped final
-    // packet on the unordered channel can't leave the server stuck on a stale stick position.
-    private static let gamepadIdleRefreshTicks = 15
-
     // Per-controller Steam-overlay (Shift+Tab) long-press hold duration (ticks at 60 Hz).
     private var steamHoldTicks: [Int: Int] = [:]
     // ~1 s at 60 Hz.
@@ -452,8 +440,6 @@ final class InputSender {
         lastDualSenseTouchpadClick = false
         overlayHoldTicks.removeAll()
         steamHoldTicks.removeAll()
-        lastGamepadFrame.removeAll()
-        ticksSinceGamepadSend.removeAll()
         for controller in GCController.controllers() where controller.extendedGamepad != nil {
             if remoteMode == .gamepad || remoteMode == .dualsense {
                 claimControllerInput(controller)
@@ -525,19 +511,11 @@ final class InputSender {
                     }
                 }
 
-                // Send-on-change: only emit a gamepad packet when the frame differs from the
-                // last one sent, or after an idle-refresh interval. Cuts the 60 Hz flood to
-                // event-driven traffic, reducing channel pressure and loss exposure.
-                let frame = GamepadFrame(buttons: btns, lt: lt, rt: rt, lx: lx, ly: ly, rx: rx, ry: ry)
-                let elapsed = ticksSinceGamepadSend[idx] ?? Int.max
-                let changed = lastGamepadFrame[idx] != frame
-                guard changed || elapsed >= Self.gamepadIdleRefreshTicks else {
-                    ticksSinceGamepadSend[idx] = elapsed + 1
-                    continue
-                }
-                lastGamepadFrame[idx] = frame
-                ticksSinceGamepadSend[idx] = 0
-
+                // Send the full gamepad state every tick (60 Hz). Packets carry ABSOLUTE stick
+                // state, so the server stays in sync only through continuous re-sends: on the
+                // unordered/partially-reliable channel a dropped packet is corrected by the next
+                // one ~16 ms later. Throttling idle state instead lets a lost "return to neutral"
+                // leave the server on a stale position, which then snaps on the next movement.
                 let data = encoder.encodeGamepad(
                     controllerId: idx,
                     buttons: btns,
@@ -801,9 +779,7 @@ final class InputSender {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
         gamepadBitmap &= ~(1 << UInt8(idx & 3))
-        // Clear per-controller send/gesture state so a reconnect starts fresh.
-        lastGamepadFrame[idx] = nil
-        ticksSinceGamepadSend[idx] = nil
+        // Clear per-controller gesture state so a reconnect starts fresh.
         overlayHoldTicks[idx] = nil
         steamHoldTicks[idx] = nil
         // Revert to mouse mode when the last controller disconnects.
