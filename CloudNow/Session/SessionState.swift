@@ -21,10 +21,12 @@ struct StreamSettings: Codable, Equatable {
     /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
     /// nil = let the GFN default VPC handle routing.
     var preferredZoneUrl: String? = nil
-    /// Negotiate protocol v3 so gamepad input rides the partially-reliable, unordered data
-    /// channel instead of the reliable/ordered one. Avoids head-of-line blocking (a single
-    /// lost input packet freezing input until retransmit, then snapping). Independent of codec.
-    var partiallyReliableInput: Bool = true
+    /// Opt-in: negotiate protocol v3 so gamepad input rides the partially-reliable, unordered
+    /// data channel instead of the reliable/ordered one. Trades drop-tolerance (no head-of-line
+    /// blocking) for the risk that a lost absolute-state packet leaves the server on a stale
+    /// stick position under burst loss. Default off — gamepad on the reliable channel keeps state
+    /// consistent; the tiny ~3 KB/s input stream rarely stalls. Independent of codec.
+    var partiallyReliableInput: Bool = false
     /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
     /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
     var enableSteamOverlayGesture: Bool = true

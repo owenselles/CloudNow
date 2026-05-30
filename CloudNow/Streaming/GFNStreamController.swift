@@ -86,6 +86,8 @@ final class GFNStreamController: NSObject {
     private var inputReady = false
     private var lastBytesReceived: Double = 0
     private var lastStatsTime: Date = .distantPast
+    private var lastPacketsLost: Double = 0
+    private var lastPacketsReceived: Double = 0
 
     private static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
@@ -173,6 +175,8 @@ final class GFNStreamController: NSObject {
         inputReady = false
         lastBytesReceived = 0
         lastStatsTime = .distantPast
+        lastPacketsLost = 0
+        lastPacketsReceived = 0
         videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
         videoView = nil
@@ -603,7 +607,17 @@ final class GFNStreamController: NSObject {
                 if lost + received > 0 {
                     stats.packetLossPercent = lost / (lost + received) * 100
                 }
-                print("[Stats] framesReceived=\(Int(framesReceived)) framesDecoded=\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps) codec=\(stats.codec)")
+                // Per-interval (instantaneous) loss — surfaces bursts that cumulative loss hides.
+                let dLost = max(0, lost - lastPacketsLost)
+                let dRecv = max(0, received - lastPacketsReceived)
+                let lossNow = (dLost + dRecv) > 0 ? dLost / (dLost + dRecv) * 100 : 0
+                lastPacketsLost = lost
+                lastPacketsReceived = received
+                // Input-channel send-buffer backlog: if these grow, packets are piling up in the
+                // transport and will burst-flush — a client-side cause of the idle→move glitch.
+                let rbuf = reliableSendChannel?.bufferedAmount ?? 0
+                let pbuf = partialSendChannel?.bufferedAmount ?? 0
+                print("[Stats] frames=\(Int(framesReceived))/\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps) codec=\(stats.codec) rtt=\(Int(stats.rttMs))ms jitter=\(String(format: "%.1f", stats.jitterMs))ms lossNow=\(String(format: "%.1f", lossNow))% lossTotal=\(String(format: "%.2f", stats.packetLossPercent))% rbuf=\(rbuf) pbuf=\(pbuf)")
             }
             if stat.type == "candidate-pair", stat.values["state"] as? String == "succeeded" {
                 stats.rttMs = (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000
