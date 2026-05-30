@@ -216,15 +216,6 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    Toggle(isOn: $vm.streamSettings.partiallyReliableInput) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Smooth Input — Experimental (GFN proto v3)")
-                            Text("Negotiates NVIDIA's v3 input protocol so gamepad data rides the partially-reliable, unordered channel — a single lost packet can't freeze input and then snap. Mainly helps on lossy networks; falls back to v2 if the server declines. Disable if any game's input misbehaves.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
                     Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
                         Text("Mouse").tag(RemoteInputMode.mouse)
                         Text("Gamepad").tag(RemoteInputMode.gamepad)

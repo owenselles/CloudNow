@@ -333,10 +333,8 @@ private func axisToInt16(_ v: Float) -> Int16 {
 // MARK: - DataChannelSender
 
 /// Abstracts the WebRTC data channel so the WebRTC dependency stays in GFNStreamController.
-/// `reliable: true` routes over the reliable/ordered `input_channel_v1`; `reliable: false`
-/// routes over the partially-reliable/unordered `input_channel_partially_reliable` (gamepad in v3).
 protocol DataChannelSender: AnyObject {
-    func sendInput(_ data: Data, reliable: Bool)
+    func sendData(_ data: Data)
 }
 
 // MARK: - InputSender
@@ -376,21 +374,6 @@ final class InputSender {
     private var heartbeatTimer: Timer?
     private var observations: [NSObjectProtocol] = []
 
-    // Negotiated input protocol version. v3 wraps gamepad packets with sequence numbers and
-    // routes them over the partially-reliable channel; v2 sends plain over the reliable channel.
-    private var protocolVersion = 2
-    private var partiallyReliableGamepadActive: Bool { protocolVersion >= 3 }
-
-    // MARK: Temporary input diagnostics — remove once the idle→move glitch is resolved.
-    static var debugInput = true
-    private var dbgLastTickNs: UInt64 = 0          // for tick-cadence gap detection
-    private var dbgReportNs: UInt64 = 0            // wall clock at last per-second report
-    private var dbgTickCount = 0                   // ticks since last report
-    private var dbgGamepadSends = 0                // gamepad packets sent since last report
-    private var dbgRightStickActive = false        // right-stick engaged last tick?
-    private var dbgIdleStartNs: UInt64 = 0         // when the right stick last went neutral
-    private var dbgLogFramesLeft = 0               // frames still to dump after an engage
-
     // Gamepad bitmap: bit i = extended gamepad i is connected (matches official GFN protocol)
     private var gamepadBitmap: UInt8 = 0
 
@@ -428,7 +411,7 @@ final class InputSender {
         // Sent unconditionally (not gated on isPaused) to maintain the connection.
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.channel?.sendInput(self.encoder.encodeHeartbeat(), reliable: true)
+            self.channel?.sendData(self.encoder.encodeHeartbeat())
         }
     }
 
@@ -441,7 +424,6 @@ final class InputSender {
     }
 
     func setProtocolVersion(_ v: Int) {
-        protocolVersion = v
         encoder.setProtocolVersion(v)
     }
 
@@ -475,8 +457,6 @@ final class InputSender {
     // MARK: Private — Tick
 
     private func tick() {
-        if Self.debugInput { dbgTickCadence() }
-
         let controllers = GCController.controllers()
         let extended = controllers.filter { $0.extendedGamepad != nil }
         let micro    = controllers.filter { $0.extendedGamepad == nil && $0.microGamepad != nil }
@@ -536,17 +516,9 @@ final class InputSender {
                     }
                 }
 
-                if Self.debugInput, idx == 0 {
-                    let rawX = controller.extendedGamepad?.rightThumbstick.xAxis.value ?? 0
-                    let rawY = controller.extendedGamepad?.rightThumbstick.yAxis.value ?? 0
-                    dbgRightStick(rawX: rawX, rawY: rawY, rx: rx, ry: ry)
-                }
-
                 // Send the full gamepad state every tick (60 Hz). Packets carry ABSOLUTE stick
-                // state, so the server stays in sync only through continuous re-sends: on the
-                // unordered/partially-reliable channel a dropped packet is corrected by the next
-                // one ~16 ms later. Throttling idle state instead lets a lost "return to neutral"
-                // leave the server on a stale position, which then snaps on the next movement.
+                // state, so the server stays in sync through continuous re-sends — a dropped
+                // packet is corrected by the next one ~16 ms later.
                 let data = encoder.encodeGamepad(
                     controllerId: idx,
                     buttons: btns,
@@ -558,8 +530,7 @@ final class InputSender {
                     rightStickY: ry,
                     gamepadBitmap: gamepadBitmap
                 )
-                channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
-                if Self.debugInput { dbgGamepadSends += 1 }
+                channel?.sendData(data)
             }
 
             // DualSense mode: poll touchpad for mouse movement alongside regular gamepad packets
@@ -635,7 +606,7 @@ final class InputSender {
                 rightStickX: 0, rightStickY: 0,
                 gamepadBitmap: gamepadBitmap | 1  // Siri Remote acts as slot 0
             )
-            channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
+            channel?.sendData(data)
 
         case .dualsense:
             break  // Siri Remote is suppressed in DualSense mode; touchpad handled separately
@@ -804,7 +775,7 @@ final class InputSender {
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
             gamepadBitmap: gamepadBitmap
         )
-        channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
+        channel?.sendData(data)
     }
 
     private func controllerDisconnected(_ controller: GCController) {
@@ -825,52 +796,7 @@ final class InputSender {
             leftStickX: 0, leftStickY: 0, rightStickX: 0, rightStickY: 0,
             gamepadBitmap: gamepadBitmap
         )
-        channel?.sendInput(data, reliable: !partiallyReliableGamepadActive)
-    }
-
-    // MARK: Private — Temporary Input Diagnostics
-
-    /// Detects 60 Hz timer starvation (gaps) and reports tick rate + gamepad send count per second.
-    private func dbgTickCadence() {
-        let now = DispatchTime.now().uptimeNanoseconds
-        if dbgLastTickNs != 0 {
-            let gapMs = Double(now - dbgLastTickNs) / 1_000_000
-            if gapMs > 30 { print("[InputDbg] tick GAP \(String(format: "%.0f", gapMs))ms (expected ~16.7)") }
-        }
-        dbgLastTickNs = now
-        dbgTickCount += 1
-        if dbgTickCount >= 60 {
-            if dbgReportNs != 0 {
-                let elapsed = Double(now - dbgReportNs) / 1_000_000_000
-                print("[InputDbg] 60 ticks in \(String(format: "%.2f", elapsed))s → \(String(format: "%.0f", 60 / elapsed)) Hz, gamepadSends=\(dbgGamepadSends)")
-            }
-            dbgReportNs = now
-            dbgTickCount = 0
-            dbgGamepadSends = 0
-        }
-    }
-
-    /// Logs right-stick engage/release transitions (with preceding idle duration) and dumps the
-    /// first ~12 frames of stick values after an engage — so we can see exactly what the client
-    /// sends at the moment of the "wrong position" glitch.
-    private func dbgRightStick(rawX: Float, rawY: Float, rx: Int16, ry: Int16) {
-        let active = rx != 0 || ry != 0
-        if active != dbgRightStickActive {
-            dbgRightStickActive = active
-            let now = DispatchTime.now().uptimeNanoseconds
-            if active {
-                let idleMs = dbgIdleStartNs != 0 ? Double(now - dbgIdleStartNs) / 1_000_000 : 0
-                print("[InputDbg] RS ENGAGE raw=(\(String(format: "%.3f", rawX)),\(String(format: "%.3f", rawY))) → rx=\(rx) ry=\(ry) afterIdle=\(String(format: "%.0f", idleMs))ms")
-                dbgLogFramesLeft = 12
-            } else {
-                dbgIdleStartNs = now
-                print("[InputDbg] RS release")
-            }
-        }
-        if dbgLogFramesLeft > 0 {
-            print("[InputDbg]   RS frame raw=(\(String(format: "%.3f", rawX)),\(String(format: "%.3f", rawY))) → rx=\(rx) ry=\(ry)")
-            dbgLogFramesLeft -= 1
-        }
+        channel?.sendData(data)
     }
 
     // MARK: Private — Steam Overlay
@@ -886,13 +812,13 @@ final class InputSender {
         let tabVK: UInt16   = 0x09, tabScan: UInt16   = 0x0F  // Tab
         let shiftMod: UInt16 = 0x0001
         // Press: Shift down → Tab down.
-        channel?.sendInput(encoder.encodeKeyboard(down: true, vk: shiftVK, scancode: shiftScan, modifiers: shiftMod), reliable: true)
-        channel?.sendInput(encoder.encodeKeyboard(down: true, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod), reliable: true)
+        channel?.sendData(encoder.encodeKeyboard(down: true, vk: shiftVK, scancode: shiftScan, modifiers: shiftMod))
+        channel?.sendData(encoder.encodeKeyboard(down: true, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod))
         // Release after a real hold: Tab up → Shift up.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             guard let self else { return }
-            self.channel?.sendInput(self.encoder.encodeKeyboard(down: false, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod), reliable: true)
-            self.channel?.sendInput(self.encoder.encodeKeyboard(down: false, vk: shiftVK, scancode: shiftScan, modifiers: 0),        reliable: true)
+            self.channel?.sendData(self.encoder.encodeKeyboard(down: false, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod))
+            self.channel?.sendData(self.encoder.encodeKeyboard(down: false, vk: shiftVK, scancode: shiftScan, modifiers: 0))
         }
     }
 }
@@ -902,21 +828,21 @@ final class InputSender {
 extension InputSender: InputEventHandler {
     func sendKeyEvent(down: Bool, vk: UInt16, scancode: UInt16, modifiers: UInt16) {
         guard !isPaused else { return }
-        channel?.sendInput(encoder.encodeKeyboard(down: down, vk: vk, scancode: scancode, modifiers: modifiers), reliable: true)
+        channel?.sendData(encoder.encodeKeyboard(down: down, vk: vk, scancode: scancode, modifiers: modifiers))
     }
 
     func sendMouseMove(dx: Int16, dy: Int16) {
         guard !isPaused else { return }
-        channel?.sendInput(encoder.encodeMouseMove(dx: dx, dy: dy), reliable: true)
+        channel?.sendData(encoder.encodeMouseMove(dx: dx, dy: dy))
     }
 
     func sendMouseButton(down: Bool, button: UInt8) {
         guard !isPaused else { return }
-        channel?.sendInput(encoder.encodeMouseButton(down: down, button: button), reliable: true)
+        channel?.sendData(encoder.encodeMouseButton(down: down, button: button))
     }
 
     func sendMouseWheel(delta: Int16) {
         guard !isPaused else { return }
-        channel?.sendInput(encoder.encodeMouseWheel(delta: delta), reliable: true)
+        channel?.sendData(encoder.encodeMouseWheel(delta: delta))
     }
 }
