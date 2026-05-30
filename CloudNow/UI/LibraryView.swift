@@ -22,7 +22,7 @@ struct LibraryView: View {
     ]
 
     private var availableStores: [String] {
-        let stores = Set(games.flatMap { $0.variants.map { $0.appStore } }
+        let stores = Set(games.flatMap { $0.ownedStores }
             .filter { $0 != "unknown" })
         return stores.sorted()
     }
@@ -30,7 +30,7 @@ struct LibraryView: View {
     private var filteredGames: [GameInfo] {
         var result = games
         if let store = selectedStore {
-            result = result.filter { $0.variants.contains { $0.appStore == store } }
+            result = result.filter { $0.matchesStore(store) }
         }
         if !searchText.isEmpty {
             result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }

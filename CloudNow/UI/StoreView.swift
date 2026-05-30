@@ -23,7 +23,7 @@ struct StoreView: View {
             result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
         }
         if let store = selectedStore {
-            result = result.filter { $0.variants.contains { $0.appStore == store } }
+            result = result.filter { $0.matchesStore(store) }
         }
         return result
     }

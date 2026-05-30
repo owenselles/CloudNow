@@ -150,12 +150,32 @@ struct GameInfo: Identifiable, Equatable {
     let heroBannerUrl: String?
     var isInLibrary: Bool
     var variants: [GameVariant]
+
+    /// Whether this game belongs under a given store-filter chip. An owned game matches only
+    /// via the store it's actually owned through (so a Game Pass / Ubisoft title that also exists
+    /// on Steam won't show under the Steam filter); an unowned catalog game matches any store it's
+    /// available on.
+    func matchesStore(_ store: String) -> Bool {
+        if isInLibrary {
+            return variants.contains { $0.appStore == store && $0.isOwned }
+        }
+        return variants.contains { $0.appStore == store }
+    }
+
+    /// Stores this game is actually owned through (drives the Library tab's filter chips).
+    var ownedStores: [String] {
+        variants.filter { $0.isOwned }.map { $0.appStore }
+    }
 }
 
 struct GameVariant: Equatable {
     let id: String
     let appStore: String
     var appId: String?
+    /// True when this specific store variant is the one in the user's GFN library
+    /// (`gfn.library.selected`). Used to filter by the store a game is *owned* through,
+    /// rather than every store the game merely exists on.
+    var isOwned: Bool = false
 
     var storeName: String {
         switch appStore {
