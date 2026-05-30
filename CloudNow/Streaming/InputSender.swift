@@ -832,7 +832,6 @@ final class InputSender {
         let shiftVK: UInt16 = 0xA0, shiftScan: UInt16 = 0x2A  // Left Shift
         let tabVK: UInt16   = 0x09, tabScan: UInt16   = 0x0F  // Tab
         let shiftMod: UInt16 = 0x0001
-        print("[Steam] Sending Shift+Tab overlay chord")
         // Press: Shift down → Tab down.
         channel?.sendInput(encoder.encodeKeyboard(down: true, vk: shiftVK, scancode: shiftScan, modifiers: shiftMod), reliable: true)
         channel?.sendInput(encoder.encodeKeyboard(down: true, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod), reliable: true)

@@ -218,8 +218,8 @@ struct SettingsView: View {
                     }
                     Toggle(isOn: $vm.streamSettings.partiallyReliableInput) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Smooth Input (Partially-Reliable)")
-                            Text("Sends gamepad input over the unordered channel so a single lost packet can't freeze input and then snap. Recommended on. Disable to compare if you suspect input issues.")
+                            Text("Smooth Input — Experimental (GFN proto v3)")
+                            Text("Negotiates NVIDIA's v3 input protocol so gamepad data rides the partially-reliable, unordered channel — a single lost packet can't freeze input and then snap. Mainly helps on lossy networks; falls back to v2 if the server declines. Disable if any game's input misbehaves.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -238,7 +238,7 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    LabeledContent("Protocol", value: "XInput v2/v3")
+                    LabeledContent("Protocol", value: "XInput over GFN v2/v3")
                 }
 
                 Section("Account") {
