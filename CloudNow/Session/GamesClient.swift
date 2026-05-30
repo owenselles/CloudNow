@@ -123,7 +123,34 @@ actor GamesClient {
             throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
         }
         let payload = try JSONDecoder().decode(PanelsResponse.self, from: data)
-        return flattenPanels(payload)
+        let games = flattenPanels(payload)
+        logPanelDiagnostics(panelNames: panelNames, byteCount: data.count, payload: payload, flattenedCount: games.count)
+        return games
+    }
+
+    /// TEMPORARY instrumentation (Task 1): logs response size, panel/section/item counts, any
+    /// pagination cursor the current Decodable would otherwise silently drop, and the flattened total.
+    /// Lets us confirm on-device whether the LIBRARY shortfall is pagination vs. wrong-panel before
+    /// committing to a fix. Remove once the root cause is confirmed.
+    private func logPanelDiagnostics(panelNames: [String], byteCount: Int, payload: PanelsResponse, flattenedCount: Int) {
+        let tag = panelNames.joined(separator: ",")
+        let panels = payload.data?.panels ?? []
+        var totalItems = 0
+        var cursorNotes: [String] = []
+        for panel in panels {
+            for section in panel.sections ?? [] {
+                totalItems += section.items?.count ?? 0
+                if let info = section.pageInfo, info.hasNextPage == true || info.endCursor != nil {
+                    cursorNotes.append("section hasNextPage=\(info.hasNextPage.map(String.init) ?? "nil") endCursor=\(info.endCursor ?? "nil") total=\(info.totalCount.map(String.init) ?? "nil")")
+                }
+            }
+        }
+        print("[Panels:\(tag)] bytes=\(byteCount) panels=\(panels.count) rawItems=\(totalItems) flattened=\(flattenedCount)")
+        if cursorNotes.isEmpty {
+            print("[Panels:\(tag)] no pageInfo/cursor present in response")
+        } else {
+            for note in cursorNotes { print("[Panels:\(tag)] \(note)") }
+        }
     }
 
     private func flattenPanels(_ payload: PanelsResponse) -> [GameInfo] {
@@ -235,9 +262,15 @@ private struct PanelsResponse: Decodable {
             let sections: [Section]?
             struct Section: Decodable {
                 let items: [Item]?
+                let pageInfo: PageInfo?
                 struct Item: Decodable {
                     let __typename: String
                     let app: AppData?
+                }
+                struct PageInfo: Decodable {
+                    let hasNextPage: Bool?
+                    let endCursor: String?
+                    let totalCount: Int?
                 }
             }
         }
