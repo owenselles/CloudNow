@@ -138,11 +138,9 @@ class GamesViewModel {
                 panelLibrary = []
             }
 
-            // The LIBRARY panel under-reports owned games (e.g. Doom 2016, Wolfenstein, Dishonored
-            // are missing) — likely because the panel is curated/truncated. The MAIN catalog carries
-            // a reliable per-variant `gfn.library.selected` flag, so games we own that GFN supports
-            // show up there as `isInLibrary`. Union the two sources (dedup by id, panel order first)
-            // for a complete owned list.
+            // The LIBRARY panel under-reports owned games. The MAIN catalog carries a per-variant
+            // `gfn.library.selected` flag, so union it with catalog games flagged as owned
+            // (dedup by id, panel order first) for a complete list.
             let catalogOwned = mainGames.filter { $0.isInLibrary }
             var merged = panelLibrary
             var seen = Set(panelLibrary.map(\.id))
