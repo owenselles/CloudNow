@@ -272,10 +272,18 @@ final class VideoSurfaceView: UIView {
 /// Implements LKRTCVideoRenderer to receive decoded WebRTC frames and feed them
 /// to the display layer's background-safe AVSampleBufferVideoRenderer.
 private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
+    private struct FlushRequest {
+        let generation: UInt64
+        let removeDisplayedImage: Bool
+    }
+
     private struct State {
         var formatDescription: CMVideoFormatDescription?
         var isFlushing = false
+        var generation: UInt64 = 0
         var metricsRequestInFlight = false
+        var activeEnqueues = 0
+        var pendingFlush: FlushRequest?
     }
 
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
@@ -298,7 +306,10 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             diagnostics.recordDrop(trace)
             return
         }
-        guard !state.withLock({ $0.isFlushing }) else {
+        guard let renderGeneration = state.withLock({ state -> UInt64? in
+            guard !state.isFlushing else { return nil }
+            return state.generation
+        }) else {
             diagnostics.recordDrop(trace)
             return
         }
@@ -355,11 +366,31 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         }
         markForImmediatePresentation(sampleBuffer)
         diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
-        if !sampleBufferRenderer.isReadyForMoreMediaData {
+        let didBeginEnqueue = state.withLock { state -> Bool in
+            guard !state.isFlushing, state.generation == renderGeneration else { return false }
+            state.activeEnqueues += 1
+            return true
+        }
+        guard didBeginEnqueue else {
+            diagnostics.recordDrop(trace)
+            return
+        }
+
+        let backpressured = !sampleBufferRenderer.isReadyForMoreMediaData
+        sampleBufferRenderer.enqueue(sampleBuffer)
+        let pendingFlush = state.withLock { state -> FlushRequest? in
+            state.activeEnqueues -= 1
+            guard state.activeEnqueues == 0, let request = state.pendingFlush else { return nil }
+            state.pendingFlush = nil
+            return request
+        }
+        if backpressured {
             diagnostics.recordBackpressure()
         }
-        sampleBufferRenderer.enqueue(sampleBuffer)
         diagnostics.recordEnqueue(trace)
+        if let pendingFlush {
+            performFlush(pendingFlush)
+        }
     }
 
     func reset(preservingDisplayedImage: Bool) {
@@ -406,18 +437,47 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     }
 
     private func flush(preservingDisplayedImage: Bool, recordFailure: Bool) {
-        guard let sampleBufferRenderer else { return }
-        let shouldFlush = state.withLock { state -> Bool in
+        guard sampleBufferRenderer != nil else { return }
+        var requestToRun: FlushRequest?
+        let didBeginFlush = state.withLock { state -> Bool in
             guard !state.isFlushing else { return false }
             state.isFlushing = true
+            state.generation &+= 1
             state.formatDescription = nil
+            let request = FlushRequest(
+                generation: state.generation,
+                removeDisplayedImage: !preservingDisplayedImage
+            )
+            if state.activeEnqueues == 0 {
+                requestToRun = request
+            } else {
+                state.pendingFlush = request
+            }
             return true
         }
-        guard shouldFlush else { return }
+        guard didBeginFlush else { return }
 
         if recordFailure { diagnostics.recordRendererFailure() }
-        sampleBufferRenderer.flush(removingDisplayedImage: !preservingDisplayedImage) { [weak self] in
-            self?.state.withLock { $0.isFlushing = false }
+        if let requestToRun {
+            performFlush(requestToRun)
+        }
+    }
+
+    private func performFlush(_ request: FlushRequest) {
+        guard let sampleBufferRenderer else {
+            state.withLock { state in
+                if state.generation == request.generation {
+                    state.isFlushing = false
+                }
+            }
+            return
+        }
+        sampleBufferRenderer.flush(removingDisplayedImage: request.removeDisplayedImage) { [weak self] in
+            self?.state.withLock { state in
+                if state.generation == request.generation {
+                    state.isFlushing = false
+                }
+            }
             self?.diagnostics.recordRendererFlush()
         }
     }
