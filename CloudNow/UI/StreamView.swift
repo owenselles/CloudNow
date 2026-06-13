@@ -378,6 +378,7 @@ struct StreamView: View {
     // MARK: Actions
 
     private func startSession() async {
+        let settings = settings.normalizedForClient
         // Reset stream controller (handles retry from failed/disconnected state)
         streamController.disconnect()
 

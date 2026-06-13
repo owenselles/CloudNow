@@ -58,6 +58,7 @@ class GamesViewModel {
         if streamSettings.fps > screenMax {
             streamSettings.fps = screenMax
         }
+        streamSettings = streamSettings.normalizedForClient
     }
 
     // MARK: Computed — Entitled Resolutions & FPS

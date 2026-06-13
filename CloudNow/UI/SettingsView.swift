@@ -43,15 +43,25 @@ struct SettingsView: View {
                             Text(codec.rawValue).tag(codec)
                         }
                     }
+                    .onChange(of: vm.streamSettings.codec) { _, codec in
+                        if codec == .av1 {
+                            vm.streamSettings.colorQuality = .sdr8bit
+                        }
+                    }
 
                     Picker(selection: $vm.streamSettings.colorQuality) {
                         ForEach(ColorQuality.allCases, id: \.self) { q in
                             Text(colorQualityLabel(q)).tag(q)
+                                .disabled(vm.streamSettings.codec == .av1 && q != .sdr8bit)
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Color Quality")
-                            if vm.streamSettings.colorQuality == .hdr10bit {
+                            if vm.streamSettings.codec == .av1 {
+                                Text("AV1 uses the software I420 path and is limited to SDR 8-bit BT.709.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            } else if vm.streamSettings.colorQuality == .hdr10bit {
                                 Text("⚠️ Experimental — GFN may downscale to ~540p when HDR is enabled.")
                                     .font(.caption)
                                     .foregroundStyle(.orange)

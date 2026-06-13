@@ -24,6 +24,15 @@ struct StreamSettings: Codable, Equatable {
     /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
     /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
     var enableSteamOverlayGesture: Bool = true
+
+    var normalizedForClient: StreamSettings {
+        var normalized = self
+        // The software I420 path is 8-bit video-range BT.709 and cannot preserve HDR/10-bit metadata.
+        if normalized.codec == .av1 {
+            normalized.colorQuality = .sdr8bit
+        }
+        return normalized
+    }
 }
 
 // MARK: - StreamSettings: resilient decoding

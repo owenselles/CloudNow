@@ -161,6 +161,7 @@ final class GFNStreamController: NSObject {
         case .connecting, .streaming: return
         default: break
         }
+        let settings = settings.normalizedForClient
         state = .connecting
         sessionInfo = session
         self.settings = settings
