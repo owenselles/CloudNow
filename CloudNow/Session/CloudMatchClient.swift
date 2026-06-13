@@ -267,12 +267,20 @@ actor CloudMatchClient {
             throw CloudMatchError.sessionCreateFailed(msg)
         }
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: base, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
+        return try toSessionInfo(
+            base: base,
+            routingZoneUrl: base,
+            payload: payload,
+            rawData: data,
+            clientId: clientId,
+            deviceId: deviceId
+        )
     }
 
     // MARK: Poll Session
 
     func pollSession(sessionId: String, token: String, base: String, serverIp: String?,
+                     routingZoneUrl: String? = nil,
                      clientId: String, deviceId: String) async throws -> SessionInfo {
         let effectiveBase = serverIp.map { "https://\($0)" } ?? base
         let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
@@ -282,7 +290,14 @@ actor CloudMatchClient {
         }
         let (data, _) = try await urlSession.data(for: request)
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: effectiveBase, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
+        return try toSessionInfo(
+            base: effectiveBase,
+            routingZoneUrl: routingZoneUrl,
+            payload: payload,
+            rawData: data,
+            clientId: clientId,
+            deviceId: deviceId
+        )
     }
 
     // MARK: Stop Session
@@ -343,6 +358,7 @@ actor CloudMatchClient {
             token: token,
             base: effectiveBase,
             serverIp: nil,
+            routingZoneUrl: nil,
             clientId: clientId,
             deviceId: deviceId
         )
@@ -374,13 +390,26 @@ actor CloudMatchClient {
             throw CloudMatchError.sessionCreateFailed("Resume failed: \(msg)")
         }
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: effectiveBase, payload: payload, rawData: data,
-                                 clientId: clientId, deviceId: deviceId)
+        return try toSessionInfo(
+            base: effectiveBase,
+            routingZoneUrl: preflight.zone,
+            payload: payload,
+            rawData: data,
+            clientId: clientId,
+            deviceId: deviceId
+        )
     }
 
     // MARK: Private
 
-    private func toSessionInfo(base: String, payload: CloudMatchResponse, rawData: Data, clientId: String, deviceId: String) throws -> SessionInfo {
+    private func toSessionInfo(
+        base: String,
+        routingZoneUrl: String?,
+        payload: CloudMatchResponse,
+        rawData: Data,
+        clientId: String,
+        deviceId: String
+    ) throws -> SessionInfo {
         let s = payload.session
         let connections = s.connectionInfo ?? []
         let connInfoLog = connections.map { c -> String in
@@ -436,7 +465,7 @@ actor CloudMatchClient {
         return SessionInfo(
             sessionId: s.sessionId,
             status: s.status,
-            zone: "",
+            zone: routingZoneUrl ?? "",
             streamingBaseUrl: base,
             serverIp: serverIp,
             signalingServer: serverIp.contains(":") ? serverIp : "\(serverIp):443",

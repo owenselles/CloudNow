@@ -86,92 +86,61 @@ final class GFNSignalingClient {
         let candidates: [String] = resolvedIPs.isEmpty ? [host] : (resolvedIPs + [host])
         print("[Signaling] Resolved \(resolvedIPs.count) IPs for '\(host)': \(resolvedIPs.joined(separator: ", "))")
 
+        let boundedCandidates = Array(candidates.prefix(8))
+        var winner: ConnectedCandidate?
         var lastError: Error?
-        for (i, candidateHost) in candidates.prefix(8).enumerated() {
-            // Fresh TLS/WS/params per attempt — each NWConnection needs its own option objects.
-            // SNI is always set to the original hostname since we're connecting by IP.
-            let tlsOpts = NWProtocolTLS.Options()
-            sec_protocol_options_set_min_tls_protocol_version(tlsOpts.securityProtocolOptions, .TLSv12)
-            if useTLS {
-                sec_protocol_options_set_tls_server_name(tlsOpts.securityProtocolOptions, host)
-            }
-            sec_protocol_options_set_verify_block(tlsOpts.securityProtocolOptions,
-                                                  { _, _, complete in complete(true) },
-                                                  .global(qos: .userInitiated))
-            // WebSocket options — system handles HTTP upgrade, framing, and ping/pong.
-            // Register GFN session subprotocol — server echoes x-nv-sessionid.{id} in its 101;
-            // RFC 6455 §4.1 requires we offer it or NWProtocolWebSocket aborts (ECONNABORTED).
-            let wsOpts = NWProtocolWebSocket.Options()
-            wsOpts.autoReplyPing = true
-            wsOpts.setSubprotocols(["x-nv-sessionid.\(sessionId)"])
-            wsOpts.setAdditionalHeaders([
-                ("Origin", "https://play.geforcenow.com"),
-                ("User-Agent", NVIDIAAuth.userAgent),
-            ])
-            let params: NWParameters = useTLS
-                ? NWParameters(tls: tlsOpts, tcp: NWProtocolTCP.Options())
-                : .tcp
-            params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
 
-            var epComps = comps
-            epComps.host = candidateHost
-            guard let candidateUrl = epComps.url else { continue }
-            let candidateEndpoint = NWEndpoint.url(candidateUrl)
-
-            if i == 0 {
-                print("[Signaling] Connecting → \(candidateUrl.absoluteString)")
-            } else {
-                print("[Signaling] Trying candidate \(i + 1)/\(min(candidates.count, 8)) → \(candidateUrl.absoluteString)")
-            }
-
-            let conn = NWConnection(to: candidateEndpoint, using: params)
-            connection = conn
-
+        let firstWave = Array(boundedCandidates.prefix(2))
+        if firstWave.count > 1 {
             do {
-                // .ready fires only after TLS handshake AND WebSocket HTTP upgrade both complete.
-                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                    conn.stateUpdateHandler = { state in
-                        switch state {
-                        case .ready:
-                            conn.stateUpdateHandler = nil
-                            print("[Signaling] Connected (WebSocket ready) via \(candidateHost)")
-                            cont.resume()
-                        case .failed(let err):
-                            conn.stateUpdateHandler = nil
-                            print("[Signaling] Connection failed (\(candidateHost)): \(err)")
-                            cont.resume(throwing: err)
-                        case .cancelled:
-                            conn.stateUpdateHandler = nil
-                            cont.resume(throwing: SignalingError.cancelled)
-                        case .waiting(let err):
-                            let desc = "\(err)"
-                            if desc.contains("53") || desc.contains("ECONNABORTED") {
-                                // ECONNABORTED = server rejected WS handshake — try the next IP.
-                                conn.stateUpdateHandler = nil
-                                print("[Signaling] ECONNABORTED (\(candidateHost)) — trying next IP")
-                                cont.resume(throwing: err)
-                            } else {
-                                print("[Signaling] Waiting: \(err)")
-                            }
-                        default:
-                            break
-                        }
-                    }
-                    conn.start(queue: .global(qos: .userInitiated))
-                }
-                lastError = nil
-                connectedHost = candidateHost
-                break  // connected — stop trying candidates
+                winner = try await raceCandidates(
+                    firstWave,
+                    originalHost: host,
+                    components: comps,
+                    useTLS: useTLS,
+                    totalCount: boundedCandidates.count
+                )
             } catch {
                 lastError = error
-                let desc = "\(error)"
-                guard desc.contains("53") || desc.contains("ECONNABORTED") else { break }
-                conn.cancel()
-                connection = nil
-                try? await Task.sleep(for: .milliseconds(200))
+            }
+        } else if let candidate = firstWave.first {
+            do {
+                winner = try await connectCandidate(
+                    candidate,
+                    originalHost: host,
+                    components: comps,
+                    useTLS: useTLS,
+                    index: 0,
+                    totalCount: boundedCandidates.count
+                )
+            } catch {
+                lastError = error
             }
         }
-        if let e = lastError { throw e }
+
+        if winner == nil {
+            for (offset, candidate) in boundedCandidates.dropFirst(firstWave.count).enumerated() {
+                do {
+                    winner = try await connectCandidate(
+                        candidate,
+                        originalHost: host,
+                        components: comps,
+                        useTLS: useTLS,
+                        index: firstWave.count + offset,
+                        totalCount: boundedCandidates.count
+                    )
+                    break
+                } catch {
+                    lastError = error
+                }
+            }
+        }
+
+        guard let winner else {
+            throw lastError ?? SignalingError.handshakeFailed("No signaling endpoint connected")
+        }
+        connection = winner.connection
+        connectedHost = winner.host
 
         startReceiving()
         sendPeerInfo()
@@ -389,6 +358,124 @@ final class GFNSignalingClient {
     private func nextAckId() -> Int {
         ackCounter += 1
         return ackCounter
+    }
+
+    private struct ConnectedCandidate {
+        let host: String
+        let connection: NWConnection
+    }
+
+    private func raceCandidates(
+        _ candidates: [String],
+        originalHost: String,
+        components: URLComponents,
+        useTLS: Bool,
+        totalCount: Int
+    ) async throws -> ConnectedCandidate {
+        var lastError: Error?
+        return try await withThrowingTaskGroup(of: ConnectedCandidate.self) { group in
+            for (index, candidate) in candidates.enumerated() {
+                group.addTask {
+                    try await self.connectCandidate(
+                        candidate,
+                        originalHost: originalHost,
+                        components: components,
+                        useTLS: useTLS,
+                        index: index,
+                        totalCount: totalCount
+                    )
+                }
+            }
+
+            while !group.isEmpty {
+                do {
+                    if let winner = try await group.next() {
+                        group.cancelAll()
+                        return winner
+                    }
+                } catch {
+                    lastError = error
+                }
+            }
+            throw lastError ?? SignalingError.handshakeFailed("Candidate race produced no winner")
+        }
+    }
+
+    private func connectCandidate(
+        _ candidateHost: String,
+        originalHost: String,
+        components: URLComponents,
+        useTLS: Bool,
+        index: Int,
+        totalCount: Int
+    ) async throws -> ConnectedCandidate {
+        let tlsOpts = NWProtocolTLS.Options()
+        sec_protocol_options_set_min_tls_protocol_version(tlsOpts.securityProtocolOptions, .TLSv12)
+        if useTLS {
+            sec_protocol_options_set_tls_server_name(tlsOpts.securityProtocolOptions, originalHost)
+        }
+        sec_protocol_options_set_verify_block(
+            tlsOpts.securityProtocolOptions,
+            { _, _, complete in complete(true) },
+            .global(qos: .userInitiated)
+        )
+
+        let wsOpts = NWProtocolWebSocket.Options()
+        wsOpts.autoReplyPing = true
+        wsOpts.setSubprotocols(["x-nv-sessionid.\(sessionId)"])
+        wsOpts.setAdditionalHeaders([
+            ("Origin", "https://play.geforcenow.com"),
+            ("User-Agent", NVIDIAAuth.userAgent),
+        ])
+
+        let tcpOpts = NWProtocolTCP.Options()
+        tcpOpts.noDelay = true
+        tcpOpts.connectionTimeout = 4
+        let params = useTLS
+            ? NWParameters(tls: tlsOpts, tcp: tcpOpts)
+            : NWParameters(tls: nil, tcp: tcpOpts)
+        params.defaultProtocolStack.applicationProtocols.insert(wsOpts, at: 0)
+
+        var endpointComponents = components
+        endpointComponents.host = candidateHost
+        guard let candidateUrl = endpointComponents.url else {
+            throw SignalingError.invalidUrl(signalingUrl)
+        }
+        print("[Signaling] Trying candidate \(index + 1)/\(totalCount) → \(candidateUrl.absoluteString)")
+
+        let connection = NWConnection(to: .url(candidateUrl), using: params)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                connection.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        connection.stateUpdateHandler = nil
+                        print("[Signaling] Connected (WebSocket ready) via \(candidateHost)")
+                        continuation.resume()
+                    case .failed(let error):
+                        connection.stateUpdateHandler = nil
+                        print("[Signaling] Connection failed (\(candidateHost)): \(error)")
+                        continuation.resume(throwing: error)
+                    case .cancelled:
+                        connection.stateUpdateHandler = nil
+                        continuation.resume(throwing: SignalingError.cancelled)
+                    case .waiting(let error):
+                        let description = "\(error)"
+                        if description.contains("53") || description.contains("ECONNABORTED") {
+                            connection.stateUpdateHandler = nil
+                            connection.cancel()
+                            continuation.resume(throwing: error)
+                        }
+                    default:
+                        break
+                    }
+                }
+                connection.start(queue: .global(qos: .userInitiated))
+            }
+            return ConnectedCandidate(host: candidateHost, connection: connection)
+        } onCancel: {
+            connection.cancel()
+        }
     }
 
     // MARK: Private — DNS Resolution

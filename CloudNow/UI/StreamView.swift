@@ -227,6 +227,19 @@ struct StreamView: View {
                 Divider().overlay(.white.opacity(0.4))
                 Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
                 Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
+                if !streamController.stats.selectedCandidatePairId.isEmpty {
+                    Label(
+                        "ICE \(streamController.stats.selectedProtocol.uppercased()) "
+                        + "\(streamController.stats.localCandidateType) -> \(streamController.stats.remoteCandidateType)",
+                        systemImage: "point.3.connected.trianglepath.dotted"
+                    )
+                    Label(
+                        "Remote \(streamController.stats.remoteCandidateAddress)"
+                        + " · available \(streamController.stats.availableIncomingBitrateKbps / 1000) Mbps"
+                        + " · switches \(streamController.stats.candidatePairChanges)",
+                        systemImage: "arrow.left.arrow.right"
+                    )
+                }
                 if !streamController.stats.gpuType.isEmpty {
                     Label(streamController.stats.gpuType, systemImage: "cpu")
                 }
@@ -415,6 +428,7 @@ struct StreamView: View {
                         token: token,
                         base: sessionInfo.streamingBaseUrl,
                         serverIp: sessionInfo.serverIp.isEmpty ? nil : sessionInfo.serverIp,
+                        routingZoneUrl: sessionInfo.zone,
                         clientId: sessionInfo.clientId,
                         deviceId: sessionInfo.deviceId
                     )
@@ -460,8 +474,16 @@ struct StreamView: View {
                 // New session path
                 guard let appId = game.variants.first?.appId ?? game.variants.first?.id else { return }
 
-                // Prefer the user-selected zone URL; fall back to the provider's default.
-                let sessionBase = settings.preferredZoneUrl ?? base
+                // Automatic routing is prewarmed in the background and never blocks launch.
+                let automaticZoneUrl = settings.preferredZoneUrl == nil
+                    ? await ZoneClient.shared.cachedAutomaticZoneUrl(
+                        isUnlimited: viewModel.subscription?.isUnlimited ?? false
+                    )
+                    : nil
+                let sessionBase = settings.preferredZoneUrl ?? automaticZoneUrl ?? base
+                if let automaticZoneUrl {
+                    print("[Zone] Automatic routing selected \(automaticZoneUrl)")
+                }
 
                 let request = SessionCreateRequest(
                     appId: appId,
@@ -520,6 +542,7 @@ struct StreamView: View {
                     token: token,
                     base: sessionInfo.streamingBaseUrl,
                     serverIp: sessionInfo.serverIp.isEmpty ? nil : sessionInfo.serverIp,
+                    routingZoneUrl: sessionInfo.zone,
                     clientId: sessionInfo.clientId,
                     deviceId: sessionInfo.deviceId
                 )
