@@ -788,9 +788,15 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 // MARK: - DataChannelSender conformance
 
 extension GFNStreamController: DataChannelSender {
-    nonisolated func sendData(_ data: Data) {
+    nonisolated func sendData(_ packet: EncodedInputPacket, completion: @escaping () -> Void) {
         inputSendQueue.async { [weak self] in
+            defer { completion() }
             guard let dc = self?.reliableSendChannel, dc.readyState == .open else { return }
+            let data = Data(
+                bytesNoCopy: packet.storage.mutableBytes,
+                count: packet.count,
+                deallocator: .none
+            )
             let buffer = LKRTCDataBuffer(data: data, isBinary: true)
             dc.sendData(buffer)
         }

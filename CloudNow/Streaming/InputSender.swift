@@ -58,10 +58,27 @@ protocol InputEventHandler: AnyObject {
     func sendMouseWheel(delta: Int16)
 }
 
+// MARK: - Encoded Packet
+
+/// Reusable fixed-capacity storage handed from InputSender to the WebRTC send queue.
+final class EncodedInputPacket: @unchecked Sendable {
+    static let capacity = 64
+
+    let storage = NSMutableData(length: capacity)!
+    private(set) var count = 0
+
+    func prepare(length: Int) -> UnsafeMutableRawBufferPointer {
+        precondition(length <= Self.capacity)
+        count = length
+        let bytes = UnsafeMutableRawBufferPointer(start: storage.mutableBytes, count: Self.capacity)
+        for index in 0..<length { bytes[index] = 0 }
+        return bytes
+    }
+}
+
 // MARK: - Input Encoder
 
-/// Encodes controller and HID input into GFN binary protocol packets.
-/// Supports protocol v2 (plain) and v3 (wrapped with 0x23 timestamp header).
+/// Encodes controller and HID input into reusable GFN protocol packet buffers.
 final class InputEncoder {
     private var protocolVersion = 2
     private var gamepadSequence = [Int: UInt16]()
@@ -72,10 +89,9 @@ final class InputEncoder {
 
     /// Sends a keep-alive to hold the server's virtual gamepad state between real input events.
     /// Encoded as a raw 4-byte u32 LE value 2 — no v3 wrapper (matches official client's Jc()).
-    func encodeHeartbeat() -> Data {
-        var buf = Data(count: 4)
-        writeUInt32LE(&buf, offset: 0, value: GFNInput.heartbeatU32)
-        return buf
+    func encodeHeartbeat(into packet: EncodedInputPacket) {
+        let buf = packet.prepare(length: 4)
+        writeUInt32LE(buf, offset: 0, value: GFNInput.heartbeatU32)
     }
 
     // MARK: Gamepad
@@ -91,132 +107,114 @@ final class InputEncoder {
         leftStickY: Int16,
         rightStickX: Int16,
         rightStickY: Int16,
-        gamepadBitmap: UInt8
-    ) -> Data {
+        gamepadBitmap: UInt8,
+        into packet: EncodedInputPacket
+    ) {
         let timestamp = currentTimestamp()
-        var buf = Data(count: GFNInput.gamepadPacketSize)
-        writeUInt32LE(&buf, offset: 0,  value: 12)                        // type
-        writeUInt16LE(&buf, offset: 4,  value: 26)                        // payload size
-        writeUInt16LE(&buf, offset: 6,  value: UInt16(controllerId & 3))  // gamepad index
-        writeUInt16LE(&buf, offset: 8,  value: UInt16(gamepadBitmap))     // connected-controller bitmask
-        writeUInt16LE(&buf, offset: 10, value: 20)                        // inner payload size
-        writeUInt16LE(&buf, offset: 12, value: buttons)                   // XInput buttons
-        buf[14] = leftTrigger
-        buf[15] = rightTrigger
-        writeInt16LE(&buf, offset: 16, value: leftStickX)
-        writeInt16LE(&buf, offset: 18, value: leftStickY)
-        writeInt16LE(&buf, offset: 20, value: rightStickX)
-        writeInt16LE(&buf, offset: 22, value: rightStickY)
-        // buf[24–25]: reserved (zero)
-        buf[26] = 0x55  // magic constant required by GFN protocol
-        // buf[27–29]: reserved (zero)
-        writeTimestampLE(&buf, offset: 30, value: timestamp)               // u64 LE microseconds
-        return protocolVersion >= 3
-            ? wrapGamepadPartiallyReliable(buf, gamepadIndex: controllerId, timestamp: timestamp)
-            : buf
+        let payloadOffset = protocolVersion >= 3 ? 16 : 0
+        let buf = packet.prepare(length: payloadOffset + GFNInput.gamepadPacketSize)
+
+        if protocolVersion >= 3 {
+            let seq = nextGamepadSequence(controllerId)
+            buf[0] = 0x23
+            writeTimestampBE(buf, offset: 1, value: timestamp)
+            buf[9] = 0x26
+            buf[10] = UInt8(controllerId & 0xFF)
+            buf[11] = UInt8(seq >> 8)
+            buf[12] = UInt8(seq & 0xFF)
+            buf[13] = 0x21
+            buf[14] = UInt8(GFNInput.gamepadPacketSize >> 8)
+            buf[15] = UInt8(GFNInput.gamepadPacketSize & 0xFF)
+        }
+
+        writeUInt32LE(buf, offset: payloadOffset, value: 12)
+        writeUInt16LE(buf, offset: payloadOffset + 4, value: 26)
+        writeUInt16LE(buf, offset: payloadOffset + 6, value: UInt16(controllerId & 3))
+        writeUInt16LE(buf, offset: payloadOffset + 8, value: UInt16(gamepadBitmap))
+        writeUInt16LE(buf, offset: payloadOffset + 10, value: 20)
+        writeUInt16LE(buf, offset: payloadOffset + 12, value: buttons)
+        buf[payloadOffset + 14] = leftTrigger
+        buf[payloadOffset + 15] = rightTrigger
+        writeInt16LE(buf, offset: payloadOffset + 16, value: leftStickX)
+        writeInt16LE(buf, offset: payloadOffset + 18, value: leftStickY)
+        writeInt16LE(buf, offset: payloadOffset + 20, value: rightStickX)
+        writeInt16LE(buf, offset: payloadOffset + 22, value: rightStickY)
+        buf[payloadOffset + 26] = 0x55
+        writeTimestampLE(buf, offset: payloadOffset + 30, value: timestamp)
     }
 
     // MARK: Keyboard
     // Packet (18 bytes): [UInt32 LE type][UInt16 BE vk][UInt16 BE mods][UInt16 BE scan][UInt64 BE ts]
 
-    func encodeKeyboard(down: Bool, vk: UInt16, scancode: UInt16, modifiers: UInt16) -> Data {
+    func encodeKeyboard(
+        down: Bool,
+        vk: UInt16,
+        scancode: UInt16,
+        modifiers: UInt16,
+        into packet: EncodedInputPacket
+    ) {
         let timestamp = currentTimestamp()
-        var buf = Data(count: GFNInput.keyboardPacketSize)
-        writeUInt32LE(&buf, offset: 0, value: down ? UInt32(GFNInput.keyDown) : UInt32(GFNInput.keyUp))
-        writeUInt16BE(&buf, offset: 4, value: vk)
-        writeUInt16BE(&buf, offset: 6, value: modifiers)
-        writeUInt16BE(&buf, offset: 8, value: scancode)
-        writeTimestampBE(&buf, offset: 10, value: timestamp)
-        return wrapSingleEvent(buf, timestamp: timestamp)
+        let payloadOffset = protocolVersion >= 3 ? 10 : 0
+        let buf = packet.prepare(length: payloadOffset + GFNInput.keyboardPacketSize)
+        writeSingleEventHeader(buf, timestamp: timestamp)
+        writeUInt32LE(buf, offset: payloadOffset, value: down ? UInt32(GFNInput.keyDown) : UInt32(GFNInput.keyUp))
+        writeUInt16BE(buf, offset: payloadOffset + 4, value: vk)
+        writeUInt16BE(buf, offset: payloadOffset + 6, value: modifiers)
+        writeUInt16BE(buf, offset: payloadOffset + 8, value: scancode)
+        writeTimestampBE(buf, offset: payloadOffset + 10, value: timestamp)
     }
 
     // MARK: Mouse Move
     // Packet (22 bytes): [UInt32 LE type][Int16 BE dx][Int16 BE dy][6B reserved][UInt64 BE ts]
 
-    func encodeMouseMove(dx: Int16, dy: Int16) -> Data {
+    func encodeMouseMove(dx: Int16, dy: Int16, into packet: EncodedInputPacket) {
         let timestamp = currentTimestamp()
-        var buf = Data(count: GFNInput.mouseMovePacketSize)
-        writeUInt32LE(&buf, offset: 0, value: UInt32(GFNInput.mouseRel))
-        writeInt16BE(&buf, offset: 4, value: dx)
-        writeInt16BE(&buf, offset: 6, value: dy)
-        // bytes 8–13: reserved zeros (already zero from Data init)
-        writeTimestampBE(&buf, offset: 14, value: timestamp)
-        return wrapMouseMoveEvent(buf, timestamp: timestamp)
+        let payloadOffset = protocolVersion >= 3 ? 12 : 0
+        let buf = packet.prepare(length: payloadOffset + GFNInput.mouseMovePacketSize)
+        if protocolVersion >= 3 {
+            buf[0] = 0x23
+            writeTimestampBE(buf, offset: 1, value: timestamp)
+            buf[9] = 0x21
+            buf[10] = UInt8(GFNInput.mouseMovePacketSize >> 8)
+            buf[11] = UInt8(GFNInput.mouseMovePacketSize & 0xFF)
+        }
+        writeUInt32LE(buf, offset: payloadOffset, value: UInt32(GFNInput.mouseRel))
+        writeInt16BE(buf, offset: payloadOffset + 4, value: dx)
+        writeInt16BE(buf, offset: payloadOffset + 6, value: dy)
+        writeTimestampBE(buf, offset: payloadOffset + 14, value: timestamp)
     }
 
     // MARK: Mouse Button
     // Packet (18 bytes): [UInt32 LE type][UInt8 button][1B pad][4B reserved][UInt64 BE ts]
 
-    func encodeMouseButton(down: Bool, button: UInt8) -> Data {
+    func encodeMouseButton(down: Bool, button: UInt8, into packet: EncodedInputPacket) {
         let timestamp = currentTimestamp()
-        var buf = Data(count: GFNInput.mouseButtonPacketSize)
-        writeUInt32LE(&buf, offset: 0, value: down ? UInt32(GFNInput.mouseBtnDown) : UInt32(GFNInput.mouseBtnUp))
-        buf[4] = button
-        // buf[5]: padding; buf[6–9]: reserved — all zero
-        writeTimestampBE(&buf, offset: 10, value: timestamp)
-        return wrapSingleEvent(buf, timestamp: timestamp)
+        let payloadOffset = protocolVersion >= 3 ? 10 : 0
+        let buf = packet.prepare(length: payloadOffset + GFNInput.mouseButtonPacketSize)
+        writeSingleEventHeader(buf, timestamp: timestamp)
+        writeUInt32LE(buf, offset: payloadOffset, value: down ? UInt32(GFNInput.mouseBtnDown) : UInt32(GFNInput.mouseBtnUp))
+        buf[payloadOffset + 4] = button
+        writeTimestampBE(buf, offset: payloadOffset + 10, value: timestamp)
     }
 
     // MARK: Mouse Wheel
     // Packet (22 bytes): [UInt32 LE type][2B reserved][Int16 BE vert][6B reserved][UInt64 BE ts]
 
-    func encodeMouseWheel(delta: Int16) -> Data {
+    func encodeMouseWheel(delta: Int16, into packet: EncodedInputPacket) {
         let timestamp = currentTimestamp()
-        var buf = Data(count: GFNInput.mouseWheelPacketSize)
-        writeUInt32LE(&buf, offset: 0, value: UInt32(GFNInput.mouseWheel))
-        // bytes 4–5: horizontal delta = 0
-        writeInt16BE(&buf, offset: 6, value: delta)
-        // bytes 8–13: reserved; timestamp at 14
-        writeTimestampBE(&buf, offset: 14, value: timestamp)
-        return wrapSingleEvent(buf, timestamp: timestamp)
+        let payloadOffset = protocolVersion >= 3 ? 10 : 0
+        let buf = packet.prepare(length: payloadOffset + GFNInput.mouseWheelPacketSize)
+        writeSingleEventHeader(buf, timestamp: timestamp)
+        writeUInt32LE(buf, offset: payloadOffset, value: UInt32(GFNInput.mouseWheel))
+        writeInt16BE(buf, offset: payloadOffset + 6, value: delta)
+        writeTimestampBE(buf, offset: payloadOffset + 14, value: timestamp)
     }
 
-    // MARK: Private Wrappers (Protocol v3)
-
-    /// v3: [0x23][8B ts BE][0x22][payload]  — keyboard, mouse button, mouse wheel
-    private func wrapSingleEvent(_ payload: Data, timestamp: UInt64) -> Data {
-        guard protocolVersion >= 3 else { return payload }
-        var buf = Data(count: 10 + payload.count)
+    private func writeSingleEventHeader(_ buf: UnsafeMutableRawBufferPointer, timestamp: UInt64) {
+        guard protocolVersion >= 3 else { return }
         buf[0] = 0x23
-        writeTimestampBE(&buf, offset: 1, value: timestamp)
+        writeTimestampBE(buf, offset: 1, value: timestamp)
         buf[9] = 0x22
-        buf.replaceSubrange(10..., with: payload)
-        return buf
-    }
-
-    /// v3: [0x23][8B ts BE][0x21][2B len BE][payload]  — mouse move (coalesced path)
-    private func wrapMouseMoveEvent(_ payload: Data, timestamp: UInt64) -> Data {
-        guard protocolVersion >= 3 else { return payload }
-        var buf = Data(count: 12 + payload.count)
-        buf[0] = 0x23
-        writeTimestampBE(&buf, offset: 1, value: timestamp)
-        buf[9] = 0x21
-        let len = UInt16(payload.count)
-        buf[10] = UInt8(len >> 8)
-        buf[11] = UInt8(len & 0xFF)
-        buf.replaceSubrange(12..., with: payload)
-        return buf
-    }
-
-    private func wrapGamepadPartiallyReliable(
-        _ payload: Data,
-        gamepadIndex: Int,
-        timestamp: UInt64
-    ) -> Data {
-        let seq = nextGamepadSequence(gamepadIndex)
-        // [0x23][8B ts][0x26][1B idx][2B seq BE][0x21][2B size BE][payload]
-        var buf = Data(count: 9 + 1 + 1 + 2 + 1 + 2 + payload.count)
-        buf[0] = 0x23
-        writeTimestampBE(&buf, offset: 1, value: timestamp)
-        buf[9]  = 0x26
-        buf[10] = UInt8(gamepadIndex & 0xFF)
-        buf[11] = UInt8(seq >> 8)
-        buf[12] = UInt8(seq & 0xFF)
-        buf[13] = 0x21
-        buf[14] = UInt8(payload.count >> 8)
-        buf[15] = UInt8(payload.count & 0xFF)
-        buf.replaceSubrange(16..., with: payload)
-        return buf
     }
 
     private func nextGamepadSequence(_ idx: Int) -> UInt16 {
@@ -227,12 +225,12 @@ final class InputEncoder {
 
     // MARK: Write Helpers
 
-    private func writeUInt16LE(_ buf: inout Data, offset: Int, value: UInt16) {
+    private func writeUInt16LE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt16) {
         buf[offset]     = UInt8(value & 0xFF)
         buf[offset + 1] = UInt8(value >> 8)
     }
 
-    private func writeTimestampLE(_ buf: inout Data, offset: Int, value: UInt64) {
+    private func writeTimestampLE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt64) {
         buf[offset]     = UInt8(value        & 0xFF)
         buf[offset + 1] = UInt8((value >> 8)  & 0xFF)
         buf[offset + 2] = UInt8((value >> 16) & 0xFF)
@@ -243,31 +241,31 @@ final class InputEncoder {
         buf[offset + 7] = UInt8((value >> 56) & 0xFF)
     }
 
-    private func writeUInt32LE(_ buf: inout Data, offset: Int, value: UInt32) {
+    private func writeUInt32LE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt32) {
         buf[offset]     = UInt8(value & 0xFF)
         buf[offset + 1] = UInt8((value >> 8) & 0xFF)
         buf[offset + 2] = UInt8((value >> 16) & 0xFF)
         buf[offset + 3] = UInt8((value >> 24) & 0xFF)
     }
 
-    private func writeUInt16BE(_ buf: inout Data, offset: Int, value: UInt16) {
+    private func writeUInt16BE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt16) {
         buf[offset]     = UInt8(value >> 8)
         buf[offset + 1] = UInt8(value & 0xFF)
     }
 
-    private func writeInt16BE(_ buf: inout Data, offset: Int, value: Int16) {
+    private func writeInt16BE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: Int16) {
         let v = UInt16(bitPattern: value)
         buf[offset]     = UInt8(v >> 8)
         buf[offset + 1] = UInt8(v & 0xFF)
     }
 
-    private func writeInt16LE(_ buf: inout Data, offset: Int, value: Int16) {
+    private func writeInt16LE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: Int16) {
         let v = UInt16(bitPattern: value)
         buf[offset]     = UInt8(v & 0xFF)
         buf[offset + 1] = UInt8(v >> 8)
     }
 
-    private func writeTimestampBE(_ buf: inout Data, offset: Int, value: UInt64) {
+    private func writeTimestampBE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt64) {
         buf[offset]     = UInt8((value >> 56) & 0xFF)
         buf[offset + 1] = UInt8((value >> 48) & 0xFF)
         buf[offset + 2] = UInt8((value >> 40) & 0xFF)
@@ -332,7 +330,7 @@ private func normalizeAxis(_ v: Float, deadzone: Float) -> Int16 {
 
 /// Abstracts the WebRTC data channel so the WebRTC dependency stays in GFNStreamController.
 protocol DataChannelSender: AnyObject {
-    func sendData(_ data: Data)
+    func sendData(_ packet: EncodedInputPacket, completion: @escaping () -> Void)
 }
 
 // MARK: - InputSender
@@ -361,6 +359,7 @@ final class InputSender {
     private weak var channel: DataChannelSender?
     private let encoder = InputEncoder()
     private let inputQueue = DispatchQueue(label: "com.cloudnow.input", qos: .userInteractive)
+    private var packetPool = (0..<16).map { _ in EncodedInputPacket() }
     private var sampler: DispatchSourceTimer?
     private var observations: [NSObjectProtocol] = []
     private var remoteMode: RemoteInputMode = .mouse
@@ -498,11 +497,25 @@ final class InputSender {
 
     // MARK: Private — Tick
 
+    private func sendEncoded(_ encode: (EncodedInputPacket) -> Void) {
+        let packet = packetPool.popLast() ?? EncodedInputPacket()
+        encode(packet)
+        guard let channel else {
+            packetPool.append(packet)
+            return
+        }
+        channel.sendData(packet) { [weak self, packet] in
+            self?.inputQueue.async { [weak self, packet] in
+                self?.packetPool.append(packet)
+            }
+        }
+    }
+
     private func tick() {
         let now = DispatchTime.now().uptimeNanoseconds
         if now &- lastHeartbeat >= Self.heartbeatInterval {
             lastHeartbeat = now
-            channel?.sendData(encoder.encodeHeartbeat())
+            sendEncoded { encoder.encodeHeartbeat(into: $0) }
         }
         guard !isPaused else { return }
 
@@ -664,17 +677,20 @@ final class InputSender {
         }
         lastSnapshots[slot] = snapshot
         lastSnapshotSend[slot] = now
-        channel?.sendData(encoder.encodeGamepad(
-            controllerId: slot,
-            buttons: snapshot.buttons,
-            leftTrigger: snapshot.leftTrigger,
-            rightTrigger: snapshot.rightTrigger,
-            leftStickX: snapshot.leftStickX,
-            leftStickY: snapshot.leftStickY,
-            rightStickX: snapshot.rightStickX,
-            rightStickY: snapshot.rightStickY,
-            gamepadBitmap: snapshot.bitmap
-        ))
+        sendEncoded {
+            encoder.encodeGamepad(
+                controllerId: slot,
+                buttons: snapshot.buttons,
+                leftTrigger: snapshot.leftTrigger,
+                rightTrigger: snapshot.rightTrigger,
+                leftStickX: snapshot.leftStickX,
+                leftStickY: snapshot.leftStickY,
+                rightStickX: snapshot.rightStickX,
+                rightStickY: snapshot.rightStickY,
+                gamepadBitmap: snapshot.bitmap,
+                into: $0
+            )
+        }
     }
 
     private func sendNeutralGamepads() {
@@ -725,7 +741,7 @@ final class InputSender {
         let dx = Int16(clamping: physical.x + micro.x + dualSense.x)
         let dy = Int16(clamping: physical.y + micro.y + dualSense.y)
         guard dx != 0 || dy != 0 else { return }
-        channel?.sendData(encoder.encodeMouseMove(dx: dx, dy: dy))
+        sendEncoded { encoder.encodeMouseMove(dx: dx, dy: dy, into: $0) }
     }
 
     private func drainWholePixels(from delta: inout (x: Float, y: Float)) -> (x: Int, y: Int) {
@@ -749,12 +765,12 @@ final class InputSender {
 
     private func sendMouseButtonNow(down: Bool, button: UInt8) {
         guard !isPaused else { return }
-        channel?.sendData(encoder.encodeMouseButton(down: down, button: button))
+        sendEncoded { encoder.encodeMouseButton(down: down, button: button, into: $0) }
     }
 
     private func sendMouseWheelNow(_ delta: Int16) {
         guard !isPaused else { return }
-        channel?.sendData(encoder.encodeMouseWheel(delta: delta))
+        sendEncoded { encoder.encodeMouseWheel(delta: delta, into: $0) }
     }
 
     // MARK: Private — Controller Notifications
@@ -946,9 +962,15 @@ extension InputSender: InputEventHandler {
     func sendKeyEvent(down: Bool, vk: UInt16, scancode: UInt16, modifiers: UInt16) {
         inputQueue.async { [weak self] in
             guard let self, !self.isPaused else { return }
-            self.channel?.sendData(
-                self.encoder.encodeKeyboard(down: down, vk: vk, scancode: scancode, modifiers: modifiers)
-            )
+            self.sendEncoded {
+                self.encoder.encodeKeyboard(
+                    down: down,
+                    vk: vk,
+                    scancode: scancode,
+                    modifiers: modifiers,
+                    into: $0
+                )
+            }
         }
     }
 
