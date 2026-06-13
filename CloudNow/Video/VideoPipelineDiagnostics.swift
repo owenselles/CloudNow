@@ -76,6 +76,11 @@ final class VideoPipelineDiagnostics: @unchecked Sendable {
         os_signpost(.end, log: Self.log, name: "I420Conversion", signpostID: trace.signpostID)
     }
 
+    func cancelConversion(_ trace: VideoFrameTrace?) {
+        guard let trace else { return }
+        os_signpost(.end, log: Self.log, name: "I420Conversion", signpostID: trace.signpostID)
+    }
+
     func beginSampleCreation(_ trace: VideoFrameTrace?) -> UInt64 {
         guard let trace else { return 0 }
         os_signpost(.begin, log: Self.log, name: "SampleCreation", signpostID: trace.signpostID)

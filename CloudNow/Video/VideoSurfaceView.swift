@@ -279,6 +279,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
     private let diagnostics: VideoPipelineDiagnostics
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let i420Converter = I420FrameConverter()
 
     init(diagnostics: VideoPipelineDiagnostics) {
         self.diagnostics = diagnostics
@@ -308,7 +309,8 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             cvBuf = hwBuf.pixelBuffer
         } else if let i420 = frame.buffer as? LKRTCI420Buffer {
             let conversionStart = diagnostics.beginConversion(trace)
-            guard let converted = i420ToCVPixelBuffer(i420) else {
+            guard let converted = i420Converter.convert(i420) else {
+                diagnostics.cancelConversion(trace)
                 diagnostics.recordDrop(trace)
                 return
             }
@@ -440,43 +442,6 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         )
     }
 
-    private func i420ToCVPixelBuffer(_ i420: LKRTCI420Buffer) -> CVPixelBuffer? {
-        let w = Int(i420.width), h = Int(i420.height)
-        var pb: CVPixelBuffer?
-        // AVSampleBufferDisplayLayer on tvOS requires biplanar NV12, not three-plane I420
-        guard CVPixelBufferCreate(kCFAllocatorDefault, w, h,
-                                  kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &pb) == kCVReturnSuccess,
-              let pb else { return nil }
-        CVPixelBufferLockBaseAddress(pb, [])
-        defer { CVPixelBufferUnlockBaseAddress(pb, []) }
-
-        // Y plane
-        if let dst = CVPixelBufferGetBaseAddressOfPlane(pb, 0) {
-            let src = i420.dataY
-            let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
-            for row in 0..<h {
-                memcpy(dst.advanced(by: row * dstStride), src.advanced(by: row * Int(i420.strideY)), w)
-            }
-        }
-
-        // UV plane: interleave I420 U and V into NV12 UV
-        if let dst = CVPixelBufferGetBaseAddressOfPlane(pb, 1)?.assumingMemoryBound(to: UInt8.self) {
-            let srcU = i420.dataU
-            let srcV = i420.dataV
-            let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
-            let uvRows = h / 2, uvCols = w / 2
-            for row in 0..<uvRows {
-                let uRow = srcU.advanced(by: row * Int(i420.strideU))
-                let vRow = srcV.advanced(by: row * Int(i420.strideV))
-                let dstRow = dst.advanced(by: row * dstStride)
-                for col in 0..<uvCols {
-                    dstRow[col * 2]     = uRow[col]
-                    dstRow[col * 2 + 1] = vRow[col]
-                }
-            }
-        }
-        return pb
-    }
 }
 
 // MARK: - Streaming View Controller
