@@ -98,12 +98,11 @@ final class VideoSurfaceView: UIView {
                 // via Options long press detected in InputSender.tick().
                 menuPressHandler?()
                 handled = true
-            } else if let key = press.key, let mapping = Self.hidToKeyMapping[key.keyCode] {
+            } else if let key = press.key {
                 inputHandler?.sendKeyEvent(
                     down: true,
-                    vk: mapping.vk,
-                    scancode: mapping.scancode,
-                    modifiers: gfnModifiers(from: key.modifierFlags)
+                    keyCode: key.keyCode,
+                    modifiers: key.modifierFlags
                 )
                 handled = true
             }
@@ -114,12 +113,11 @@ final class VideoSurfaceView: UIView {
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if let key = press.key, let mapping = Self.hidToKeyMapping[key.keyCode] {
+            if let key = press.key {
                 inputHandler?.sendKeyEvent(
                     down: false,
-                    vk: mapping.vk,
-                    scancode: mapping.scancode,
-                    modifiers: gfnModifiers(from: key.modifierFlags)
+                    keyCode: key.keyCode,
+                    modifiers: key.modifierFlags
                 )
                 handled = true
             }
@@ -131,101 +129,6 @@ final class VideoSurfaceView: UIView {
         pressesEnded(presses, with: event)
     }
 
-    // MARK: - Helpers
-
-    private func gfnModifiers(from flags: UIKeyModifierFlags) -> UInt16 {
-        var mods: UInt16 = 0
-        if flags.contains(.shift)     { mods |= 0x0001 }
-        if flags.contains(.control)   { mods |= 0x0002 }
-        if flags.contains(.alternate) { mods |= 0x0004 }
-        if flags.contains(.command)   { mods |= 0x0008 }
-        return mods
-    }
-
-    // MARK: - HID → (VK, Scancode) Table
-    //
-    // Maps UIKeyboardHIDUsage (USB HID Usage codes) to Windows Virtual Key codes
-    // and PS/2 Set-1 scancodes.
-    // Extended scancodes (0xE0 prefix) are stored as-is in the UInt16 high byte (0xE0__).
-
-    private static let hidToKeyMapping: [UIKeyboardHIDUsage: (vk: UInt16, scancode: UInt16)] = [
-        // Letters A–Z  (VK = ASCII uppercase, scancode = PS/2 Set-1)
-        .keyboardA: (0x41, 0x1E), .keyboardB: (0x42, 0x30), .keyboardC: (0x43, 0x2E),
-        .keyboardD: (0x44, 0x20), .keyboardE: (0x45, 0x12), .keyboardF: (0x46, 0x21),
-        .keyboardG: (0x47, 0x22), .keyboardH: (0x48, 0x23), .keyboardI: (0x49, 0x17),
-        .keyboardJ: (0x4A, 0x24), .keyboardK: (0x4B, 0x25), .keyboardL: (0x4C, 0x26),
-        .keyboardM: (0x4D, 0x32), .keyboardN: (0x4E, 0x31), .keyboardO: (0x4F, 0x18),
-        .keyboardP: (0x50, 0x19), .keyboardQ: (0x51, 0x10), .keyboardR: (0x52, 0x13),
-        .keyboardS: (0x53, 0x1F), .keyboardT: (0x54, 0x14), .keyboardU: (0x55, 0x16),
-        .keyboardV: (0x56, 0x2F), .keyboardW: (0x57, 0x11), .keyboardX: (0x58, 0x2D),
-        .keyboardY: (0x59, 0x15), .keyboardZ: (0x5A, 0x2C),
-
-        // Digit row  (VK = ASCII digit)
-        .keyboard1: (0x31, 0x02), .keyboard2: (0x32, 0x03), .keyboard3: (0x33, 0x04),
-        .keyboard4: (0x34, 0x05), .keyboard5: (0x35, 0x06), .keyboard6: (0x36, 0x07),
-        .keyboard7: (0x37, 0x08), .keyboard8: (0x38, 0x09), .keyboard9: (0x39, 0x0A),
-        .keyboard0: (0x30, 0x0B),
-
-        // Control / whitespace
-        .keyboardReturnOrEnter:     (0x0D, 0x1C),
-        .keyboardEscape:            (0x1B, 0x01),
-        .keyboardDeleteOrBackspace: (0x08, 0x0E),
-        .keyboardTab:               (0x09, 0x0F),
-        .keyboardSpacebar:          (0x20, 0x39),
-        .keyboardCapsLock:          (0x14, 0x3A),
-
-        // Symbols
-        .keyboardHyphen:               (0xBD, 0x0C),
-        .keyboardEqualSign:            (0xBB, 0x0D),
-        .keyboardOpenBracket:          (0xDB, 0x1A),
-        .keyboardCloseBracket:         (0xDD, 0x1B),
-        .keyboardBackslash:            (0xDC, 0x2B),
-        .keyboardNonUSPound:           (0xE2, 0x56),   // IntlBackslash / non-US #
-        .keyboardSemicolon:            (0xBA, 0x27),
-        .keyboardQuote:                (0xDE, 0x28),
-        .keyboardGraveAccentAndTilde:  (0xC0, 0x29),
-        .keyboardComma:                (0xBC, 0x33),
-        .keyboardPeriod:               (0xBE, 0x34),
-        .keyboardSlash:                (0xBF, 0x35),
-
-        // Function keys F1–F13
-        .keyboardF1:  (0x70, 0x3B), .keyboardF2:  (0x71, 0x3C), .keyboardF3:  (0x72, 0x3D),
-        .keyboardF4:  (0x73, 0x3E), .keyboardF5:  (0x74, 0x3F), .keyboardF6:  (0x75, 0x40),
-        .keyboardF7:  (0x76, 0x41), .keyboardF8:  (0x77, 0x42), .keyboardF9:  (0x78, 0x43),
-        .keyboardF10: (0x79, 0x44), .keyboardF11: (0x7A, 0x57), .keyboardF12: (0x7B, 0x58),
-        .keyboardF13: (0x7C, 0x64),
-
-        // Navigation cluster (extended scancodes: 0xE0 in high byte)
-        .keyboardInsert:      (0x2D, 0xE052), .keyboardHome:     (0x24, 0xE047),
-        .keyboardPageUp:      (0x21, 0xE049), .keyboardDeleteForward: (0x2E, 0xE053),
-        .keyboardEnd:         (0x23, 0xE04F), .keyboardPageDown:  (0x22, 0xE051),
-        .keyboardRightArrow:  (0x27, 0xE04D), .keyboardLeftArrow: (0x25, 0xE04B),
-        .keyboardDownArrow:   (0x28, 0xE050), .keyboardUpArrow:   (0x26, 0xE048),
-
-        // System keys
-        .keyboardPrintScreen: (0x2C, 0xE037),
-        .keyboardScrollLock:  (0x91, 0x46),
-        .keyboardPause:       (0x13, 0x45),
-        .keyboardApplication: (0x5D, 0xE05D),  // ContextMenu
-
-        // Numpad
-        .keypadNumLock:   (0x90, 0xE045),
-        .keypadSlash:     (0x6F, 0xE035),
-        .keypadAsterisk:  (0x6A, 0x37),
-        .keypadHyphen:    (0x6D, 0x4A),
-        .keypadPlus:      (0x6B, 0x4E),
-        .keypadEnter:     (0x0D, 0xE01C),
-        .keypad1:         (0x61, 0x4F), .keypad2: (0x62, 0x50), .keypad3: (0x63, 0x51),
-        .keypad4:         (0x64, 0x4B), .keypad5: (0x65, 0x4C), .keypad6: (0x66, 0x4D),
-        .keypad7:         (0x67, 0x47), .keypad8: (0x68, 0x48), .keypad9: (0x69, 0x49),
-        .keypad0:         (0x60, 0x52), .keypadPeriod: (0x6E, 0x53),
-
-        // Modifier keys
-        .keyboardLeftControl:  (0xA2, 0x1D),   .keyboardRightControl: (0xA3, 0xE01D),
-        .keyboardLeftShift:    (0xA0, 0x2A),   .keyboardRightShift:   (0xA1, 0x36),
-        .keyboardLeftAlt:      (0xA4, 0x38),   .keyboardRightAlt:     (0xA5, 0xE038),
-        .keyboardLeftGUI:      (0x5B, 0xE05B), .keyboardRightGUI:     (0x5C, 0xE05C),
-    ]
 }
 
 // MARK: - WebRTC Video Renderer
