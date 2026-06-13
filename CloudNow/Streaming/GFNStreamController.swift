@@ -5,7 +5,7 @@
 
 import AVFoundation
 import Foundation
-import LiveKitWebRTC
+@preconcurrency import LiveKitWebRTC
 import Observation
 
 // MARK: - Session Time Warning
@@ -44,6 +44,7 @@ struct StreamStats {
     var inputSubmitted: UInt64 = 0
     var inputAccepted: UInt64 = 0
     var inputDropped: UInt64 = 0
+    var inputSuperseded: UInt64 = 0
     var inputBufferedBytes: UInt64 = 0
     var inputQueueP95Ms: Double = 0
     var inputQueueMaxMs: Double = 0
@@ -76,11 +77,17 @@ final class GFNStreamController: NSObject {
     @ObservationIgnored nonisolated(unsafe) private var inputSubmitted: UInt64 = 0
     @ObservationIgnored nonisolated(unsafe) private var inputAccepted: UInt64 = 0
     @ObservationIgnored nonisolated(unsafe) private var inputDropped: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var inputSuperseded: UInt64 = 0
     @ObservationIgnored nonisolated(unsafe) private var inputBufferedBytes: UInt64 = 0
     @ObservationIgnored nonisolated(unsafe) private var inputQueueWaitsNs: [UInt64] = []
     @ObservationIgnored nonisolated(unsafe) private var inputQueueMaxNs: UInt64 = 0
     @ObservationIgnored nonisolated(unsafe) private var newestGamepadGeneratedAt: UInt64 = 0
     @ObservationIgnored nonisolated(unsafe) private var inputChannelState = "closed"
+    @ObservationIgnored nonisolated(unsafe) private var pendingGamepadSnapshots: [
+        Int: (packet: EncodedInputPacket, completion: (InputSendDisposition) -> Void)
+    ] = [:]
+    @ObservationIgnored nonisolated(unsafe) private let inputBackpressureHighWaterBytes: UInt64 = 512
+    @ObservationIgnored nonisolated(unsafe) private let inputBackpressureLowWaterBytes: UInt64 = 128
     private let inputSendQueue = DispatchQueue(
         label: "com.cloudnow.input.send",
         qos: .userInteractive
@@ -127,6 +134,7 @@ final class GFNStreamController: NSObject {
             inputSubmitted = 0
             inputAccepted = 0
             inputDropped = 0
+            inputSuperseded = 0
             inputBufferedBytes = 0
             inputQueueWaitsNs.removeAll(keepingCapacity: true)
             inputQueueMaxNs = 0
@@ -184,7 +192,13 @@ final class GFNStreamController: NSObject {
         peerConnection?.close()
         peerConnection = nil
         inputDataChannel = nil
-        inputSendQueue.sync { reliableSendChannel = nil }
+        inputSendQueue.sync {
+            reliableSendChannel = nil
+            let pending = Array(pendingGamepadSnapshots.values)
+            pendingGamepadSnapshots.removeAll()
+            inputDropped &+= UInt64(pending.count)
+            pending.forEach { $0.completion(.channelUnavailable) }
+        }
         partiallyReliableDataChannel = nil
         controlChannel = nil
         videoTrack = nil
@@ -597,6 +611,7 @@ final class GFNStreamController: NSObject {
             let submitted = self.inputSubmitted
             let accepted = self.inputAccepted
             let dropped = self.inputDropped
+            let superseded = self.inputSuperseded
             let bufferedBytes = self.inputBufferedBytes
             let maxNs = self.inputQueueMaxNs
             let channelState = self.inputChannelState
@@ -609,6 +624,7 @@ final class GFNStreamController: NSObject {
                 self.stats.inputSubmitted = submitted
                 self.stats.inputAccepted = accepted
                 self.stats.inputDropped = dropped
+                self.stats.inputSuperseded = superseded
                 self.stats.inputBufferedBytes = bufferedBytes
                 self.stats.inputQueueP95Ms = Double(p95Ns) / 1_000_000
                 self.stats.inputQueueMaxMs = Double(maxNs) / 1_000_000
@@ -824,8 +840,15 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             @unknown default: state = "unknown"
             }
             inputSendQueue.async { [weak self] in
-                self?.inputChannelState = state
-                self?.inputBufferedBytes = dataChannel.bufferedAmount
+                guard let self else { return }
+                self.inputChannelState = state
+                self.inputBufferedBytes = dataChannel.bufferedAmount
+                if state == "closing" || state == "closed" {
+                    let pending = Array(self.pendingGamepadSnapshots.values)
+                    self.pendingGamepadSnapshots.removeAll()
+                    self.inputDropped &+= UInt64(pending.count)
+                    pending.forEach { $0.completion(.channelUnavailable) }
+                }
             }
         }
         // InputSender is NOT started here — it starts only after the server sends its
@@ -835,7 +858,9 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didChangeBufferedAmount amount: UInt64) {
         guard dataChannel.label == "input_channel_v1" else { return }
         inputSendQueue.async { [weak self] in
-            self?.inputBufferedBytes = amount
+            guard let self else { return }
+            self.inputBufferedBytes = amount
+            self.drainPendingGamepadSnapshotsIfPossible(on: dataChannel)
         }
     }
 
@@ -927,36 +952,72 @@ extension GFNStreamController: DataChannelSender {
                 completion(.channelUnavailable)
                 return
             }
-            let now = DispatchTime.now().uptimeNanoseconds
-            let waitNs = now &- packet.generatedAt
             self.inputGenerated &+= 1
-            self.inputQueueWaitsNs.append(waitNs)
-            self.inputQueueMaxNs = max(self.inputQueueMaxNs, waitNs)
-            if packet.category == .gamepadSnapshot {
-                self.newestGamepadGeneratedAt = packet.generatedAt
-            }
 
             guard let dc = self.reliableSendChannel, dc.readyState == .open else {
                 self.inputDropped &+= 1
                 completion(.channelUnavailable)
                 return
             }
-            self.inputSubmitted &+= 1
-            let data = Data(
-                bytesNoCopy: packet.storage.mutableBytes,
-                count: packet.count,
-                deallocator: .none
-            )
-            let buffer = LKRTCDataBuffer(data: data, isBinary: true)
-            let accepted = dc.sendData(buffer)
-            self.inputBufferedBytes = dc.bufferedAmount
-            if accepted {
-                self.inputAccepted &+= 1
-                completion(.accepted)
-            } else {
-                self.inputDropped &+= 1
-                completion(.rejected)
+
+            if let slot = packet.gamepadSlot {
+                if let pending = self.pendingGamepadSnapshots.removeValue(forKey: slot) {
+                    self.inputSuperseded &+= 1
+                    pending.completion(.superseded)
+                }
+                if packet.isReplaceableGamepadSnapshot,
+                   dc.bufferedAmount > self.inputBackpressureHighWaterBytes {
+                    self.pendingGamepadSnapshots[slot] = (packet, completion)
+                    return
+                }
             }
+
+            self.sendImmediately(packet, completion: completion, on: dc)
+            self.drainPendingGamepadSnapshotsIfPossible(on: dc)
+        }
+    }
+
+    nonisolated private func sendImmediately(
+        _ packet: EncodedInputPacket,
+        completion: @escaping (InputSendDisposition) -> Void,
+        on dataChannel: LKRTCDataChannel
+    ) {
+        let waitNs = DispatchTime.now().uptimeNanoseconds &- packet.generatedAt
+        inputQueueWaitsNs.append(waitNs)
+        inputQueueMaxNs = max(inputQueueMaxNs, waitNs)
+        if packet.category == .gamepadSnapshot {
+            newestGamepadGeneratedAt = packet.generatedAt
+        }
+        let data = Data(
+            bytesNoCopy: packet.storage.mutableBytes,
+            count: packet.count,
+            deallocator: .none
+        )
+        let buffer = LKRTCDataBuffer(data: data, isBinary: true)
+        inputSubmitted &+= 1
+        var accepted = dataChannel.sendData(buffer)
+        if !accepted, dataChannel.readyState == .open {
+            // One immediate retry preserves FIFO ordering without creating an application retry queue.
+            inputSubmitted &+= 1
+            accepted = dataChannel.sendData(buffer)
+        }
+        inputBufferedBytes = dataChannel.bufferedAmount
+        if accepted {
+            inputAccepted &+= 1
+            completion(.accepted)
+        } else {
+            inputDropped &+= 1
+            completion(.rejected)
+        }
+    }
+
+    nonisolated private func drainPendingGamepadSnapshotsIfPossible(on dataChannel: LKRTCDataChannel) {
+        guard dataChannel.readyState == .open,
+              dataChannel.bufferedAmount <= inputBackpressureLowWaterBytes else { return }
+        for slot in pendingGamepadSnapshots.keys.sorted() {
+            guard dataChannel.bufferedAmount <= inputBackpressureHighWaterBytes,
+                  let pending = pendingGamepadSnapshots.removeValue(forKey: slot) else { break }
+            sendImmediately(pending.packet, completion: pending.completion, on: dataChannel)
         }
     }
 }

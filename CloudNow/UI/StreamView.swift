@@ -239,6 +239,13 @@ struct StreamView: View {
                     )
                     .foregroundStyle(.orange)
                 }
+                if streamController.stats.inputSuperseded > 0 {
+                    Label(
+                        "Analog snapshots coalesced \(streamController.stats.inputSuperseded)",
+                        systemImage: "arrow.triangle.merge"
+                    )
+                    .foregroundStyle(.secondary)
+                }
                 if !streamController.stats.gpuType.isEmpty {
                     Label(streamController.stats.gpuType, systemImage: "cpu")
                 }

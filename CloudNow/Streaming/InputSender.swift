@@ -81,13 +81,21 @@ enum InputSendDisposition: Sendable {
 final class EncodedInputPacket: @unchecked Sendable {
     static let capacity = 64
 
-    let storage = NSMutableData(length: capacity)!
-    private(set) var count = 0
-    private(set) var category: InputPacketCategory = .heartbeat
-    private(set) var generatedAt: UInt64 = 0
+    nonisolated(unsafe) let storage = NSMutableData(length: capacity)!
+    nonisolated(unsafe) private(set) var count = 0
+    nonisolated(unsafe) private(set) var category: InputPacketCategory = .heartbeat
+    nonisolated(unsafe) private(set) var generatedAt: UInt64 = 0
+    nonisolated(unsafe) private(set) var gamepadSlot: Int?
+    nonisolated(unsafe) private(set) var isReplaceableGamepadSnapshot = false
 
-    func markGenerated(as category: InputPacketCategory) {
+    func markGenerated(
+        as category: InputPacketCategory,
+        gamepadSlot: Int? = nil,
+        replaceableGamepadSnapshot: Bool = false
+    ) {
         self.category = category
+        self.gamepadSlot = gamepadSlot
+        isReplaceableGamepadSnapshot = replaceableGamepadSnapshot
         generatedAt = DispatchTime.now().uptimeNanoseconds
     }
 
@@ -564,10 +572,16 @@ final class InputSender {
 
     private func sendEncoded(
         category: InputPacketCategory,
+        gamepadSlot: Int? = nil,
+        replaceableGamepadSnapshot: Bool = false,
         _ encode: (EncodedInputPacket) -> Void
     ) {
         let packet = packetPool.popLast() ?? EncodedInputPacket()
-        packet.markGenerated(as: category)
+        packet.markGenerated(
+            as: category,
+            gamepadSlot: gamepadSlot,
+            replaceableGamepadSnapshot: replaceableGamepadSnapshot
+        )
         encode(packet)
         guard let channel else {
             packetPool.append(packet)
@@ -774,13 +788,25 @@ final class InputSender {
         now: UInt64 = DispatchTime.now().uptimeNanoseconds,
         force: Bool = false
     ) {
+        let previous = lastSnapshots[slot]
         let lastSend = lastSnapshotSend[slot] ?? 0
-        guard force || lastSnapshots[slot] != snapshot || now &- lastSend >= Self.gamepadKeepAlive else {
+        guard force || previous != snapshot || now &- lastSend >= Self.gamepadKeepAlive else {
             return
         }
+        let returnedToNeutral = previous.map {
+            isAnalogActive($0) && !isAnalogActive(snapshot)
+        } ?? false
+        let isReplaceable = !force
+            && previous?.buttons == snapshot.buttons
+            && previous?.bitmap == snapshot.bitmap
+            && !returnedToNeutral
         lastSnapshots[slot] = snapshot
         lastSnapshotSend[slot] = now
-        sendEncoded(category: .gamepadSnapshot) {
+        sendEncoded(
+            category: .gamepadSnapshot,
+            gamepadSlot: slot,
+            replaceableGamepadSnapshot: isReplaceable
+        ) {
             encoder.encodeGamepad(
                 controllerId: slot,
                 buttons: snapshot.buttons,
@@ -794,6 +820,15 @@ final class InputSender {
                 into: $0
             )
         }
+    }
+
+    private func isAnalogActive(_ snapshot: GamepadSnapshot) -> Bool {
+        snapshot.leftTrigger != 0
+            || snapshot.rightTrigger != 0
+            || snapshot.leftStickX != 0
+            || snapshot.leftStickY != 0
+            || snapshot.rightStickX != 0
+            || snapshot.rightStickY != 0
     }
 
     private func finishOverlayPress(for controller: GCController, slot: Int) {
