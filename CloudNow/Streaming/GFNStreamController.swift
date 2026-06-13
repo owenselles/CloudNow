@@ -104,6 +104,8 @@ final class GFNStreamController: NSObject {
     private(set) var stats = StreamStats()
     private(set) var videoTrack: LKRTCVideoTrack?
     private(set) var statsMode: StreamStatsMode = .hud
+    private(set) var videoDiagnostics = VideoPipelineSnapshot()
+    private(set) var rtcEventLogURL: URL?
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
     private(set) var bitrateHistory: [Double] = []
@@ -178,6 +180,7 @@ final class GFNStreamController: NSObject {
     /// Stores a reference so the inputHandler can be wired up when InputSender starts.
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
+        view.setDiagnosticsEnabled(statsMode == .diagnostic)
         view.inputHandler = inputSender
         view.menuPressHandler = { [weak self] in self?.handleMenuPress() }
     }
@@ -185,11 +188,48 @@ final class GFNStreamController: NSObject {
     func setStatsMode(_ mode: StreamStatsMode) {
         guard statsMode != mode else { return }
         statsMode = mode
+        videoView?.setDiagnosticsEnabled(mode == .diagnostic)
         if mode == .off {
             stopStatsTimer()
         } else if state == .streaming {
             startStatsTimer()
         }
+    }
+
+    @discardableResult
+    func startRtcEventLog(maxSizeBytes: Int64 = 15 * 1024 * 1024) -> URL? {
+        guard let peerConnection else { return nil }
+        stopRtcEventLog()
+
+        let fileManager = FileManager.default
+        guard let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let directory = caches.appendingPathComponent("RTCEventLogs", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try pruneRtcEventLogs(in: directory, keeping: 2)
+        } catch {
+            print("[Stats] Unable to prepare RTC event log directory: \(error)")
+            return nil
+        }
+
+        let formatter = ISO8601DateFormatter()
+        let filename = "rtc-\(formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-"))-\(UUID().uuidString).log"
+        let url = directory.appendingPathComponent(filename)
+        guard peerConnection.startRtcEventLog(
+            withFilePath: url.path,
+            maxSizeInBytes: max(1_048_576, maxSizeBytes)
+        ) else { return nil }
+
+        rtcEventLogURL = url
+        return url
+    }
+
+    func stopRtcEventLog() {
+        guard rtcEventLogURL != nil else { return }
+        peerConnection?.stopRtcEventLog()
+        rtcEventLogURL = nil
     }
 
     /// Invoked by VideoSurfaceView when the user presses Menu.
@@ -220,6 +260,7 @@ final class GFNStreamController: NSObject {
     // MARK: Disconnect
 
     func disconnect() {
+        stopRtcEventLog()
         stopStatsTimer()
         inputSender?.stop()
         signaling?.disconnect()
@@ -246,6 +287,7 @@ final class GFNStreamController: NSObject {
         remoteMode = .mouse
         menuPressCount = 0
         timeWarning = nil
+        videoDiagnostics = VideoPipelineSnapshot()
         state = .idle
     }
 
@@ -647,6 +689,9 @@ final class GFNStreamController: NSObject {
 
     private func collectStats() {
         guard statsMode != .off, let peerConnection else { return }
+        if statsMode == .diagnostic {
+            videoDiagnostics = videoView?.diagnosticsSnapshot ?? VideoPipelineSnapshot()
+        }
         statsTick &+= 1
         let generation = statsGeneration
 
@@ -825,6 +870,25 @@ final class GFNStreamController: NSObject {
 
     private func intervalCount(_ current: Double, _ previous: Double) -> Int {
         Int(max(0, current - previous))
+    }
+
+    private func pruneRtcEventLogs(in directory: URL, keeping count: Int) throws {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .creationDateKey]
+        let logs = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        )
+        let sorted = logs.sorted { lhs, rhs in
+            let leftValues = try? lhs.resourceValues(forKeys: keys)
+            let rightValues = try? rhs.resourceValues(forKeys: keys)
+            let leftDate = leftValues?.contentModificationDate ?? leftValues?.creationDate ?? .distantPast
+            let rightDate = rightValues?.contentModificationDate ?? rightValues?.creationDate ?? .distantPast
+            return leftDate > rightDate
+        }
+        for url in sorted.dropFirst(max(0, count)) {
+            try FileManager.default.removeItem(at: url)
+        }
     }
 
     private func appendHistory(_ history: inout [Double], value: Double) {

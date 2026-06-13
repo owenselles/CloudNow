@@ -15,7 +15,8 @@ import LiveKitWebRTC
 final class VideoSurfaceView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
     private var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
-    private let renderer = WebRTCFrameRenderer()
+    private let pipelineDiagnostics = VideoPipelineDiagnostics()
+    private lazy var renderer = WebRTCFrameRenderer(diagnostics: pipelineDiagnostics)
     private var currentTrack: LKRTCVideoTrack?
 
     /// Set by GFNStreamController once the input data channel handshake completes.
@@ -44,6 +45,14 @@ final class VideoSurfaceView: UIView {
                 print("[VideoSurfaceView] Track attached")
             }
         }
+    }
+
+    var diagnosticsSnapshot: VideoPipelineSnapshot {
+        pipelineDiagnostics.snapshot()
+    }
+
+    func setDiagnosticsEnabled(_ enabled: Bool) {
+        pipelineDiagnostics.setEnabled(enabled)
     }
 
     override init(frame: CGRect) {
@@ -234,11 +243,17 @@ final class VideoSurfaceView: UIView {
 /// to an AVSampleBufferDisplayLayer via CMSampleBuffer.
 private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     weak var displayLayer: AVSampleBufferDisplayLayer?
+    private let diagnostics: VideoPipelineDiagnostics
+
+    init(diagnostics: VideoPipelineDiagnostics) {
+        self.diagnostics = diagnostics
+    }
 
     func setSize(_ size: CGSize) {}
 
     func renderFrame(_ frame: LKRTCVideoFrame?) {
         guard let frame else { return }
+        let trace = diagnostics.beginFrame()
 
         // Hardware-decoded H.264/H.265/AV1 frames arrive as CVPixelBuffer (NV12/420v).
         // H.265/HDR/AV1 can fall back to software decoding (LKRTCI420Buffer) on some
@@ -247,16 +262,27 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         if let hwBuf = frame.buffer as? LKRTCCVPixelBuffer {
             cvBuf = hwBuf.pixelBuffer
         } else if let i420 = frame.buffer as? LKRTCI420Buffer {
-            guard let converted = i420ToCVPixelBuffer(i420) else { return }
+            let conversionStart = diagnostics.beginConversion(trace)
+            guard let converted = i420ToCVPixelBuffer(i420) else {
+                diagnostics.recordDrop(trace)
+                return
+            }
+            diagnostics.endConversion(trace, startedAt: conversionStart)
             cvBuf = converted
         } else {
             print("[WebRTCFrameRenderer] Unhandled frame type: \(type(of: frame.buffer))")
+            diagnostics.recordDrop(trace)
             return
         }
 
+        let sampleCreationStart = diagnostics.beginSampleCreation(trace)
         var fmtDesc: CMVideoFormatDescription?
         CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: cvBuf, formatDescriptionOut: &fmtDesc)
-        guard let fmtDesc else { return }
+        guard let fmtDesc else {
+            diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
+            diagnostics.recordDrop(trace)
+            return
+        }
 
         // Use current host-clock time as presentation timestamp → display immediately
         var timing = CMSampleTimingInfo(
@@ -275,8 +301,21 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             sampleTiming: &timing,
             sampleBufferOut: &sampleBuffer
         )
-        guard let sampleBuffer else { return }
-        displayLayer?.enqueue(sampleBuffer)
+        guard let sampleBuffer else {
+            diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
+            diagnostics.recordDrop(trace)
+            return
+        }
+        diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
+        guard let displayLayer else {
+            diagnostics.recordDrop(trace)
+            return
+        }
+        if !displayLayer.isReadyForMoreMediaData {
+            diagnostics.recordBackpressure()
+        }
+        displayLayer.enqueue(sampleBuffer)
+        diagnostics.recordEnqueue(trace)
     }
 
     private func i420ToCVPixelBuffer(_ i420: LKRTCI420Buffer) -> CVPixelBuffer? {
