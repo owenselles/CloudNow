@@ -40,6 +40,16 @@ struct StreamStats {
     var jitterMs: Double = 0
     var codec: String = ""
     var gpuType: String = ""
+    var inputGenerated: UInt64 = 0
+    var inputSubmitted: UInt64 = 0
+    var inputAccepted: UInt64 = 0
+    var inputDropped: UInt64 = 0
+    var inputBufferedBytes: UInt64 = 0
+    var inputQueueP95Ms: Double = 0
+    var inputQueueMaxMs: Double = 0
+    var newestGamepadAgeMs: Double = 0
+    var inputChannelState: String = "closed"
+    var selectedNetworkPath: String = "Unknown"
 }
 
 // MARK: - GFNStreamController
@@ -62,6 +72,15 @@ final class GFNStreamController: NSObject {
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
     @ObservationIgnored nonisolated(unsafe) private var reliableSendChannel: LKRTCDataChannel?
+    @ObservationIgnored nonisolated(unsafe) private var inputGenerated: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var inputSubmitted: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var inputAccepted: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var inputDropped: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var inputBufferedBytes: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var inputQueueWaitsNs: [UInt64] = []
+    @ObservationIgnored nonisolated(unsafe) private var inputQueueMaxNs: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var newestGamepadGeneratedAt: UInt64 = 0
+    @ObservationIgnored nonisolated(unsafe) private var inputChannelState = "closed"
     private let inputSendQueue = DispatchQueue(
         label: "com.cloudnow.input.send",
         qos: .userInteractive
@@ -103,6 +122,17 @@ final class GFNStreamController: NSObject {
         sessionInfo = session
         self.settings = settings
         stats.gpuType = session.gpuType ?? ""
+        inputSendQueue.sync {
+            inputGenerated = 0
+            inputSubmitted = 0
+            inputAccepted = 0
+            inputDropped = 0
+            inputBufferedBytes = 0
+            inputQueueWaitsNs.removeAll(keepingCapacity: true)
+            inputQueueMaxNs = 0
+            newestGamepadGeneratedAt = 0
+            inputChannelState = "closed"
+        }
 
         setupSignaling(session: session)
         do {
@@ -545,8 +575,46 @@ final class GFNStreamController: NSObject {
     }
 
     private func collectStats() {
+        collectInputStats()
         peerConnection?.statistics { [weak self] report in
             Task { @MainActor [weak self] in self?.parseStats(report) }
+        }
+    }
+
+    private func collectInputStats() {
+        inputSendQueue.async { [weak self] in
+            guard let self else { return }
+            let sortedWaits = self.inputQueueWaitsNs.sorted()
+            let p95Index = sortedWaits.isEmpty
+                ? 0
+                : min(sortedWaits.count - 1, Int((Double(sortedWaits.count) * 0.95).rounded(.up)) - 1)
+            let p95Ns = sortedWaits.isEmpty ? 0 : sortedWaits[p95Index]
+            let now = DispatchTime.now().uptimeNanoseconds
+            let gamepadAgeNs = self.newestGamepadGeneratedAt == 0
+                ? 0
+                : now &- self.newestGamepadGeneratedAt
+            let generated = self.inputGenerated
+            let submitted = self.inputSubmitted
+            let accepted = self.inputAccepted
+            let dropped = self.inputDropped
+            let bufferedBytes = self.inputBufferedBytes
+            let maxNs = self.inputQueueMaxNs
+            let channelState = self.inputChannelState
+            self.inputQueueWaitsNs.removeAll(keepingCapacity: true)
+            self.inputQueueMaxNs = 0
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.stats.inputGenerated = generated
+                self.stats.inputSubmitted = submitted
+                self.stats.inputAccepted = accepted
+                self.stats.inputDropped = dropped
+                self.stats.inputBufferedBytes = bufferedBytes
+                self.stats.inputQueueP95Ms = Double(p95Ns) / 1_000_000
+                self.stats.inputQueueMaxMs = Double(maxNs) / 1_000_000
+                self.stats.newestGamepadAgeMs = Double(gamepadAgeNs) / 1_000_000
+                self.stats.inputChannelState = channelState
+            }
         }
     }
 
@@ -565,7 +633,29 @@ final class GFNStreamController: NSObject {
             }
         }
 
-        for (_, stat) in report.statistics {
+        var candidateDetails: [String: (protocolName: String, candidateType: String)] = [:]
+        var candidatePairs: [String: (localID: String, remoteID: String, rttMs: Double, nominated: Bool)] = [:]
+        var selectedCandidatePairID: String?
+
+        for (id, stat) in report.statistics {
+            if stat.type == "local-candidate" || stat.type == "remote-candidate" {
+                candidateDetails[id] = (
+                    protocolName: (stat.values["protocol"] as? String ?? "").lowercased(),
+                    candidateType: (stat.values["candidateType"] as? String ?? "").lowercased()
+                )
+            } else if stat.type == "transport" {
+                selectedCandidatePairID = stat.values["selectedCandidatePairId"] as? String
+                    ?? selectedCandidatePairID
+            } else if stat.type == "candidate-pair",
+                      stat.values["state"] as? String == "succeeded" {
+                candidatePairs[id] = (
+                    localID: stat.values["localCandidateId"] as? String ?? "",
+                    remoteID: stat.values["remoteCandidateId"] as? String ?? "",
+                    rttMs: (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000,
+                    nominated: stat.values["nominated"] as? Bool ?? false
+                )
+            }
+
             if stat.type == "inbound-rtp", stat.values["kind"] as? String == "video" {
                 let bytesReceived = stat.values["bytesReceived"] as? Double ?? 0
                 let framesReceived = stat.values["framesReceived"] as? Double ?? 0
@@ -596,8 +686,26 @@ final class GFNStreamController: NSObject {
                 }
                 print("[Stats] framesReceived=\(Int(framesReceived)) framesDecoded=\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps) codec=\(stats.codec)")
             }
-            if stat.type == "candidate-pair", stat.values["state"] as? String == "succeeded" {
-                stats.rttMs = (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000
+        }
+
+        let selectedPair = selectedCandidatePairID.flatMap { candidatePairs[$0] }
+            ?? candidatePairs.values.first(where: \.nominated)
+        if let selectedPair {
+            stats.rttMs = selectedPair.rttMs
+            let local = candidateDetails[selectedPair.localID]
+            let remote = candidateDetails[selectedPair.remoteID]
+            let protocolName = local?.protocolName.isEmpty == false
+                ? local?.protocolName ?? ""
+                : remote?.protocolName ?? ""
+            let usesRelay = local?.candidateType == "relay" || remote?.candidateType == "relay"
+            if protocolName == "tcp" || protocolName == "tls" {
+                stats.selectedNetworkPath = "TCP/TLS fallback"
+            } else if usesRelay && protocolName == "udp" {
+                stats.selectedNetworkPath = "TURN/UDP relay"
+            } else if protocolName == "udp" {
+                stats.selectedNetworkPath = "Direct UDP"
+            } else {
+                stats.selectedNetworkPath = "Unknown"
             }
         }
         appendHistory(&pingHistory, value: stats.rttMs)
@@ -706,8 +814,29 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 extension GFNStreamController: LKRTCDataChannelDelegate {
     nonisolated func dataChannelDidChangeState(_ dataChannel: LKRTCDataChannel) {
         print("[DataChannel] State → \(dataChannel.readyState.rawValue) label=\(dataChannel.label)")
+        if dataChannel.label == "input_channel_v1" {
+            let state: String
+            switch dataChannel.readyState {
+            case .connecting: state = "connecting"
+            case .open: state = "open"
+            case .closing: state = "closing"
+            case .closed: state = "closed"
+            @unknown default: state = "unknown"
+            }
+            inputSendQueue.async { [weak self] in
+                self?.inputChannelState = state
+                self?.inputBufferedBytes = dataChannel.bufferedAmount
+            }
+        }
         // InputSender is NOT started here — it starts only after the server sends its
         // handshake message on input_channel_v1 (handled in dataChannel(_:didReceiveMessageWith:))
+    }
+
+    nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didChangeBufferedAmount amount: UInt64) {
+        guard dataChannel.label == "input_channel_v1" else { return }
+        inputSendQueue.async { [weak self] in
+            self?.inputBufferedBytes = amount
+        }
     }
 
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
@@ -789,17 +918,45 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 // MARK: - DataChannelSender conformance
 
 extension GFNStreamController: DataChannelSender {
-    nonisolated func sendData(_ packet: EncodedInputPacket, completion: @escaping () -> Void) {
+    nonisolated func sendData(
+        _ packet: EncodedInputPacket,
+        completion: @escaping (InputSendDisposition) -> Void
+    ) {
         inputSendQueue.async { [weak self] in
-            defer { completion() }
-            guard let dc = self?.reliableSendChannel, dc.readyState == .open else { return }
+            guard let self else {
+                completion(.channelUnavailable)
+                return
+            }
+            let now = DispatchTime.now().uptimeNanoseconds
+            let waitNs = now &- packet.generatedAt
+            self.inputGenerated &+= 1
+            self.inputQueueWaitsNs.append(waitNs)
+            self.inputQueueMaxNs = max(self.inputQueueMaxNs, waitNs)
+            if packet.category == .gamepadSnapshot {
+                self.newestGamepadGeneratedAt = packet.generatedAt
+            }
+
+            guard let dc = self.reliableSendChannel, dc.readyState == .open else {
+                self.inputDropped &+= 1
+                completion(.channelUnavailable)
+                return
+            }
+            self.inputSubmitted &+= 1
             let data = Data(
                 bytesNoCopy: packet.storage.mutableBytes,
                 count: packet.count,
                 deallocator: .none
             )
             let buffer = LKRTCDataBuffer(data: data, isBinary: true)
-            dc.sendData(buffer)
+            let accepted = dc.sendData(buffer)
+            self.inputBufferedBytes = dc.bufferedAmount
+            if accepted {
+                self.inputAccepted &+= 1
+                completion(.accepted)
+            } else {
+                self.inputDropped &+= 1
+                completion(.rejected)
+            }
         }
     }
 }

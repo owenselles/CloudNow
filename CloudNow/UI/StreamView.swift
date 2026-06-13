@@ -227,6 +227,18 @@ struct StreamView: View {
                 Divider().overlay(.white.opacity(0.4))
                 Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
                 Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
+                Label(streamController.stats.selectedNetworkPath, systemImage: "point.3.connected.trianglepath.dotted")
+                Label(
+                    "Input p95 \(String(format: "%.1f", streamController.stats.inputQueueP95Ms)) ms · \(streamController.stats.inputBufferedBytes) B queued",
+                    systemImage: "gamecontroller"
+                )
+                if streamController.stats.inputDropped > 0 {
+                    Label(
+                        "Input drops \(streamController.stats.inputDropped)",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+                }
                 if !streamController.stats.gpuType.isEmpty {
                     Label(streamController.stats.gpuType, systemImage: "cpu")
                 }
