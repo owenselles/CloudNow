@@ -24,12 +24,19 @@ struct StreamSettings: Codable, Equatable {
     /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
     /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
     var enableSteamOverlayGesture: Bool = true
+    /// Controls receiver statistics collection. Diagnostic mode also enables video-pipeline tracing.
+    var statsMode: StreamStatsMode = .hud
+    /// Captures a bounded WebRTC event log for the duration of the next stream.
+    var enableRtcEventLog: Bool = false
 
     var normalizedForClient: StreamSettings {
         var normalized = self
         // The software I420 path is 8-bit video-range BT.709 and cannot preserve HDR/10-bit metadata.
         if normalized.codec == .av1 {
             normalized.colorQuality = .sdr8bit
+        }
+        if normalized.statsMode != .diagnostic {
+            normalized.enableRtcEventLog = false
         }
         return normalized
     }
@@ -46,6 +53,7 @@ extension StreamSettings {
         case gameLanguage, enableL4S, micEnabled, controllerDeadzone, overlayTriggerButton
         case defaultRemoteInputMode, preferredZoneUrl
         case enableSteamOverlayGesture
+        case statsMode, enableRtcEventLog
     }
 
     init(from decoder: Decoder) throws {
@@ -66,6 +74,22 @@ extension StreamSettings {
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self,  forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
         preferredZoneUrl      = try c.decodeIfPresent(String.self,            forKey: .preferredZoneUrl)
         enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self,         forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
+        statsMode             = try c.decodeIfPresent(StreamStatsMode.self,  forKey: .statsMode)             ?? d.statsMode
+        enableRtcEventLog     = try c.decodeIfPresent(Bool.self,              forKey: .enableRtcEventLog)     ?? d.enableRtcEventLog
+    }
+}
+
+enum StreamStatsMode: String, Codable, CaseIterable, Sendable {
+    case off
+    case hud
+    case diagnostic
+
+    var label: String {
+        switch self {
+        case .off: return "Off"
+        case .hud: return "HUD"
+        case .diagnostic: return "Diagnostic"
+        }
     }
 }
 

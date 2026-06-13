@@ -56,12 +56,6 @@ struct StreamStats {
     var powerEfficientDecoder: Bool?
 }
 
-enum StreamStatsMode: Sendable {
-    case off
-    case hud
-    case diagnostic
-}
-
 private struct VideoStatsSnapshot: Sendable {
     var timestampUs: Double = 0
     var bytesReceived: Double = 0
@@ -165,6 +159,7 @@ final class GFNStreamController: NSObject {
         state = .connecting
         sessionInfo = session
         self.settings = settings
+        setStatsMode(settings.statsMode)
         stats.gpuType = session.gpuType ?? ""
 
         setupSignaling(session: session)
@@ -370,6 +365,13 @@ final class GFNStreamController: NSObject {
             return
         }
         peerConnection = pc
+        if settings.enableRtcEventLog {
+            if let url = startRtcEventLog() {
+                print("[Stats] RTC event log: \(url.path)")
+            } else {
+                print("[Stats] Unable to start RTC event log")
+            }
+        }
         print("[Stream] Peer connection created, starting offer handling")
 
         // Reliable ordered input channel — label must match the GFN server's expected "input_channel_v1"

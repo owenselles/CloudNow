@@ -242,6 +242,38 @@ struct SettingsView: View {
                     LabeledContent("Protocol", value: "XInput over GFN v2/v3")
                 }
 
+                Section("Diagnostics") {
+                    Picker(selection: $vm.streamSettings.statsMode) {
+                        ForEach(StreamStatsMode.allCases, id: \.self) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Statistics Mode")
+                            Text(statsModeDescription(vm.streamSettings.statsMode))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .onChange(of: vm.streamSettings.statsMode) { _, mode in
+                        if mode != .diagnostic {
+                            vm.streamSettings.enableRtcEventLog = false
+                        }
+                    }
+
+                    Toggle(isOn: $vm.streamSettings.enableRtcEventLog) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("RTC Event Log")
+                            Text("Writes a bounded WebRTC event log to the app caches directory for the next stream.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .disabled(vm.streamSettings.statsMode != .diagnostic)
+                }
+
                 Section("Account") {
                     if let user = authManager.session?.user {
                         LabeledContent("Name", value: user.displayName)
@@ -294,6 +326,14 @@ struct SettingsView: View {
         case .sdr8bit: return "SDR 8-bit"
         case .sdr10bit: return "SDR 10-bit"
         case .hdr10bit: return "HDR 10-bit"
+        }
+    }
+
+    private func statsModeDescription(_ mode: StreamStatsMode) -> String {
+        switch mode {
+        case .off: return "Disables periodic WebRTC statistics collection."
+        case .hud: return "Collects the lightweight statistics shown in the in-stream overlay."
+        case .diagnostic: return "Adds receiver timing, renderer metrics, frame counters, and Instruments signposts."
         }
     }
 }
