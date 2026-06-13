@@ -3,6 +3,7 @@
 import AVFoundation
 import UIKit
 import LiveKitWebRTC
+import os
 
 // MARK: - VideoSurfaceView
 
@@ -18,6 +19,7 @@ final class VideoSurfaceView: UIView {
     private let pipelineDiagnostics = VideoPipelineDiagnostics()
     private lazy var renderer = WebRTCFrameRenderer(diagnostics: pipelineDiagnostics)
     private var currentTrack: LKRTCVideoTrack?
+    private var notificationTokens: [NSObjectProtocol] = []
 
     /// Set by GFNStreamController once the input data channel handshake completes.
     weak var inputHandler: InputEventHandler?
@@ -38,7 +40,11 @@ final class VideoSurfaceView: UIView {
     var videoTrack: LKRTCVideoTrack? {
         didSet {
             guard oldValue !== videoTrack else { return }
+            let hadTrack = currentTrack != nil
             currentTrack?.remove(renderer)
+            if hadTrack {
+                renderer.reset(preservingDisplayedImage: videoTrack != nil)
+            }
             currentTrack = videoTrack
             if let track = videoTrack {
                 track.add(renderer)
@@ -48,7 +54,8 @@ final class VideoSurfaceView: UIView {
     }
 
     var diagnosticsSnapshot: VideoPipelineSnapshot {
-        pipelineDiagnostics.snapshot()
+        renderer.capturePerformanceMetrics()
+        return pipelineDiagnostics.snapshot()
     }
 
     func setDiagnosticsEnabled(_ enabled: Bool) {
@@ -68,15 +75,37 @@ final class VideoSurfaceView: UIView {
     private func setup() {
         backgroundColor = .black
         displayLayer.videoGravity = .resizeAspectFill
-        // Set timebase so the layer displays frames at host-clock time (real-time playback)
-        var tb: CMTimebase?
-        CMTimebaseCreateWithSourceClock(allocator: nil, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &tb)
-        if let tb {
-            CMTimebaseSetTime(tb, time: CMClockGetTime(CMClockGetHostTimeClock()))
-            CMTimebaseSetRate(tb, rate: 1.0)
-            displayLayer.controlTimebase = tb
-        }
-        renderer.displayLayer = displayLayer
+        displayLayer.controlTimebase = nil
+
+        let sampleBufferRenderer = displayLayer.sampleBufferRenderer
+        renderer.sampleBufferRenderer = sampleBufferRenderer
+        notificationTokens = [
+            NotificationCenter.default.addObserver(
+                forName: AVSampleBufferVideoRenderer.didFailToDecodeNotification,
+                object: sampleBufferRenderer,
+                queue: nil
+            ) { [weak renderer] _ in
+                renderer?.recoverAfterFailure()
+            },
+            NotificationCenter.default.addObserver(
+                forName: AVSampleBufferVideoRenderer.requiresFlushToResumeDecodingDidChangeNotification,
+                object: sampleBufferRenderer,
+                queue: nil
+            ) { [weak renderer] _ in
+                renderer?.recoverIfRequired()
+            },
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: nil
+            ) { [weak renderer] _ in
+                renderer?.recoverIfRequired()
+            },
+        ]
+    }
+
+    deinit {
+        notificationTokens.forEach(NotificationCenter.default.removeObserver)
     }
 
     // Become first responder as soon as the view enters a window so hardware
@@ -240,10 +269,16 @@ final class VideoSurfaceView: UIView {
 // MARK: - WebRTC Video Renderer
 
 /// Implements LKRTCVideoRenderer to receive decoded WebRTC frames and feed them
-/// to an AVSampleBufferDisplayLayer via CMSampleBuffer.
+/// to the display layer's background-safe AVSampleBufferVideoRenderer.
 private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
-    weak var displayLayer: AVSampleBufferDisplayLayer?
+    private struct State {
+        var formatDescription: CMVideoFormatDescription?
+        var isFlushing = false
+    }
+
+    var sampleBufferRenderer: AVSampleBufferVideoRenderer?
     private let diagnostics: VideoPipelineDiagnostics
+    private let state = OSAllocatedUnfairLock(initialState: State())
 
     init(diagnostics: VideoPipelineDiagnostics) {
         self.diagnostics = diagnostics
@@ -252,8 +287,18 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     func setSize(_ size: CGSize) {}
 
     func renderFrame(_ frame: LKRTCVideoFrame?) {
-        guard let frame else { return }
+        guard let frame, let sampleBufferRenderer else { return }
         let trace = diagnostics.beginFrame()
+
+        if sampleBufferRenderer.status == .failed || sampleBufferRenderer.requiresFlushToResumeDecoding {
+            recoverAfterFailure()
+            diagnostics.recordDrop(trace)
+            return
+        }
+        guard !state.withLock({ $0.isFlushing }) else {
+            diagnostics.recordDrop(trace)
+            return
+        }
 
         // Hardware-decoded H.264/H.265/AV1 frames arrive as CVPixelBuffer (NV12/420v).
         // H.265/HDR/AV1 can fall back to software decoding (LKRTCI420Buffer) on some
@@ -276,18 +321,16 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         }
 
         let sampleCreationStart = diagnostics.beginSampleCreation(trace)
-        var fmtDesc: CMVideoFormatDescription?
-        CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: cvBuf, formatDescriptionOut: &fmtDesc)
-        guard let fmtDesc else {
+        guard let formatDescription = formatDescription(for: cvBuf) else {
             diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
             diagnostics.recordDrop(trace)
             return
         }
 
-        // Use current host-clock time as presentation timestamp → display immediately
+        // DisplayImmediately makes the timestamp irrelevant and replaces queued stale images.
         var timing = CMSampleTimingInfo(
             duration: .invalid,
-            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            presentationTimeStamp: .zero,
             decodeTimeStamp: .invalid
         )
         var sampleBuffer: CMSampleBuffer?
@@ -297,7 +340,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             dataReady: true,
             makeDataReadyCallback: nil,
             refcon: nil,
-            formatDescription: fmtDesc,
+            formatDescription: formatDescription,
             sampleTiming: &timing,
             sampleBufferOut: &sampleBuffer
         )
@@ -306,16 +349,95 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             diagnostics.recordDrop(trace)
             return
         }
+        markForImmediatePresentation(sampleBuffer)
         diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
-        guard let displayLayer else {
-            diagnostics.recordDrop(trace)
-            return
-        }
-        if !displayLayer.isReadyForMoreMediaData {
+        if !sampleBufferRenderer.isReadyForMoreMediaData {
             diagnostics.recordBackpressure()
         }
-        displayLayer.enqueue(sampleBuffer)
+        sampleBufferRenderer.enqueue(sampleBuffer)
         diagnostics.recordEnqueue(trace)
+    }
+
+    func reset(preservingDisplayedImage: Bool) {
+        flush(preservingDisplayedImage: preservingDisplayedImage, recordFailure: false)
+    }
+
+    func recoverAfterFailure() {
+        flush(preservingDisplayedImage: true, recordFailure: true)
+    }
+
+    func recoverIfRequired() {
+        guard let sampleBufferRenderer,
+              sampleBufferRenderer.status == .failed || sampleBufferRenderer.requiresFlushToResumeDecoding else {
+            return
+        }
+        recoverAfterFailure()
+    }
+
+    func capturePerformanceMetrics() {
+        guard let sampleBufferRenderer else { return }
+        sampleBufferRenderer.loadVideoPerformanceMetrics { [weak diagnostics] metrics in
+            guard let metrics else { return }
+            diagnostics?.updateAVMetrics(
+                totalFrames: metrics.totalNumberOfFrames,
+                droppedFrames: metrics.numberOfDroppedFrames,
+                corruptedFrames: metrics.numberOfCorruptedFrames,
+                accumulatedFrameDelaySeconds: metrics.totalAccumulatedFrameDelay
+            )
+        }
+    }
+
+    private func flush(preservingDisplayedImage: Bool, recordFailure: Bool) {
+        guard let sampleBufferRenderer else { return }
+        let shouldFlush = state.withLock { state -> Bool in
+            guard !state.isFlushing else { return false }
+            state.isFlushing = true
+            state.formatDescription = nil
+            return true
+        }
+        guard shouldFlush else { return }
+
+        if recordFailure { diagnostics.recordRendererFailure() }
+        sampleBufferRenderer.flush(removingDisplayedImage: !preservingDisplayedImage) { [weak self] in
+            self?.state.withLock { $0.isFlushing = false }
+            self?.diagnostics.recordRendererFlush()
+        }
+    }
+
+    private func formatDescription(for pixelBuffer: CVPixelBuffer) -> CMVideoFormatDescription? {
+        state.withLock { state in
+            if let cached = state.formatDescription,
+               CMVideoFormatDescriptionMatchesImageBuffer(cached, imageBuffer: pixelBuffer) {
+                return cached
+            }
+
+            var created: CMVideoFormatDescription?
+            let status = CMVideoFormatDescriptionCreateForImageBuffer(
+                allocator: nil,
+                imageBuffer: pixelBuffer,
+                formatDescriptionOut: &created
+            )
+            guard status == noErr else { return nil }
+            state.formatDescription = created
+            return created
+        }
+    }
+
+    private func markForImmediatePresentation(_ sampleBuffer: CMSampleBuffer) {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
+            sampleBuffer,
+            createIfNecessary: true
+        ), CFArrayGetCount(attachments) > 0 else { return }
+
+        let dictionary = unsafeBitCast(
+            CFArrayGetValueAtIndex(attachments, 0),
+            to: CFMutableDictionary.self
+        )
+        CFDictionarySetValue(
+            dictionary,
+            Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+            Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+        )
     }
 
     private func i420ToCVPixelBuffer(_ i420: LKRTCI420Buffer) -> CVPixelBuffer? {
