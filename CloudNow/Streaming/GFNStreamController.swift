@@ -237,6 +237,13 @@ final class GFNStreamController: NSObject {
             print("[Stream] AVAudioSession configuration failed (non-fatal): \(error)")
         }
 
+        // The lifetime is immutable after channel creation, so resolve the server's value first.
+        if let match = sdp.range(of: #"ri\.partialReliableThresholdMs[: ]+(\d+)"#, options: .regularExpression),
+           let numMatch = sdp[match].range(of: #"\d+"#, options: .regularExpression),
+           let ms = Int(sdp[numMatch]) {
+            partialReliableThresholdMs = min(max(ms, 1), Int(UInt16.max))
+        }
+
         let iceServers: [LKRTCIceServer] = session.iceServers.map {
             LKRTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
         }
@@ -278,13 +285,6 @@ final class GFNStreamController: NSObject {
         // so the m=audio sendrecv line is included in the SDP)
         if settings.micEnabled {
             await attachMicrophone(to: pc)
-        }
-
-        // Extract partial-reliable threshold from offer if the server advertises one
-        if let match = sdp.range(of: #"ri\.partialReliableThresholdMs[: ]+(\d+)"#, options: .regularExpression),
-           let numMatch = sdp[match].range(of: #"\d+"#, options: .regularExpression),
-           let ms = Int(sdp[numMatch]) {
-            partialReliableThresholdMs = ms
         }
 
         // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers)
