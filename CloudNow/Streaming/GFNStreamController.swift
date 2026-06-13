@@ -40,7 +40,60 @@ struct StreamStats {
     var jitterMs: Double = 0
     var codec: String = ""
     var gpuType: String = ""
+    var jitterBufferDelayMs: Double = 0
+    var jitterBufferTargetDelayMs: Double = 0
+    var jitterBufferMinimumDelayMs: Double = 0
+    var decodeTimeMs: Double = 0
+    var processingDelayMs: Double = 0
+    var framesDropped: Int = 0
+    var freezeCount: Int = 0
+    var freezeDurationMs: Double = 0
+    var nackCount: Int = 0
+    var pliCount: Int = 0
+    var firCount: Int = 0
+    var retransmittedPackets: Int = 0
+    var decoderImplementation: String = ""
+    var powerEfficientDecoder: Bool?
 }
+
+enum StreamStatsMode: Sendable {
+    case off
+    case hud
+    case diagnostic
+}
+
+private struct VideoStatsSnapshot: Sendable {
+    var timestampUs: Double = 0
+    var bytesReceived: Double = 0
+    var packetsReceived: Double = 0
+    var packetsLost: Double = 0
+    var framesDecoded: Double = 0
+    var framesDropped: Double = 0
+    var framesPerSecond: Double = 0
+    var frameWidth: Double = 0
+    var frameHeight: Double = 0
+    var jitterSeconds: Double = 0
+    var jitterBufferDelaySeconds: Double = 0
+    var jitterBufferTargetDelaySeconds: Double = 0
+    var jitterBufferMinimumDelaySeconds: Double = 0
+    var jitterBufferEmittedCount: Double = 0
+    var totalDecodeTimeSeconds: Double = 0
+    var totalProcessingDelaySeconds: Double = 0
+    var freezeCount: Double = 0
+    var totalFreezeDurationSeconds: Double = 0
+    var nackCount: Double = 0
+    var pliCount: Double = 0
+    var firCount: Double = 0
+    var retransmittedPackets: Double = 0
+    var codec: String = ""
+    var decoderImplementation: String = ""
+    var powerEfficientDecoder: Bool?
+}
+
+private let streamStatsParsingQueue = DispatchQueue(
+    label: "com.cloudnow.stream-stats",
+    qos: .utility
+)
 
 // MARK: - GFNStreamController
 
@@ -50,6 +103,7 @@ final class GFNStreamController: NSObject {
     private(set) var state: StreamState = .idle
     private(set) var stats = StreamStats()
     private(set) var videoTrack: LKRTCVideoTrack?
+    private(set) var statsMode: StreamStatsMode = .hud
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
     private(set) var bitrateHistory: [Double] = []
@@ -66,6 +120,7 @@ final class GFNStreamController: NSObject {
     private(set) var videoView: VideoSurfaceView?
     private(set) var remoteMode: RemoteInputMode = .mouse
     private var statsTimer: Timer?
+    private var videoReceiver: LKRTCRtpReceiver?
     private var protocolVersion = 2
     private var partialReliableThresholdMs = 300
     private var sessionInfo: SessionInfo?
@@ -83,8 +138,11 @@ final class GFNStreamController: NSObject {
     private let inputSendQueue = DispatchQueue(label: "com.cloudnow.input-send", qos: .userInteractive)
     nonisolated(unsafe) private var reliableSendChannel: LKRTCDataChannel?
     private var inputReady = false
-    private var lastBytesReceived: Double = 0
-    private var lastStatsTime: Date = .distantPast
+    private var previousVideoStats: VideoStatsSnapshot?
+    private var statsTick = 0
+    private var statsGeneration = 0
+    private var videoStatsRequestInFlight = false
+    private var connectionStatsRequestInFlight = false
 
     private static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
@@ -124,6 +182,16 @@ final class GFNStreamController: NSObject {
         view.menuPressHandler = { [weak self] in self?.handleMenuPress() }
     }
 
+    func setStatsMode(_ mode: StreamStatsMode) {
+        guard statsMode != mode else { return }
+        statsMode = mode
+        if mode == .off {
+            stopStatsTimer()
+        } else if state == .streaming {
+            startStatsTimer()
+        }
+    }
+
     /// Invoked by VideoSurfaceView when the user presses Menu.
     /// Incrementing the counter lets SwiftUI's .onChange react without depending
     /// on the tvOS focus engine (which is suppressed when UIKit holds first responder).
@@ -152,7 +220,7 @@ final class GFNStreamController: NSObject {
     // MARK: Disconnect
 
     func disconnect() {
-        statsTimer?.invalidate()
+        stopStatsTimer()
         inputSender?.stop()
         signaling?.disconnect()
         peerConnection?.close()
@@ -162,6 +230,7 @@ final class GFNStreamController: NSObject {
         reliableSendChannel = nil
         controlChannel = nil
         videoTrack = nil
+        videoReceiver = nil
         micAudioTrack = nil
         micAudioSource = nil
         pingHistory = []
@@ -169,8 +238,8 @@ final class GFNStreamController: NSObject {
         bitrateHistory = []
         signalingComplete = false
         inputReady = false
-        lastBytesReceived = 0
-        lastStatsTime = .distantPast
+        previousVideoStats = nil
+        statsTick = 0
         videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
         videoView = nil
@@ -559,18 +628,58 @@ final class GFNStreamController: NSObject {
     // MARK: Private — Stats
 
     private func startStatsTimer() {
-        statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.collectStats()
+        guard statsMode != .off, statsTimer == nil else { return }
+        collectStats()
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.collectStats() }
         }
+        statsTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopStatsTimer() {
+        statsTimer?.invalidate()
+        statsTimer = nil
+        statsGeneration &+= 1
+        videoStatsRequestInFlight = false
+        connectionStatsRequestInFlight = false
     }
 
     private func collectStats() {
-        peerConnection?.statistics { [weak self] report in
-            Task { @MainActor [weak self] in self?.parseStats(report) }
+        guard statsMode != .off, let peerConnection else { return }
+        statsTick &+= 1
+        let generation = statsGeneration
+
+        if let videoReceiver, !videoStatsRequestInFlight {
+            videoStatsRequestInFlight = true
+            peerConnection.statistics(for: videoReceiver) { [weak self] report in
+                streamStatsParsingQueue.async {
+                    let snapshot = Self.parseVideoStats(report)
+                    Task { @MainActor [weak self] in
+                        guard let self, self.statsGeneration == generation else { return }
+                        self.videoStatsRequestInFlight = false
+                        if let snapshot { self.applyVideoStats(snapshot) }
+                    }
+                }
+            }
+        }
+
+        if statsTick == 1 || statsTick.isMultiple(of: 5), !connectionStatsRequestInFlight {
+            connectionStatsRequestInFlight = true
+            peerConnection.statistics { [weak self] report in
+                streamStatsParsingQueue.async {
+                    let rttMs = Self.parseConnectionRtt(report)
+                    Task { @MainActor [weak self] in
+                        guard let self, self.statsGeneration == generation else { return }
+                        self.connectionStatsRequestInFlight = false
+                        if let rttMs { self.stats.rttMs = rttMs }
+                    }
+                }
+            }
         }
     }
 
-    private func parseStats(_ report: LKRTCStatisticsReport) {
+    nonisolated private static func parseVideoStats(_ report: LKRTCStatisticsReport) -> VideoStatsSnapshot? {
         // Build codec name lookup: stat ID → human-readable name (e.g. "H.265", "AV1")
         var codecNames: [String: String] = [:]
         for (id, stat) in report.statistics where stat.type == "codec" {
@@ -585,44 +694,137 @@ final class GFNStreamController: NSObject {
             }
         }
 
-        for (_, stat) in report.statistics {
-            if stat.type == "inbound-rtp", stat.values["kind"] as? String == "video" {
-                let bytesReceived = stat.values["bytesReceived"] as? Double ?? 0
-                let framesReceived = stat.values["framesReceived"] as? Double ?? 0
-                let framesDecoded  = stat.values["framesDecoded"]  as? Double ?? 0
-                let now = Date()
-                let elapsed = now.timeIntervalSince(lastStatsTime)
-                if elapsed > 0 && lastBytesReceived > 0 {
-                    let deltaBytes = bytesReceived - lastBytesReceived
-                    stats.bitrateKbps = Int(max(0, deltaBytes) * 8 / elapsed / 1000)
-                }
-                lastBytesReceived = bytesReceived
-                lastStatsTime = now
+        guard let stat = report.statistics.values.first(where: {
+            $0.type == "inbound-rtp" && $0.values["kind"] as? String == "video"
+        }) else { return nil }
 
-                stats.fps = stat.values["framesPerSecond"] as? Double ?? 0
-                if let w = stat.values["frameWidth"] as? Double,
-                   let h = stat.values["frameHeight"] as? Double {
-                    stats.resolutionWidth  = Int(w)
-                    stats.resolutionHeight = Int(h)
-                }
-                // Resolve the codec name from the codecId reference (e.g. "RTCCodec_V_Inbound_127" → "H.265")
-                let codecId = stat.values["codecId"] as? String ?? ""
-                stats.codec = codecNames[codecId] ?? codecId
-                stats.jitterMs = (stat.values["jitter"] as? Double ?? 0) * 1000
-                let lost = stat.values["packetsLost"] as? Double ?? 0
-                let received = stat.values["packetsReceived"] as? Double ?? 0
-                if lost + received > 0 {
-                    stats.packetLossPercent = lost / (lost + received) * 100
-                }
-                print("[Stats] framesReceived=\(Int(framesReceived)) framesDecoded=\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps) codec=\(stats.codec)")
-            }
-            if stat.type == "candidate-pair", stat.values["state"] as? String == "succeeded" {
-                stats.rttMs = (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000
-            }
+        let codecId = stat.values["codecId"] as? String ?? ""
+        return VideoStatsSnapshot(
+            timestampUs: stat.timestamp_us,
+            bytesReceived: numericValue(stat.values["bytesReceived"]),
+            packetsReceived: numericValue(stat.values["packetsReceived"]),
+            packetsLost: numericValue(stat.values["packetsLost"]),
+            framesDecoded: numericValue(stat.values["framesDecoded"]),
+            framesDropped: numericValue(stat.values["framesDropped"]),
+            framesPerSecond: numericValue(stat.values["framesPerSecond"]),
+            frameWidth: numericValue(stat.values["frameWidth"]),
+            frameHeight: numericValue(stat.values["frameHeight"]),
+            jitterSeconds: numericValue(stat.values["jitter"]),
+            jitterBufferDelaySeconds: numericValue(stat.values["jitterBufferDelay"]),
+            jitterBufferTargetDelaySeconds: numericValue(stat.values["jitterBufferTargetDelay"]),
+            jitterBufferMinimumDelaySeconds: numericValue(stat.values["jitterBufferMinimumDelay"]),
+            jitterBufferEmittedCount: numericValue(stat.values["jitterBufferEmittedCount"]),
+            totalDecodeTimeSeconds: numericValue(stat.values["totalDecodeTime"]),
+            totalProcessingDelaySeconds: numericValue(stat.values["totalProcessingDelay"]),
+            freezeCount: numericValue(stat.values["freezeCount"]),
+            totalFreezeDurationSeconds: numericValue(stat.values["totalFreezesDuration"]),
+            nackCount: numericValue(stat.values["nackCount"]),
+            pliCount: numericValue(stat.values["pliCount"]),
+            firCount: numericValue(stat.values["firCount"]),
+            retransmittedPackets: numericValue(stat.values["retransmittedPacketsReceived"]),
+            codec: codecNames[codecId] ?? codecId,
+            decoderImplementation: stat.values["decoderImplementation"] as? String ?? "",
+            powerEfficientDecoder: boolValue(stat.values["powerEfficientDecoder"])
+        )
+    }
+
+    nonisolated private static func parseConnectionRtt(_ report: LKRTCStatisticsReport) -> Double? {
+        let candidatePairs = report.statistics.values.filter {
+            $0.type == "candidate-pair" && $0.values["state"] as? String == "succeeded"
         }
+        let selected = candidatePairs.first(where: { boolValue($0.values["nominated"]) == true })
+            ?? candidatePairs.first
+        guard let selected else { return nil }
+        return numericValue(selected.values["currentRoundTripTime"]) * 1000
+    }
+
+    nonisolated private static func numericValue(_ value: Any?) -> Double {
+        (value as? NSNumber)?.doubleValue ?? 0
+    }
+
+    nonisolated private static func boolValue(_ value: Any?) -> Bool? {
+        (value as? NSNumber)?.boolValue
+    }
+
+    private func applyVideoStats(_ sample: VideoStatsSnapshot) {
+        stats.fps = sample.framesPerSecond
+        stats.resolutionWidth = Int(sample.frameWidth)
+        stats.resolutionHeight = Int(sample.frameHeight)
+        stats.codec = sample.codec
+        stats.jitterMs = sample.jitterSeconds * 1000
+        stats.decoderImplementation = sample.decoderImplementation
+        stats.powerEfficientDecoder = sample.powerEfficientDecoder
+
+        if let previous = previousVideoStats {
+            let elapsedSeconds = (sample.timestampUs - previous.timestampUs) / 1_000_000
+            if elapsedSeconds > 0 {
+                stats.bitrateKbps = Int(
+                    max(0, sample.bytesReceived - previous.bytesReceived) * 8 / elapsedSeconds / 1000
+                )
+            }
+
+            let received = max(0, sample.packetsReceived - previous.packetsReceived)
+            let lost = max(0, sample.packetsLost - previous.packetsLost)
+            if received + lost > 0 {
+                stats.packetLossPercent = lost / (received + lost) * 100
+            }
+
+            let emitted = max(0, sample.jitterBufferEmittedCount - previous.jitterBufferEmittedCount)
+            stats.jitterBufferDelayMs = intervalAverage(
+                sample.jitterBufferDelaySeconds,
+                previous.jitterBufferDelaySeconds,
+                count: emitted
+            )
+            stats.jitterBufferTargetDelayMs = intervalAverage(
+                sample.jitterBufferTargetDelaySeconds,
+                previous.jitterBufferTargetDelaySeconds,
+                count: emitted
+            )
+            stats.jitterBufferMinimumDelayMs = intervalAverage(
+                sample.jitterBufferMinimumDelaySeconds,
+                previous.jitterBufferMinimumDelaySeconds,
+                count: emitted
+            )
+
+            let decoded = max(0, sample.framesDecoded - previous.framesDecoded)
+            stats.decodeTimeMs = intervalAverage(
+                sample.totalDecodeTimeSeconds,
+                previous.totalDecodeTimeSeconds,
+                count: decoded
+            )
+            stats.processingDelayMs = intervalAverage(
+                sample.totalProcessingDelaySeconds,
+                previous.totalProcessingDelaySeconds,
+                count: decoded
+            )
+            stats.framesDropped = intervalCount(sample.framesDropped, previous.framesDropped)
+            stats.freezeCount = intervalCount(sample.freezeCount, previous.freezeCount)
+            stats.freezeDurationMs = max(
+                0,
+                sample.totalFreezeDurationSeconds - previous.totalFreezeDurationSeconds
+            ) * 1000
+            stats.nackCount = intervalCount(sample.nackCount, previous.nackCount)
+            stats.pliCount = intervalCount(sample.pliCount, previous.pliCount)
+            stats.firCount = intervalCount(sample.firCount, previous.firCount)
+            stats.retransmittedPackets = intervalCount(
+                sample.retransmittedPackets,
+                previous.retransmittedPackets
+            )
+        }
+
+        previousVideoStats = sample
         appendHistory(&pingHistory, value: stats.rttMs)
         appendHistory(&fpsHistory, value: stats.fps)
         appendHistory(&bitrateHistory, value: Double(stats.bitrateKbps) / 1000.0)
+    }
+
+    private func intervalAverage(_ current: Double, _ previous: Double, count: Double) -> Double {
+        guard count > 0 else { return 0 }
+        return max(0, current - previous) / count * 1000
+    }
+
+    private func intervalCount(_ current: Double, _ previous: Double) -> Int {
+        Int(max(0, current - previous))
     }
 
     private func appendHistory(_ history: inout [Double], value: Double) {
@@ -663,12 +865,10 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                 self?.state = .streaming
                 self?.startStatsTimer()
             case .disconnected:
-                self?.statsTimer?.invalidate()
-                self?.statsTimer = nil
+                self?.stopStatsTimer()
                 self?.state = .disconnected(reason: "ICE disconnected")
             case .failed:
-                self?.statsTimer?.invalidate()
-                self?.statsTimer = nil
+                self?.stopStatsTimer()
                 self?.state = .failed(message: "ICE connection failed")
             default:
                 break
@@ -716,6 +916,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         guard let track = rtpReceiver.track as? LKRTCVideoTrack else { return }
         print("[Stream] Got video track")
         Task { @MainActor [weak self] in
+            self?.videoReceiver = rtpReceiver
             self?.videoTrack = track
         }
     }
