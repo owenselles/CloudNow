@@ -28,6 +28,14 @@ final class VideoPipelineDiagnostics: @unchecked Sendable {
         var conversionNanoseconds: UInt64 = 0
         var sampleCreationNanoseconds: UInt64 = 0
         var sampleCreationCount = 0
+        var previousAVMetrics: AVMetrics?
+    }
+
+    private struct AVMetrics {
+        var totalFrames: Int
+        var droppedFrames: Int
+        var corruptedFrames: Int
+        var accumulatedFrameDelaySeconds: Double
     }
 
     private static let log = OSLog(
@@ -151,10 +159,27 @@ final class VideoPipelineDiagnostics: @unchecked Sendable {
     ) {
         state.withLock { state in
             guard state.isEnabled else { return }
-            state.snapshot.avTotalFrames = totalFrames
-            state.snapshot.avDroppedFrames = droppedFrames
-            state.snapshot.avCorruptedFrames = corruptedFrames
-            state.snapshot.avAccumulatedFrameDelayMs = accumulatedFrameDelaySeconds * 1000
+            let current = AVMetrics(
+                totalFrames: totalFrames,
+                droppedFrames: droppedFrames,
+                corruptedFrames: corruptedFrames,
+                accumulatedFrameDelaySeconds: accumulatedFrameDelaySeconds
+            )
+            if let previous = state.previousAVMetrics {
+                state.snapshot.avTotalFrames = max(0, current.totalFrames - previous.totalFrames)
+                state.snapshot.avDroppedFrames = max(0, current.droppedFrames - previous.droppedFrames)
+                state.snapshot.avCorruptedFrames = max(0, current.corruptedFrames - previous.corruptedFrames)
+                state.snapshot.avAccumulatedFrameDelayMs = max(
+                    0,
+                    current.accumulatedFrameDelaySeconds - previous.accumulatedFrameDelaySeconds
+                ) * 1000
+            } else {
+                state.snapshot.avTotalFrames = 0
+                state.snapshot.avDroppedFrames = 0
+                state.snapshot.avCorruptedFrames = 0
+                state.snapshot.avAccumulatedFrameDelayMs = 0
+            }
+            state.previousAVMetrics = current
         }
     }
 

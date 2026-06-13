@@ -53,9 +53,10 @@ final class VideoSurfaceView: UIView {
         }
     }
 
-    var diagnosticsSnapshot: VideoPipelineSnapshot {
-        renderer.capturePerformanceMetrics()
-        return pipelineDiagnostics.snapshot()
+    func captureDiagnostics(_ completion: @escaping @Sendable (VideoPipelineSnapshot) -> Void) {
+        renderer.capturePerformanceMetrics { [pipelineDiagnostics] in
+            completion(pipelineDiagnostics.snapshot())
+        }
     }
 
     func setDiagnosticsEnabled(_ enabled: Bool) {
@@ -274,6 +275,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     private struct State {
         var formatDescription: CMVideoFormatDescription?
         var isFlushing = false
+        var metricsRequestInFlight = false
     }
 
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
@@ -376,16 +378,30 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         recoverAfterFailure()
     }
 
-    func capturePerformanceMetrics() {
-        guard let sampleBufferRenderer else { return }
-        sampleBufferRenderer.loadVideoPerformanceMetrics { [weak diagnostics] metrics in
-            guard let metrics else { return }
-            diagnostics?.updateAVMetrics(
-                totalFrames: metrics.totalNumberOfFrames,
-                droppedFrames: metrics.numberOfDroppedFrames,
-                corruptedFrames: metrics.numberOfCorruptedFrames,
-                accumulatedFrameDelaySeconds: metrics.totalAccumulatedFrameDelay
-            )
+    func capturePerformanceMetrics(completion: @escaping @Sendable () -> Void) {
+        guard let sampleBufferRenderer else {
+            completion()
+            return
+        }
+        let shouldRequest = state.withLock { state -> Bool in
+            guard !state.metricsRequestInFlight else { return false }
+            state.metricsRequestInFlight = true
+            return true
+        }
+        guard shouldRequest else {
+            return
+        }
+        sampleBufferRenderer.loadVideoPerformanceMetrics { [weak self, weak diagnostics] metrics in
+            if let metrics {
+                diagnostics?.updateAVMetrics(
+                    totalFrames: metrics.totalNumberOfFrames,
+                    droppedFrames: metrics.numberOfDroppedFrames,
+                    corruptedFrames: metrics.numberOfCorruptedFrames,
+                    accumulatedFrameDelaySeconds: metrics.totalAccumulatedFrameDelay
+                )
+            }
+            self?.state.withLock { $0.metricsRequestInFlight = false }
+            completion()
         }
     }
 

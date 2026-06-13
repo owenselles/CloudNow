@@ -696,7 +696,15 @@ final class GFNStreamController: NSObject {
     private func collectStats() {
         guard statsMode != .off, let peerConnection else { return }
         if statsMode == .diagnostic {
-            videoDiagnostics = videoView?.diagnosticsSnapshot ?? VideoPipelineSnapshot()
+            let generation = statsGeneration
+            videoView?.captureDiagnostics { [weak self] snapshot in
+                Task { @MainActor [weak self] in
+                    guard let self, self.statsGeneration == generation, self.statsMode == .diagnostic else {
+                        return
+                    }
+                    self.videoDiagnostics = snapshot
+                }
+            }
         }
         statsTick &+= 1
         let generation = statsGeneration

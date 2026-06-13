@@ -203,42 +203,51 @@ struct StreamView: View {
 
             // Live stats
             VStack(alignment: .leading, spacing: 10) {
-                metricRow(
-                    icon: "network",
-                    label: "RTT",
-                    value: "\(Int(streamController.stats.rttMs)) ms",
-                    history: streamController.pingHistory,
-                    color: pingColor(streamController.stats.rttMs)
-                )
-                metricRow(
-                    icon: "speedometer",
-                    label: "FPS",
-                    value: "\(Int(streamController.stats.fps))",
-                    history: streamController.fpsHistory,
-                    color: fpsColor(streamController.stats.fps)
-                )
-                metricRow(
-                    icon: "wifi",
-                    label: "Bitrate",
-                    value: "\(streamController.stats.bitrateKbps / 1000) Mbps",
-                    history: streamController.bitrateHistory,
-                    color: .cyan
-                )
-                Divider().overlay(.white.opacity(0.4))
-                Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
-                Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
-                if !streamController.stats.gpuType.isEmpty {
-                    Label(streamController.stats.gpuType, systemImage: "cpu")
-                }
-                if let sub = viewModel.subscription, !sub.isUnlimited, let rem = sub.remainingMinutes {
+                if streamController.statsMode == .off {
+                    Label("Statistics disabled", systemImage: "chart.bar.xaxis")
+                        .foregroundStyle(.secondary)
+                } else {
+                    metricRow(
+                        icon: "network",
+                        label: "RTT",
+                        value: "\(Int(streamController.stats.rttMs)) ms",
+                        history: streamController.pingHistory,
+                        color: pingColor(streamController.stats.rttMs)
+                    )
+                    metricRow(
+                        icon: "speedometer",
+                        label: "FPS",
+                        value: "\(Int(streamController.stats.fps))",
+                        history: streamController.fpsHistory,
+                        color: fpsColor(streamController.stats.fps)
+                    )
+                    metricRow(
+                        icon: "wifi",
+                        label: "Bitrate",
+                        value: "\(streamController.stats.bitrateKbps / 1000) Mbps",
+                        history: streamController.bitrateHistory,
+                        color: .cyan
+                    )
                     Divider().overlay(.white.opacity(0.4))
-                    Label {
-                        Text(rem >= 60 ? "\(rem / 60)h \(rem % 60)m remaining" : "\(rem)m remaining")
-                    } icon: {
-                        Image(systemName: "clock")
-                            .foregroundStyle(rem < 30 ? .orange : .white.opacity(0.7))
+                    Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
+                    Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
+                    if !streamController.stats.gpuType.isEmpty {
+                        Label(streamController.stats.gpuType, systemImage: "cpu")
                     }
-                    .foregroundStyle(rem < 30 ? .orange : .white)
+                    if let sub = viewModel.subscription, !sub.isUnlimited, let rem = sub.remainingMinutes {
+                        Divider().overlay(.white.opacity(0.4))
+                        Label {
+                            Text(rem >= 60 ? "\(rem / 60)h \(rem % 60)m remaining" : "\(rem)m remaining")
+                        } icon: {
+                            Image(systemName: "clock")
+                                .foregroundStyle(rem < 30 ? .orange : .white.opacity(0.7))
+                        }
+                        .foregroundStyle(rem < 30 ? .orange : .white)
+                    }
+                }
+
+                if streamController.statsMode == .diagnostic {
+                    diagnosticRows
                 }
             }
             .font(.caption.weight(.medium))
@@ -248,6 +257,48 @@ struct StreamView: View {
         .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 16))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .padding(60)
+    }
+
+    private var diagnosticRows: some View {
+        let pipeline = streamController.videoDiagnostics
+        return Group {
+            Divider().overlay(.white.opacity(0.4))
+            Label(
+                "Jitter buffer \(formatMs(streamController.stats.jitterBufferDelayMs)) / target \(formatMs(streamController.stats.jitterBufferTargetDelayMs))",
+                systemImage: "waveform.path"
+            )
+            Label(
+                "Decode \(formatMs(streamController.stats.decodeTimeMs)) · process \(formatMs(streamController.stats.processingDelayMs))",
+                systemImage: "cpu"
+            )
+            Label(
+                "App \(pipeline.enqueuedFrames) enqueued · \(pipeline.droppedFrames) dropped · \(pipeline.backpressureEvents) backpressure",
+                systemImage: "rectangle.stack"
+            )
+            Label(
+                "Sample \(formatMs(pipeline.averageSampleCreationMs)) · convert \(formatMs(pipeline.averageConversionMs))",
+                systemImage: "timer"
+            )
+            Label(
+                "AV interval \(pipeline.avTotalFrames) frames · \(pipeline.avDroppedFrames) dropped · \(pipeline.avCorruptedFrames) corrupt · \(formatMs(pipeline.avAccumulatedFrameDelayMs)) late",
+                systemImage: "display"
+            )
+            if !streamController.stats.decoderImplementation.isEmpty {
+                Label(
+                    "\(streamController.stats.decoderImplementation)\(streamController.stats.powerEfficientDecoder == true ? " · hardware" : "")",
+                    systemImage: "video"
+                )
+            }
+            if streamController.rtcEventLogURL != nil {
+                Label("RTC event log active", systemImage: "doc.text.magnifyingglass")
+            }
+        }
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.white.opacity(0.85))
+    }
+
+    private func formatMs(_ value: Double) -> String {
+        String(format: "%.2f ms", value)
     }
 
     private var remoteModeLabel: String {
