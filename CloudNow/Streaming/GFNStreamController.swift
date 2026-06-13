@@ -61,6 +61,11 @@ final class GFNStreamController: NSObject {
 
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
+    @ObservationIgnored nonisolated(unsafe) private var reliableSendChannel: LKRTCDataChannel?
+    private let inputSendQueue = DispatchQueue(
+        label: "com.cloudnow.input.send",
+        qos: .userInteractive
+    )
     private var signaling: GFNSignalingClient?
     private var inputSender: InputSender?
     private(set) var videoView: VideoSurfaceView?
@@ -128,12 +133,10 @@ final class GFNStreamController: NSObject {
 
     func toggleRemoteMode() {
         inputSender?.toggleRemoteMode()
-        remoteMode = inputSender?.remoteMode ?? .mouse
-        videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
     }
 
     func setInputPaused(_ paused: Bool) {
-        inputSender?.isPaused = paused
+        inputSender?.setPaused(paused)
     }
 
     // MARK: Fail (external error surfacing)
@@ -151,6 +154,7 @@ final class GFNStreamController: NSObject {
         peerConnection?.close()
         peerConnection = nil
         inputDataChannel = nil
+        inputSendQueue.sync { reliableSendChannel = nil }
         partiallyReliableDataChannel = nil
         controlChannel = nil
         videoTrack = nil
@@ -257,6 +261,7 @@ final class GFNStreamController: NSObject {
         dcConfig.isNegotiated = false
         if let dc = pc.dataChannel(forLabel: "input_channel_v1", configuration: dcConfig) {
             inputDataChannel = dc
+            reliableSendChannel = dc
             dc.delegate = self
         }
 
@@ -752,17 +757,20 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             return
         }
 
+        let negotiatedVersion = version
         Task { @MainActor [weak self] in
             guard let self, !self.inputReady else { return }
             self.inputReady = true
-            self.protocolVersion = version
-            print("[DataChannel] Input ready — starting InputSender (protocol v\(version))")
+            self.protocolVersion = negotiatedVersion
+            print("[DataChannel] Input ready — starting InputSender (protocol v\(negotiatedVersion))")
             let sender = InputSender(channel: self)
-            sender.setProtocolVersion(version)
-            sender.deadzone = Float(self.settings.controllerDeadzone)
-            sender.overlayTriggerButton = self.settings.overlayTriggerButton
-            sender.remoteMode = self.settings.defaultRemoteInputMode
-            self.remoteMode = sender.remoteMode
+            sender.configure(
+                protocolVersion: negotiatedVersion,
+                deadzone: Float(self.settings.controllerDeadzone),
+                overlayTriggerButton: self.settings.overlayTriggerButton,
+                remoteMode: self.settings.defaultRemoteInputMode
+            )
+            self.remoteMode = self.settings.defaultRemoteInputMode
             self.videoView?.gamepadModeActive = (self.remoteMode == .gamepad || self.remoteMode == .dualsense)
             sender.menuToggleHandler = { [weak self] in self?.handleMenuPress() }
             sender.onRemoteModeChanged = { [weak self] mode in
@@ -781,9 +789,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 
 extension GFNStreamController: DataChannelSender {
     nonisolated func sendData(_ data: Data) {
-        // Access inputDataChannel on the main actor asynchronously to satisfy isolation
-        Task { @MainActor [weak self] in
-            guard let dc = self?.inputDataChannel, dc.readyState == .open else { return }
+        inputSendQueue.async { [weak self] in
+            guard let dc = self?.reliableSendChannel, dc.readyState == .open else { return }
             let buffer = LKRTCDataBuffer(data: data, isBinary: true)
             dc.sendData(buffer)
         }
