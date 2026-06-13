@@ -147,7 +147,12 @@ actor GamesClient {
         let id = rawId.stringValue
         var variants: [GameVariant] = app.variants?.compactMap { v in
             guard let vid = v.id else { return nil }
-            return GameVariant(id: vid, appStore: v.appStore ?? "unknown", appId: isNumericId(vid) ? vid : nil)
+            return GameVariant(
+                id: vid,
+                appStore: v.appStore ?? "unknown",
+                appId: isNumericId(vid) ? vid : nil,
+                isOwned: v.gfn?.library?.selected == true
+            )
         } ?? []
 
         // Move the backend-selected variant to front so variants.first is the default launch store

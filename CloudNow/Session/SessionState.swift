@@ -21,6 +21,43 @@ struct StreamSettings: Codable, Equatable {
     /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
     /// nil = let the GFN default VPC handle routing.
     var preferredZoneUrl: String? = nil
+    /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
+    /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
+    var enableSteamOverlayGesture: Bool = true
+}
+
+// MARK: - StreamSettings: resilient decoding
+//
+// Synthesized Decodable throws keyNotFound when a newly-added field is missing from
+// previously-persisted JSON, which would silently reset ALL settings to defaults on upgrade.
+// decodeIfPresent + default fallbacks keep existing settings intact across versions.
+extension StreamSettings {
+    enum CodingKeys: String, CodingKey {
+        case resolution, fps, maxBitrateKbps, codec, colorQuality, keyboardLayout
+        case gameLanguage, enableL4S, micEnabled, controllerDeadzone, overlayTriggerButton
+        case defaultRemoteInputMode, preferredZoneUrl
+        case enableSteamOverlayGesture
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = StreamSettings()
+        self.init()
+        resolution            = try c.decodeIfPresent(String.self,            forKey: .resolution)            ?? d.resolution
+        fps                   = try c.decodeIfPresent(Int.self,               forKey: .fps)                   ?? d.fps
+        maxBitrateKbps        = try c.decodeIfPresent(Int.self,               forKey: .maxBitrateKbps)        ?? d.maxBitrateKbps
+        codec                 = try c.decodeIfPresent(VideoCodec.self,        forKey: .codec)                 ?? d.codec
+        colorQuality          = try c.decodeIfPresent(ColorQuality.self,      forKey: .colorQuality)          ?? d.colorQuality
+        keyboardLayout        = try c.decodeIfPresent(String.self,            forKey: .keyboardLayout)        ?? d.keyboardLayout
+        gameLanguage          = try c.decodeIfPresent(String.self,            forKey: .gameLanguage)          ?? d.gameLanguage
+        enableL4S             = try c.decodeIfPresent(Bool.self,              forKey: .enableL4S)             ?? d.enableL4S
+        micEnabled            = try c.decodeIfPresent(Bool.self,              forKey: .micEnabled)            ?? d.micEnabled
+        controllerDeadzone    = try c.decodeIfPresent(Double.self,            forKey: .controllerDeadzone)    ?? d.controllerDeadzone
+        overlayTriggerButton  = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
+        defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self,  forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
+        preferredZoneUrl      = try c.decodeIfPresent(String.self,            forKey: .preferredZoneUrl)
+        enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self,         forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
+    }
 }
 
 enum OverlayTriggerButton: String, Codable, CaseIterable {
@@ -150,12 +187,29 @@ struct GameInfo: Identifiable, Equatable {
     let heroBannerUrl: String?
     var isInLibrary: Bool
     var variants: [GameVariant]
+
+    /// Whether this game belongs under a store filter. Owned games match only the store they're
+    /// owned through; unowned catalog games match any store they're available on.
+    func matchesStore(_ store: String) -> Bool {
+        if isInLibrary {
+            return variants.contains { $0.appStore == store && $0.isOwned }
+        }
+        return variants.contains { $0.appStore == store }
+    }
+
+    /// Stores this game is owned through (drives the Library filter chips).
+    var ownedStores: [String] {
+        variants.filter { $0.isOwned }.map { $0.appStore }
+    }
 }
 
 struct GameVariant: Equatable {
     let id: String
     let appStore: String
     var appId: String?
+    /// True when this variant is the one in the GFN library (`gfn.library.selected`) —
+    /// i.e. the store the game is owned through.
+    var isOwned: Bool = false
 
     var storeName: String {
         switch appStore {

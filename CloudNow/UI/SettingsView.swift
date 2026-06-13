@@ -201,7 +201,16 @@ struct SettingsView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Overlay Button")
-                            Text("Long-press this button during play to open the GFN overlay. Switch if it conflicts with an in-game action.")
+                            Text("Long-press this button during play to open the app overlay. Switch if it conflicts with an in-game action.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    Toggle(isOn: $vm.streamSettings.enableSteamOverlayGesture) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Steam Overlay Gesture")
+                            Text("Long-press the OTHER button (the one not set as Overlay Button) to send Shift+Tab and open the Steam overlay. e.g. with Overlay on Start, long-press View/Back.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -220,7 +229,7 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    LabeledContent("Protocol", value: "XInput v2/v3")
+                    LabeledContent("Protocol", value: "XInput over GFN v2/v3")
                 }
 
                 Section("Account") {

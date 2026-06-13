@@ -15,15 +15,26 @@ struct LibraryView: View {
 
     @State private var searchText = ""
     @State private var sortOrder: LibrarySortOrder = .default
+    @State private var selectedStore: String? = nil
 
     private let columns = [
         GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40)
     ]
 
+    private var availableStores: [String] {
+        let stores = Set(games.flatMap { $0.ownedStores }
+            .filter { $0 != "unknown" })
+        return stores.sorted()
+    }
+
     private var filteredGames: [GameInfo] {
-        var result = searchText.isEmpty
-            ? games
-            : games.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        var result = games
+        if let store = selectedStore {
+            result = result.filter { $0.matchesStore(store) }
+        }
+        if !searchText.isEmpty {
+            result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        }
         switch sortOrder {
         case .default: break
         case .titleAZ: result.sort { $0.title < $1.title }
@@ -76,8 +87,24 @@ struct LibraryView: View {
 
     private var gameGrid: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 40) {
-                ForEach(filteredGames) { game in
+            VStack(alignment: .leading, spacing: 0) {
+                if availableStores.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            filterChip("All", isSelected: selectedStore == nil) { selectedStore = nil }
+                            ForEach(availableStores, id: \.self) { store in
+                                filterChip(storeName(store), isSelected: selectedStore == store) {
+                                    selectedStore = selectedStore == store ? nil : store
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 60)
+                    }
+                    .scrollClipDisabled()
+                    .padding(.vertical, 32)
+                }
+                LazyVGrid(columns: columns, spacing: 40) {
+                    ForEach(filteredGames) { game in
                     Button {
                         onPlay(viewModel.gameWithPreferredStore(game))
                     } label: {
@@ -113,9 +140,24 @@ struct LibraryView: View {
                         }
                     }
                 }
+                }
+                .padding(60)
+                .padding(.top, 0)
             }
-            .padding(60)
         }
+    }
+
+    private func filterChip(_ label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.bordered)
+        .tint(isSelected ? .blue : nil)
+    }
+
+    private func storeName(_ store: String) -> String {
+        GameVariant(id: "", appStore: store).storeName
     }
 
     private var emptyState: some View {

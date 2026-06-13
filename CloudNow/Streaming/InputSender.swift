@@ -313,17 +313,33 @@ func mapGCControllerToXInput(_ controller: GCController, deadzone: Float = 0.15)
     let lt = UInt8(clamping: Int(pad.leftTrigger.value * 255))
     let rt = UInt8(clamping: Int(pad.rightTrigger.value * 255))
 
-    let lx = normalizeAxis(pad.leftThumbstick.xAxis.value, deadzone: deadzone)
-    let ly = normalizeAxis(pad.leftThumbstick.yAxis.value, deadzone: deadzone)
-    let rx = normalizeAxis(pad.rightThumbstick.xAxis.value, deadzone: deadzone)
-    let ry = normalizeAxis(pad.rightThumbstick.yAxis.value, deadzone: deadzone)
+    let (lx, ly) = radialDeadzone(
+        x: pad.leftThumbstick.xAxis.value,
+        y: pad.leftThumbstick.yAxis.value,
+        deadzone: deadzone
+    )
+    let (rx, ry) = radialDeadzone(
+        x: pad.rightThumbstick.xAxis.value,
+        y: pad.rightThumbstick.yAxis.value,
+        deadzone: deadzone
+    )
 
     return (buttons, lt, rt, lx, ly, rx, ry)
 }
 
-private func normalizeAxis(_ v: Float, deadzone: Float) -> Int16 {
-    let clamped = max(-1.0, min(1.0, v))
-    if abs(clamped) < deadzone { return 0 }
+private func radialDeadzone(x: Float, y: Float, deadzone: Float) -> (Int16, Int16) {
+    let clampedX = max(-1, min(1, x))
+    let clampedY = max(-1, min(1, y))
+    let magnitude = (clampedX * clampedX + clampedY * clampedY).squareRoot()
+    guard magnitude > deadzone, magnitude > 0 else { return (0, 0) }
+
+    let scaled = min(1, (magnitude - deadzone) / (1 - deadzone))
+    let factor = scaled / magnitude
+    return (axisToInt16(clampedX * factor), axisToInt16(clampedY * factor))
+}
+
+private func axisToInt16(_ value: Float) -> Int16 {
+    let clamped = max(-1, min(1, value))
     return Int16(clamped < 0 ? clamped * 32768 : clamped * 32767)
 }
 
@@ -371,6 +387,7 @@ final class InputSender {
     private var remoteMode: RemoteInputMode = .mouse
     private var deadzone: Float = 0.15
     private var overlayTriggerButton: OverlayTriggerButton = .start
+    private var steamOverlayGestureEnabled = true
     private var isPaused = false
 
     private var extendedControllers: [GCController] = []
@@ -392,10 +409,13 @@ final class InputSender {
 
     private var overlayPresses: [Int: OverlayPressState] = [:]
     private var overlayReplaySlots = Set<Int>()
+    private var steamHoldTicks: [Int: Int] = [:]
+    private var steamTriggeredSlots = Set<Int>()
     private static let sampleInterval = 8_333_333
     private static let gamepadKeepAlive = UInt64(33_333_333)
     private static let heartbeatInterval = UInt64(2_000_000_000)
     private static let overlayLongPressThreshold = 216
+    private static let steamLongPressThreshold = 120
 
     init(channel: DataChannelSender) {
         self.channel = channel
@@ -447,12 +467,14 @@ final class InputSender {
         protocolVersion: Int,
         deadzone: Float,
         overlayTriggerButton: OverlayTriggerButton,
+        steamOverlayGestureEnabled: Bool,
         remoteMode: RemoteInputMode
     ) {
         inputQueue.sync {
             encoder.setProtocolVersion(protocolVersion)
             self.deadzone = deadzone
             self.overlayTriggerButton = overlayTriggerButton
+            self.steamOverlayGestureEnabled = steamOverlayGestureEnabled
             self.remoteMode = remoteMode
         }
     }
@@ -469,6 +491,8 @@ final class InputSender {
             if paused {
                 self.overlayPresses.removeAll()
                 self.overlayReplaySlots.removeAll()
+                self.steamHoldTicks.removeAll()
+                self.steamTriggeredSlots.removeAll()
                 self.releaseHeldDiscreteInputs()
                 self.sendNeutralGamepads()
             } else {
@@ -501,6 +525,8 @@ final class InputSender {
         releaseHeldMouseButtons()
         overlayPresses.removeAll()
         overlayReplaySlots.removeAll()
+        steamHoldTicks.removeAll()
+        steamTriggeredSlots.removeAll()
         lastSnapshots.removeAll()
         for controller in extendedControllers {
             if remoteMode == .gamepad || remoteMode == .dualsense {
@@ -551,6 +577,8 @@ final class InputSender {
         } else {
             overlayPresses.removeAll()
             overlayReplaySlots.removeAll()
+            steamHoldTicks.removeAll()
+            steamTriggeredSlots.removeAll()
             if let remote = microControllers.first {
                 handleMicroGamepad(remote, now: now)
             }
@@ -672,6 +700,18 @@ final class InputSender {
             } else if overlayPresses[slot] != nil {
                 finishOverlayPress(for: controller, slot: slot)
             }
+
+            if steamOverlayGestureEnabled, isSteamButtonHeld(on: controller) {
+                let ticks = (steamHoldTicks[slot] ?? 0) + 1
+                steamHoldTicks[slot] = ticks
+                if ticks >= Self.steamLongPressThreshold,
+                   steamTriggeredSlots.insert(slot).inserted {
+                    sendSteamOverlayChord()
+                }
+            } else {
+                steamHoldTicks[slot] = nil
+                steamTriggeredSlots.remove(slot)
+            }
         }
 
         // The trigger is withheld for the entire gesture. A short press is replayed
@@ -680,6 +720,9 @@ final class InputSender {
             state.buttons &= ~overlayButtonMask
         } else if overlayReplaySlots.contains(slot) {
             state.buttons |= overlayButtonMask
+        }
+        if steamTriggeredSlots.contains(slot) {
+            state.buttons &= ~steamButtonMask
         }
 
         sendGamepadSnapshot(
@@ -807,11 +850,23 @@ final class InputSender {
         overlayTriggerButton == .start ? GFNInput.start : GFNInput.back
     }
 
+    private var steamButtonMask: UInt16 {
+        overlayTriggerButton == .start ? GFNInput.back : GFNInput.start
+    }
+
     private func isOverlayButtonHeld(on controller: GCController) -> Bool {
         guard let pad = controller.extendedGamepad else { return false }
         switch overlayTriggerButton {
         case .start:   return pad.buttonMenu.isPressed
         case .options: return pad.buttonOptions?.isPressed ?? false
+        }
+    }
+
+    private func isSteamButtonHeld(on controller: GCController) -> Bool {
+        guard let pad = controller.extendedGamepad else { return false }
+        switch overlayTriggerButton {
+        case .start:   return pad.buttonOptions?.isPressed ?? false
+        case .options: return pad.buttonMenu.isPressed
         }
     }
 
@@ -882,6 +937,22 @@ final class InputSender {
                 modifiers: modifiers,
                 into: $0
             )
+        }
+    }
+
+    private func sendSteamOverlayChord() {
+        let shiftVK: UInt16 = 0xA0
+        let shiftScan: UInt16 = 0x2A
+        let tabVK: UInt16 = 0x09
+        let tabScan: UInt16 = 0x0F
+        let shiftModifier: UInt16 = 0x0001
+
+        emitKeyboard(down: true, vk: shiftVK, scancode: shiftScan, modifiers: shiftModifier)
+        emitKeyboard(down: true, vk: tabVK, scancode: tabScan, modifiers: shiftModifier)
+        inputQueue.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
+            guard let self else { return }
+            self.emitKeyboard(down: false, vk: tabVK, scancode: tabScan, modifiers: shiftModifier)
+            self.emitKeyboard(down: false, vk: shiftVK, scancode: shiftScan, modifiers: 0)
         }
     }
 
@@ -1074,6 +1145,8 @@ final class InputSender {
             lastSnapshotSend[slot] = nil
             overlayPresses[slot] = nil
             overlayReplaySlots.remove(slot)
+            steamHoldTicks[slot] = nil
+            steamTriggeredSlots.remove(slot)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
             if updateMode && extendedControllers.isEmpty && remoteMode != .mouse {
                 remoteMode = .mouse
