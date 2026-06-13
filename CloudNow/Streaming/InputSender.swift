@@ -431,7 +431,11 @@ final class InputSender {
             sampler = nil
             observations.forEach { NotificationCenter.default.removeObserver($0) }
             observations.removeAll()
-            extendedControllers.forEach(clearControllerHandlers)
+            extendedControllers.forEach {
+                clearControllerHandlers($0)
+                releaseControllerInput($0)
+                $0.playerIndex = .indexUnset
+            }
             microControllers.forEach(clearControllerHandlers)
             GCMouse.mice().forEach(clearMouseHandlers)
             extendedControllers.removeAll()
@@ -930,7 +934,28 @@ final class InputSender {
                     self?.clearMouseHandlers(for: mouse)
                 }
             },
+            center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
+                self?.inputQueue.async { [weak self] in
+                    self?.resyncConnectedDevices()
+                }
+            },
         ]
+    }
+
+    private func resyncConnectedDevices() {
+        let connected = GCController.controllers()
+        let stale = (extendedControllers + microControllers).filter { existing in
+            !connected.contains(where: { $0 === existing })
+        }
+        stale.forEach { detachController($0, updateMode: false) }
+        connected.forEach { attachController($0, autoSwitch: false) }
+        GCMouse.mice().forEach(setupMouseHandlers)
+
+        if extendedControllers.isEmpty && remoteMode != .mouse {
+            remoteMode = .mouse
+            applyRemoteMode()
+            notifyRemoteModeChanged()
+        }
     }
 
     private func setupMouseHandlers(for mouse: GCMouse) {
@@ -1005,6 +1030,7 @@ final class InputSender {
                   let slot = firstFreeSlot else { return }
             extendedControllers.append(controller)
             controllerSlots[ObjectIdentifier(controller)] = slot
+            controller.playerIndex = playerIndex(for: slot)
             gamepadBitmap |= 1 << UInt8(slot)
             lastButtons[slot] = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
             pad.valueChangedHandler = { [weak self, weak controller] _, _ in
@@ -1036,8 +1062,9 @@ final class InputSender {
         }
     }
 
-    private func detachController(_ controller: GCController) {
+    private func detachController(_ controller: GCController, updateMode: Bool = true) {
         clearControllerHandlers(controller)
+        controller.playerIndex = .indexUnset
         let id = ObjectIdentifier(controller)
         if let slot = controllerSlots.removeValue(forKey: id) {
             extendedControllers.removeAll { $0 === controller }
@@ -1048,7 +1075,7 @@ final class InputSender {
             overlayPresses[slot] = nil
             overlayReplaySlots.remove(slot)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
-            if extendedControllers.isEmpty && remoteMode != .mouse {
+            if updateMode && extendedControllers.isEmpty && remoteMode != .mouse {
                 remoteMode = .mouse
                 applyRemoteMode()
                 notifyRemoteModeChanged()
@@ -1061,6 +1088,16 @@ final class InputSender {
     private var firstFreeSlot: Int? {
         let used = Set(controllerSlots.values)
         return (0..<4).first { !used.contains($0) }
+    }
+
+    private func playerIndex(for slot: Int) -> GCControllerPlayerIndex {
+        switch slot {
+        case 0: return .index1
+        case 1: return .index2
+        case 2: return .index3
+        case 3: return .index4
+        default: return .indexUnset
+        }
     }
 
     private func slot(for controller: GCController) -> Int {
