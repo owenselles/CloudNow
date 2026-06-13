@@ -264,6 +264,7 @@ final class GFNStreamController: NSObject {
         stopStatsTimer()
         inputSender?.stop()
         signaling?.disconnect()
+        videoView?.videoTrack = nil
         peerConnection?.close()
         peerConnection = nil
         inputDataChannel = nil
@@ -685,6 +686,8 @@ final class GFNStreamController: NSObject {
         statsGeneration &+= 1
         videoStatsRequestInFlight = false
         connectionStatsRequestInFlight = false
+        previousVideoStats = nil
+        statsTick = 0
     }
 
     private func collectStats() {

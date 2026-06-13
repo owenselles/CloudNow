@@ -27,6 +27,7 @@ final class VideoPipelineDiagnostics: @unchecked Sendable {
         var snapshot = VideoPipelineSnapshot()
         var conversionNanoseconds: UInt64 = 0
         var sampleCreationNanoseconds: UInt64 = 0
+        var sampleCreationCount = 0
     }
 
     private static let log = OSLog(
@@ -92,10 +93,10 @@ final class VideoPipelineDiagnostics: @unchecked Sendable {
         let duration = DispatchTime.now().uptimeNanoseconds - startedAt
         state.withLock { state in
             state.sampleCreationNanoseconds &+= duration
-            let count = max(1, state.snapshot.enqueuedFrames + state.snapshot.droppedFrames + 1)
+            state.sampleCreationCount += 1
             state.snapshot.averageSampleCreationMs = Self.averageMilliseconds(
                 totalNanoseconds: state.sampleCreationNanoseconds,
-                count: count
+                count: state.sampleCreationCount
             )
         }
         os_signpost(.end, log: Self.log, name: "SampleCreation", signpostID: trace.signpostID)
