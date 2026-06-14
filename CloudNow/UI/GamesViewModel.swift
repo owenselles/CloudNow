@@ -205,7 +205,7 @@ class GamesViewModel {
         do {
             return try await operation(token)
         } catch GamesError.unauthorized {
-            let refreshedToken = try await authManager.resolveToken(forceRefresh: true)
+            let refreshedToken = try await authManager.resolveToken(rejecting: token)
             return try await operation(refreshedToken)
         }
     }

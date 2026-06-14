@@ -140,17 +140,34 @@ final class AuthManager {
 
     // MARK: Token Refresh
 
-    /// Returns the best available JWT token, optionally refreshing even when its
-    /// local expiry has not been reached (for example, after a server-side 401).
-    func resolveToken(forceRefresh: Bool = false) async throws -> String {
+    /// Returns the best available JWT token, refreshing if near expiry.
+    func resolveToken() async throws -> String {
         guard var s = session else { throw AuthError.noSession }
-        if forceRefresh || s.tokens.isNearExpiry {
+        if s.tokens.isNearExpiry {
             s = try await refresh(session: s)
         }
-        return s.tokens.idToken ?? s.tokens.accessToken
+        return preferredToken(in: s)
+    }
+
+    /// Returns a credential different from one rejected by the server. If another
+    /// request already refreshed the session, reuse it instead of rotating again.
+    func resolveToken(rejecting rejectedToken: String) async throws -> String {
+        guard var s = session else { throw AuthError.noSession }
+        let currentToken = preferredToken(in: s)
+        if currentToken != rejectedToken {
+            return currentToken
+        }
+
+        s = try await refresh(session: s)
+        let refreshedToken = preferredToken(in: s)
+        return refreshedToken == rejectedToken ? s.tokens.accessToken : refreshedToken
     }
 
     // MARK: Private
+
+    private func preferredToken(in session: AuthSession) -> String {
+        session.tokens.idToken ?? session.tokens.accessToken
+    }
 
     func refreshIfNeeded() async {
         guard let s = session, s.tokens.isNearExpiry else { return }
