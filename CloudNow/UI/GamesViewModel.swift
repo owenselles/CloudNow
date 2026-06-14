@@ -127,27 +127,20 @@ class GamesViewModel {
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
 
-            mainGames = try await gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
+            async let mainFetch = gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
+            async let libraryFetch = gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
 
-            // Non-fatal — may be empty if no games are linked to account
-            var panelLibrary: [GameInfo] = []
             do {
-                panelLibrary = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
+                mainGames = try await mainFetch
+            } catch {
+                self.error = error.localizedDescription
+            }
+
+            do {
+                libraryGames = try await libraryFetch
             } catch {
                 libraryError = error.localizedDescription
-                panelLibrary = []
             }
-
-            // The LIBRARY panel under-reports owned games. The MAIN catalog carries a per-variant
-            // `gfn.library.selected` flag, so union it with catalog games flagged as owned
-            // (dedup by id, panel order first) for a complete list.
-            let catalogOwned = mainGames.filter { $0.isInLibrary }
-            var merged = panelLibrary
-            var seen = Set(panelLibrary.map(\.id))
-            for game in catalogOwned where seen.insert(game.id).inserted {
-                merged.append(game)
-            }
-            libraryGames = merged
 
             // Non-fatal — may fail if no active sessions or server returns 404
             activeSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
