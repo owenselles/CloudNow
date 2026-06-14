@@ -54,7 +54,7 @@ struct LibraryView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if games.isEmpty && (viewModel.isLoading || viewModel.isLibraryLoading) {
+            if games.isEmpty && viewModel.isLibraryLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(0..<12, id: \.self) { _ in

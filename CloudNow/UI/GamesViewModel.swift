@@ -154,7 +154,6 @@ class GamesViewModel {
     }
 
     private func loadMainGames(authManager: AuthManager, base: String) async {
-        defer { isLoading = false }
         do {
             mainGames = try await fetchWithAuthRetry(authManager: authManager) { token in
                 try await gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
