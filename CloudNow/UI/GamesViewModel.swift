@@ -21,6 +21,7 @@ class GamesViewModel {
     var libraryGames: [GameInfo] = []
     var activeSessions: [ActiveSessionInfo] = []
     var isLoading = false
+    var isLibraryLoading = false
     var error: String?
     var libraryError: String?
 
@@ -120,6 +121,7 @@ class GamesViewModel {
 
     func load(authManager: AuthManager) async {
         isLoading = true
+        isLibraryLoading = true
         error = nil
         libraryError = nil
         do {
@@ -141,6 +143,7 @@ class GamesViewModel {
             } catch {
                 libraryError = error.localizedDescription
             }
+            isLibraryLoading = false
 
             // Non-fatal — may fail if no active sessions or server returns 404
             activeSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
@@ -155,7 +158,24 @@ class GamesViewModel {
         } catch {
             self.error = error.localizedDescription
         }
+        isLibraryLoading = false
         isLoading = false
+    }
+
+    func refreshLibrary(authManager: AuthManager) async {
+        guard !isLibraryLoading else { return }
+        isLibraryLoading = true
+        libraryError = nil
+        defer { isLibraryLoading = false }
+
+        do {
+            let token = try await authManager.resolveToken()
+            let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+            let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
+            libraryGames = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
+        } catch {
+            libraryError = error.localizedDescription
+        }
     }
 
     func refreshActiveSessions(authManager: AuthManager) async {
