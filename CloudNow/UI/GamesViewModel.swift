@@ -24,6 +24,7 @@ class GamesViewModel {
     var isLibraryLoading = false
     var error: String?
     var libraryError: String?
+    var libraryWarning: String?
 
     var favoriteIds: Set<String> = []
     var preferredStoreIds: [String: String] = [:]
@@ -124,6 +125,7 @@ class GamesViewModel {
         isLibraryLoading = true
         error = nil
         libraryError = nil
+        libraryWarning = nil
         do {
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
@@ -142,7 +144,9 @@ class GamesViewModel {
             }
 
             do {
-                libraryGames = try await libraryFetch
+                let result = try await libraryFetch
+                libraryGames = result.games
+                libraryWarning = result.warning
             } catch {
                 libraryError = error.localizedDescription
             }
@@ -171,14 +175,17 @@ class GamesViewModel {
         guard !isLibraryLoading else { return }
         isLibraryLoading = true
         libraryError = nil
+        libraryWarning = nil
         defer { isLibraryLoading = false }
 
         do {
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
-            libraryGames = try await fetchWithAuthRetry(authManager: authManager) { token in
+            let result = try await fetchWithAuthRetry(authManager: authManager) { token in
                 try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
             }
+            libraryGames = result.games
+            libraryWarning = result.warning
         } catch {
             libraryError = error.localizedDescription
         }

@@ -96,6 +96,17 @@ struct LibraryView: View {
     private var gameGrid: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if let statusMessage = viewModel.libraryError ?? viewModel.libraryWarning {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(statusMessage)
+                            .font(.caption)
+                            .lineLimit(2)
+                    }
+                    .foregroundStyle(viewModel.libraryError == nil ? .orange : .red)
+                    .padding(.horizontal, 60)
+                    .padding(.top, 24)
+                }
                 if availableStores.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
