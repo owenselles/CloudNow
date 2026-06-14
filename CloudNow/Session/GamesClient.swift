@@ -7,6 +7,7 @@ actor GamesClient {
     private static let graphqlURL = "https://games.geforce.com/graphql"
     private static let panelsQueryHash = "f8e26265a5db5c20e1334a6872cf04b6e3970507697f6ae55a6ddefa5420daf0"
     private static let metadataQueryHash = "39187e85b6dcf60b7279a5f233288b0a8b69a8b1dbcfb5b25555afdcb988f0d7"
+    private static let ownedAppsQueryHash = "698bbc7e16a17c8e3fc56944a0e6d62e7d70296b29dfb35fb4d83ebd66dd10f1"
     private static let clientId = "ec7e38d4-03af-4b58-b131-cfb0495903ab"
     private static let clientVersion = "2.0.80.173"
 
@@ -25,9 +26,18 @@ actor GamesClient {
 
     func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
         let vpcId = (try? await fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
-        var games = try await fetchPanels(token: token, panelNames: ["LIBRARY"], vpcId: vpcId)
-        games = (try? await enrich(token: token, vpcId: vpcId, games: games)) ?? games
-        return games
+        let ownedApps = try await fetchOwnedApps(token: token, vpcId: vpcId)
+        let ownedIds = ownedApps.compactMap { $0.id?.stringValue }
+        let metadata = try await fetchMetadata(token: token, appIds: ownedIds, vpcId: vpcId)
+        let metadataById = Dictionary(
+            metadata.compactMap { app in app.id.map { ($0.stringValue, app) } },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        return ownedApps.compactMap { ownedApp in
+            guard let id = ownedApp.id?.stringValue else { return nil }
+            return appToGame(metadataById[id] ?? ownedApp)
+        }
     }
 
     // MARK: - Metadata Enrichment
@@ -64,13 +74,85 @@ actor GamesClient {
     }
 
     private func fetchMetadata(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
-        let variables: [String: Any] = ["vpcId": vpcId, "locale": "en_US", "appIds": appIds]
-        let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.metadataQueryHash]]
+        guard !appIds.isEmpty else { return [] }
+
+        var apps: [AppData] = []
+        let chunkSize = 40
+        for start in stride(from: 0, to: appIds.count, by: chunkSize) {
+            let chunk = Array(appIds[start..<min(start + chunkSize, appIds.count)])
+            let variables: [String: Any] = ["vpcId": vpcId, "locale": "en_US", "appIds": chunk]
+            let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.metadataQueryHash]]
+            let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0..<Int.max), radix: 16))"
+
+            var comps = URLComponents(string: GamesClient.graphqlURL)!
+            comps.queryItems = [
+                URLQueryItem(name: "requestType", value: "appMetaData"),
+                URLQueryItem(name: "extensions", value: jsonString(extensions)),
+                URLQueryItem(name: "huId", value: huId),
+                URLQueryItem(name: "variables", value: jsonString(variables)),
+            ]
+            var request = URLRequest(url: comps.url!)
+            setGFNHeaders(on: &request, token: token)
+
+            let (data, response) = try await urlSession.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
+            }
+            let payload = try JSONDecoder().decode(MetadataResponse.self, from: data)
+            apps.append(contentsOf: payload.data?.apps.items ?? [])
+        }
+        return apps
+    }
+
+    // MARK: - Owned Apps
+
+    private func fetchOwnedApps(token: String, vpcId: String) async throws -> [AppData] {
+        var cursor = ""
+        var apps: [AppData] = []
+        var seenCursors = Set<String>()
+
+        while true {
+            let page = try await fetchOwnedAppsPage(token: token, vpcId: vpcId, cursor: cursor)
+            apps.append(contentsOf: page.items)
+
+            guard page.pageInfo.hasNextPage == true,
+                  let nextCursor = page.pageInfo.endCursor,
+                  !nextCursor.isEmpty,
+                  seenCursors.insert(nextCursor).inserted else {
+                break
+            }
+            cursor = nextCursor
+        }
+
+        var seenIds = Set<String>()
+        return apps.filter { app in
+            guard let id = app.id?.stringValue else { return false }
+            return seenIds.insert(id).inserted
+        }
+    }
+
+    private func fetchOwnedAppsPage(token: String, vpcId: String, cursor: String) async throws -> AppsContainer {
+        let variables: [String: Any] = [
+            "vpcId": vpcId,
+            "locale": "en_US",
+            "fetchCount": 749,
+            "cursor": cursor,
+            "filters": [
+                "variants": [
+                    "gfn": [
+                        "library": [
+                            "status": ["notEquals": "NOT_OWNED"]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.ownedAppsQueryHash]]
         let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0..<Int.max), radix: 16))"
 
         var comps = URLComponents(string: GamesClient.graphqlURL)!
         comps.queryItems = [
-            URLQueryItem(name: "requestType", value: "appMetaData"),
+            URLQueryItem(name: "requestType", value: "appsPatchInfoWithLibraryFilter"),
             URLQueryItem(name: "extensions", value: jsonString(extensions)),
             URLQueryItem(name: "huId", value: huId),
             URLQueryItem(name: "variables", value: jsonString(variables)),
@@ -82,8 +164,8 @@ actor GamesClient {
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
         }
-        let payload = try JSONDecoder().decode(MetadataResponse.self, from: data)
-        return payload.data?.apps.items ?? []
+        let payload = try JSONDecoder().decode(OwnedAppsResponse.self, from: data)
+        return payload.data?.apps ?? AppsContainer(items: [], pageInfo: PageInfo())
     }
 
     // MARK: - Panels
@@ -227,6 +309,30 @@ private struct MetadataResponse: Decodable {
         struct AppsContainer: Decodable {
             let items: [AppData]
         }
+    }
+}
+
+private struct OwnedAppsResponse: Decodable {
+    let data: OwnedAppsData?
+    struct OwnedAppsData: Decodable {
+        let apps: AppsContainer
+    }
+}
+
+private struct AppsContainer: Decodable {
+    let items: [AppData]
+    let pageInfo: PageInfo
+}
+
+private struct PageInfo: Decodable {
+    let hasNextPage: Bool?
+    let endCursor: String?
+    let totalCount: Int?
+
+    init(hasNextPage: Bool? = nil, endCursor: String? = nil, totalCount: Int? = nil) {
+        self.hasNextPage = hasNextPage
+        self.endCursor = endCursor
+        self.totalCount = totalCount
     }
 }
 
