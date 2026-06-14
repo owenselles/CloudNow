@@ -163,25 +163,49 @@ actor GamesClient {
         var cursor = ""
         var apps: [AppData] = []
         var seenCursors = Set<String>()
+        var expectedTotalCount: Int?
 
         while true {
             let page = try await fetchOwnedAppsPage(token: token, vpcId: vpcId, cursor: cursor)
             apps.append(contentsOf: page.items)
 
-            guard page.pageInfo.hasNextPage == true,
-                  let nextCursor = page.pageInfo.endCursor,
-                  !nextCursor.isEmpty,
-                  seenCursors.insert(nextCursor).inserted else {
+            if let totalCount = page.pageInfo.totalCount {
+                guard totalCount >= 0 else {
+                    throw GamesError.pagination("Owned-app total count was negative")
+                }
+                if let expectedTotalCount, expectedTotalCount != totalCount {
+                    throw GamesError.pagination("Owned-app total count changed between pages")
+                }
+                expectedTotalCount = totalCount
+            }
+
+            guard let hasNextPage = page.pageInfo.hasNextPage else {
+                throw GamesError.pagination("Owned-app response omitted hasNextPage")
+            }
+            guard hasNextPage else {
                 break
+            }
+
+            guard let nextCursor = page.pageInfo.endCursor, !nextCursor.isEmpty else {
+                throw GamesError.pagination("Owned-app response indicated another page without a cursor")
+            }
+            guard seenCursors.insert(nextCursor).inserted else {
+                throw GamesError.pagination("Owned-app pagination repeated cursor \(nextCursor)")
             }
             cursor = nextCursor
         }
 
         var seenIds = Set<String>()
-        return apps.filter { app in
+        let uniqueApps = apps.filter { app in
             guard let id = app.id?.stringValue else { return false }
             return seenIds.insert(id).inserted
         }
+        if let expectedTotalCount, uniqueApps.count != expectedTotalCount {
+            throw GamesError.pagination(
+                "Owned-app response returned \(uniqueApps.count) unique apps, expected \(expectedTotalCount)"
+            )
+        }
+        return uniqueApps
     }
 
     private func fetchOwnedAppsPage(token: String, vpcId: String, cursor: String) async throws -> AppsContainer {
@@ -498,12 +522,14 @@ private struct AnyCodableGameId: Decodable {
 enum GamesError: Error, LocalizedError {
     case fetchFailed(String)
     case graphql(String)
+    case pagination(String)
     case unauthorized
 
     var errorDescription: String? {
         switch self {
         case .fetchFailed(let message): return "Games fetch failed: \(message)"
         case .graphql(let message): return "Games GraphQL error: \(message)"
+        case .pagination(let message): return "Games pagination failed: \(message)"
         case .unauthorized: return "Games authentication was rejected."
         }
     }
