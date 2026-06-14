@@ -130,27 +130,9 @@ class GamesViewModel {
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
 
-            async let mainFetch = fetchWithAuthRetry(authManager: authManager) { token in
-                try await gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
-            }
-            async let libraryFetch = fetchWithAuthRetry(authManager: authManager) { token in
-                try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
-            }
-
-            do {
-                mainGames = try await mainFetch
-            } catch {
-                self.error = error.localizedDescription
-            }
-
-            do {
-                let result = try await libraryFetch
-                libraryGames = result.games
-                libraryWarning = result.warning
-            } catch {
-                libraryError = error.localizedDescription
-            }
-            isLibraryLoading = false
+            async let mainLoad: Void = loadMainGames(authManager: authManager, base: base)
+            async let libraryLoad: Void = loadLibraryGames(authManager: authManager, base: base)
+            _ = await (mainLoad, libraryLoad)
 
             let token = try await authManager.resolveToken()
 
@@ -169,6 +151,30 @@ class GamesViewModel {
         }
         isLibraryLoading = false
         isLoading = false
+    }
+
+    private func loadMainGames(authManager: AuthManager, base: String) async {
+        defer { isLoading = false }
+        do {
+            mainGames = try await fetchWithAuthRetry(authManager: authManager) { token in
+                try await gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func loadLibraryGames(authManager: AuthManager, base: String) async {
+        defer { isLibraryLoading = false }
+        do {
+            let result = try await fetchWithAuthRetry(authManager: authManager) { token in
+                try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
+            }
+            libraryGames = result.games
+            libraryWarning = result.warning
+        } catch {
+            libraryError = error.localizedDescription
+        }
     }
 
     func refreshLibrary(authManager: AuthManager) async {
