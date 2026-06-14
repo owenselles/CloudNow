@@ -36,7 +36,12 @@ actor GamesClient {
 
         return ownedApps.compactMap { ownedApp in
             guard let id = ownedApp.id?.stringValue else { return nil }
-            return appToGame(metadataById[id] ?? ownedApp)
+            let ownedVariantIds = Set(
+                ownedApp.variants?.compactMap { variant in
+                    variant.gfn?.library?.isOwned == true ? variant.id : nil
+                } ?? []
+            )
+            return appToGame(metadataById[id] ?? ownedApp, ownedVariantIds: ownedVariantIds)
         }
     }
 
@@ -224,7 +229,7 @@ actor GamesClient {
         return games
     }
 
-    private func appToGame(_ app: AppData) -> GameInfo? {
+    private func appToGame(_ app: AppData, ownedVariantIds: Set<String> = []) -> GameInfo? {
         guard let rawId = app.id else { return nil }
         let id = rawId.stringValue
         var variants: [GameVariant] = app.variants?.compactMap { v in
@@ -233,7 +238,7 @@ actor GamesClient {
                 id: vid,
                 appStore: v.appStore ?? "unknown",
                 appId: isNumericId(vid) ? vid : nil,
-                isOwned: v.gfn?.library?.selected == true
+                isOwned: v.gfn?.library?.isOwned == true || ownedVariantIds.contains(vid)
             )
         } ?? []
 
@@ -250,7 +255,7 @@ actor GamesClient {
             title: app.title ?? id,
             boxArtUrl: app.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) },
             heroBannerUrl: (app.images?.TV_BANNER ?? app.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) },
-            isInLibrary: app.variants?.contains { $0.gfn?.library?.selected == true } ?? false,
+            isInLibrary: variants.contains { $0.isOwned },
             variants: variants
         )
     }
@@ -374,7 +379,15 @@ private struct AppData: Decodable {
         let gfn: GFNMeta?
         struct GFNMeta: Decodable {
             let library: LibraryMeta?
-            struct LibraryMeta: Decodable { let selected: Bool? }
+            struct LibraryMeta: Decodable {
+                let status: String?
+                let selected: Bool?
+
+                var isOwned: Bool {
+                    guard let status else { return false }
+                    return status.caseInsensitiveCompare("NOT_OWNED") != .orderedSame
+                }
+            }
         }
     }
 }
