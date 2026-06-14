@@ -5,8 +5,8 @@ import Foundation
 /// Fetches the GFN game library via the GraphQL persisted-query API.
 actor GamesClient {
     private static let graphqlURL = "https://games.geforce.com/graphql"
-    private static let panelsQueryHash = "f8e26265a5db5c20e1334a6872cf04b6e3970507697f6ae55a6ddefa5420daf0"
-    private static let metadataQueryHash = "39187e85b6dcf60b7279a5f233288b0a8b69a8b1dbcfb5b25555afdcb988f0d7"
+    private static let panelsQueryHash = "46ec15f267a056e7d5e46e629efa929529e5e7542a4850faece90b9f8fa5f810"
+    private static let metadataQueryHash = "cf8b620dfd03617017ba7c858cee65197e1ace5180e41be194b39227227ced63"
     private static let ownedAppsQueryHash = "698bbc7e16a17c8e3fc56944a0e6d62e7d70296b29dfb35fb4d83ebd66dd10f1"
     private static let clientId = "ec7e38d4-03af-4b58-b131-cfb0495903ab"
     private static let clientVersion = "2.0.80.173"
@@ -104,7 +104,11 @@ actor GamesClient {
                 throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
             }
             let payload = try JSONDecoder().decode(MetadataResponse.self, from: data)
-            apps.append(contentsOf: payload.data?.apps.items ?? [])
+            try validateGraphQL(errors: payload.errors)
+            guard let payloadApps = payload.data?.apps.items else {
+                throw GamesError.fetchFailed("GraphQL response did not contain app metadata")
+            }
+            apps.append(contentsOf: payloadApps)
         }
         return apps
     }
@@ -170,7 +174,11 @@ actor GamesClient {
             throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
         }
         let payload = try JSONDecoder().decode(OwnedAppsResponse.self, from: data)
-        return payload.data?.apps ?? AppsContainer(items: [], pageInfo: PageInfo())
+        try validateGraphQL(errors: payload.errors)
+        guard let apps = payload.data?.apps else {
+            throw GamesError.fetchFailed("GraphQL response did not contain owned apps")
+        }
+        return apps
     }
 
     // MARK: - Panels
@@ -210,6 +218,10 @@ actor GamesClient {
             throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
         }
         let payload = try JSONDecoder().decode(PanelsResponse.self, from: data)
+        try validateGraphQL(errors: payload.errors)
+        guard payload.data != nil else {
+            throw GamesError.fetchFailed("GraphQL response did not contain panels")
+        }
         return flattenPanels(payload)
     }
 
@@ -298,6 +310,11 @@ actor GamesClient {
               let str = String(data: data, encoding: .utf8) else { return "{}" }
         return str
     }
+
+    private func validateGraphQL(errors: [GQLError]?) throws {
+        guard let errors, !errors.isEmpty else { return }
+        throw GamesError.graphql(errors.map(\.message).joined(separator: "; "))
+    }
 }
 
 // MARK: - Response Types
@@ -309,6 +326,7 @@ private struct ServerInfoResponse: Decodable {
 
 private struct MetadataResponse: Decodable {
     let data: MetadataData?
+    let errors: [GQLError]?
     struct MetadataData: Decodable {
         let apps: AppsContainer
         struct AppsContainer: Decodable {
@@ -319,6 +337,7 @@ private struct MetadataResponse: Decodable {
 
 private struct OwnedAppsResponse: Decodable {
     let data: OwnedAppsData?
+    let errors: [GQLError]?
     struct OwnedAppsData: Decodable {
         let apps: AppsContainer
     }
@@ -358,8 +377,9 @@ private struct PanelsResponse: Decodable {
             }
         }
     }
-    struct GQLError: Decodable { let message: String }
 }
+
+private struct GQLError: Decodable { let message: String }
 
 private struct AppData: Decodable {
     let id: AnyCodableGameId?
@@ -407,8 +427,12 @@ private struct AnyCodableGameId: Decodable {
 
 enum GamesError: Error, LocalizedError {
     case fetchFailed(String)
+    case graphql(String)
+
     var errorDescription: String? {
-        if case .fetchFailed(let msg) = self { return "Games fetch failed: \(msg)" }
-        return nil
+        switch self {
+        case .fetchFailed(let message): return "Games fetch failed: \(message)"
+        case .graphql(let message): return "Games GraphQL error: \(message)"
+        }
     }
 }
