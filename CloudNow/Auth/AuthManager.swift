@@ -140,10 +140,11 @@ final class AuthManager {
 
     // MARK: Token Refresh
 
-    /// Returns the best available JWT token, refreshing if near expiry.
-    func resolveToken() async throws -> String {
+    /// Returns the best available JWT token, optionally refreshing even when its
+    /// local expiry has not been reached (for example, after a server-side 401).
+    func resolveToken(forceRefresh: Bool = false) async throws -> String {
         guard var s = session else { throw AuthError.noSession }
-        if s.tokens.isNearExpiry {
+        if forceRefresh || s.tokens.isNearExpiry {
             s = try await refresh(session: s)
         }
         return s.tokens.idToken ?? s.tokens.accessToken

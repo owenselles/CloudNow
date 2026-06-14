@@ -100,9 +100,7 @@ actor GamesClient {
             setGFNHeaders(on: &request, token: token)
 
             let (data, response) = try await urlSession.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
-            }
+            try validateHTTPResponse(response, data: data)
             let payload = try JSONDecoder().decode(MetadataResponse.self, from: data)
             try validateGraphQL(errors: payload.errors)
             guard let payloadApps = payload.data?.apps.items else {
@@ -170,9 +168,7 @@ actor GamesClient {
         setGFNHeaders(on: &request, token: token)
 
         let (data, response) = try await urlSession.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
-        }
+        try validateHTTPResponse(response, data: data)
         let payload = try JSONDecoder().decode(OwnedAppsResponse.self, from: data)
         try validateGraphQL(errors: payload.errors)
         guard let apps = payload.data?.apps else {
@@ -214,9 +210,7 @@ actor GamesClient {
         setGFNHeaders(on: &request, token: token)
 
         let (data, response) = try await urlSession.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
-        }
+        try validateHTTPResponse(response, data: data)
         let payload = try JSONDecoder().decode(PanelsResponse.self, from: data)
         try validateGraphQL(errors: payload.errors)
         guard payload.data != nil else {
@@ -314,6 +308,17 @@ actor GamesClient {
     private func validateGraphQL(errors: [GQLError]?) throws {
         guard let errors, !errors.isEmpty else { return }
         throw GamesError.graphql(errors.map(\.message).joined(separator: "; "))
+    }
+
+    private func validateHTTPResponse(_ response: URLResponse, data: Data) throws {
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if statusCode == 401 {
+            throw GamesError.unauthorized
+        }
+        guard statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
+            throw GamesError.fetchFailed(body)
+        }
     }
 }
 
@@ -428,11 +433,13 @@ private struct AnyCodableGameId: Decodable {
 enum GamesError: Error, LocalizedError {
     case fetchFailed(String)
     case graphql(String)
+    case unauthorized
 
     var errorDescription: String? {
         switch self {
         case .fetchFailed(let message): return "Games fetch failed: \(message)"
         case .graphql(let message): return "Games GraphQL error: \(message)"
+        case .unauthorized: return "Games authentication was rejected."
         }
     }
 }
