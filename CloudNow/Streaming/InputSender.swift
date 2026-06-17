@@ -461,6 +461,13 @@ final class InputSender {
             GCController.controllers().forEach { attachController($0, autoSwitch: false) }
             GCMouse.mice().forEach(setupMouseHandlers)
 
+            // attachController(autoSwitch:false) won't promote the mode, so do it here for a controller present at start.
+            if !extendedControllers.isEmpty && remoteMode == .mouse {
+                remoteMode = .gamepad
+                applyRemoteMode()
+                notifyRemoteModeChanged()
+            }
+
             lastHeartbeat = DispatchTime.now().uptimeNanoseconds
             let timer = DispatchSource.makeTimerSource(queue: inputQueue)
             timer.schedule(
