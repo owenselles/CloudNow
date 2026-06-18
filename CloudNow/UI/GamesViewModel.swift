@@ -16,6 +16,7 @@ struct ResumableSession {
 }
 
 @Observable
+@MainActor
 class GamesViewModel {
     var mainGames: [GameInfo] = []
     var libraryGames: [GameInfo] = []
