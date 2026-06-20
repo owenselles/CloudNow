@@ -11,6 +11,7 @@ struct LibraryView: View {
     let games: [GameInfo]
     let onPlay: (GameInfo) -> Void
 
+    @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
 
     @State private var searchText = ""
@@ -53,7 +54,7 @@ struct LibraryView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if games.isEmpty && viewModel.isLoading {
+            if games.isEmpty && viewModel.isLibraryLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(0..<12, id: \.self) { _ in
@@ -70,7 +71,14 @@ struct LibraryView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    Task { await viewModel.refreshLibrary(authManager: authManager) }
+                } label: {
+                    Label("Refresh Library", systemImage: "arrow.clockwise")
+                }
+                .disabled(viewModel.isLibraryLoading)
+
                 Menu {
                     Picker("Sort", selection: $sortOrder) {
                         ForEach(LibrarySortOrder.allCases, id: \.self) { order in
@@ -88,6 +96,17 @@ struct LibraryView: View {
     private var gameGrid: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if let statusMessage = viewModel.libraryError ?? viewModel.libraryWarning {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(statusMessage)
+                            .font(.caption)
+                            .lineLimit(2)
+                    }
+                    .foregroundStyle(viewModel.libraryError == nil ? .orange : .red)
+                    .padding(.horizontal, 60)
+                    .padding(.top, 24)
+                }
                 if availableStores.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
