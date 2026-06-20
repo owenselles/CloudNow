@@ -207,8 +207,7 @@ struct GameVariant: Equatable {
     let id: String
     let appStore: String
     var appId: String?
-    /// True when this variant is the one in the GFN library (`gfn.library.selected`) —
-    /// i.e. the store the game is owned through.
+    /// True when GFN reports a library status other than `NOT_OWNED` for this variant.
     var isOwned: Bool = false
 
     var storeName: String {

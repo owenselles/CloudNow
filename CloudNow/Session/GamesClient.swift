@@ -1,16 +1,23 @@
 import Foundation
 
+struct LibraryFetchResult {
+    let games: [GameInfo]
+    let warning: String?
+}
+
 // MARK: - GamesClient
 
 /// Fetches the GFN game library via the GraphQL persisted-query API.
 actor GamesClient {
     private static let graphqlURL = "https://games.geforce.com/graphql"
-    private static let panelsQueryHash = "f8e26265a5db5c20e1334a6872cf04b6e3970507697f6ae55a6ddefa5420daf0"
-    private static let metadataQueryHash = "39187e85b6dcf60b7279a5f233288b0a8b69a8b1dbcfb5b25555afdcb988f0d7"
+    private static let panelsQueryHash = "46ec15f267a056e7d5e46e629efa929529e5e7542a4850faece90b9f8fa5f810"
+    private static let metadataQueryHash = "cf8b620dfd03617017ba7c858cee65197e1ace5180e41be194b39227227ced63"
+    private static let ownedAppsQueryHash = "698bbc7e16a17c8e3fc56944a0e6d62e7d70296b29dfb35fb4d83ebd66dd10f1"
     private static let clientId = "ec7e38d4-03af-4b58-b131-cfb0495903ab"
     private static let clientVersion = "2.0.80.173"
 
     private let urlSession = URLSession.shared
+    private var metadataCache: [String: AppData] = [:]
 
     // MARK: Fetch Main Game List
 
@@ -23,11 +30,30 @@ actor GamesClient {
 
     // MARK: Fetch Library (owned/purchased games)
 
-    func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
+    func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> LibraryFetchResult {
         let vpcId = (try? await fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
-        var games = try await fetchPanels(token: token, panelNames: ["LIBRARY"], vpcId: vpcId)
-        games = (try? await enrich(token: token, vpcId: vpcId, games: games)) ?? games
-        return games
+        let ownedApps = try await fetchOwnedApps(token: token, vpcId: vpcId)
+        let ownedIds = ownedApps.compactMap { $0.id?.stringValue }
+        let metadataResult = try await fetchMetadataBestEffort(token: token, appIds: ownedIds, vpcId: vpcId)
+
+        let games: [GameInfo] = ownedApps.compactMap { ownedApp -> GameInfo? in
+            guard let id = ownedApp.id?.stringValue else { return nil }
+            let ownedVariantIds = Set(
+                ownedApp.variants?.compactMap { variant in
+                    variant.gfn?.library?.isOwned == true ? variant.id : nil
+                } ?? []
+            )
+            return appToGame(
+                metadataCache[id] ?? ownedApp,
+                ownedVariantIds: ownedVariantIds,
+                fallbackVariants: ownedApp.variants ?? []
+            )
+        }
+
+        let warning = metadataResult.failedChunkCount > 0
+            ? "Some game details could not be refreshed. All owned games are shown with the metadata currently available."
+            : nil
+        return LibraryFetchResult(games: games, warning: warning)
     }
 
     // MARK: - Metadata Enrichment
@@ -64,6 +90,42 @@ actor GamesClient {
     }
 
     private func fetchMetadata(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
+        guard !appIds.isEmpty else { return [] }
+
+        var apps: [AppData] = []
+        let chunkSize = 40
+        for start in stride(from: 0, to: appIds.count, by: chunkSize) {
+            let chunk = Array(appIds[start..<min(start + chunkSize, appIds.count)])
+            let payloadApps = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
+            cacheMetadata(payloadApps)
+            apps.append(contentsOf: payloadApps)
+        }
+        return apps
+    }
+
+    private func fetchMetadataBestEffort(token: String, appIds: [String], vpcId: String) async throws -> MetadataFetchResult {
+        guard !appIds.isEmpty else { return MetadataFetchResult(failedChunkCount: 0) }
+
+        var failedChunkCount = 0
+        let chunkSize = 40
+        for start in stride(from: 0, to: appIds.count, by: chunkSize) {
+            let chunk = Array(appIds[start..<min(start + chunkSize, appIds.count)])
+            do {
+                let payloadApps = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
+                cacheMetadata(payloadApps)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch GamesError.unauthorized {
+                throw GamesError.unauthorized
+            } catch {
+                failedChunkCount += 1
+                print("[Games] metadata chunk failed for \(chunk.count) apps: \(error)")
+            }
+        }
+        return MetadataFetchResult(failedChunkCount: failedChunkCount)
+    }
+
+    private func fetchMetadataChunk(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
         let variables: [String: Any] = ["vpcId": vpcId, "locale": "en_US", "appIds": appIds]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.metadataQueryHash]]
         let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0..<Int.max), radix: 16))"
@@ -79,11 +141,110 @@ actor GamesClient {
         setGFNHeaders(on: &request, token: token)
 
         let (data, response) = try await urlSession.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
-        }
+        try validateHTTPResponse(response, data: data)
         let payload = try JSONDecoder().decode(MetadataResponse.self, from: data)
-        return payload.data?.apps.items ?? []
+        try validateGraphQL(errors: payload.errors)
+        guard let apps = payload.data?.apps.items else {
+            throw GamesError.fetchFailed("GraphQL response did not contain app metadata")
+        }
+        return apps
+    }
+
+    private func cacheMetadata(_ apps: [AppData]) {
+        for app in apps {
+            guard let id = app.id?.stringValue else { continue }
+            metadataCache[id] = app
+        }
+    }
+
+    // MARK: - Owned Apps
+
+    private func fetchOwnedApps(token: String, vpcId: String) async throws -> [AppData] {
+        var cursor = ""
+        var apps: [AppData] = []
+        var seenCursors = Set<String>()
+        var expectedTotalCount: Int?
+
+        while true {
+            let page = try await fetchOwnedAppsPage(token: token, vpcId: vpcId, cursor: cursor)
+            apps.append(contentsOf: page.items)
+
+            if let totalCount = page.pageInfo.totalCount {
+                guard totalCount >= 0 else {
+                    throw GamesError.pagination("Owned-app total count was negative")
+                }
+                if let expectedTotalCount, expectedTotalCount != totalCount {
+                    throw GamesError.pagination("Owned-app total count changed between pages")
+                }
+                expectedTotalCount = totalCount
+            }
+
+            guard let hasNextPage = page.pageInfo.hasNextPage else {
+                throw GamesError.pagination("Owned-app response omitted hasNextPage")
+            }
+            guard hasNextPage else {
+                break
+            }
+
+            guard let nextCursor = page.pageInfo.endCursor, !nextCursor.isEmpty else {
+                throw GamesError.pagination("Owned-app response indicated another page without a cursor")
+            }
+            guard seenCursors.insert(nextCursor).inserted else {
+                throw GamesError.pagination("Owned-app pagination repeated cursor \(nextCursor)")
+            }
+            cursor = nextCursor
+        }
+
+        var seenIds = Set<String>()
+        let uniqueApps = apps.filter { app in
+            guard let id = app.id?.stringValue else { return false }
+            return seenIds.insert(id).inserted
+        }
+        if let expectedTotalCount, uniqueApps.count != expectedTotalCount {
+            throw GamesError.pagination(
+                "Owned-app response returned \(uniqueApps.count) unique apps, expected \(expectedTotalCount)"
+            )
+        }
+        return uniqueApps
+    }
+
+    private func fetchOwnedAppsPage(token: String, vpcId: String, cursor: String) async throws -> AppsContainer {
+        let variables: [String: Any] = [
+            "vpcId": vpcId,
+            "locale": "en_US",
+            "fetchCount": 749,
+            "cursor": cursor,
+            "filters": [
+                "variants": [
+                    "gfn": [
+                        "library": [
+                            "status": ["notEquals": "NOT_OWNED"]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.ownedAppsQueryHash]]
+        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0..<Int.max), radix: 16))"
+
+        var comps = URLComponents(string: GamesClient.graphqlURL)!
+        comps.queryItems = [
+            URLQueryItem(name: "requestType", value: "appsPatchInfoWithLibraryFilter"),
+            URLQueryItem(name: "extensions", value: jsonString(extensions)),
+            URLQueryItem(name: "huId", value: huId),
+            URLQueryItem(name: "variables", value: jsonString(variables)),
+        ]
+        var request = URLRequest(url: comps.url!)
+        setGFNHeaders(on: &request, token: token)
+
+        let (data, response) = try await urlSession.data(for: request)
+        try validateHTTPResponse(response, data: data)
+        let payload = try JSONDecoder().decode(OwnedAppsResponse.self, from: data)
+        try validateGraphQL(errors: payload.errors)
+        guard let apps = payload.data?.apps else {
+            throw GamesError.fetchFailed("GraphQL response did not contain owned apps")
+        }
+        return apps
     }
 
     // MARK: - Panels
@@ -119,10 +280,12 @@ actor GamesClient {
         setGFNHeaders(on: &request, token: token)
 
         let (data, response) = try await urlSession.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
-        }
+        try validateHTTPResponse(response, data: data)
         let payload = try JSONDecoder().decode(PanelsResponse.self, from: data)
+        try validateGraphQL(errors: payload.errors)
+        guard payload.data != nil else {
+            throw GamesError.fetchFailed("GraphQL response did not contain panels")
+        }
         return flattenPanels(payload)
     }
 
@@ -133,6 +296,9 @@ actor GamesClient {
             for section in panel.sections ?? [] {
                 for item in section.items ?? [] {
                     guard item.__typename == "GameItem", let app = item.app else { continue }
+                    if let id = app.id?.stringValue, metadataCache[id] == nil {
+                        metadataCache[id] = app
+                    }
                     if let game = appToGame(app), seen.insert(game.id).inserted {
                         games.append(game)
                     }
@@ -142,24 +308,36 @@ actor GamesClient {
         return games
     }
 
-    private func appToGame(_ app: AppData) -> GameInfo? {
+    private func appToGame(
+        _ app: AppData,
+        ownedVariantIds: Set<String> = [],
+        fallbackVariants: [AppData.Variant] = []
+    ) -> GameInfo? {
         guard let rawId = app.id else { return nil }
         let id = rawId.stringValue
-        var variants: [GameVariant] = app.variants?.compactMap { v in
+        var variantSources = app.variants ?? []
+        var knownVariantIds = Set(variantSources.compactMap(\.id))
+        variantSources.append(contentsOf: fallbackVariants.filter { variant in
+            guard let id = variant.id else { return false }
+            return knownVariantIds.insert(id).inserted
+        })
+
+        var variants: [GameVariant] = variantSources.compactMap { v in
             guard let vid = v.id else { return nil }
             return GameVariant(
                 id: vid,
                 appStore: v.appStore ?? "unknown",
                 appId: isNumericId(vid) ? vid : nil,
-                isOwned: v.gfn?.library?.selected == true
+                isOwned: v.gfn?.library?.isOwned == true || ownedVariantIds.contains(vid)
             )
-        } ?? []
+        }
 
         // Move the backend-selected variant to front so variants.first is the default launch store
-        let selectedIndex = app.variants?.firstIndex { $0.gfn?.library?.selected == true } ?? 0
-        let safeIndex = min(max(0, selectedIndex), max(0, variants.count - 1))
-        if safeIndex > 0 && safeIndex < variants.count {
-            let selected = variants.remove(at: safeIndex)
+        let selectedVariantId = variantSources.first { $0.gfn?.library?.selected == true }?.id
+        if let selectedVariantId,
+           let selectedIndex = variants.firstIndex(where: { $0.id == selectedVariantId }),
+           selectedIndex > 0 {
+            let selected = variants.remove(at: selectedIndex)
             variants.insert(selected, at: 0)
         }
 
@@ -168,7 +346,7 @@ actor GamesClient {
             title: app.title ?? id,
             boxArtUrl: app.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) },
             heroBannerUrl: (app.images?.TV_BANNER ?? app.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) },
-            isInLibrary: app.variants?.contains { $0.gfn?.library?.selected == true } ?? false,
+            isInLibrary: variants.contains { $0.isOwned },
             variants: variants
         )
     }
@@ -211,6 +389,22 @@ actor GamesClient {
               let str = String(data: data, encoding: .utf8) else { return "{}" }
         return str
     }
+
+    private func validateGraphQL(errors: [GQLError]?) throws {
+        guard let errors, !errors.isEmpty else { return }
+        throw GamesError.graphql(errors.map(\.message).joined(separator: "; "))
+    }
+
+    private func validateHTTPResponse(_ response: URLResponse, data: Data) throws {
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if statusCode == 401 {
+            throw GamesError.unauthorized
+        }
+        guard statusCode == 200 else {
+            let body = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
+            throw GamesError.fetchFailed(body)
+        }
+    }
 }
 
 // MARK: - Response Types
@@ -222,11 +416,37 @@ private struct ServerInfoResponse: Decodable {
 
 private struct MetadataResponse: Decodable {
     let data: MetadataData?
+    let errors: [GQLError]?
     struct MetadataData: Decodable {
         let apps: AppsContainer
         struct AppsContainer: Decodable {
             let items: [AppData]
         }
+    }
+}
+
+private struct OwnedAppsResponse: Decodable {
+    let data: OwnedAppsData?
+    let errors: [GQLError]?
+    struct OwnedAppsData: Decodable {
+        let apps: AppsContainer
+    }
+}
+
+private struct AppsContainer: Decodable {
+    let items: [AppData]
+    let pageInfo: PageInfo
+}
+
+private struct PageInfo: Decodable {
+    let hasNextPage: Bool?
+    let endCursor: String?
+    let totalCount: Int?
+
+    init(hasNextPage: Bool? = nil, endCursor: String? = nil, totalCount: Int? = nil) {
+        self.hasNextPage = hasNextPage
+        self.endCursor = endCursor
+        self.totalCount = totalCount
     }
 }
 
@@ -247,7 +467,12 @@ private struct PanelsResponse: Decodable {
             }
         }
     }
-    struct GQLError: Decodable { let message: String }
+}
+
+private struct GQLError: Decodable { let message: String }
+
+private struct MetadataFetchResult {
+    let failedChunkCount: Int
 }
 
 private struct AppData: Decodable {
@@ -268,7 +493,15 @@ private struct AppData: Decodable {
         let gfn: GFNMeta?
         struct GFNMeta: Decodable {
             let library: LibraryMeta?
-            struct LibraryMeta: Decodable { let selected: Bool? }
+            struct LibraryMeta: Decodable {
+                let status: String?
+                let selected: Bool?
+
+                var isOwned: Bool {
+                    guard let status else { return false }
+                    return status.caseInsensitiveCompare("NOT_OWNED") != .orderedSame
+                }
+            }
         }
     }
 }
@@ -288,8 +521,16 @@ private struct AnyCodableGameId: Decodable {
 
 enum GamesError: Error, LocalizedError {
     case fetchFailed(String)
+    case graphql(String)
+    case pagination(String)
+    case unauthorized
+
     var errorDescription: String? {
-        if case .fetchFailed(let msg) = self { return "Games fetch failed: \(msg)" }
-        return nil
+        switch self {
+        case .fetchFailed(let message): return "Games fetch failed: \(message)"
+        case .graphql(let message): return "Games GraphQL error: \(message)"
+        case .pagination(let message): return "Games pagination failed: \(message)"
+        case .unauthorized: return "Games authentication was rejected."
+        }
     }
 }

@@ -7,8 +7,17 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 > [!WARNING]
 > CloudNow is under active development. Expect bugs, lots of them
 
+---
 
+## Installation
 
+### Option A — Pre-built IPA (recommended for most users)
+
+Download the latest `CloudNow.ipa` from the [Releases](https://github.com/owenselles/CloudNow/releases) page, then sideload it with [Sideloadly](https://sideloadly.io) or AltServer. No Xcode or Apple Developer account required — Sideloadly signs the IPA with your free Apple ID.
+
+### Option B — Build from source
+
+Follow the [Getting Started](#getting-started) steps below if you want to build and run directly from Xcode.
 
 ---
 
@@ -32,9 +41,8 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 ## Requirements
 
 - Apple TV 4K (2nd generation or later) running tvOS 17+
-- Xcode 16+ on a Mac
 - Active GeForce NOW account (Free, Priority, or Ultimate)
-- Apple Developer account (free tier works for sideloading)
+- **Build from source only:** Xcode 16+ on a Mac, Apple Developer account (free tier works)
 
 ## Getting Started
 
