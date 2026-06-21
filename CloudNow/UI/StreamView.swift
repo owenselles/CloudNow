@@ -1,5 +1,8 @@
 import Charts
+import os.log
 import SwiftUI
+
+private let streamLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Stream")
 
 private enum LoadingPhase: Equatable {
     case finding
@@ -378,15 +381,18 @@ struct StreamView: View {
     // MARK: Actions
 
     private func startSession() async {
+        streamLog.info("startSession: game=\(game.title), existingSession=\(existingSession != nil), directSession=\(directSession != nil)")
         // Reset stream controller (handles retry from failed/disconnected state)
         streamController.disconnect()
 
         // Reconnect path — RESUME PUT tells the server to rebuild its media endpoint,
         // then connect WebRTC as soon as we get a single status 2/3 (no double-poll wait).
         if let direct = directSession {
+            streamLog.info("startSession: direct reconnect path, sessionId=\(direct.sessionId)")
             loadingPhase = .preparing
             do {
                 let token = try await authManager.resolveToken()
+                streamLog.info("startSession: token resolved")
                 sessionToken = token
                 let provider = authManager.session?.provider
                 let streamingBaseUrl = provider?.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
@@ -399,6 +405,7 @@ struct StreamView: View {
                     base: base,
                     settings: settings
                 )
+                streamLog.info("startSession: claimed session, status=\(sessionInfo.status)")
                 createdSession = sessionInfo
 
                 // Poll until ready, but only need a single status 2/3 (server media is up).
@@ -421,9 +428,11 @@ struct StreamView: View {
                     createdSession = sessionInfo
                 }
 
+                streamLog.info("startSession: direct path ready, connecting WebRTC")
                 viewModel.recordPlayed(game)
                 await streamController.connect(session: sessionInfo, settings: settings)
             } catch {
+                streamLog.error("startSession: direct path failed: \(error)")
                 streamController.fail(with: error.localizedDescription)
             }
             return
@@ -432,6 +441,7 @@ struct StreamView: View {
         // Stop any previously created server session before opening a new one.
         // Skip for resume — we want to keep the existing session alive.
         if let session = createdSession, let token = sessionToken, existingSession == nil {
+            streamLog.info("startSession: stopping previous session \(session.sessionId)")
             try? await cloudMatchClient.stopSession(
                 sessionId: session.sessionId, token: token, base: session.streamingBaseUrl
             )
@@ -440,14 +450,17 @@ struct StreamView: View {
         loadingPhase = .finding
         do {
             let token = try await authManager.resolveToken()
+            streamLog.info("startSession: token resolved")
             sessionToken = token
             let provider = authManager.session?.provider
             let streamingBaseUrl = provider?.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingBaseUrl.hasSuffix("/") ? String(streamingBaseUrl.dropLast()) : streamingBaseUrl
+            streamLog.info("startSession: base=\(base)")
 
             var sessionInfo: SessionInfo
 
             if let existing = existingSession, let serverIp = existing.serverIp {
+                streamLog.info("startSession: resume path, sessionId=\(existing.sessionId)")
                 // Resume path: attach to the existing session without creating a new one
                 sessionInfo = try await cloudMatchClient.claimSession(
                     sessionId: existing.sessionId,
@@ -456,35 +469,55 @@ struct StreamView: View {
                     base: base,
                     settings: settings
                 )
+                streamLog.info("startSession: claimed, status=\(sessionInfo.status)")
             } else {
                 // New session path
-                guard let appId = game.variants.first?.appId ?? game.variants.first?.id else { return }
+                guard let appId = game.variants.first?.appId ?? game.variants.first?.id else {
+                    streamLog.error("startSession: no appId found for game")
+                    return
+                }
 
-                // Prefer the user-selected zone URL; fall back to the provider's default.
-                let sessionBase = settings.preferredZoneUrl ?? base
-
-                let request = SessionCreateRequest(
-                    appId: appId,
-                    internalTitle: game.title,
-                    token: token,
-                    zone: "",
-                    streamingBaseUrl: sessionBase,
-                    settings: settings,
-                    accountLinked: true
-                )
-
-                do {
-                    sessionInfo = try await cloudMatchClient.createSession(request)
-                } catch CloudMatchError.sessionCreateFailed(let msg) where msg.contains("SESSION_LIMIT_EXCEEDED") {
-                    // Stale server session is blocking creation — stop all active sessions and retry once.
-                    let staleSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
-                    for stale in staleSessions {
-                        try? await cloudMatchClient.stopSession(sessionId: stale.sessionId, token: token, base: base)
+                // Check for a locally saved session for this game — resume instead of creating new.
+                if let last = viewModel.lastSession, last.appId == appId {
+                    print("[Resume] found saved session \(last.sessionId) for appId=\(appId), trying resume")
+                    do {
+                        sessionInfo = try await cloudMatchClient.claimSession(
+                            sessionId: last.sessionId,
+                            serverIp: last.serverIp,
+                            token: token,
+                            base: last.base,
+                            settings: settings
+                        )
+                        print("[Resume] claimed session, status=\(sessionInfo.status)")
+                        createdSession = sessionInfo
+                    } catch {
+                        print("[Resume] claim failed: \(error), stopping old session and creating new")
+                        try? await cloudMatchClient.stopSession(sessionId: last.sessionId, token: token, base: last.base)
+                        viewModel.clearLastSession()
+                        // Fall through to create new session below
+                        sessionInfo = try await createNewSession(appId: appId, token: token, base: base)
                     }
-                    sessionInfo = try await cloudMatchClient.createSession(request)
+                } else {
+                    if let last = viewModel.lastSession {
+                        print("[Resume] saved session appId=\(last.appId) != game appId=\(appId), stopping it")
+                        try? await cloudMatchClient.stopSession(sessionId: last.sessionId, token: token, base: last.base)
+                        viewModel.clearLastSession()
+                    }
+                    sessionInfo = try await createNewSession(appId: appId, token: token, base: base)
                 }
             }
             createdSession = sessionInfo
+
+            // Persist session so we can resume it across app launches
+            if let appId = game.variants.first?.appId ?? game.variants.first?.id {
+                viewModel.saveLastSession(LastSessionRecord(
+                    sessionId: sessionInfo.sessionId,
+                    serverIp: sessionInfo.serverIp,
+                    appId: appId,
+                    base: sessionInfo.streamingBaseUrl,
+                    createdAt: Date()
+                ))
+            }
 
             // Poll with readyPollStreak confirmation (requires 2 consecutive ready polls).
             // While in queue: no timeout — user waits indefinitely with position updates.
@@ -526,9 +559,12 @@ struct StreamView: View {
                 createdSession = sessionInfo
             }
 
+            streamLog.info("startSession: queue cleared, readyPollStreak=\(readyPollStreak), connecting WebRTC")
+            streamLog.info("startSession: serverIp=\(sessionInfo.serverIp), signalingUrl=\(sessionInfo.signalingUrl ?? "nil")")
             viewModel.recordPlayed(game)
             await streamController.connect(session: sessionInfo, settings: settings)
         } catch {
+            streamLog.error("startSession: FAILED: \(error)")
             streamController.fail(with: error.localizedDescription)
         }
     }
@@ -546,6 +582,7 @@ struct StreamView: View {
     private func disconnect() {
         // Intentional end — clear any pending resumable session
         viewModel.resumableSession = nil
+        viewModel.clearLastSession()
         // Tell the server to stop the session so it doesn't linger
         if let session = createdSession, let token = sessionToken {
             Task {
@@ -558,6 +595,32 @@ struct StreamView: View {
         }
         streamController.disconnect()
         onDismiss()
+    }
+
+    private func createNewSession(appId: String, token: String, base: String) async throws -> SessionInfo {
+        let sessionBase: String
+        if let preferred = settings.preferredZoneUrl {
+            sessionBase = preferred
+        } else if let best = await viewModel.bestZoneUrl() {
+            sessionBase = best
+        } else {
+            sessionBase = base
+        }
+        print("[Session] creating new session, appId=\(appId), sessionBase=\(sessionBase)")
+
+        let request = SessionCreateRequest(
+            appId: appId,
+            internalTitle: game.title,
+            token: token,
+            zone: "",
+            streamingBaseUrl: sessionBase,
+            settings: settings,
+            accountLinked: true
+        )
+
+        let sessionInfo = try await cloudMatchClient.createSession(request)
+        print("[Session] created, sessionId=\(sessionInfo.sessionId), status=\(sessionInfo.status)")
+        return sessionInfo
     }
 
     private func reportAd(id: String, action: AdAction, watchedMs: Int? = nil) {

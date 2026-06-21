@@ -40,6 +40,7 @@ struct MainTabView: View {
         }
         .environment(viewModel)
         .task { await viewModel.load(authManager: authManager) }
+        .task { await viewModel.measureTopZones() }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
             if new == nil {

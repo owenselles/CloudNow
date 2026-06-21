@@ -180,7 +180,7 @@ struct SubscriptionInfo {
 
 // MARK: - Games
 
-struct GameInfo: Identifiable, Equatable {
+struct GameInfo: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let boxArtUrl: String?
@@ -203,7 +203,7 @@ struct GameInfo: Identifiable, Equatable {
     }
 }
 
-struct GameVariant: Equatable {
+struct GameVariant: Equatable, Codable {
     let id: String
     let appStore: String
     var appId: String?

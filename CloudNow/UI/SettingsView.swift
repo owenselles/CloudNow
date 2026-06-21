@@ -306,7 +306,10 @@ private struct ZonePickerView: View {
             + grouped.keys.filter { !order.contains($0) }.sorted()
         return sortedRegions.map { region in
             let meta = GFNZone.regionMeta[region] ?? (label: region, flag: "🌐")
-            return (region, meta.label, meta.flag, grouped[region, default: []])
+            let sorted = grouped[region, default: []].sorted {
+                ($0.pingMs ?? .max) < ($1.pingMs ?? .max)
+            }
+            return (region, meta.label, meta.flag, sorted)
         }
     }
 

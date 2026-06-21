@@ -7,6 +7,9 @@ import AVFoundation
 import Foundation
 import LiveKitWebRTC
 import Observation
+import os.log
+
+private let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
 
 // MARK: - Session Time Warning
 
@@ -98,9 +101,12 @@ final class GFNStreamController: NSObject {
     func connect(session: SessionInfo, settings: StreamSettings) async {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
         switch state {
-        case .connecting, .streaming: return
+        case .connecting, .streaming:
+            gfnLog.info("connect: already \(String(describing: self.state)), ignoring")
+            return
         default: break
         }
+        gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl ?? "nil")")
         state = .connecting
         sessionInfo = session
         self.settings = settings
@@ -108,8 +114,11 @@ final class GFNStreamController: NSObject {
 
         setupSignaling(session: session)
         do {
+            gfnLog.info("connect: opening signaling WebSocket")
             try await signaling?.connect()
+            gfnLog.info("connect: signaling connected")
         } catch {
+            gfnLog.error("connect: signaling FAILED: \(error)")
             state = .failed(message: error.localizedDescription)
         }
     }

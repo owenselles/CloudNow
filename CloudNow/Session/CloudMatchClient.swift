@@ -14,7 +14,7 @@ private func gfnHeaders(token: String, clientId: String, deviceId: String, inclu
         "nv-client-version": "2.0.83.130",
         "nv-device-make": "UNKNOWN",
         "nv-device-model": "UNKNOWN",
-        "nv-device-os": "MACOS",
+        "nv-device-os": "WINDOWS",
         "nv-device-type": "DESKTOP",
         "x-device-id": deviceId,
     ]
@@ -125,7 +125,7 @@ private struct GetSessionsResponse: Decodable {
         let connectionInfo: [ConnEntry]?
         let sessionControlInfo: CtrlEntry?
 
-        struct SessionRequestData: Decodable { let appId: String? }
+        struct SessionRequestData: Decodable { let appId: AnyCodableString? }
         struct ConnEntry: Decodable { let ip: AnyCodableString?; let port: Int?; let usage: Int? }
         struct CtrlEntry: Decodable { let ip: AnyCodableString? }
     }
@@ -152,17 +152,21 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest) -> [String: 
             "clientVersion": "30.0",
             "sdkVersion": "1.0",
             "streamerVersion": 1,
-            "clientPlatformName": "mac",
+            "clientPlatformName": "windows",
             "clientRequestMonitorSettings": [[
+                "monitorId": 0,
+                "positionX": 0,
+                "positionY": 0,
                 "widthInPixels": width,
                 "heightInPixels": height,
                 "framesPerSecond": input.settings.fps,
                 "sdrHdrMode": isHdr ? 1 : 0,
-                "displayData": [
-                    "desiredContentMaxLuminance": isHdr ? 1000 : 0,
+                "displayData": isHdr ? [
+                    "desiredContentMaxLuminance": 1000,
                     "desiredContentMinLuminance": 0,
-                    "desiredContentMaxFrameAverageLuminance": isHdr ? 500 : 0,
-                ],
+                    "desiredContentMaxFrameAverageLuminance": 500,
+                ] as Any : NSNull(),
+                "hdr10PlusGamingData": NSNull(),
                 "dpi": 100,
             ]],
             "useOps": true,
@@ -236,38 +240,63 @@ private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> Stri
 // MARK: - CloudMatchClient
 
 actor CloudMatchClient {
-    private let urlSession = URLSession.shared
+    private let urlSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpAdditionalHeaders = ["Accept": "application/json"]
+        return URLSession(configuration: config)
+    }()
 
     // MARK: Create Session
 
     func createSession(_ input: SessionCreateRequest) async throws -> SessionInfo {
         let clientId = UUID().uuidString
         let deviceId = UUID().uuidString
-        let base = input.streamingBaseUrl.map {
+        let preferredBase = input.streamingBaseUrl.map {
             $0.hasSuffix("/") ? String($0.dropLast()) : $0
         } ?? "https://prod.cloudmatchbeta.nvidiagrid.net"
-
-        let params = URLComponents(string: "\(base)/v2/session")!.url!
-            .appending(queryItems: [
-                URLQueryItem(name: "keyboardLayout", value: input.settings.keyboardLayout),
-                URLQueryItem(name: "languageCode", value: input.settings.gameLanguage),
-            ])
+        let fallbackBase = "https://prod.cloudmatchbeta.nvidiagrid.net"
 
         let body = buildSessionRequestBody(input)
-        var request = URLRequest(url: params)
-        request.httpMethod = "POST"
-        for (k, v) in gfnHeaders(token: input.token, clientId: clientId, deviceId: deviceId, includeOrigin: true) {
-            request.setValue(v, forHTTPHeaderField: k)
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        print("[CloudMatch] bodySize: \(bodyData.count) bytes")
+        let headers = gfnHeaders(token: input.token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
+        let queryItems = [
+            URLQueryItem(name: "keyboardLayout", value: input.settings.keyboardLayout),
+            URLQueryItem(name: "languageCode", value: input.settings.gameLanguage),
+        ]
 
-        let (data, resp) = try await urlSession.data(for: request)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            let msg = String(data: data, encoding: .utf8) ?? ""
-            throw CloudMatchError.sessionCreateFailed(msg)
+        let bases = preferredBase == fallbackBase ? [preferredBase] : [preferredBase, fallbackBase]
+        var lastError: Error?
+
+        for base in bases {
+            let params = URLComponents(string: "\(base)/v2/session")!.url!
+                .appending(queryItems: queryItems)
+            var request = URLRequest(url: params)
+            request.httpMethod = "POST"
+            for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+            request.setValue("\(bodyData.count)", forHTTPHeaderField: "Content-Length")
+            request.httpBody = bodyData
+            print("[CloudMatch] createSession POST \(params), appId=\(input.appId)")
+
+            let (data, resp) = try await urlSession.data(for: request)
+            let statusCode = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            print("[CloudMatch] createSession response: HTTP \(statusCode)")
+            if statusCode == 200 {
+                let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+                return try toSessionInfo(base: base, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
+            }
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            print("[CloudMatch] createSession failed: HTTP \(statusCode) body: \(raw.prefix(500))")
+            // Clean up phantom session the server allocated despite the error
+            if let errPayload = try? JSONDecoder().decode(CloudMatchResponse.self, from: data),
+               !errPayload.session.sessionId.isEmpty {
+                let sid = errPayload.session.sessionId
+                print("[CloudMatch] cleaning phantom session \(sid)")
+                try? await stopSession(sessionId: sid, token: input.token, base: base)
+            }
+            lastError = CloudMatchError.sessionCreateFailed(raw)
         }
-        let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: base, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
+        throw lastError!
     }
 
     // MARK: Poll Session
@@ -301,12 +330,17 @@ actor CloudMatchClient {
     func getActiveSessions(token: String, base: String) async throws -> [ActiveSessionInfo] {
         let url = URL(string: "\(base)/v2/sessions")!
         var request = URLRequest(url: url)
-        request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
-        let (data, _) = try await urlSession.data(for: request)
-        let resp = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
-        return (resp.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
-            let appId = entry.sessionRequestData?.appId
+        let clientId = UUID().uuidString
+        let deviceId = UUID().uuidString
+        let headers = gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
+        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        let (data, resp) = try await urlSession.data(for: request)
+        let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        print("[CloudMatch] getActiveSessions HTTP \(httpStatus), \(data.count) bytes")
+        if let raw = String(data: data, encoding: .utf8) { print("[CloudMatch] getActiveSessions raw: \(raw.prefix(500))") }
+        let decoded = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
+        return (decoded.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
+            let appId = entry.sessionRequestData?.appId?.value
             let sigConn = entry.connectionInfo?.first { $0.usage == 14 && $0.ip?.value != nil }
                        ?? entry.connectionInfo?.first { $0.ip?.value != nil }
             let serverIp = sigConn?.ip?.value ?? entry.sessionControlInfo?.ip?.value
