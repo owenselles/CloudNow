@@ -43,14 +43,23 @@ struct StreamView: View {
                 connectingView
             case .streaming:
                 streamingView
+            case .reconnecting(let attempt):
+                reconnectingView(attempt: attempt)
             case .disconnected(let reason):
                 disconnectedView(reason)
             case .failed(let message):
                 failedView(message)
+            case .sessionEnded:
+                sessionEndedView
             }
         }
         .ignoresSafeArea()
-        .task { await startSession() }
+        .task {
+            streamController.onReconnectNeeded = { [self] in
+                await self.reclaimSession()
+            }
+            await startSession()
+        }
         .onDisappear { streamController.disconnect() }
         // During streaming, VideoSurfaceView is first responder and intercepts Menu via UIKit,
         // signaling us through menuPressCount. .onExitCommand only fires in non-streaming states
@@ -233,6 +242,9 @@ struct StreamView: View {
                 if !streamController.stats.gpuType.isEmpty {
                     Label(streamController.stats.gpuType, systemImage: "cpu")
                 }
+                if let session = createdSession, !session.zone.isEmpty {
+                    Label(session.zone, systemImage: "server.rack")
+                }
                 if let sub = viewModel.subscription, !sub.isUnlimited, let rem = sub.remainingMinutes {
                     Divider().overlay(.white.opacity(0.4))
                     Label {
@@ -325,6 +337,41 @@ struct StreamView: View {
     }
 
     // MARK: Disconnected / Failed
+
+    private func reconnectingView(attempt: Int) -> some View {
+        VStack(spacing: 24) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Reconnecting…")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white)
+            Text("Attempt \(attempt) of 3")
+                .font(.body)
+                .foregroundStyle(.secondary)
+            Button("Cancel") { disconnect() }
+                .buttonStyle(.bordered)
+                .tint(.red)
+        }
+        .padding(60)
+    }
+
+    private var sessionEndedView: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 60))
+                .foregroundStyle(.green)
+            Text("Session Ended")
+                .font(.title.weight(.bold))
+                .foregroundStyle(.white)
+            Text("Your game session has ended.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+            Button("Exit") { disconnect() }
+                .buttonStyle(.bordered)
+                .tint(.blue)
+        }
+        .padding(60)
+    }
 
     private func disconnectedView(_ reason: String) -> some View {
         statusView(
@@ -566,6 +613,26 @@ struct StreamView: View {
         } catch {
             streamLog.error("startSession: FAILED: \(error)")
             streamController.fail(with: error.localizedDescription)
+        }
+    }
+
+    private func reclaimSession() async -> SessionInfo? {
+        guard let session = createdSession, let token = sessionToken else { return nil }
+        streamLog.info("reclaimSession: attempting to reclaim \(session.sessionId)")
+        do {
+            let reclaimed = try await cloudMatchClient.claimSession(
+                sessionId: session.sessionId,
+                serverIp: session.serverIp,
+                token: token,
+                base: session.streamingBaseUrl,
+                settings: settings
+            )
+            createdSession = reclaimed
+            streamLog.info("reclaimSession: success, status=\(reclaimed.status)")
+            return reclaimed
+        } catch {
+            streamLog.error("reclaimSession: failed: \(error)")
+            return nil
         }
     }
 

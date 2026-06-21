@@ -157,20 +157,15 @@ final class AuthManager {
             let refreshed = try await refresh(session: s)
             session = refreshed
             try? persist(refreshed)
-        } catch AuthError.tokenRefreshFailed {
-            // Only force re-login if the access token is actually expired. If it's still valid
-            // (we were just refreshing proactively) keep the session — it will work until expiry
-            // and retry on the next call.
+        } catch {
             if s.tokens.isExpired {
-                print("[Auth] Token expired and all refresh mechanisms exhausted — clearing session, re-login required")
+                print("[Auth] Token expired and refresh failed: \(error) — clearing session, re-login required")
                 refreshTimer?.cancel()
                 session = nil
                 KeychainService.delete()
             } else {
-                print("[Auth] Refresh failed but token still valid — keeping session, will retry on next call")
+                print("[Auth] Refresh failed but token still valid (\(Int(s.tokens.expiresAt.timeIntervalSinceNow))s left) — keeping session")
             }
-        } catch {
-            print("[Auth] refresh failed with unexpected error: \(error)")
         }
     }
 
@@ -191,9 +186,10 @@ final class AuthManager {
 
     private func performRefresh(session s: AuthSession) async throws -> AuthSession {
         var updated = s
-        // Primary: client_token grant (re-binds to clientID, works cross-client).
-        // Skip if the stored clientToken is already past its expiry — treat it the same as absent.
-        // Use ?? false so a missing expiry date is treated conservatively as expired.
+        print("[Auth] performRefresh: accessToken expires=\(s.tokens.expiresAt), " +
+              "clientToken=\(s.tokens.clientToken != nil ? "yes" : "nil") expires=\(s.tokens.clientTokenExpiresAt?.description ?? "nil"), " +
+              "refreshToken=\(s.tokens.refreshToken != nil ? "yes" : "nil"), " +
+              "idToken=\(s.tokens.idToken != nil ? "yes" : "nil")")
         let clientTokenUsable = s.tokens.clientToken != nil &&
             (s.tokens.clientTokenExpiresAt.map { $0 > Date() } ?? false)
         if !clientTokenUsable {

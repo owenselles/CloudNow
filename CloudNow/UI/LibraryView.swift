@@ -82,7 +82,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .searchable(text: $searchText, prompt: "Search library")
+        .searchable(text: $searchText, prompt: games.isEmpty ? "Loading library…" : "Search \(games.count) games")
     }
 
     private var gameGrid: some View {

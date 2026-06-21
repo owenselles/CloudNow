@@ -135,18 +135,18 @@ class GamesViewModel {
 
     // MARK: Load
 
-    private static let mainCacheKey = "gfn.cache.mainGames"
-    private static let libraryCacheKey = "gfn.cache.libraryGames"
+    private static let libraryCacheKey = "gfn.cache.libraryGames.v2"
 
     func load(authManager: AuthManager) async {
-        // Show cached data instantly
-        if mainGames.isEmpty, let cached = loadCache(Self.mainCacheKey, as: [GameInfo].self) {
-            mainGames = cached
-        }
+        // Invalidate stale v1 cache from the old panels API
+        UserDefaults.standard.removeObject(forKey: "gfn.cache.mainGames")
+        UserDefaults.standard.removeObject(forKey: "gfn.cache.libraryGames")
+
+        // Show cached library instantly (catalog is too large to cache)
         if libraryGames.isEmpty, let cached = loadCache(Self.libraryCacheKey, as: [GameInfo].self) {
             libraryGames = cached
         }
-        let hadCache = !mainGames.isEmpty
+        let hadCache = !libraryGames.isEmpty
         isLoading = !hadCache
         error = nil
         libraryError = nil
@@ -180,8 +180,7 @@ class GamesViewModel {
             }
             libraryGames = merged
 
-            // Persist to cache for next launch
-            saveCache(Self.mainCacheKey, data: fetchedMain)
+            // Only cache library (small); catalog is too large for tvOS UserDefaults
             saveCache(Self.libraryCacheKey, data: merged)
         } catch {
             if !hadCache { self.error = error.localizedDescription }
@@ -310,33 +309,53 @@ class GamesViewModel {
                 }
             }
         }
-        topZones = measured
-            .filter { $0.pingMs != nil }
-            .sorted { $0.pingMs! < $1.pingMs! }
-            .prefix(5)
-            .map { $0 }
-        print("[Zones] top 5: \(topZones.map { "\($0.id) \($0.pingMs!)ms" }.joined(separator: ", "))")
+        let reachable = measured.filter { $0.pingMs != nil }
+        let isUnlimited = subscription?.isUnlimited ?? false
+        topZones = Array(reachable
+            .sorted { autoZoneScore($0, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited) <
+                      autoZoneScore($1, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited) }
+            .prefix(5))
+        print("[Zones] top 5: \(topZones.map { "\($0.id) ping=\($0.pingMs!)ms queue=\($0.queuePosition)" }.joined(separator: ", "))")
     }
 
     func bestZoneUrl() async -> String? {
         guard !topZones.isEmpty else { return nil }
-        var best: (url: String, ping: Int)?
+        // Re-ping candidates and refresh queue data for current conditions
+        var refreshed = topZones
+        if let freshZones = try? await ZoneClient.shared.fetchZones() {
+            let queueLookup = Dictionary(uniqueKeysWithValues: freshZones.map { ($0.id, $0.queuePosition) })
+            for i in refreshed.indices {
+                if let q = queueLookup[refreshed[i].id] {
+                    refreshed[i].queuePosition = q
+                }
+            }
+        }
         await withTaskGroup(of: (String, Int?).self) { group in
-            for zone in topZones {
+            for zone in refreshed {
                 group.addTask {
                     let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
-                    return (zone.zoneUrl, ping)
+                    return (zone.id, ping)
                 }
             }
-            for await (url, ping) in group {
-                if let p = ping, (best == nil || p < best!.ping) {
-                    best = (url, p)
+            for await (id, ping) in group {
+                if let idx = refreshed.firstIndex(where: { $0.id == id }) {
+                    refreshed[idx].pingMs = ping
                 }
             }
         }
+        let reachable = refreshed.filter { $0.pingMs != nil }
+        let isUnlimited = subscription?.isUnlimited ?? false
+        let best = reachable.autoZone(isUnlimited: isUnlimited)
         if let best {
-            print("[Zones] best at launch: \(best.url) (\(best.ping)ms)")
+            print("[Zones] best at launch: \(best.zoneUrl) (ping=\(best.pingMs!)ms queue=\(best.queuePosition), unlimited=\(isUnlimited))")
         }
-        return best?.url
+        return best?.zoneUrl
+    }
+
+    private func autoZoneScore(_ zone: GFNZone, maxPing: [GFNZone], maxQueue: [GFNZone], isUnlimited: Bool) -> Double {
+        if isUnlimited { return Double(zone.pingMs ?? .max) }
+        let mp = Double(Swift.max(maxPing.compactMap(\.pingMs).max() ?? 1, 1))
+        let mq = Double(Swift.max(maxQueue.map(\.queuePosition).max() ?? 1, 1))
+        return (Double(zone.pingMs ?? Int(mp)) / mp) * 0.4 + (Double(zone.queuePosition) / mq) * 0.6
     }
 }

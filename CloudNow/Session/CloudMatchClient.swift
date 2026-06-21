@@ -328,11 +328,11 @@ actor CloudMatchClient {
     // MARK: Active Sessions
 
     func getActiveSessions(token: String, base: String) async throws -> [ActiveSessionInfo] {
-        let url = URL(string: "\(base)/v2/sessions")!
+        let url = URL(string: "\(base)/v2/session")!
         var request = URLRequest(url: url)
         let clientId = UUID().uuidString
         let deviceId = UUID().uuidString
-        let headers = gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
+        let headers = gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: false)
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         let (data, resp) = try await urlSession.data(for: request)
         let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1

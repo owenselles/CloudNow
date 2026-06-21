@@ -6,7 +6,7 @@ struct GFNZone: Identifiable, Equatable {
     let id: String           // e.g. "NP-AWS-US-N-Virginia-1"
     let region: String       // e.g. "US"
     let regionSuffix: String // e.g. "AWS-N-Virginia-1"
-    let queuePosition: Int
+    var queuePosition: Int
     let etaMs: Double?
     let zoneUrl: String
     var pingMs: Int?

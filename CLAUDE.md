@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **CloudNow** is a native tvOS app — a reverse-engineered GeForce NOW client for Apple TV. It streams PC games over WebRTC using NVIDIA's GFN protocol over WebRTC, using [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) as the WebRTC transport.
 
+## Git
+
+- **Upstream**: `origin` → `owenselles/CloudNow` (original author)
+- **Fork**: `fork` → `yowmamasita/CloudNow` (our fork — push here)
+- `project.pbxproj` contains our dev team ID (`7RX5G7H8DW`) and deployment target (`18.0`) — don't commit this to branches intended for upstream PRs
+
 ## Building
 
 - **Xcode 16+**, targeting tvOS 17+

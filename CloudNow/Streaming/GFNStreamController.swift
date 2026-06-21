@@ -27,8 +27,10 @@ enum StreamState: Equatable {
     case idle
     case connecting
     case streaming
+    case reconnecting(attempt: Int)
     case disconnected(reason: String)
     case failed(message: String)
+    case sessionEnded
 }
 
 // MARK: - Stream Statistics
@@ -88,6 +90,11 @@ final class GFNStreamController: NSObject {
     private var inputReady = false
     private var lastBytesReceived: Double = 0
     private var lastStatsTime: Date = .distantPast
+    private var wasStreaming = false
+    private var reconnectAttempt = 0
+    private static let maxReconnectAttempts = 3
+    /// Set by the caller to enable auto-reconnect on ICE disconnect.
+    var onReconnectNeeded: (() async -> SessionInfo?)?
 
     private static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
@@ -162,6 +169,8 @@ final class GFNStreamController: NSObject {
 
     func disconnect() {
         statsTimer?.invalidate()
+        wasStreaming = false
+        reconnectAttempt = 0
         inputSender?.stop()
         signaling?.disconnect()
         peerConnection?.close()
@@ -187,6 +196,67 @@ final class GFNStreamController: NSObject {
         menuPressCount = 0
         timeWarning = nil
         state = .idle
+    }
+
+    // MARK: Auto-Reconnect
+
+    private func attemptReconnect() {
+        reconnectAttempt += 1
+        let attempt = reconnectAttempt
+        gfnLog.info("attemptReconnect: attempt \(attempt)/\(Self.maxReconnectAttempts)")
+
+        guard attempt <= Self.maxReconnectAttempts, onReconnectNeeded != nil else {
+            gfnLog.info("attemptReconnect: giving up, showing sessionEnded")
+            state = .sessionEnded
+            return
+        }
+
+        state = .reconnecting(attempt: attempt)
+
+        // Tear down current peer connection before reconnecting
+        inputSender?.stop()
+        signaling?.disconnect()
+        peerConnection?.close()
+        peerConnection = nil
+        inputDataChannel = nil
+        partiallyReliableDataChannel = nil
+        reliableSendChannel = nil
+        controlChannel = nil
+        videoTrack = nil
+        micAudioTrack = nil
+        micAudioSource = nil
+        signalingComplete = false
+        inputReady = false
+
+        let delays: [TimeInterval] = [0.5, 1.0, 2.0]
+        let delay = delays[min(attempt - 1, delays.count - 1)]
+
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self else { return }
+            guard case .reconnecting = self.state else { return }
+
+            guard let reclaim = self.onReconnectNeeded,
+                  let session = await reclaim() else {
+                gfnLog.info("attemptReconnect: reclaim failed on attempt \(attempt)")
+                if attempt >= Self.maxReconnectAttempts {
+                    self.state = .sessionEnded
+                }
+                return
+            }
+
+            gfnLog.info("attemptReconnect: reclaimed session, reconnecting WebRTC")
+            self.sessionInfo = session
+            self.setupSignaling(session: session)
+            do {
+                try await self.signaling?.connect()
+            } catch {
+                gfnLog.error("attemptReconnect: signaling failed: \(error)")
+                if attempt >= Self.maxReconnectAttempts {
+                    self.state = .sessionEnded
+                }
+            }
+        }
     }
 
     // MARK: Private — Signaling Setup
@@ -667,18 +737,29 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         }
         print("[ICE] State → \(name)")
         Task { @MainActor [weak self] in
+            guard let self else { return }
             switch newState {
             case .connected, .completed:
-                self?.state = .streaming
-                self?.startStatsTimer()
+                self.wasStreaming = true
+                self.reconnectAttempt = 0
+                self.state = .streaming
+                self.startStatsTimer()
             case .disconnected:
-                self?.statsTimer?.invalidate()
-                self?.statsTimer = nil
-                self?.state = .disconnected(reason: "ICE disconnected")
+                self.statsTimer?.invalidate()
+                self.statsTimer = nil
+                if self.wasStreaming {
+                    self.attemptReconnect()
+                } else {
+                    self.state = .disconnected(reason: "ICE disconnected")
+                }
             case .failed:
-                self?.statsTimer?.invalidate()
-                self?.statsTimer = nil
-                self?.state = .failed(message: "ICE connection failed")
+                self.statsTimer?.invalidate()
+                self.statsTimer = nil
+                if self.wasStreaming {
+                    self.attemptReconnect()
+                } else {
+                    self.state = .failed(message: "ICE connection failed")
+                }
             default:
                 break
             }
