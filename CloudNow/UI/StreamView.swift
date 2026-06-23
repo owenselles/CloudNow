@@ -232,13 +232,13 @@ struct StreamView: View {
                 if !streamController.stats.selectedCandidatePairId.isEmpty {
                     Label(
                         "ICE \(streamController.stats.selectedProtocol.uppercased()) "
-                        + "\(streamController.stats.localCandidateType) -> \(streamController.stats.remoteCandidateType)",
+                            + "\(streamController.stats.localCandidateType) -> \(streamController.stats.remoteCandidateType)",
                         systemImage: "point.3.connected.trianglepath.dotted"
                     )
                     Label(
                         "Remote \(streamController.stats.remoteCandidateAddress)"
-                        + " · available \(streamController.stats.availableIncomingBitrateKbps / 1000) Mbps"
-                        + " · switches \(streamController.stats.candidatePairChanges)",
+                            + " · available \(streamController.stats.availableIncomingBitrateKbps / 1000) Mbps"
+                            + " · switches \(streamController.stats.candidatePairChanges)",
                         systemImage: "arrow.left.arrow.right"
                     )
                 }

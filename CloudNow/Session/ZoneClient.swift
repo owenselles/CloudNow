@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Zone Model
 
-struct GFNZone: Identifiable, Equatable, Sendable {
+struct GFNZone: Identifiable, Equatable {
     let id: String // e.g. "NP-AWS-US-N-Virginia-1"
     let region: String // e.g. "US"
     let regionSuffix: String // e.g. "AWS-N-Virginia-1"
@@ -114,7 +114,8 @@ actor ZoneClient {
     func prewarmAutomaticRouting() async {
         let now = Date()
         guard !isPrewarming,
-              lastPrewarmAt.map({ now.timeIntervalSince($0) >= Self.prewarmInterval }) ?? true else {
+              lastPrewarmAt.map({ now.timeIntervalSince($0) >= Self.prewarmInterval }) ?? true
+        else {
             return
         }
 
@@ -130,11 +131,11 @@ actor ZoneClient {
             let batchSize = 6
             for start in stride(from: 0, to: staleZones.count, by: batchSize) {
                 let end = min(start + batchSize, staleZones.count)
-                let batch = staleZones[start..<end]
+                let batch = staleZones[start ..< end]
                 await withTaskGroup(of: (String, Int?).self) { group in
                     for zone in batch {
                         group.addTask { [zone] in
-                            (zone.id, await self.measurePing(to: zone.zoneUrl))
+                            await (zone.id, self.measurePing(to: zone.zoneUrl))
                         }
                     }
                     for await (id, ping) in group {
@@ -156,7 +157,8 @@ actor ZoneClient {
     func cachedAutomaticZoneUrl(isUnlimited: Bool) -> String? {
         let key = isUnlimited ? "unlimited" : "standard"
         guard let record = autoRouteCache[key],
-              Date().timeIntervalSince(record.selectedAt) <= Self.autoRouteMaxAge else {
+              Date().timeIntervalSince(record.selectedAt) <= Self.autoRouteMaxAge
+        else {
             return nil
         }
         return record.zoneUrl
@@ -199,11 +201,13 @@ actor ZoneClient {
     private func effectivePingMs(from record: LatencyRecord?, now: Date) -> Double? {
         if let measuredAt = record?.sessionMeasuredAt,
            now.timeIntervalSince(measuredAt) <= Self.sessionRttMaxAge,
-           let rtt = record?.sessionRttMs {
+           let rtt = record?.sessionRttMs
+        {
             return rtt
         }
         if let measuredAt = record?.headMeasuredAt,
-           now.timeIntervalSince(measuredAt) <= Self.headPingMaxAge {
+           now.timeIntervalSince(measuredAt) <= Self.headPingMaxAge
+        {
             return record?.headPingMs
         }
         return nil

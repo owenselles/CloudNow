@@ -453,14 +453,14 @@ final class GFNSignalingClient {
                         connection.stateUpdateHandler = nil
                         print("[Signaling] Connected (WebSocket ready) via \(candidateHost)")
                         continuation.resume()
-                    case .failed(let error):
+                    case let .failed(error):
                         connection.stateUpdateHandler = nil
                         print("[Signaling] Connection failed (\(candidateHost)): \(error)")
                         continuation.resume(throwing: error)
                     case .cancelled:
                         connection.stateUpdateHandler = nil
                         continuation.resume(throwing: SignalingError.cancelled)
-                    case .waiting(let error):
+                    case let .waiting(error):
                         let description = "\(error)"
                         if description.contains("53") || description.contains("ECONNABORTED") {
                             connection.stateUpdateHandler = nil

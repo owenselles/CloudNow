@@ -288,8 +288,7 @@ actor CloudMatchClient {
         routingZoneUrl: String? = nil,
         clientId: String,
         deviceId: String
-    ) async throws -> SessionInfo
-    {
+    ) async throws -> SessionInfo {
         let effectiveBase = serverIp.map { "https://\($0)" } ?? base
         let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
         var request = URLRequest(url: url)

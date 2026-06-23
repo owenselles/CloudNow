@@ -278,10 +278,10 @@ final class GFNStreamController: NSObject {
 
     private func handleOffer(sdp: String) async {
         guard let session = sessionInfo else { return }
-#if DEBUG
-        print("[Stream] Offer SDP (\(sdp.count) chars):")
-        sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
-#endif
+        #if DEBUG
+            print("[Stream] Offer SDP (\(sdp.count) chars):")
+            sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+        #endif
 
         // Configure audio session for real-time streaming before creating the peer connection.
         // .playback + .moviePlayback gives the lowest latency path; allowBluetooth covers
@@ -404,10 +404,10 @@ final class GFNStreamController: NSObject {
                 ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(codecFilteredSdp))
                 : codecFilteredSdp
             let mangledAnswerSdp = SDPMunger.injectBandwidth(h265SafeSdp, videoKbps: settings.maxBitrateKbps)
-#if DEBUG
-            print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
-            mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
-#endif
+            #if DEBUG
+                print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
+                mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+            #endif
 
             // Set local description
             let localSDP = LKRTCSessionDescription(type: .answer, sdp: mangledAnswerSdp)
@@ -756,7 +756,7 @@ final class GFNStreamController: NSObject {
             || stats.remoteCandidateType.lowercased() == "relay"
         if protocolName == "tcp" || protocolName == "tls" {
             stats.selectedNetworkPath = "TCP/TLS fallback"
-        } else if usesRelay && protocolName == "udp" {
+        } else if usesRelay, protocolName == "udp" {
             stats.selectedNetworkPath = "TURN/UDP relay"
         } else if protocolName == "udp" {
             stats.selectedNetworkPath = "Direct UDP"
@@ -768,7 +768,8 @@ final class GFNStreamController: NSObject {
         if stats.rttMs > 0,
            lastZoneRttFeedbackAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true,
            let zoneUrl = sessionInfo?.zone,
-           !zoneUrl.isEmpty {
+           !zoneUrl.isEmpty
+        {
             lastZoneRttFeedbackAt = now
             let rttMs = stats.rttMs
             Task { await ZoneClient.shared.recordSessionRtt(zoneUrl: zoneUrl, rttMs: rttMs) }
