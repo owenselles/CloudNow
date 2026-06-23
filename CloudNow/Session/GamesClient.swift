@@ -22,16 +22,16 @@ actor GamesClient {
     // MARK: Fetch Main Game List
 
     func fetchMainGames(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
-        let vpcId = (try? await fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
         var games = try await fetchPanels(token: token, panelNames: ["MAIN"], vpcId: vpcId)
-        games = (try? await enrich(token: token, vpcId: vpcId, games: games)) ?? games
+        games = await (try? enrich(token: token, vpcId: vpcId, games: games)) ?? games
         return games
     }
 
     // MARK: Fetch Library (owned/purchased games)
 
     func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> LibraryFetchResult {
-        let vpcId = (try? await fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
         let ownedApps = try await fetchOwnedApps(token: token, vpcId: vpcId)
         let ownedIds = ownedApps.compactMap { $0.id?.stringValue }
         let metadataResult = try await fetchMetadataBestEffort(token: token, appIds: ownedIds, vpcId: vpcId)
@@ -66,7 +66,7 @@ actor GamesClient {
         let chunkSize = 40
 
         for start in stride(from: 0, to: ids.count, by: chunkSize) {
-            let chunk = Array(ids[start..<min(start + chunkSize, ids.count)])
+            let chunk = Array(ids[start ..< min(start + chunkSize, ids.count)])
             let payload = try await fetchMetadata(token: token, appIds: chunk, vpcId: vpcId)
             for app in payload {
                 guard let rawId = app.id else { continue }
@@ -77,7 +77,7 @@ actor GamesClient {
         return games.map { game in
             guard let meta = metaById[game.id] else { return game }
             let boxArt = meta.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) }
-            let hero   = (meta.images?.TV_BANNER ?? meta.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) }
+            let hero = (meta.images?.TV_BANNER ?? meta.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) }
             return GameInfo(
                 id: game.id,
                 title: meta.title ?? game.title,
@@ -95,7 +95,7 @@ actor GamesClient {
         var apps: [AppData] = []
         let chunkSize = 40
         for start in stride(from: 0, to: appIds.count, by: chunkSize) {
-            let chunk = Array(appIds[start..<min(start + chunkSize, appIds.count)])
+            let chunk = Array(appIds[start ..< min(start + chunkSize, appIds.count)])
             let payloadApps = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
             cacheMetadata(payloadApps)
             apps.append(contentsOf: payloadApps)
@@ -109,7 +109,7 @@ actor GamesClient {
         var failedChunkCount = 0
         let chunkSize = 40
         for start in stride(from: 0, to: appIds.count, by: chunkSize) {
-            let chunk = Array(appIds[start..<min(start + chunkSize, appIds.count)])
+            let chunk = Array(appIds[start ..< min(start + chunkSize, appIds.count)])
             do {
                 let payloadApps = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
                 cacheMetadata(payloadApps)
@@ -128,7 +128,7 @@ actor GamesClient {
     private func fetchMetadataChunk(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
         let variables: [String: Any] = ["vpcId": vpcId, "locale": "en_US", "appIds": appIds]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.metadataQueryHash]]
-        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0..<Int.max), radix: 16))"
+        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0 ..< Int.max), radix: 16))"
 
         var comps = URLComponents(string: GamesClient.graphqlURL)!
         comps.queryItems = [
@@ -218,14 +218,14 @@ actor GamesClient {
                 "variants": [
                     "gfn": [
                         "library": [
-                            "status": ["notEquals": "NOT_OWNED"]
-                        ]
-                    ]
-                ]
-            ]
+                            "status": ["notEquals": "NOT_OWNED"],
+                        ],
+                    ],
+                ],
+            ],
         ]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.ownedAppsQueryHash]]
-        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0..<Int.max), radix: 16))"
+        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0 ..< Int.max), radix: 16))"
 
         var comps = URLComponents(string: GamesClient.graphqlURL)!
         comps.queryItems = [
@@ -267,7 +267,7 @@ actor GamesClient {
         let variables: [String: Any] = ["vpcId": vpcId, "locale": "en_US", "panelNames": panelNames]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.panelsQueryHash]]
         let requestType = panelNames.contains("LIBRARY") ? "panels/Library" : "panels/MainV2"
-        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0..<Int.max), radix: 16))"
+        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0 ..< Int.max), radix: 16))"
 
         var comps = URLComponents(string: GamesClient.graphqlURL)!
         comps.queryItems = [
@@ -336,7 +336,8 @@ actor GamesClient {
         let selectedVariantId = variantSources.first { $0.gfn?.library?.selected == true }?.id
         if let selectedVariantId,
            let selectedIndex = variants.firstIndex(where: { $0.id == selectedVariantId }),
-           selectedIndex > 0 {
+           selectedIndex > 0
+        {
             let selected = variants.remove(at: selectedIndex)
             variants.insert(selected, at: 0)
         }
@@ -381,7 +382,7 @@ actor GamesClient {
 
     private func isNumericId(_ s: String?) -> Bool {
         guard let s else { return false }
-        return s.allSatisfy { $0.isNumber } && !s.isEmpty
+        return s.allSatisfy(\.isNumber) && !s.isEmpty
     }
 
     private func jsonString(_ obj: [String: Any]) -> String {
@@ -527,10 +528,10 @@ enum GamesError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .fetchFailed(let message): return "Games fetch failed: \(message)"
-        case .graphql(let message): return "Games GraphQL error: \(message)"
-        case .pagination(let message): return "Games pagination failed: \(message)"
-        case .unauthorized: return "Games authentication was rejected."
+        case let .fetchFailed(message): "Games fetch failed: \(message)"
+        case let .graphql(message): "Games GraphQL error: \(message)"
+        case let .pagination(message): "Games pagination failed: \(message)"
+        case .unauthorized: "Games authentication was rejected."
         }
     }
 }

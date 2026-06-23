@@ -47,7 +47,7 @@ struct GameCardSkeleton: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 12)
             .fill(Color.gray.opacity(0.2))
-            .aspectRatio(2/3, contentMode: .fit)
+            .aspectRatio(2 / 3, contentMode: .fit)
             .shimmer()
     }
 }

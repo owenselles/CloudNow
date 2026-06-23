@@ -1,9 +1,9 @@
 import SwiftUI
 
 private enum LibrarySortOrder: String, CaseIterable {
-    case `default`   = "Default"
-    case titleAZ     = "A → Z"
-    case titleZA     = "Z → A"
+    case `default` = "Default"
+    case titleAZ = "A → Z"
+    case titleZA = "Z → A"
     case recentFirst = "Recently Played"
 }
 
@@ -19,11 +19,11 @@ struct LibraryView: View {
     @State private var selectedStore: String? = nil
 
     private let columns = [
-        GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40)
+        GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40),
     ]
 
     private var availableStores: [String] {
-        let stores = Set(games.flatMap { $0.ownedStores }
+        let stores = Set(games.flatMap(\.ownedStores)
             .filter { $0 != "unknown" })
         return stores.sorted()
     }
@@ -54,10 +54,10 @@ struct LibraryView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if games.isEmpty && viewModel.isLibraryLoading {
+            if games.isEmpty, viewModel.isLibraryLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
-                        ForEach(0..<12, id: \.self) { _ in
+                        ForEach(0 ..< 12, id: \.self) { _ in
                             GameCardSkeleton()
                         }
                     }
@@ -124,41 +124,41 @@ struct LibraryView: View {
                 }
                 LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(filteredGames) { game in
-                    Button {
-                        onPlay(viewModel.gameWithPreferredStore(game))
-                    } label: {
-                        GameCardLabel(game: game)
-                    }
-                    .aspectRatio(2/3, contentMode: .fit)
-                    .buttonStyle(.card)
-                    .contextMenu {
                         Button {
-                            viewModel.toggleFavorite(game.id)
+                            onPlay(viewModel.gameWithPreferredStore(game))
                         } label: {
-                            let isFav = viewModel.favoriteIds.contains(game.id)
-                            Label(
-                                isFav ? "Remove from Favorites" : "Add to Favorites",
-                                systemImage: isFav ? "star.slash.fill" : "star"
-                            )
+                            GameCardLabel(game: game)
                         }
-                        if game.variants.count > 1 {
-                            Menu("Launch via...") {
-                                ForEach(game.variants, id: \.id) { variant in
-                                    Button {
-                                        viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
-                                    } label: {
-                                        let isSelected = viewModel.preferredVariantId(for: game) == variant.id
-                                        if isSelected {
-                                            Label(variant.storeName, systemImage: "checkmark")
-                                        } else {
-                                            Text(variant.storeName)
+                        .aspectRatio(2 / 3, contentMode: .fit)
+                        .buttonStyle(.card)
+                        .contextMenu {
+                            Button {
+                                viewModel.toggleFavorite(game.id)
+                            } label: {
+                                let isFav = viewModel.favoriteIds.contains(game.id)
+                                Label(
+                                    isFav ? "Remove from Favorites" : "Add to Favorites",
+                                    systemImage: isFav ? "star.slash.fill" : "star"
+                                )
+                            }
+                            if game.variants.count > 1 {
+                                Menu("Launch via...") {
+                                    ForEach(game.variants, id: \.id) { variant in
+                                        Button {
+                                            viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
+                                        } label: {
+                                            let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+                                            if isSelected {
+                                                Label(variant.storeName, systemImage: "checkmark")
+                                            } else {
+                                                Text(variant.storeName)
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
                 }
                 .padding(60)
                 .padding(.top, 0)
@@ -212,12 +212,12 @@ struct GameBoxArt: View {
     var body: some View {
         AsyncImage(url: url.flatMap { URL(string: $0) }) { phase in
             switch phase {
-            case .success(let image):
-                image.resizable().aspectRatio(2/3, contentMode: .fill)
+            case let .success(image):
+                image.resizable().aspectRatio(2 / 3, contentMode: .fill)
             case .failure:
                 Rectangle()
                     .fill(Color.gray.opacity(0.2))
-                    .aspectRatio(2/3, contentMode: .fit)
+                    .aspectRatio(2 / 3, contentMode: .fit)
                     .shimmer()
                     .onAppear {
                         guard attempt < 3 else { return }
@@ -229,10 +229,10 @@ struct GameBoxArt: View {
             case .empty:
                 Rectangle()
                     .fill(Color.gray.opacity(0.2))
-                    .aspectRatio(2/3, contentMode: .fit)
+                    .aspectRatio(2 / 3, contentMode: .fit)
                     .shimmer()
             @unknown default:
-                Color.gray.opacity(0.2).aspectRatio(2/3, contentMode: .fit)
+                Color.gray.opacity(0.2).aspectRatio(2 / 3, contentMode: .fit)
             }
         }
         .id(attempt)

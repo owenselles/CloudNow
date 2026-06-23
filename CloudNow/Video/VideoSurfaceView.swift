@@ -1,8 +1,8 @@
 // NOTE: Requires WebRTC SPM package (https://github.com/livekit/webrtc-xcframework)
 
 import AVFoundation
-import UIKit
 import LiveKitWebRTC
+import UIKit
 
 // MARK: - VideoSurfaceView
 
@@ -13,8 +13,15 @@ import LiveKitWebRTC
 /// Also acts as first responder for hardware keyboard input and pointer (mouse)
 /// input, forwarding events to `inputHandler` as GFN protocol packets.
 final class VideoSurfaceView: UIView {
-    override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
-    private var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
+    override class var layerClass: AnyClass {
+        AVSampleBufferDisplayLayer.self
+    }
+
+    // swiftlint:disable:next force_cast - reason: layerClass override above guarantees self.layer is AVSampleBufferDisplayLayer
+    private var displayLayer: AVSampleBufferDisplayLayer {
+        layer as! AVSampleBufferDisplayLayer
+    }
+
     private let renderer = WebRTCFrameRenderer()
     private var currentTrack: LKRTCVideoTrack?
 
@@ -70,8 +77,8 @@ final class VideoSurfaceView: UIView {
         renderer.displayLayer = displayLayer
     }
 
-    // Become first responder as soon as the view enters a window so hardware
-    // keyboard events are directed here rather than the focus engine.
+    /// Become first responder as soon as the view enters a window so hardware
+    /// keyboard events are directed here rather than the focus engine.
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
@@ -81,7 +88,9 @@ final class VideoSurfaceView: UIView {
 
     // MARK: - First Responder / Keyboard
 
-    override var canBecomeFirstResponder: Bool { true }
+    override var canBecomeFirstResponder: Bool {
+        true
+    }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
@@ -92,7 +101,7 @@ final class VideoSurfaceView: UIView {
                 // force-quitting the app. If the overlay is open, treat this as "close overlay".
                 if overlayVisible { menuPressHandler?() }
                 handled = true
-            } else if press.type == .playPause && !gamepadModeActive {
+            } else if press.type == .playPause, !gamepadModeActive {
                 // Play/Pause toggles the HUD overlay (Siri Remote only).
                 // Suppressed when a gamepad is in control — the overlay is toggled there
                 // via Options long press detected in InputSender.tick().
@@ -128,7 +137,6 @@ final class VideoSurfaceView: UIView {
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         pressesEnded(presses, with: event)
     }
-
 }
 
 // MARK: - WebRTC Video Renderer
@@ -138,7 +146,7 @@ final class VideoSurfaceView: UIView {
 private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     weak var displayLayer: AVSampleBufferDisplayLayer?
 
-    func setSize(_ size: CGSize) {}
+    func setSize(_: CGSize) {}
 
     func renderFrame(_ frame: LKRTCVideoFrame?) {
         guard let frame else { return }
@@ -188,7 +196,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         // AVSampleBufferDisplayLayer on tvOS requires biplanar NV12, not three-plane I420
         guard CVPixelBufferCreate(kCFAllocatorDefault, w, h,
                                   kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &pb) == kCVReturnSuccess,
-              let pb else { return nil }
+            let pb else { return nil }
         CVPixelBufferLockBaseAddress(pb, [])
         defer { CVPixelBufferUnlockBaseAddress(pb, []) }
 
@@ -196,7 +204,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         if let dst = CVPixelBufferGetBaseAddressOfPlane(pb, 0) {
             let src = i420.dataY
             let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
-            for row in 0..<h {
+            for row in 0 ..< h {
                 memcpy(dst.advanced(by: row * dstStride), src.advanced(by: row * Int(i420.strideY)), w)
             }
         }
@@ -207,12 +215,12 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             let srcV = i420.dataV
             let dstStride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
             let uvRows = h / 2, uvCols = w / 2
-            for row in 0..<uvRows {
+            for row in 0 ..< uvRows {
                 let uRow = srcU.advanced(by: row * Int(i420.strideU))
                 let vRow = srcV.advanced(by: row * Int(i420.strideV))
                 let dstRow = dst.advanced(by: row * dstStride)
-                for col in 0..<uvCols {
-                    dstRow[col * 2]     = uRow[col]
+                for col in 0 ..< uvCols {
+                    dstRow[col * 2] = uRow[col]
                     dstRow[col * 2 + 1] = vRow[col]
                 }
             }
@@ -246,7 +254,7 @@ struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
     let streamController: GFNStreamController
     var showOverlay: Bool = false
 
-    func makeUIViewController(context: Context) -> StreamingViewController {
+    func makeUIViewController(context _: Context) -> StreamingViewController {
         let vc = StreamingViewController()
         Task { @MainActor in
             streamController.bindVideoView(vc.videoSurface)
@@ -254,7 +262,7 @@ struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
         return vc
     }
 
-    func updateUIViewController(_ vc: StreamingViewController, context: Context) {
+    func updateUIViewController(_ vc: StreamingViewController, context _: Context) {
         vc.videoSurface.videoTrack = streamController.videoTrack
         vc.controllerUserInteractionEnabled = showOverlay
         vc.videoSurface.overlayVisible = showOverlay

@@ -5,8 +5,8 @@ import Security
 // MARK: - Constants
 
 enum NVIDIAAuth {
-    static let authEndpoint    = "https://login.nvidia.com/authorize"
-    static let tokenEndpoint   = "https://login.nvidia.com/token"
+    static let authEndpoint = "https://login.nvidia.com/authorize"
+    static let tokenEndpoint = "https://login.nvidia.com/token"
     static let deviceAuthorizeEndpoint = "https://login.nvidia.com/device/authorize"
     static let clientTokenEndpoint = "https://login.nvidia.com/client_token"
     static let userinfoEndpoint = "https://login.nvidia.com/userinfo"
@@ -14,12 +14,12 @@ enum NVIDIAAuth {
 
     static let clientID = "ZU7sPN-miLujMD95LfOQ453IB0AtjM8sMyvgJ9wCXEQ"
     static let deviceFlowClientID = "zp4TWyCwtbLiUfcG0_ecveyZEK1OlNiee-8qthakGn8"
-    static let scopes   = "openid consent email tk_client age"
+    static let scopes = "openid consent email tk_client age"
     static let defaultIdpId = "PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg"
     static let defaultStreamingUrl = "https://prod.cloudmatchbeta.nvidiagrid.net/"
     static let callbackScheme = "http"
 
-    // Matches the official GFN PC client User-Agent so the NVIDIA backend accepts the token
+    /// Matches the official GFN PC client User-Agent so the NVIDIA backend accepts the token
     static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 NVIDIACEFClient/HEAD/debb5919f6 GFN-PC/2.0.83.130"
 }
 
@@ -116,8 +116,13 @@ struct AuthTokens: Codable {
     var clientToken: String?
     var clientTokenExpiresAt: Date?
 
-    var isExpired: Bool { expiresAt < Date() }
-    var isNearExpiry: Bool { expiresAt.timeIntervalSinceNow < 10 * 60 }
+    var isExpired: Bool {
+        expiresAt < Date()
+    }
+
+    var isNearExpiry: Bool {
+        expiresAt.timeIntervalSinceNow < 10 * 60
+    }
 }
 
 struct AuthUser: Codable {
@@ -369,7 +374,9 @@ actor NVIDIAAuthAPI {
         var base64 = parts[1]
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
-        while base64.count % 4 != 0 { base64 += "=" }
+        while base64.count % 4 != 0 {
+            base64 += "="
+        }
         guard let data = Data(base64Encoded: base64),
               let payload = try? JSONDecoder().decode(JWTPayload.self, from: data),
               let sub = payload.sub
@@ -383,7 +390,7 @@ actor NVIDIAAuthAPI {
         )
     }
 
-    nonisolated private func randomHex(_ byteCount: Int) -> String {
+    private nonisolated func randomHex(_ byteCount: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: byteCount)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return bytes.map { String(format: "%02x", $0) }.joined()
@@ -457,14 +464,14 @@ enum AuthError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noAuthCode: return "No authorization code received."
-        case .tokenExchangeFailed(let msg): return "Token exchange failed: \(msg)"
-        case .tokenRefreshFailed(let msg): return "Token refresh failed: \(msg)"
-        case .clientTokenFailed(let msg): return "Failed to obtain client token: \(msg)"
-        case .noSession: return "No authenticated session."
-        case .deviceFlowFailed(let msg): return "Device login failed: \(msg)"
-        case .deviceFlowExpired: return "Login code expired. Please try again."
-        case .deviceFlowDenied: return "Login was denied."
+        case .noAuthCode: "No authorization code received."
+        case let .tokenExchangeFailed(msg): "Token exchange failed: \(msg)"
+        case let .tokenRefreshFailed(msg): "Token refresh failed: \(msg)"
+        case let .clientTokenFailed(msg): "Failed to obtain client token: \(msg)"
+        case .noSession: "No authenticated session."
+        case let .deviceFlowFailed(msg): "Device login failed: \(msg)"
+        case .deviceFlowExpired: "Login code expired. Please try again."
+        case .deviceFlowDenied: "Login was denied."
         }
     }
 }

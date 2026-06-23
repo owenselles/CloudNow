@@ -5,40 +5,40 @@ import UIKit
 // MARK: - GFN Input Protocol Constants
 
 private enum GFNInput {
-    static let keyDown: UInt8      = 3
-    static let keyUp: UInt8        = 4
-    static let mouseRel: UInt8     = 7
+    static let keyDown: UInt8 = 3
+    static let keyUp: UInt8 = 4
+    static let mouseRel: UInt8 = 7
     static let mouseBtnDown: UInt8 = 8
-    static let mouseBtnUp: UInt8   = 9
-    static let mouseWheel: UInt8   = 10
-    static let gamepad: UInt8      = 12
-    // Heartbeat type (u32 LE value 2) — keeps the server's virtual gamepad alive
+    static let mouseBtnUp: UInt8 = 9
+    static let mouseWheel: UInt8 = 10
+    static let gamepad: UInt8 = 12
+    /// Heartbeat type (u32 LE value 2) — keeps the server's virtual gamepad alive
     static let heartbeatU32: UInt32 = 2
 
-    // Gamepad packet: 38 bytes, u32 LE type per GFN protocol
+    /// Gamepad packet: 38 bytes, u32 LE type per GFN protocol
     static let gamepadPacketSize = 38
     // Keyboard/mouse packets use 4-byte UInt32 LE type (matches TS InputEncoder)
-    static let keyboardPacketSize    = 18
+    static let keyboardPacketSize = 18
     static let mouseButtonPacketSize = 18
-    static let mouseMovePacketSize   = 22
-    static let mouseWheelPacketSize  = 22
+    static let mouseMovePacketSize = 22
+    static let mouseWheelPacketSize = 22
 
     // XInput button flags
-    static let dpadUp: UInt16    = 0x0001
-    static let dpadDown: UInt16  = 0x0002
-    static let dpadLeft: UInt16  = 0x0004
+    static let dpadUp: UInt16 = 0x0001
+    static let dpadDown: UInt16 = 0x0002
+    static let dpadLeft: UInt16 = 0x0004
     static let dpadRight: UInt16 = 0x0008
-    static let start: UInt16     = 0x0010
-    static let back: UInt16      = 0x0020
-    static let ls: UInt16        = 0x0040
-    static let rs: UInt16        = 0x0080
-    static let lb: UInt16        = 0x0100
-    static let rb: UInt16        = 0x0200
-    static let guide: UInt16     = 0x0400
-    static let buttonA: UInt16   = 0x1000
-    static let buttonB: UInt16   = 0x2000
-    static let buttonX: UInt16   = 0x4000
-    static let buttonY: UInt16   = 0x8000
+    static let start: UInt16 = 0x0010
+    static let back: UInt16 = 0x0020
+    static let ls: UInt16 = 0x0040
+    static let rs: UInt16 = 0x0080
+    static let lb: UInt16 = 0x0100
+    static let rb: UInt16 = 0x0200
+    static let guide: UInt16 = 0x0400
+    static let buttonA: UInt16 = 0x1000
+    static let buttonB: UInt16 = 0x2000
+    static let buttonX: UInt16 = 0x4000
+    static let buttonY: UInt16 = 0x8000
 }
 
 // MARK: - Remote Input Mode
@@ -61,7 +61,7 @@ protocol InputEventHandler: AnyObject {
 
 // MARK: - Encoded Packet
 
-enum InputPacketCategory: String, Sendable {
+enum InputPacketCategory: String {
     case heartbeat
     case gamepadSnapshot
     case keyboard
@@ -70,7 +70,7 @@ enum InputPacketCategory: String, Sendable {
     case mouseWheel
 }
 
-enum InputSendDisposition: Sendable {
+enum InputSendDisposition {
     case accepted
     case channelUnavailable
     case rejected
@@ -82,11 +82,11 @@ final class EncodedInputPacket: @unchecked Sendable {
     static let capacity = 64
 
     nonisolated(unsafe) let storage = NSMutableData(length: capacity)!
-    nonisolated(unsafe) private(set) var count = 0
-    nonisolated(unsafe) private(set) var category: InputPacketCategory = .heartbeat
-    nonisolated(unsafe) private(set) var generatedAt: UInt64 = 0
-    nonisolated(unsafe) private(set) var gamepadSlot: Int?
-    nonisolated(unsafe) private(set) var isReplaceableGamepadSnapshot = false
+    private(set) nonisolated(unsafe) var count = 0
+    private(set) nonisolated(unsafe) var category: InputPacketCategory = .heartbeat
+    private(set) nonisolated(unsafe) var generatedAt: UInt64 = 0
+    private(set) nonisolated(unsafe) var gamepadSlot: Int?
+    private(set) nonisolated(unsafe) var isReplaceableGamepadSnapshot = false
 
     func markGenerated(
         as category: InputPacketCategory,
@@ -103,7 +103,9 @@ final class EncodedInputPacket: @unchecked Sendable {
         precondition(length <= Self.capacity)
         count = length
         let bytes = UnsafeMutableRawBufferPointer(start: storage.mutableBytes, count: Self.capacity)
-        for index in 0..<length { bytes[index] = 0 }
+        for index in 0 ..< length {
+            bytes[index] = 0
+        }
         return bytes
     }
 }
@@ -115,7 +117,9 @@ final class InputEncoder {
     private var protocolVersion = 2
     private var gamepadSequence = [Int: UInt16]()
 
-    func setProtocolVersion(_ v: Int) { protocolVersion = v }
+    func setProtocolVersion(_ v: Int) {
+        protocolVersion = v
+    }
 
     // MARK: Heartbeat
 
@@ -176,6 +180,7 @@ final class InputEncoder {
     }
 
     // MARK: Keyboard
+
     // Packet (18 bytes): [UInt32 LE type][UInt16 BE vk][UInt16 BE mods][UInt16 BE scan][UInt64 BE ts]
 
     func encodeKeyboard(
@@ -197,6 +202,7 @@ final class InputEncoder {
     }
 
     // MARK: Mouse Move
+
     // Packet (22 bytes): [UInt32 LE type][Int16 BE dx][Int16 BE dy][6B reserved][UInt64 BE ts]
 
     func encodeMouseMove(dx: Int16, dy: Int16, into packet: EncodedInputPacket) {
@@ -217,6 +223,7 @@ final class InputEncoder {
     }
 
     // MARK: Mouse Button
+
     // Packet (18 bytes): [UInt32 LE type][UInt8 button][1B pad][4B reserved][UInt64 BE ts]
 
     func encodeMouseButton(down: Bool, button: UInt8, into packet: EncodedInputPacket) {
@@ -230,6 +237,7 @@ final class InputEncoder {
     }
 
     // MARK: Mouse Wheel
+
     // Packet (22 bytes): [UInt32 LE type][2B reserved][Int16 BE vert][6B reserved][UInt64 BE ts]
 
     func encodeMouseWheel(delta: Int16, into packet: EncodedInputPacket) {
@@ -251,20 +259,20 @@ final class InputEncoder {
 
     private func nextGamepadSequence(_ idx: Int) -> UInt16 {
         let current = gamepadSequence[idx] ?? 1
-        gamepadSequence[idx] = current &+ 1  // wraps at 65535
+        gamepadSequence[idx] = current &+ 1 // wraps at 65535
         return current
     }
 
     // MARK: Write Helpers
 
     private func writeUInt16LE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt16) {
-        buf[offset]     = UInt8(value & 0xFF)
+        buf[offset] = UInt8(value & 0xFF)
         buf[offset + 1] = UInt8(value >> 8)
     }
 
     private func writeTimestampLE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt64) {
-        buf[offset]     = UInt8(value        & 0xFF)
-        buf[offset + 1] = UInt8((value >> 8)  & 0xFF)
+        buf[offset] = UInt8(value & 0xFF)
+        buf[offset + 1] = UInt8((value >> 8) & 0xFF)
         buf[offset + 2] = UInt8((value >> 16) & 0xFF)
         buf[offset + 3] = UInt8((value >> 24) & 0xFF)
         buf[offset + 4] = UInt8((value >> 32) & 0xFF)
@@ -274,38 +282,38 @@ final class InputEncoder {
     }
 
     private func writeUInt32LE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt32) {
-        buf[offset]     = UInt8(value & 0xFF)
+        buf[offset] = UInt8(value & 0xFF)
         buf[offset + 1] = UInt8((value >> 8) & 0xFF)
         buf[offset + 2] = UInt8((value >> 16) & 0xFF)
         buf[offset + 3] = UInt8((value >> 24) & 0xFF)
     }
 
     private func writeUInt16BE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt16) {
-        buf[offset]     = UInt8(value >> 8)
+        buf[offset] = UInt8(value >> 8)
         buf[offset + 1] = UInt8(value & 0xFF)
     }
 
     private func writeInt16BE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: Int16) {
         let v = UInt16(bitPattern: value)
-        buf[offset]     = UInt8(v >> 8)
+        buf[offset] = UInt8(v >> 8)
         buf[offset + 1] = UInt8(v & 0xFF)
     }
 
     private func writeInt16LE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: Int16) {
         let v = UInt16(bitPattern: value)
-        buf[offset]     = UInt8(v & 0xFF)
+        buf[offset] = UInt8(v & 0xFF)
         buf[offset + 1] = UInt8(v >> 8)
     }
 
     private func writeTimestampBE(_ buf: UnsafeMutableRawBufferPointer, offset: Int, value: UInt64) {
-        buf[offset]     = UInt8((value >> 56) & 0xFF)
+        buf[offset] = UInt8((value >> 56) & 0xFF)
         buf[offset + 1] = UInt8((value >> 48) & 0xFF)
         buf[offset + 2] = UInt8((value >> 40) & 0xFF)
         buf[offset + 3] = UInt8((value >> 32) & 0xFF)
         buf[offset + 4] = UInt8((value >> 24) & 0xFF)
         buf[offset + 5] = UInt8((value >> 16) & 0xFF)
-        buf[offset + 6] = UInt8((value >>  8) & 0xFF)
-        buf[offset + 7] = UInt8((value      ) & 0xFF)
+        buf[offset + 6] = UInt8((value >> 8) & 0xFF)
+        buf[offset + 7] = UInt8(value & 0xFF)
     }
 
     private func currentTimestamp() -> UInt64 {
@@ -324,17 +332,19 @@ func mapGCControllerToXInput(_ controller: GCController, deadzone: Float = 0.15)
     }
 
     var buttons: UInt16 = 0
-    func pressed(_ e: GCControllerButtonInput) -> Bool { e.isPressed }
+    func pressed(_ e: GCControllerButtonInput) -> Bool {
+        e.isPressed
+    }
 
-    if pressed(pad.dpad.up)    { buttons |= GFNInput.dpadUp }
-    if pressed(pad.dpad.down)  { buttons |= GFNInput.dpadDown }
-    if pressed(pad.dpad.left)  { buttons |= GFNInput.dpadLeft }
+    if pressed(pad.dpad.up) { buttons |= GFNInput.dpadUp }
+    if pressed(pad.dpad.down) { buttons |= GFNInput.dpadDown }
+    if pressed(pad.dpad.left) { buttons |= GFNInput.dpadLeft }
     if pressed(pad.dpad.right) { buttons |= GFNInput.dpadRight }
     if pressed(pad.buttonMenu) { buttons |= GFNInput.start }
     if pressed(pad.buttonOptions ?? pad.buttonMenu) { buttons |= GFNInput.back }
-    if let ls = pad.leftThumbstickButton,  pressed(ls) { buttons |= GFNInput.ls }
+    if let ls = pad.leftThumbstickButton, pressed(ls) { buttons |= GFNInput.ls }
     if let rs = pad.rightThumbstickButton, pressed(rs) { buttons |= GFNInput.rs }
-    if pressed(pad.leftShoulder)  { buttons |= GFNInput.lb }
+    if pressed(pad.leftShoulder) { buttons |= GFNInput.lb }
     if pressed(pad.rightShoulder) { buttons |= GFNInput.rb }
     if pressed(pad.buttonA) { buttons |= GFNInput.buttonA }
     if pressed(pad.buttonB) { buttons |= GFNInput.buttonB }
@@ -412,7 +422,7 @@ final class InputSender {
     private weak var channel: DataChannelSender?
     private let encoder = InputEncoder()
     private let inputQueue = DispatchQueue(label: "com.cloudnow.input", qos: .userInteractive)
-    private var packetPool = (0..<16).map { _ in EncodedInputPacket() }
+    private var packetPool = (0 ..< 16).map { _ in EncodedInputPacket() }
     private var sampler: DispatchSourceTimer?
     private var observations: [NSObjectProtocol] = []
     private var remoteMode: RemoteInputMode = .mouse
@@ -462,7 +472,7 @@ final class InputSender {
             GCMouse.mice().forEach(setupMouseHandlers)
 
             // attachController(autoSwitch:false) won't promote the mode, so do it here for a controller present at start.
-            if !extendedControllers.isEmpty && remoteMode == .mouse {
+            if !extendedControllers.isEmpty, remoteMode == .mouse {
                 remoteMode = .gamepad
                 applyRemoteMode()
                 notifyRemoteModeChanged()
@@ -489,10 +499,10 @@ final class InputSender {
             sampler = nil
             observations.forEach { NotificationCenter.default.removeObserver($0) }
             observations.removeAll()
-            extendedControllers.forEach {
-                clearControllerHandlers($0)
-                releaseControllerInput($0)
-                $0.playerIndex = .indexUnset
+            for extendedController in extendedControllers {
+                clearControllerHandlers(extendedController)
+                releaseControllerInput(extendedController)
+                extendedController.playerIndex = .indexUnset
             }
             microControllers.forEach(clearControllerHandlers)
             GCMouse.mice().forEach(clearMouseHandlers)
@@ -519,22 +529,22 @@ final class InputSender {
 
     func setPaused(_ paused: Bool) {
         inputQueue.async { [weak self] in
-            guard let self, self.isPaused != paused else { return }
-            self.isPaused = paused
-            self.pointerDelta = (0, 0)
-            self.microPointerDelta = (0, 0)
-            self.dualSensePointerDelta = (0, 0)
-            self.lastMicroDpad = (0, 0)
-            self.lastDualSenseTouchpad = (0, 0)
+            guard let self, isPaused != paused else { return }
+            isPaused = paused
+            pointerDelta = (0, 0)
+            microPointerDelta = (0, 0)
+            dualSensePointerDelta = (0, 0)
+            lastMicroDpad = (0, 0)
+            lastDualSenseTouchpad = (0, 0)
             if paused {
-                self.overlayPresses.removeAll()
-                self.overlayReplaySlots.removeAll()
-                self.steamHoldTicks.removeAll()
-                self.steamTriggeredSlots.removeAll()
-                self.releaseHeldDiscreteInputs()
-                self.sendNeutralGamepads()
+                overlayPresses.removeAll()
+                overlayReplaySlots.removeAll()
+                steamHoldTicks.removeAll()
+                steamTriggeredSlots.removeAll()
+                releaseHeldDiscreteInputs()
+                sendNeutralGamepads()
             } else {
-                self.lastSnapshots.removeAll()
+                lastSnapshots.removeAll()
             }
         }
     }
@@ -544,13 +554,13 @@ final class InputSender {
     func toggleRemoteMode() {
         inputQueue.async { [weak self] in
             guard let self else { return }
-            switch self.remoteMode {
-            case .mouse:     self.remoteMode = .gamepad
-            case .gamepad:   self.remoteMode = .dualsense
-            case .dualsense: self.remoteMode = .mouse
+            switch remoteMode {
+            case .mouse: remoteMode = .gamepad
+            case .gamepad: remoteMode = .dualsense
+            case .dualsense: remoteMode = .mouse
             }
-            self.applyRemoteMode()
-            self.notifyRemoteModeChanged()
+            applyRemoteMode()
+            notifyRemoteModeChanged()
         }
     }
 
@@ -615,7 +625,8 @@ final class InputSender {
             }
 
             if remoteMode == .dualsense,
-               let controller = extendedControllers.first(where: { $0.extendedGamepad is GCDualSenseGamepad }) {
+               let controller = extendedControllers.first(where: { $0.extendedGamepad is GCDualSenseGamepad })
+            {
                 handleDualSenseTouchpad(controller)
             }
 
@@ -641,7 +652,7 @@ final class InputSender {
         let curY = pad.dpad.yAxis.value
         // Treat the touchpad as "not being touched" when position is near centre.
         // This prevents a snap-back mouseRel when the finger lifts and dpad returns to (0,0).
-        let isTouching  = abs(curX) > 0.02 || abs(curY) > 0.02
+        let isTouching = abs(curX) > 0.02 || abs(curY) > 0.02
         let wasTouching = abs(lastMicroDpad.x) > 0.02 || abs(lastMicroDpad.y) > 0.02
         // Compute delta before updating the reference so we don't compare a value with itself.
         let dx = curX - lastMicroDpad.x
@@ -650,7 +661,7 @@ final class InputSender {
 
         switch remoteMode {
         case .mouse:
-            if isTouching && wasTouching {
+            if isTouching, wasTouching {
                 microPointerDelta.x += dx * Self.remoteSensitivity
                 microPointerDelta.y += -dy * Self.remoteSensitivity
             } else {
@@ -659,11 +670,11 @@ final class InputSender {
 
         case .gamepad:
             var buttons: UInt16 = 0
-            if pad.dpad.up.isPressed    { buttons |= GFNInput.dpadUp }
-            if pad.dpad.down.isPressed  { buttons |= GFNInput.dpadDown }
-            if pad.dpad.left.isPressed  { buttons |= GFNInput.dpadLeft }
+            if pad.dpad.up.isPressed { buttons |= GFNInput.dpadUp }
+            if pad.dpad.down.isPressed { buttons |= GFNInput.dpadDown }
+            if pad.dpad.left.isPressed { buttons |= GFNInput.dpadLeft }
             if pad.dpad.right.isPressed { buttons |= GFNInput.dpadRight }
-            if pad.buttonA.isPressed    { buttons |= GFNInput.buttonA }
+            if pad.buttonA.isPressed { buttons |= GFNInput.buttonA }
             // buttonX (Play/Pause) is reserved for the overlay toggle — not forwarded to game
 
             sendGamepadSnapshot(
@@ -682,7 +693,7 @@ final class InputSender {
             )
 
         case .dualsense:
-            break  // Siri Remote is suppressed in DualSense mode; touchpad handled separately
+            break // Siri Remote is suppressed in DualSense mode; touchpad handled separately
         }
     }
 
@@ -691,13 +702,13 @@ final class InputSender {
         let curX = dualSense.touchpadPrimary.xAxis.value
         let curY = dualSense.touchpadPrimary.yAxis.value
 
-        let isTouching  = abs(curX) > 0.02 || abs(curY) > 0.02
+        let isTouching = abs(curX) > 0.02 || abs(curY) > 0.02
         let wasTouching = abs(lastDualSenseTouchpad.x) > 0.02 || abs(lastDualSenseTouchpad.y) > 0.02
         let dx = curX - lastDualSenseTouchpad.x
         let dy = curY - lastDualSenseTouchpad.y
         lastDualSenseTouchpad = (curX, curY)
 
-        if isTouching && wasTouching {
+        if isTouching, wasTouching {
             dualSensePointerDelta.x += dx * Self.remoteSensitivity
             dualSensePointerDelta.y += -dy * Self.remoteSensitivity
         } else {
@@ -740,7 +751,7 @@ final class InputSender {
             if isOverlayButtonHeld(on: controller) {
                 var press = overlayPresses[slot] ?? OverlayPressState()
                 press.ticks += 1
-                if !press.triggered && press.ticks >= Self.overlayLongPressThreshold {
+                if !press.triggered, press.ticks >= Self.overlayLongPressThreshold {
                     press.triggered = true
                     notifyMenuToggle()
                 }
@@ -753,7 +764,8 @@ final class InputSender {
                 let ticks = (steamHoldTicks[slot] ?? 0) + 1
                 steamHoldTicks[slot] = ticks
                 if ticks >= Self.steamLongPressThreshold,
-                   steamTriggeredSlots.insert(slot).inserted {
+                   steamTriggeredSlots.insert(slot).inserted
+                {
                     sendSteamOverlayChord()
                 }
             } else {
@@ -871,19 +883,19 @@ final class InputSender {
         inputQueue.asyncAfter(deadline: .now() + .milliseconds(17)) { [weak self, weak controller] in
             guard let self,
                   let controller,
-                  self.overlayReplaySlots.remove(slot) != nil,
-                  self.controllerSlots[ObjectIdentifier(controller)] == slot else { return }
-            let current = mapGCControllerToXInput(controller, deadzone: self.deadzone)
-            self.sendGamepadSnapshot(
+                  overlayReplaySlots.remove(slot) != nil,
+                  controllerSlots[ObjectIdentifier(controller)] == slot else { return }
+            let current = mapGCControllerToXInput(controller, deadzone: deadzone)
+            sendGamepadSnapshot(
                 GamepadSnapshot(
-                    buttons: current.buttons & ~self.overlayButtonMask,
+                    buttons: current.buttons & ~overlayButtonMask,
                     leftTrigger: current.leftTrigger,
                     rightTrigger: current.rightTrigger,
                     leftStickX: current.lx,
                     leftStickY: current.ly,
                     rightStickX: current.rx,
                     rightStickY: current.ry,
-                    bitmap: self.gamepadBitmap
+                    bitmap: gamepadBitmap
                 ),
                 slot: slot,
                 force: true
@@ -926,7 +938,7 @@ final class InputSender {
     private func isOverlayButtonHeld(on controller: GCController) -> Bool {
         guard let pad = controller.extendedGamepad else { return false }
         switch overlayTriggerButton {
-        case .start:   return pad.buttonMenu.isPressed
+        case .start: return pad.buttonMenu.isPressed
         case .options: return pad.buttonOptions?.isPressed ?? false
         }
     }
@@ -934,7 +946,7 @@ final class InputSender {
     private func isSteamButtonHeld(on controller: GCController) -> Bool {
         guard let pad = controller.extendedGamepad else { return false }
         switch overlayTriggerButton {
-        case .start:   return pad.buttonOptions?.isPressed ?? false
+        case .start: return pad.buttonOptions?.isPressed ?? false
         case .options: return pad.buttonMenu.isPressed
         }
     }
@@ -1020,15 +1032,17 @@ final class InputSender {
         emitKeyboard(down: true, vk: tabVK, scancode: tabScan, modifiers: shiftModifier)
         inputQueue.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
             guard let self else { return }
-            self.emitKeyboard(down: false, vk: tabVK, scancode: tabScan, modifiers: shiftModifier)
-            self.emitKeyboard(down: false, vk: shiftVK, scancode: shiftScan, modifiers: 0)
+            emitKeyboard(down: false, vk: tabVK, scancode: tabScan, modifiers: shiftModifier)
+            emitKeyboard(down: false, vk: shiftVK, scancode: shiftScan, modifiers: 0)
         }
     }
 
     private func releaseHeldMouseButtons() {
         let buttons = heldMouseButtons.sorted()
         heldMouseButtons.removeAll()
-        for button in buttons { emitMouseButton(down: false, button: button) }
+        for button in buttons {
+            emitMouseButton(down: false, button: button)
+        }
     }
 
     private func releaseHeldDiscreteInputs() {
@@ -1091,7 +1105,7 @@ final class InputSender {
         connected.forEach { attachController($0, autoSwitch: false) }
         GCMouse.mice().forEach(setupMouseHandlers)
 
-        if extendedControllers.isEmpty && remoteMode != .mouse {
+        if extendedControllers.isEmpty, remoteMode != .mouse {
             remoteMode = .mouse
             applyRemoteMode()
             notifyRemoteModeChanged()
@@ -1104,7 +1118,7 @@ final class InputSender {
 
         input.mouseMovedHandler = { [weak self] _, deltaX, deltaY in
             guard let self, !self.isPaused else { return }
-            self.accumulatePointer(x: deltaX, y: -deltaY)
+            accumulatePointer(x: deltaX, y: -deltaY)
         }
 
         input.leftButton.pressedChangedHandler = { [weak self] _, _, pressed in
@@ -1120,7 +1134,7 @@ final class InputSender {
         input.scroll.valueChangedHandler = { [weak self] _, _, yValue in
             guard let self, !self.isPaused else { return }
             let delta = Int16(clamping: Int((-yValue * 3).rounded()))
-            if delta != 0 { self.sendMouseWheelNow(delta) }
+            if delta != 0 { sendMouseWheelNow(delta) }
         }
     }
 
@@ -1217,7 +1231,7 @@ final class InputSender {
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
-            if updateMode && extendedControllers.isEmpty && remoteMode != .mouse {
+            if updateMode, extendedControllers.isEmpty, remoteMode != .mouse {
                 remoteMode = .mouse
                 applyRemoteMode()
                 notifyRemoteModeChanged()
@@ -1229,16 +1243,16 @@ final class InputSender {
 
     private var firstFreeSlot: Int? {
         let used = Set(controllerSlots.values)
-        return (0..<4).first { !used.contains($0) }
+        return (0 ..< 4).first { !used.contains($0) }
     }
 
     private func playerIndex(for slot: Int) -> GCControllerPlayerIndex {
         switch slot {
-        case 0: return .index1
-        case 1: return .index2
-        case 2: return .index3
-        case 3: return .index4
-        default: return .indexUnset
+        case 0: .index1
+        case 1: .index2
+        case 2: .index3
+        case 3: .index4
+        default: .indexUnset
         }
     }
 
@@ -1276,15 +1290,15 @@ extension InputSender: InputEventHandler {
             let encodedModifiers: UInt16
             if down {
                 encodedModifiers = currentModifiers
-                self.heldKeys[keyID] = (
+                heldKeys[keyID] = (
                     vk: mapping.vk,
                     scancode: mapping.scancode,
                     modifiers: currentModifiers
                 )
             } else {
-                encodedModifiers = self.heldKeys.removeValue(forKey: keyID)?.modifiers ?? currentModifiers
+                encodedModifiers = heldKeys.removeValue(forKey: keyID)?.modifiers ?? currentModifiers
             }
-            self.emitKeyboard(
+            emitKeyboard(
                 down: down,
                 vk: mapping.vk,
                 scancode: mapping.scancode,
@@ -1296,7 +1310,7 @@ extension InputSender: InputEventHandler {
     func sendMouseMove(dx: Int16, dy: Int16) {
         inputQueue.async { [weak self] in
             guard let self, !self.isPaused else { return }
-            self.accumulatePointer(x: Float(dx), y: Float(dy))
+            accumulatePointer(x: Float(dx), y: Float(dy))
         }
     }
 
@@ -1312,10 +1326,10 @@ extension InputSender: InputEventHandler {
 
     private static func gfnModifiers(from flags: UIKeyModifierFlags) -> UInt16 {
         var mods: UInt16 = 0
-        if flags.contains(.shift)     { mods |= 0x0001 }
-        if flags.contains(.control)   { mods |= 0x0002 }
+        if flags.contains(.shift) { mods |= 0x0001 }
+        if flags.contains(.control) { mods |= 0x0002 }
         if flags.contains(.alternate) { mods |= 0x0004 }
-        if flags.contains(.command)   { mods |= 0x0008 }
+        if flags.contains(.command) { mods |= 0x0008 }
         return mods
     }
 

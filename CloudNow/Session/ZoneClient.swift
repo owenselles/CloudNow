@@ -3,8 +3,8 @@ import Foundation
 // MARK: - Zone Model
 
 struct GFNZone: Identifiable, Equatable, Sendable {
-    let id: String           // e.g. "NP-AWS-US-N-Virginia-1"
-    let region: String       // e.g. "US"
+    let id: String // e.g. "NP-AWS-US-N-Virginia-1"
+    let region: String // e.g. "US"
     let regionSuffix: String // e.g. "AWS-N-Virginia-1"
     let queuePosition: Int
     let etaMs: Double?
@@ -13,13 +13,13 @@ struct GFNZone: Identifiable, Equatable, Sendable {
     var isMeasuring: Bool
 
     static let regionMeta: [String: (label: String, flag: String)] = [
-        "US":   ("North America", "🇺🇸"),
-        "EU":   ("Europe", "🇪🇺"),
-        "JP":   ("Japan", "🇯🇵"),
-        "KR":   ("South Korea", "🇰🇷"),
-        "CA":   ("Canada", "🇨🇦"),
+        "US": ("North America", "🇺🇸"),
+        "EU": ("Europe", "🇪🇺"),
+        "JP": ("Japan", "🇯🇵"),
+        "KR": ("South Korea", "🇰🇷"),
+        "CA": ("Canada", "🇨🇦"),
         "THAI": ("Southeast Asia", "🇹🇭"),
-        "MY":   ("Malaysia", "🇲🇾"),
+        "MY": ("Malaysia", "🇲🇾"),
     ]
 }
 
@@ -64,7 +64,7 @@ actor ZoneClient {
 
     /// Fetches available GFN zones and their queue depths.
     func fetchZones() async throws -> [GFNZone] {
-        async let queueTask   = fetchQueueData()
+        async let queueTask = fetchQueueData()
         async let mappingTask = fetchMappingData()
         let (queueData, mappingData) = try await (queueTask, mappingTask)
 
@@ -94,9 +94,9 @@ actor ZoneClient {
 
     /// Refreshes the HTTP probe and returns the best known latency for the zone.
     func measurePing(to url: String) async -> Int? {
-        _ = await headProbe(url)  // warm-up
+        _ = await headProbe(url) // warm-up
         var samples: [Double] = []
-        for _ in 0..<2 {
+        for _ in 0 ..< 2 {
             if let ms = await headProbe(url) { samples.append(ms) }
         }
         guard !samples.isEmpty else { return nil }

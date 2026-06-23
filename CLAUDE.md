@@ -14,6 +14,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Distribution is sideload-only (no App Store target)
 - No test suite, no linter configured
 
+## Linting
+
+Run lint after every Swift edit. CI fails PRs on violations.
+
+```bash
+# Format check (no mutation)
+swiftformat --lint --config .swiftformat CloudNow
+# Lint check
+swiftlint --strict --config .swiftlint.yml CloudNow
+# Auto-fix everything fixable
+swiftformat --config .swiftformat CloudNow && swiftlint --fix --config .swiftlint.yml CloudNow
+```
+
+### Escape-hatch convention
+
+When a rule genuinely cannot apply (e.g., a force-cast guarded by `layerClass`), use a single-line disable directive WITH a rationale:
+
+```swift
+// swiftlint:disable:next force_cast - reason: <one-sentence why>
+```
+
+Never use block `disable`/`enable` pairs and never omit the rationale.
+
+### Pinned versions
+
+Tools pinned in `.pre-commit-config.yaml` and `.github/workflows/lint.yml`: SwiftLint 0.63.3, SwiftFormat 0.61.1.
+
 ## Architecture
 
 All source lives in `CloudNow/`. Five functional areas:
