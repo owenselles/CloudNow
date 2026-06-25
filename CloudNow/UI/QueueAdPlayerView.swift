@@ -61,7 +61,7 @@ struct QueueAdPlayerView: View {
                     .padding(10)
                 }
                 .onAppear { loadPlayer(url: url) }
-                .onChange(of: ad.adId) { _ in reload(url: url) }
+                .onChange(of: ad.adId) { reload(url: url) }
                 .onDisappear { teardown() }
             } else {
                 RoundedRectangle(cornerRadius: 12)

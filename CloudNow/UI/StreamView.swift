@@ -678,7 +678,7 @@ struct StreamView: View {
             }
 
             streamLog.info("startSession: queue cleared, readyPollStreak=\(readyPollStreak), connecting WebRTC")
-            streamLog.info("startSession: serverIp=\(sessionInfo.serverIp), signalingUrl=\(sessionInfo.signalingUrl ?? "nil")")
+            streamLog.info("startSession: serverIp=\(sessionInfo.serverIp), signalingUrl=\(sessionInfo.signalingUrl)")
             viewModel.recordPlayed(game)
             await streamController.connect(session: sessionInfo, settings: settings)
         } catch {

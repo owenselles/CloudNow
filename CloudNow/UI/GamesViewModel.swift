@@ -81,7 +81,7 @@ class GamesViewModel {
         }
         // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
         // If Apple raises the cap in a future tvOS release this will automatically unlock.
-        let screenMax = UIScreen.main.maximumFramesPerSecond
+        let screenMax = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
         if streamSettings.fps > screenMax {
             streamSettings.fps = screenMax
         }
@@ -108,7 +108,7 @@ class GamesViewModel {
     /// screen's maximum refresh rate. Today tvOS caps at 60 Hz; if Apple raises it
     /// in a future update this will automatically expose the higher option.
     var availableFps: [Int] {
-        let maxFps = UIScreen.main.maximumFramesPerSecond
+        let maxFps = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
         guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
             return [30, 60].filter { $0 <= maxFps }
         }
@@ -178,7 +178,7 @@ class GamesViewModel {
             activeSessions = await sessionsTask
             let sub = await subTask
             if let sub {
-                print("[MES] tier=\(sub.membershipTier ?? "nil") resolutions=\(sub.entitledResolutions.map(\.resolutionLabel))")
+                print("[MES] tier=\(sub.membershipTier) resolutions=\(sub.entitledResolutions.map(\.resolutionLabel))")
                 subscription = sub
             }
 

@@ -349,9 +349,8 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
 
     private func flush(preservingDisplayedImage: Bool, recordFailure: Bool) {
         guard sampleBufferRenderer != nil else { return }
-        var requestToRun: FlushRequest?
-        let didBeginFlush = state.withLock { state -> Bool in
-            guard !state.isFlushing else { return false }
+        let (didBeginFlush, requestToRun) = state.withLock { state -> (Bool, FlushRequest?) in
+            guard !state.isFlushing else { return (false, nil) }
             state.isFlushing = true
             state.generation &+= 1
             state.formatDescription = nil
@@ -360,11 +359,11 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
                 removeDisplayedImage: !preservingDisplayedImage
             )
             if state.activeEnqueues == 0 {
-                requestToRun = request
+                return (true, request)
             } else {
                 state.pendingFlush = request
+                return (true, nil)
             }
-            return true
         }
         guard didBeginFlush else { return }
 

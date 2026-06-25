@@ -207,7 +207,7 @@ final class GFNStreamController: NSObject {
         default: break
         }
         let settings = settings.normalizedForClient
-        gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl ?? "nil")")
+        gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl)")
         state = .connecting
         sessionInfo = session
         self.settings = settings
@@ -1221,6 +1221,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         case .failed: "failed"
         case .disconnected: "disconnected"
         case .closed: "closed"
+        case .count: "count"
         @unknown default: "unknown(\(newState.rawValue))"
         }
         print("[ICE] State → \(name)")
