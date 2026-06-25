@@ -7,8 +7,17 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 > [!WARNING]
 > CloudNow is under active development. Expect bugs, lots of them
 
+---
 
+## Installation
 
+### Option A — Pre-built IPA (recommended for most users)
+
+Download the latest `CloudNow.ipa` from the [Releases](https://github.com/owenselles/CloudNow/releases) page, then sideload it with [Sideloadly](https://sideloadly.io) or AltServer. No Xcode or Apple Developer account required — Sideloadly signs the IPA with your free Apple ID.
+
+### Option B — Build from source
+
+Follow the [Getting Started](#getting-started) steps below if you want to build and run directly from Xcode.
 
 ---
 
@@ -32,9 +41,8 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 ## Requirements
 
 - Apple TV 4K (2nd generation or later) running tvOS 17+
-- Xcode 16+ on a Mac
 - Active GeForce NOW account (Free, Priority, or Ultimate)
-- Apple Developer account (free tier works for sideloading)
+- **Build from source only:** Xcode 16+ on a Mac, Apple Developer account (free tier works)
 
 ## Getting Started
 
@@ -73,6 +81,41 @@ Then attach it to the project in Xcode:
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
 On first launch the app prompts you to sign in. A QR code and PIN are displayed — scan the QR code or visit the URL on any device and enter the PIN to complete sign-in, then return to the TV.
+
+---
+
+## Linting
+
+CloudNow uses SwiftLint and SwiftFormat. CI gates PRs on lint failures.
+
+### Install (one-time)
+
+```bash
+brew install swiftlint swiftformat pre-commit
+```
+
+### Run locally
+
+```bash
+# Format check (no mutation)
+swiftformat --lint --config .swiftformat CloudNow
+# Lint check
+swiftlint --strict --config .swiftlint.yml CloudNow
+# Auto-fix everything fixable
+swiftformat --config .swiftformat CloudNow && swiftlint --fix --config .swiftlint.yml CloudNow
+```
+
+### Optional pre-commit hook
+
+```bash
+pre-commit install
+```
+
+After installing, every `git commit` runs SwiftFormat then SwiftLint --fix against your staged files. On fixable issues, files are auto-corrected in the working tree and the commit is aborted with "Files were modified by this hook" — run `git add` and `git commit` again to land the fixed version. On unfixable issues, the hook prints the violation and aborts; edit the file manually and try again.
+
+### Pinned versions
+
+CI uses SwiftLint 0.63.3 and SwiftFormat 0.61.1. Local installs via Homebrew should match or exceed these; verify with `swiftlint version` and `swiftformat --version`.
 
 ---
 

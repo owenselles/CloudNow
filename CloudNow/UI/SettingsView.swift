@@ -14,7 +14,7 @@ struct SettingsView: View {
                 Section("Stream Quality") {
                     Picker("Resolution", selection: $vm.streamSettings.resolution) {
                         let common = commonResolutions.filter { viewModel.availableResolutions.contains($0.res) }
-                        let other  = viewModel.availableResolutions.filter { res in !commonResolutions.map(\.res).contains(res) }
+                        let other = viewModel.availableResolutions.filter { res in !commonResolutions.map(\.res).contains(res) }
                         if !common.isEmpty {
                             Section("TV Standards") {
                                 ForEach(common, id: \.res) { item in
@@ -97,7 +97,7 @@ struct SettingsView: View {
                     LabeledContent("Max Bitrate") {
                         HStack(spacing: 16) {
                             Button {
-                                vm.streamSettings.maxBitrateKbps = max(15_000, vm.streamSettings.maxBitrateKbps - 5_000)
+                                vm.streamSettings.maxBitrateKbps = max(15000, vm.streamSettings.maxBitrateKbps - 5000)
                             } label: {
                                 Image(systemName: "minus.circle")
                             }
@@ -107,7 +107,7 @@ struct SettingsView: View {
                                 .frame(minWidth: 72)
                                 .padding(.horizontal, 24)
                             Button {
-                                vm.streamSettings.maxBitrateKbps = min(100_000, vm.streamSettings.maxBitrateKbps + 5_000)
+                                vm.streamSettings.maxBitrateKbps = min(100_000, vm.streamSettings.maxBitrateKbps + 5000)
                             } label: {
                                 Image(systemName: "plus.circle")
                             }
@@ -242,7 +242,7 @@ struct SettingsView: View {
                             LabeledContent("Membership", value: sub.membershipTier)
                             if !sub.isUnlimited, let remaining = sub.remainingMinutes {
                                 let hours = remaining / 60
-                                let mins  = remaining % 60
+                                let mins = remaining % 60
                                 LabeledContent("Time Remaining", value: hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m")
                             }
                         } else {
@@ -273,17 +273,17 @@ struct SettingsView: View {
 
     private struct ResolutionEntry { let res: String; let badge: String; let symbol: String }
     private let commonResolutions: [ResolutionEntry] = [
-        ResolutionEntry(res: "1280x720",  badge: "HD",      symbol: "tv"),
+        ResolutionEntry(res: "1280x720", badge: "HD", symbol: "tv"),
         ResolutionEntry(res: "1920x1080", badge: "Full HD", symbol: "tv"),
-        ResolutionEntry(res: "2560x1440", badge: "2K",      symbol: "tv"),
-        ResolutionEntry(res: "3840x2160", badge: "4K",      symbol: "4k.tv"),
+        ResolutionEntry(res: "2560x1440", badge: "2K", symbol: "tv"),
+        ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
 
     private func colorQualityLabel(_ q: ColorQuality) -> String {
         switch q {
-        case .sdr8bit: return "SDR 8-bit"
-        case .sdr10bit: return "SDR 10-bit"
-        case .hdr10bit: return "HDR 10-bit"
+        case .sdr8bit: "SDR 8-bit"
+        case .sdr10bit: "SDR 10-bit"
+        case .hdr10bit: "HDR 10-bit"
         }
     }
 }
@@ -313,7 +313,9 @@ private struct ZonePickerView: View {
         }
     }
 
-    private var autoZone: GFNZone? { zones.autoZone(isUnlimited: viewModel.subscription?.isUnlimited ?? false) }
+    private var autoZone: GFNZone? {
+        zones.autoZone(isUnlimited: viewModel.subscription?.isUnlimited ?? false)
+    }
 
     var body: some View {
         NavigationStack {
@@ -323,7 +325,7 @@ private struct ZonePickerView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error {
                     ContentUnavailableView("Can't Load Servers", systemImage: "wifi.exclamationmark",
-                                          description: Text(error))
+                                           description: Text(error))
                 } else {
                     List {
                         // Auto option
@@ -418,7 +420,7 @@ private struct ZonePickerView: View {
             for start in stride(from: 0, to: zones.count, by: batchSize) {
                 if Task.isCancelled { return }
                 let end = min(start + batchSize, zones.count)
-                let batch = zones[start..<end]
+                let batch = zones[start ..< end]
                 await withTaskGroup(of: (String, Int?).self) { group in
                     for zone in batch {
                         group.addTask {
@@ -435,6 +437,7 @@ private struct ZonePickerView: View {
                     }
                 }
             }
+            await ZoneClient.shared.cacheAutomaticSelections(from: zones)
         } catch {
             isLoading = false
             self.error = error.localizedDescription
@@ -449,8 +452,8 @@ private struct ZonePickerView: View {
     }
 
     private func pingColor(_ ms: Int) -> Color {
-        if ms < 30  { return .green }
-        if ms < 80  { return .yellow }
+        if ms < 30 { return .green }
+        if ms < 80 { return .yellow }
         if ms < 150 { return .orange }
         return .red
     }

@@ -29,7 +29,7 @@ struct HomeView: View {
                         .padding(.bottom, 60)
                     }
                 }
-            } else if viewModel.continuePlaying.isEmpty && viewModel.recentlyPlayedGames.isEmpty && viewModel.favoriteGames.isEmpty && activeResumable == nil {
+            } else if viewModel.continuePlaying.isEmpty, viewModel.recentlyPlayedGames.isEmpty, viewModel.favoriteGames.isEmpty, activeResumable == nil {
                 emptyState
             } else {
                 ScrollView {
@@ -90,7 +90,7 @@ struct HomeView: View {
         ZStack(alignment: .bottomLeading) {
             AsyncImage(url: rs.game.heroBannerUrl.flatMap { URL(string: $0) }) { phase in
                 switch phase {
-                case .success(let image):
+                case let .success(image):
                     image.resizable().aspectRatio(contentMode: .fill)
                 case .failure, .empty:
                     Rectangle().fill(Color.gray.opacity(0.2))
@@ -199,7 +199,7 @@ struct HomeView: View {
                 .padding(.horizontal, 60)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 24) {
-                    ForEach(0..<6, id: \.self) { _ in
+                    ForEach(0 ..< 6, id: \.self) { _ in
                         GameCardSkeleton().frame(width: 200)
                     }
                 }
@@ -239,7 +239,7 @@ private struct HeroBannerView: View {
         ZStack(alignment: .bottom) {
             AsyncImage(url: game.heroBannerUrl.flatMap { URL(string: $0) }) { phase in
                 switch phase {
-                case .success(let image):
+                case let .success(image):
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)

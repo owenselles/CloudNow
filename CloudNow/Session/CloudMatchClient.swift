@@ -61,16 +61,16 @@ private struct CloudMatchResponse: Decodable {
     }
 }
 
-// Ad action codes sent to CloudMatch
+/// Ad action codes sent to CloudMatch
 enum AdAction: Int {
-    case start  = 1
-    case pause  = 2
+    case start = 1
+    case pause = 2
     case resume = 3
     case finish = 4
     case cancel = 5
 }
 
-// GFN API returns ip as a string, array of strings, 32-bit integer, or {"value": ...} object
+/// GFN API returns ip as a string, array of strings, 32-bit integer, or {"value": ...} object
 private struct AnyCodableString: Decodable {
     let value: String?
     init(from decoder: Decoder) throws {
@@ -84,13 +84,13 @@ private struct AnyCodableString: Decodable {
         if let intVal = try? UInt32(from: decoder) {
             let b1 = (intVal >> 24) & 0xFF
             let b2 = (intVal >> 16) & 0xFF
-            let b3 = (intVal >> 8)  & 0xFF
-            let b4 =  intVal        & 0xFF
+            let b3 = (intVal >> 8) & 0xFF
+            let b4 = intVal & 0xFF
             value = "\(b1).\(b2).\(b3).\(b4)"
             return
         }
         // String array or plain string
-        if let arr = try? [String].init(from: decoder) {
+        if let arr = try? [String](from: decoder) {
             value = arr.first
         } else {
             value = try? String(from: decoder)
@@ -101,7 +101,7 @@ private struct AnyCodableString: Decodable {
 private struct AnyCodableStringArray: Decodable {
     let values: [String]
     init(from decoder: Decoder) throws {
-        if let arr = try? [String].init(from: decoder) {
+        if let arr = try? [String](from: decoder) {
             values = arr
         } else if let single = try? String(from: decoder) {
             values = [single]
@@ -118,6 +118,7 @@ private struct GetSessionsResponse: Decodable {
         let statusCode: Int
         let statusDescription: String?
     }
+
     struct SessionEntry: Decodable {
         let sessionId: String
         let status: Int
@@ -227,8 +228,8 @@ private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> Stri
             ? String(resourcePath.dropFirst("rtsps://".count))
             : String(resourcePath.dropFirst("rtsp://".count))
         let host = withoutScheme.components(separatedBy: ":").first?
-                                .components(separatedBy: "/").first ?? ""
-        if !host.isEmpty && !host.hasPrefix(".") {
+            .components(separatedBy: "/").first ?? ""
+        if !host.isEmpty, !host.hasPrefix(".") {
             return "wss://\(host)/nvst/"
         }
     }
@@ -301,8 +302,15 @@ actor CloudMatchClient {
 
     // MARK: Poll Session
 
-    func pollSession(sessionId: String, token: String, base: String, serverIp: String?,
-                     clientId: String, deviceId: String) async throws -> SessionInfo {
+    func pollSession(
+        sessionId: String,
+        token: String,
+        base: String,
+        serverIp: String?,
+        routingZoneUrl: String? = nil,
+        clientId: String,
+        deviceId: String
+    ) async throws -> SessionInfo {
         let effectiveBase = serverIp.map { "https://\($0)" } ?? base
         let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
         var request = URLRequest(url: url)
@@ -311,7 +319,14 @@ actor CloudMatchClient {
         }
         let (data, _) = try await urlSession.data(for: request)
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: effectiveBase, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
+        return try toSessionInfo(
+            base: effectiveBase,
+            routingZoneUrl: routingZoneUrl,
+            payload: payload,
+            rawData: data,
+            clientId: clientId,
+            deviceId: deviceId
+        )
     }
 
     // MARK: Stop Session
@@ -342,7 +357,7 @@ actor CloudMatchClient {
         return (decoded.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
             let appId = entry.sessionRequestData?.appId?.value
             let sigConn = entry.connectionInfo?.first { $0.usage == 14 && $0.ip?.value != nil }
-                       ?? entry.connectionInfo?.first { $0.ip?.value != nil }
+                ?? entry.connectionInfo?.first { $0.ip?.value != nil }
             let serverIp = sigConn?.ip?.value ?? entry.sessionControlInfo?.ip?.value
             let signalingUrl = serverIp.map { "wss://\($0):443/nvst/" }
             return ActiveSessionInfo(
@@ -364,7 +379,7 @@ actor CloudMatchClient {
         sessionId: String,
         serverIp: String,
         token: String,
-        base: String,
+        base _: String,
         settings: StreamSettings
     ) async throws -> SessionInfo {
         let clientId = UUID().uuidString
@@ -377,6 +392,7 @@ actor CloudMatchClient {
             token: token,
             base: effectiveBase,
             serverIp: nil,
+            routingZoneUrl: nil,
             clientId: clientId,
             deviceId: deviceId
         )
@@ -408,13 +424,26 @@ actor CloudMatchClient {
             throw CloudMatchError.sessionCreateFailed("Resume failed: \(msg)")
         }
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-        return try toSessionInfo(base: effectiveBase, payload: payload, rawData: data,
-                                 clientId: clientId, deviceId: deviceId)
+        return try toSessionInfo(
+            base: effectiveBase,
+            routingZoneUrl: preflight.zone,
+            payload: payload,
+            rawData: data,
+            clientId: clientId,
+            deviceId: deviceId
+        )
     }
 
     // MARK: Private
 
-    private func toSessionInfo(base: String, payload: CloudMatchResponse, rawData: Data, clientId: String, deviceId: String) throws -> SessionInfo {
+    private func toSessionInfo(
+        base: String,
+        routingZoneUrl: String?,
+        payload: CloudMatchResponse,
+        rawData: Data,
+        clientId: String,
+        deviceId: String
+    ) throws -> SessionInfo {
         let s = payload.session
         let connections = s.connectionInfo ?? []
         let connInfoLog = connections.map { c -> String in
@@ -426,10 +455,12 @@ actor CloudMatchClient {
         // Diagnostic raw JSON dump (once per active session — status==2 or 3)
         if s.status == 2 || s.status == 3,
            let root = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any],
-           let sess = root["session"] as? [String: Any] {
+           let sess = root["session"] as? [String: Any]
+        {
             if let iceConfig = sess["iceServerConfiguration"] {
                 if let iceData = try? JSONSerialization.data(withJSONObject: iceConfig, options: .prettyPrinted),
-                   let iceStr = String(data: iceData, encoding: .utf8) {
+                   let iceStr = String(data: iceData, encoding: .utf8)
+                {
                     print("[CloudMatch] iceServerConfiguration:\n\(iceStr)")
                 } else {
                     print("[CloudMatch] iceServerConfiguration: \(iceConfig)")
@@ -444,7 +475,7 @@ actor CloudMatchClient {
 
         // Signaling server: usage=14
         let sigConn = connections.first { $0.usage == 14 && $0.ip?.value != nil }
-                   ?? connections.first { $0.ip?.value != nil }
+            ?? connections.first { $0.ip?.value != nil }
         let serverIp = sigConn?.ip?.value ?? s.sessionControlInfo?.ip?.value ?? ""
         let resourcePath = sigConn?.resourcePath ?? "/nvst/"
         let signalingUrl = resolveSignalingUrl(serverIp: serverIp, resourcePath: resourcePath)
@@ -457,7 +488,7 @@ actor CloudMatchClient {
 
         // Media connection — priority: usage=2 → usage=17 → usage=14 highest-port (IP from resourcePath)
         let mediaConn = connections.first { $0.usage == 2 }
-                     ?? connections.first { $0.usage == 17 }
+            ?? connections.first { $0.usage == 17 }
         let media: MediaConnectionInfo? = mediaConn.flatMap { mc -> MediaConnectionInfo? in
             guard let ip = mc.ip?.value, mc.port > 0 else { return nil }
             return MediaConnectionInfo(ip: ip, port: mc.port)
@@ -470,7 +501,7 @@ actor CloudMatchClient {
         return SessionInfo(
             sessionId: s.sessionId,
             status: s.status,
-            zone: "",
+            zone: routingZoneUrl ?? "",
             streamingBaseUrl: base,
             serverIp: serverIp,
             signalingServer: serverIp.contains(":") ? serverIp : "\(serverIp):443",
@@ -491,7 +522,7 @@ actor CloudMatchClient {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let sessionObj = root["session"] as? [String: Any] else { return nil }
 
-        // isAdsRequired lives in several possible places
+        /// isAdsRequired lives in several possible places
         func bool(_ key: String, in obj: [String: Any]) -> Bool? {
             guard let v = obj[key] else { return nil }
             if let b = v as? Bool { return b }
@@ -564,7 +595,7 @@ actor CloudMatchClient {
             "clientTimestamp": Int(Date().timeIntervalSince1970),
         ]
         if let ms = watchedTimeMs { adUpdate["watchedTimeInMs"] = max(0, ms) }
-        if let ms = pausedTimeMs  { adUpdate["pausedTimeInMs"]  = max(0, ms) }
+        if let ms = pausedTimeMs { adUpdate["pausedTimeInMs"] = max(0, ms) }
         let body: [String: Any] = ["action": 6, "adUpdates": [adUpdate]]
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
         var request = URLRequest(url: url)
@@ -626,8 +657,8 @@ enum CloudMatchError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .sessionCreateFailed(let msg): return "Session creation failed: \(msg)"
-        case .missingServerIp: return "CloudMatch response missing server IP."
+        case let .sessionCreateFailed(msg): "Session creation failed: \(msg)"
+        case .missingServerIp: "CloudMatch response missing server IP."
         }
     }
 }

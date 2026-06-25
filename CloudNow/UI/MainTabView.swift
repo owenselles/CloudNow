@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainTabView: View {
     @Environment(AuthManager.self) var authManager
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = GamesViewModel()
     @State private var gameToPlay: GameInfo?
     @State private var sessionToResume: ActiveSessionInfo? = nil
@@ -41,6 +42,10 @@ struct MainTabView: View {
         .environment(viewModel)
         .task { await viewModel.load(authManager: authManager) }
         .task { await viewModel.measureTopZones() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await viewModel.refreshLibrary(authManager: authManager) }
+        }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
             if new == nil {

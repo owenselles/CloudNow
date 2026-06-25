@@ -1,0 +1,16 @@
+# Run "brew install pre-commit && pre-commit install" to enable. See README "Linting" section.
+# Hooks pinned to match CI (.github/workflows/lint.yml). SwiftFormat runs first (mutates), then SwiftLint --fix --strict (gates).
+# On fixable violations: hooks modify files and abort the commit — re-run `git add` + `git commit` to land the fix.
+
+repos:
+  - repo: https://github.com/nicklockwood/SwiftFormat
+    rev: "0.61.1"
+    hooks:
+      - id: swiftformat
+        args: ["--config", ".swiftformat"]
+
+  - repo: https://github.com/realm/SwiftLint
+    rev: "0.63.3"
+    hooks:
+      - id: swiftlint
+        args: ["--fix", "--strict", "--config", ".swiftlint.yml"]

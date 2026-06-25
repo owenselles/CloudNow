@@ -1,0 +1,48 @@
+# Configured for SwiftLint 0.63.3 — pin in .pre-commit-config.yaml and .github/workflows/lint.yml
+# Day-1 ruleset: tuned to current CloudNow source so this config yields ZERO violations on commit.
+# Tighten progressively in follow-up PRs.
+
+included:
+  - CloudNow
+
+excluded:
+  - .build
+  - .swiftpm
+  - DerivedData
+  - .spm-packages
+  - Local.xcconfig
+
+disabled_rules:
+  # Owned by SwiftFormat; see .swiftformat (avoids tool fights)
+  - trailing_comma
+  - opening_brace
+  - vertical_whitespace
+  - trailing_whitespace
+  - colon
+  - comma
+  - statement_position
+  - mark
+
+  # TODO: re-enable in follow-up cleanup PR. Max line currently 233 chars; raising the threshold to a value
+  # that would pass cleanly is absurd, so the rule stays off until a dedicated line-wrap pass lands.
+  - line_length
+
+  # Disabled for day-1: existing codebase doesn't satisfy these.
+  # Each one deserves its own dedicated audit/cleanup PR before re-enabling.
+  - identifier_name              # short names (v, q, dx, ip), OAuth/GraphQL snake_case keys
+  - implicit_optional_initialization
+  - large_tuple                  # 3+ member tuples are intentional in several places
+  - type_body_length             # large UI structs / actors
+  - file_length                  # long files in Streaming/, Session/
+  - function_body_length         # long config/setup methods
+  - cyclomatic_complexity        # state-machine handlers exceed default
+  - function_parameter_count     # input/streaming protocol methods
+  - nesting                      # GraphQL response shapes mirror server schema
+  - for_where                    # local style
+  - closure_parameter_position
+  - static_over_final_class
+  - non_optional_string_data_conversion
+  - force_cast                   # load-bearing typed-layer pattern in VideoSurfaceView
+  - superfluous_disable_command  # noisy false positives
+
+reporter: github-actions-logging

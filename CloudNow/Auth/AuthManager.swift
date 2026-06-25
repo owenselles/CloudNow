@@ -27,7 +27,9 @@ final class AuthManager {
     private(set) var session: AuthSession?
     private(set) var loginPhase: LoginPhase = .idle
 
-    var isAuthenticated: Bool { session != nil }
+    var isAuthenticated: Bool {
+        session != nil
+    }
 
     private let api = NVIDIAAuthAPI()
     private var loginTask: Task<Void, Never>?
@@ -55,11 +57,10 @@ final class AuthManager {
         loginTask = Task {
             loginPhase = .idle
             do {
-                let providers: [LoginProvider]
-                if let provider {
-                    providers = [provider]
+                let providers: [LoginProvider] = if let provider {
+                    [provider]
                 } else {
-                    providers = (try? await api.fetchProviders()) ?? []
+                    await (try? api.fetchProviders()) ?? []
                 }
                 let selectedProvider = providers.first ?? LoginProvider(
                     idpId: NVIDIAAuth.defaultIdpId,
@@ -96,8 +97,8 @@ final class AuthManager {
                     tokens.clientToken = ct.token
                     tokens.clientTokenExpiresAt = ct.expiresAt
                     if let rebound = try? await api.refreshWithClientToken(ct.token, userId: user.userId) {
-                        let savedRefreshToken = tokens.refreshToken   // preserve device-flow refreshToken
-                        let savedIdToken = tokens.idToken             // preserve device-flow idToken
+                        let savedRefreshToken = tokens.refreshToken // preserve device-flow refreshToken
+                        let savedIdToken = tokens.idToken // preserve device-flow idToken
                         tokens = rebound
                         if tokens.refreshToken == nil { tokens.refreshToken = savedRefreshToken }
                         if tokens.idToken == nil { tokens.idToken = savedIdToken }
@@ -146,10 +147,28 @@ final class AuthManager {
         if s.tokens.isNearExpiry {
             s = try await refresh(session: s)
         }
-        return s.tokens.idToken ?? s.tokens.accessToken
+        return preferredToken(in: s)
+    }
+
+    /// Returns a credential different from one rejected by the server. If another
+    /// request already refreshed the session, reuse it instead of rotating again.
+    func resolveToken(rejecting rejectedToken: String) async throws -> String {
+        guard var s = session else { throw AuthError.noSession }
+        let currentToken = preferredToken(in: s)
+        if currentToken != rejectedToken {
+            return currentToken
+        }
+
+        s = try await refresh(session: s)
+        let refreshedToken = preferredToken(in: s)
+        return refreshedToken == rejectedToken ? s.tokens.accessToken : refreshedToken
     }
 
     // MARK: Private
+
+    private func preferredToken(in session: AuthSession) -> String {
+        session.tokens.idToken ?? session.tokens.accessToken
+    }
 
     func refreshIfNeeded() async {
         guard let s = session, s.tokens.isNearExpiry else { return }
@@ -178,7 +197,7 @@ final class AuthManager {
         let task = Task<AuthSession, Error> { @MainActor [weak self] in
             guard let self else { throw AuthError.noSession }
             defer { self.activeRefreshTask = nil }
-            return try await self.performRefresh(session: s)
+            return try await performRefresh(session: s)
         }
         activeRefreshTask = task
         return try await task.value

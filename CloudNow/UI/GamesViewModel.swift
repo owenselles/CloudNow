@@ -12,7 +12,10 @@ struct ResumableSession {
     var secondsRemaining: Int {
         max(0, Int(Self.gracePeriod - Date().timeIntervalSince(leftAt)))
     }
-    var isExpired: Bool { secondsRemaining == 0 }
+
+    var isExpired: Bool {
+        secondsRemaining == 0
+    }
 }
 
 struct LastSessionRecord: Codable {
@@ -30,18 +33,20 @@ class GamesViewModel {
     var libraryGames: [GameInfo] = []
     var activeSessions: [ActiveSessionInfo] = []
     var isLoading = false
+    var isLibraryLoading = false
     var error: String?
     var libraryError: String?
+    var libraryWarning: String?
 
     var favoriteIds: Set<String> = []
     var preferredStoreIds: [String: String] = [:]
     var recentlyPlayedIds: [String] = []
-    var streamSettings: StreamSettings = StreamSettings()
-    var subscription: SubscriptionInfo? = nil
+    var streamSettings: StreamSettings = .init()
+    var subscription: SubscriptionInfo?
     /// Session the user left without ending — available to resume for ~2 minutes.
-    var resumableSession: ResumableSession? = nil
+    var resumableSession: ResumableSession?
     /// Last created session, persisted so we can resume/stop it across app launches.
-    var lastSession: LastSessionRecord? = nil
+    var lastSession: LastSessionRecord?
     /// Top 5 lowest-latency zones, populated on launch.
     var topZones: [GFNZone] = []
 
@@ -50,20 +55,24 @@ class GamesViewModel {
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "gfn.favoriteIds"),
-           let ids = try? JSONDecoder().decode([String].self, from: data) {
-            self.favoriteIds = Set(ids)
+           let ids = try? JSONDecoder().decode([String].self, from: data)
+        {
+            favoriteIds = Set(ids)
         }
         if let data = UserDefaults.standard.data(forKey: "gfn.preferredStores"),
-           let stores = try? JSONDecoder().decode([String: String].self, from: data) {
-            self.preferredStoreIds = stores
+           let stores = try? JSONDecoder().decode([String: String].self, from: data)
+        {
+            preferredStoreIds = stores
         }
         if let data = UserDefaults.standard.data(forKey: "gfn.recentlyPlayed"),
-           let ids = try? JSONDecoder().decode([String].self, from: data) {
-            self.recentlyPlayedIds = ids
+           let ids = try? JSONDecoder().decode([String].self, from: data)
+        {
+            recentlyPlayedIds = ids
         }
         if let data = UserDefaults.standard.data(forKey: "gfn.streamSettings"),
-           let settings = try? JSONDecoder().decode(StreamSettings.self, from: data) {
-            self.streamSettings = settings
+           let settings = try? JSONDecoder().decode(StreamSettings.self, from: data)
+        {
+            streamSettings = settings
         }
         if let data = UserDefaults.standard.data(forKey: "gfn.lastSession"),
            let session = try? JSONDecoder().decode(LastSessionRecord.self, from: data) {
@@ -103,7 +112,7 @@ class GamesViewModel {
         }
         let parts = streamSettings.resolution.split(separator: "x").compactMap { Int($0) }
         let w = parts.first ?? 1920
-        let h = parts.last  ?? 1080
+        let h = parts.last ?? 1080
         let matching = resos.filter { $0.widthInPixels == w && $0.heightInPixels == h }
         let source = matching.isEmpty ? resos : matching
         return Array(Set(source.map(\.framesPerSecond))).filter { $0 <= maxFps }.sorted()
@@ -112,7 +121,7 @@ class GamesViewModel {
     // MARK: Computed — Games
 
     var continuePlaying: [GameInfo] {
-        let sessionAppIds = Set(activeSessions.compactMap { $0.appId })
+        let sessionAppIds = Set(activeSessions.compactMap(\.appId))
         return mainGames.filter { game in
             game.variants.contains { v in
                 guard let appId = v.appId else { return false }
@@ -127,7 +136,7 @@ class GamesViewModel {
     }
 
     var recentlyPlayedGames: [GameInfo] {
-        let activeIds = Set(continuePlaying.map { $0.id })
+        let activeIds = Set(continuePlaying.map(\.id))
         return recentlyPlayedIds.compactMap { id in
             mainGames.first { $0.id == id && !activeIds.contains($0.id) }
         }
@@ -185,6 +194,7 @@ class GamesViewModel {
         } catch {
             if !hadCache { self.error = error.localizedDescription }
         }
+        isLibraryLoading = false
         isLoading = false
     }
 
@@ -213,11 +223,28 @@ class GamesViewModel {
         }
     }
 
+    func refreshLibrary(authManager: AuthManager) async {
+        guard !isLibraryLoading else { return }
+        isLibraryLoading = true
+        libraryError = nil
+        defer { isLibraryLoading = false }
+
+        do {
+            let token = try await authManager.resolveToken()
+            let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+            let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
+            libraryGames = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
+            saveCache(Self.libraryCacheKey, data: libraryGames)
+        } catch {
+            libraryError = error.localizedDescription
+        }
+    }
+
     func refreshActiveSessions(authManager: AuthManager) async {
         guard let token = try? await authManager.resolveToken() else { return }
         let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
         let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
-        activeSessions = (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+        activeSessions = await (try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
     }
 
     // MARK: Recently Played

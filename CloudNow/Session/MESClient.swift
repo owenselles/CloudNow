@@ -46,8 +46,8 @@ actor MESClient {
         request.setValue("NATIVE", forHTTPHeaderField: "nv-client-type")
         request.setValue("2.0.80.173", forHTTPHeaderField: "nv-client-version")
         request.setValue("NVIDIA-CLASSIC", forHTTPHeaderField: "nv-client-streamer")
-        request.setValue("WINDOWS",        forHTTPHeaderField: "nv-device-os")
-        request.setValue("DESKTOP",        forHTTPHeaderField: "nv-device-type")
+        request.setValue("WINDOWS", forHTTPHeaderField: "nv-device-os")
+        request.setValue("DESKTOP", forHTTPHeaderField: "nv-device-type")
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await urlSession.data(for: request)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
@@ -62,11 +62,10 @@ actor MESClient {
         let decoder = JSONDecoder()
 
         // Response may be an array or a single object — try both
-        let raw: MESRawResponse
-        if let array = try? decoder.decode([MESRawResponse].self, from: data), let first = array.first {
-            raw = first
+        let raw: MESRawResponse = if let array = try? decoder.decode([MESRawResponse].self, from: data), let first = array.first {
+            first
         } else {
-            raw = try decoder.decode(MESRawResponse.self, from: data)
+            try decoder.decode(MESRawResponse.self, from: data)
         }
 
         let tier = raw.membershipTier ?? raw.type ?? "FREE"
@@ -119,8 +118,8 @@ enum MESError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL: return "Failed to build MES request URL."
-        case .fetchFailed(let msg): return "Subscription fetch failed: \(msg)"
+        case .invalidURL: "Failed to build MES request URL."
+        case let .fetchFailed(msg): "Subscription fetch failed: \(msg)"
         }
     }
 }

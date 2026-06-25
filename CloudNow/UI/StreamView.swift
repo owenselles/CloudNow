@@ -13,13 +13,13 @@ private enum LoadingPhase: Equatable {
 
 struct StreamView: View {
     let game: GameInfo
-    var settings: StreamSettings = StreamSettings()
-    var existingSession: ActiveSessionInfo? = nil
+    var settings: StreamSettings = .init()
+    var existingSession: ActiveSessionInfo?
     /// When set, skips CloudMatch entirely and reconnects WebRTC directly using the stored session.
-    var directSession: SessionInfo? = nil
+    var directSession: SessionInfo?
     let onDismiss: () -> Void
     /// Called when the user leaves without ending the session so the caller can offer a resume.
-    var onLeave: ((GameInfo, SessionInfo) -> Void)? = nil
+    var onLeave: ((GameInfo, SessionInfo) -> Void)?
 
     @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
@@ -29,7 +29,7 @@ struct StreamView: View {
     @State private var loadingPhase: LoadingPhase = .finding
     @State private var createdSession: SessionInfo?
     @State private var sessionToken: String?
-    // Per-ad state tracking to avoid duplicate reports
+    /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
     private let cloudMatchClient = CloudMatchClient()
@@ -47,7 +47,7 @@ struct StreamView: View {
                 reconnectingView(attempt: attempt)
             case .disconnected(let reason):
                 disconnectedView(reason)
-            case .failed(let message):
+            case let .failed(message):
                 failedView(message)
             case .sessionEnded:
                 sessionEndedView
@@ -98,14 +98,15 @@ struct StreamView: View {
             // Show ad player when GFN requires watching an ad to stay in queue
             if let adState = createdSession?.adState,
                adState.isAdsRequired,
-               let ad = adState.ads.first {
+               let ad = adState.ads.first
+            {
                 QueueAdPlayerView(
                     ad: ad,
-                    onStart:  { id in reportAd(id: id, action: .start)  },
-                    onPause:  { id in reportAd(id: id, action: .pause)  },
+                    onStart: { id in reportAd(id: id, action: .start) },
+                    onPause: { id in reportAd(id: id, action: .pause) },
                     onResume: { id in reportAd(id: id, action: .resume) },
                     onFinish: { id, ms in reportAd(id: id, action: .finish, watchedMs: ms) },
-                    message:  adState.message
+                    message: adState.message
                 )
                 .frame(maxWidth: 560)
             }
@@ -127,7 +128,7 @@ struct StreamView: View {
         switch loadingPhase {
         case .finding:
             return "Connecting to a GeForce NOW server…"
-        case .inQueue(let pos):
+        case let .inQueue(pos):
             if let pos { return "In queue · Position \(pos)" }
             return "In queue…"
         case .preparing:
@@ -164,7 +165,7 @@ struct StreamView: View {
         }
         .alert("End Session?", isPresented: $showExitConfirmation) {
             Button("End Session", role: .destructive) { disconnect() }
-            Button("Keep Playing", role: .cancel) { }
+            Button("Keep Playing", role: .cancel) {}
         } message: {
             Text("This will end your GeForce NOW session. To return later, use Leave Game instead.")
         }
@@ -239,6 +240,38 @@ struct StreamView: View {
                 Divider().overlay(.white.opacity(0.4))
                 Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
                 Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
+                Label(streamController.stats.selectedNetworkPath, systemImage: "point.3.connected.trianglepath.dotted")
+                if !streamController.stats.selectedCandidatePairId.isEmpty {
+                    Label(
+                        "ICE \(streamController.stats.selectedProtocol.uppercased()) "
+                            + "\(streamController.stats.localCandidateType) -> \(streamController.stats.remoteCandidateType)",
+                        systemImage: "point.3.connected.trianglepath.dotted"
+                    )
+                    Label(
+                        "Remote \(streamController.stats.remoteCandidateAddress)"
+                            + " · available \(streamController.stats.availableIncomingBitrateKbps / 1000) Mbps"
+                            + " · switches \(streamController.stats.candidatePairChanges)",
+                        systemImage: "arrow.left.arrow.right"
+                    )
+                }
+                Label(
+                    "Input p95 \(String(format: "%.1f", streamController.stats.inputQueueP95Ms)) ms · \(streamController.stats.inputBufferedBytes) B queued",
+                    systemImage: "gamecontroller"
+                )
+                if streamController.stats.inputDropped > 0 {
+                    Label(
+                        "Input drops \(streamController.stats.inputDropped)",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+                }
+                if streamController.stats.inputSuperseded > 0 {
+                    Label(
+                        "Analog snapshots coalesced \(streamController.stats.inputSuperseded)",
+                        systemImage: "arrow.triangle.merge"
+                    )
+                    .foregroundStyle(.secondary)
+                }
                 if !streamController.stats.gpuType.isEmpty {
                     Label(streamController.stats.gpuType, systemImage: "cpu")
                 }
@@ -267,17 +300,17 @@ struct StreamView: View {
 
     private var remoteModeLabel: String {
         switch streamController.remoteMode {
-        case .mouse:     return "Remote: Mouse"
-        case .gamepad:   return "Remote: Gamepad"
-        case .dualsense: return "Remote: DualSense"
+        case .mouse: "Remote: Mouse"
+        case .gamepad: "Remote: Gamepad"
+        case .dualsense: "Remote: DualSense"
         }
     }
 
     private var remoteModeIcon: String {
         switch streamController.remoteMode {
-        case .mouse:     return "cursorarrow"
-        case .gamepad:   return "gamecontroller"
-        case .dualsense: return "hand.point.up.left"
+        case .mouse: "cursorarrow"
+        case .gamepad: "gamecontroller"
+        case .dualsense: "hand.point.up.left"
         }
     }
 
@@ -291,7 +324,7 @@ struct StreamView: View {
                 .frame(width: 130, alignment: .leading)
             if history.count > 1 {
                 Chart {
-                    ForEach(Array(history.enumerated()), id: \.offset) { (idx, val) in
+                    ForEach(Array(history.enumerated()), id: \.offset) { idx, val in
                         LineMark(x: .value("t", idx), y: .value("v", val))
                             .foregroundStyle(color)
                     }
@@ -304,8 +337,8 @@ struct StreamView: View {
     }
 
     private func pingColor(_ ms: Double) -> Color {
-        if ms < 30  { return .green }
-        if ms < 80  { return .yellow }
+        if ms < 30 { return .green }
+        if ms < 80 { return .yellow }
         if ms < 150 { return .orange }
         return .red
     }
@@ -322,9 +355,9 @@ struct StreamView: View {
         let (color, icon, message): (Color, String, String) = {
             let timeText = warning.secondsLeft.map { " (\($0)s left)" } ?? ""
             switch warning.code {
-            case 3: return (.red,    "clock.badge.xmark",     "Session ending soon\(timeText)")
+            case 3: return (.red, "clock.badge.xmark", "Session ending soon\(timeText)")
             case 2: return (.orange, "clock.badge.exclamationmark", "~5 minutes remaining\(timeText)")
-            default: return (.yellow, "clock",                "Session limit approaching\(timeText)")
+            default: return (.yellow, "clock", "Session limit approaching\(timeText)")
             }
         }()
         return Label(message, systemImage: icon)
@@ -458,7 +491,7 @@ struct StreamView: View {
                 // Poll until ready, but only need a single status 2/3 (server media is up).
                 let timeout: TimeInterval = 60
                 let start = Date()
-                while sessionInfo.status != 2 && sessionInfo.status != 3 {
+                while sessionInfo.status != 2, sessionInfo.status != 3 {
                     if Date().timeIntervalSince(start) > timeout {
                         loadingPhase = .timedOut
                         return
@@ -469,6 +502,7 @@ struct StreamView: View {
                         token: token,
                         base: sessionInfo.streamingBaseUrl,
                         serverIp: sessionInfo.serverIp.isEmpty ? nil : sessionInfo.serverIp,
+                        routingZoneUrl: sessionInfo.zone,
                         clientId: sessionInfo.clientId,
                         deviceId: sessionInfo.deviceId
                     )
@@ -600,6 +634,7 @@ struct StreamView: View {
                     token: token,
                     base: sessionInfo.streamingBaseUrl,
                     serverIp: sessionInfo.serverIp.isEmpty ? nil : sessionInfo.serverIp,
+                    routingZoneUrl: sessionInfo.zone,
                     clientId: sessionInfo.clientId,
                     deviceId: sessionInfo.deviceId
                 )
@@ -636,8 +671,8 @@ struct StreamView: View {
         }
     }
 
-    // Leaves the stream locally without stopping the server session.
-    // GFN keeps the session alive for ~1–2 minutes so it can be resumed from home.
+    /// Leaves the stream locally without stopping the server session.
+    /// GFN keeps the session alive for ~1–2 minutes so it can be resumed from home.
     private func leave() {
         if let session = createdSession {
             onLeave?(game, session)
