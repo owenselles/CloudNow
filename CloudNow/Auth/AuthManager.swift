@@ -27,7 +27,9 @@ final class AuthManager {
     private(set) var session: AuthSession?
     private(set) var loginPhase: LoginPhase = .idle
 
-    var isAuthenticated: Bool { session != nil }
+    var isAuthenticated: Bool {
+        session != nil
+    }
 
     private let api = NVIDIAAuthAPI()
     private var loginTask: Task<Void, Never>?
@@ -55,11 +57,10 @@ final class AuthManager {
         loginTask = Task {
             loginPhase = .idle
             do {
-                let providers: [LoginProvider]
-                if let provider {
-                    providers = [provider]
+                let providers: [LoginProvider] = if let provider {
+                    [provider]
                 } else {
-                    providers = (try? await api.fetchProviders()) ?? []
+                    await (try? api.fetchProviders()) ?? []
                 }
                 let selectedProvider = providers.first ?? LoginProvider(
                     idpId: NVIDIAAuth.defaultIdpId,
@@ -96,9 +97,11 @@ final class AuthManager {
                     tokens.clientToken = ct.token
                     tokens.clientTokenExpiresAt = ct.expiresAt
                     if let rebound = try? await api.refreshWithClientToken(ct.token, userId: user.userId) {
-                        let savedRefreshToken = tokens.refreshToken   // preserve device-flow refreshToken
+                        let savedRefreshToken = tokens.refreshToken // preserve device-flow refreshToken
+                        let savedIdToken = tokens.idToken // preserve device-flow idToken
                         tokens = rebound
                         if tokens.refreshToken == nil { tokens.refreshToken = savedRefreshToken }
+                        if tokens.idToken == nil { tokens.idToken = savedIdToken }
                         // Re-fetch clientToken for the re-bound session
                         if let ct2 = try? await api.fetchClientToken(accessToken: tokens.accessToken) {
                             tokens.clientToken = ct2.token
@@ -144,10 +147,28 @@ final class AuthManager {
         if s.tokens.isNearExpiry {
             s = try await refresh(session: s)
         }
-        return s.tokens.idToken ?? s.tokens.accessToken
+        return preferredToken(in: s)
+    }
+
+    /// Returns a credential different from one rejected by the server. If another
+    /// request already refreshed the session, reuse it instead of rotating again.
+    func resolveToken(rejecting rejectedToken: String) async throws -> String {
+        guard var s = session else { throw AuthError.noSession }
+        let currentToken = preferredToken(in: s)
+        if currentToken != rejectedToken {
+            return currentToken
+        }
+
+        s = try await refresh(session: s)
+        let refreshedToken = preferredToken(in: s)
+        return refreshedToken == rejectedToken ? s.tokens.accessToken : refreshedToken
     }
 
     // MARK: Private
+
+    private func preferredToken(in session: AuthSession) -> String {
+        session.tokens.idToken ?? session.tokens.accessToken
+    }
 
     func refreshIfNeeded() async {
         guard let s = session, s.tokens.isNearExpiry else { return }
@@ -155,20 +176,15 @@ final class AuthManager {
             let refreshed = try await refresh(session: s)
             session = refreshed
             try? persist(refreshed)
-        } catch AuthError.tokenRefreshFailed {
-            // Only force re-login if the access token is actually expired. If it's still valid
-            // (we were just refreshing proactively) keep the session — it will work until expiry
-            // and retry on the next call.
+        } catch {
             if s.tokens.isExpired {
-                print("[Auth] Token expired and all refresh mechanisms exhausted — clearing session, re-login required")
+                print("[Auth] Token expired and refresh failed: \(error) — clearing session, re-login required")
                 refreshTimer?.cancel()
                 session = nil
                 KeychainService.delete()
             } else {
-                print("[Auth] Refresh failed but token still valid — keeping session, will retry on next call")
+                print("[Auth] Refresh failed but token still valid (\(Int(s.tokens.expiresAt.timeIntervalSinceNow))s left) — keeping session")
             }
-        } catch {
-            // Network failures, server errors, etc. — keep the session and try again later.
         }
     }
 
@@ -181,7 +197,7 @@ final class AuthManager {
         let task = Task<AuthSession, Error> { @MainActor [weak self] in
             guard let self else { throw AuthError.noSession }
             defer { self.activeRefreshTask = nil }
-            return try await self.performRefresh(session: s)
+            return try await performRefresh(session: s)
         }
         activeRefreshTask = task
         return try await task.value
@@ -189,32 +205,43 @@ final class AuthManager {
 
     private func performRefresh(session s: AuthSession) async throws -> AuthSession {
         var updated = s
-        // Primary: client_token grant (re-binds to clientID, works cross-client).
-        // Skip if the stored clientToken is already past its expiry — treat it the same as absent.
-        // Use ?? false so a missing expiry date is treated conservatively as expired.
+        print("[Auth] performRefresh: accessToken expires=\(s.tokens.expiresAt), " +
+            "clientToken=\(s.tokens.clientToken != nil ? "yes" : "nil") expires=\(s.tokens.clientTokenExpiresAt?.description ?? "nil"), " +
+            "refreshToken=\(s.tokens.refreshToken != nil ? "yes" : "nil"), " +
+            "idToken=\(s.tokens.idToken != nil ? "yes" : "nil")")
         let clientTokenUsable = s.tokens.clientToken != nil &&
             (s.tokens.clientTokenExpiresAt.map { $0 > Date() } ?? false)
         if !clientTokenUsable {
             print("[Auth] clientToken absent or expired (expiresAt: \(s.tokens.clientTokenExpiresAt?.description ?? "nil")), skipping primary path")
         }
-        if clientTokenUsable,
-           let clientToken = s.tokens.clientToken,
-           let refreshed = try? await api.refreshWithClientToken(clientToken, userId: s.user.userId) {
+        var clientTokenRefreshed: AuthTokens? = nil
+        if clientTokenUsable, let clientToken = s.tokens.clientToken {
+            do {
+                clientTokenRefreshed = try await api.refreshWithClientToken(clientToken, userId: s.user.userId)
+            } catch {
+                print("[Auth] client_token grant failed: \(error)")
+            }
+        }
+        if let refreshed = clientTokenRefreshed {
             print("[Auth] refresh via client_token grant succeeded")
             let savedRefreshToken = updated.tokens.refreshToken
+            let savedIdToken = updated.tokens.idToken
             updated.tokens = refreshed
             if updated.tokens.refreshToken == nil {
                 print("[Auth] client_token grant did not return a refreshToken — preserving previous one")
                 updated.tokens.refreshToken = savedRefreshToken
             }
+            if updated.tokens.idToken == nil { updated.tokens.idToken = savedIdToken }
         } else if let refreshToken = s.tokens.refreshToken {
             print("[Auth] client_token path unavailable or failed, falling back to refresh_token grant")
             let savedRefreshToken = updated.tokens.refreshToken
+            let savedIdToken = updated.tokens.idToken
             updated.tokens = try await api.refreshTokens(refreshToken)
             if updated.tokens.refreshToken == nil {
                 print("[Auth] refresh_token grant did not return a new refreshToken — preserving previous one")
                 updated.tokens.refreshToken = savedRefreshToken
             }
+            if updated.tokens.idToken == nil { updated.tokens.idToken = savedIdToken }
             print("[Auth] refresh via refresh_token grant succeeded")
         } else if let idToken = s.tokens.idToken {
             // Third path: the idToken is a longer-lived JWT (typically 30 days) that NVIDIA
@@ -222,10 +249,18 @@ final class AuthManager {
             // This mirrors how the official GFN client recovers when the clientToken has expired
             // and no refresh_token is available — it passes the idToken to /client_token.
             print("[Auth] both primary paths unavailable, attempting idToken bootstrap")
-            guard let ct = try? await api.fetchClientToken(accessToken: idToken),
-                  let rebound = try? await api.refreshWithClientToken(ct.token, userId: s.user.userId)
-            else {
-                print("[Auth] refresh failed: idToken bootstrap also failed")
+            let ct: (token: String, expiresAt: Date)
+            let rebound: AuthTokens
+            do {
+                ct = try await api.fetchClientToken(accessToken: idToken)
+            } catch {
+                print("[Auth] idToken bootstrap — fetchClientToken failed: \(error)")
+                throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
+            }
+            do {
+                rebound = try await api.refreshWithClientToken(ct.token, userId: s.user.userId)
+            } catch {
+                print("[Auth] idToken bootstrap — refreshWithClientToken failed: \(error)")
                 throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
             }
             print("[Auth] refresh via idToken bootstrap succeeded")
@@ -234,17 +269,20 @@ final class AuthManager {
             if updated.tokens.refreshToken == nil {
                 updated.tokens.refreshToken = savedRefreshToken
             }
+            // Preserve the idToken used for bootstrap so we can re-use it on the next cycle
+            if updated.tokens.idToken == nil { updated.tokens.idToken = idToken }
         } else {
             print("[Auth] refresh failed: no usable clientToken, refreshToken, or idToken available")
             throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
         }
         // Re-bootstrap client token
-        if let ct = try? await api.fetchClientToken(accessToken: updated.tokens.accessToken) {
+        do {
+            let ct = try await api.fetchClientToken(accessToken: updated.tokens.accessToken)
             print("[Auth] client_token re-bootstrapped, expires: \(ct.expiresAt)")
             updated.tokens.clientToken = ct.token
             updated.tokens.clientTokenExpiresAt = ct.expiresAt
-        } else {
-            print("[Auth] warning: failed to re-bootstrap client_token after refresh")
+        } catch {
+            print("[Auth] warning: failed to re-bootstrap client_token after refresh: \(error)")
         }
         session = updated
         scheduleProactiveRefresh()

@@ -3,7 +3,6 @@ import Foundation
 /// SDP manipulation for GeForce NOW WebRTC sessions.
 /// Filters codec choice and injects bandwidth hints into the SDP answer.
 enum SDPMunger {
-
     // MARK: - Codec Preference
 
     /// Removes all video payload types except the preferred codec.
@@ -111,9 +110,9 @@ enum SDPMunger {
             result.append(line)
             // Inject b=AS: only if the very next line doesn't already start with b=
             let next = i + 1 < lines.count ? lines[i + 1] : ""
-            if line.hasPrefix("m=video") && !next.hasPrefix("b=") {
+            if line.hasPrefix("m=video"), !next.hasPrefix("b=") {
                 result.append("b=AS:\(videoKbps)")
-            } else if line.hasPrefix("m=audio") && !next.hasPrefix("b=") {
+            } else if line.hasPrefix("m=audio"), !next.hasPrefix("b=") {
                 result.append("b=AS:\(audioKbps)")
             }
         }
@@ -183,11 +182,12 @@ enum SDPMunger {
             let params = parts.dropFirst().joined(separator: " ")
 
             guard let profileMatch = params.range(of: #"profile-id=(\d+)"#, options: .regularExpression),
-                  let levelMatch  = params.range(of: #"level-id=(\d+)"#,   options: .regularExpression) else {
+                  let levelMatch = params.range(of: #"level-id=(\d+)"#, options: .regularExpression)
+            else {
                 return line
             }
             let profileNum = Int(String(params[profileMatch]).components(separatedBy: "=").last ?? "") ?? 0
-            let levelNum   = Int(String(params[levelMatch]).components(separatedBy: "=").last ?? "") ?? 0
+            let levelNum = Int(String(params[levelMatch]).components(separatedBy: "=").last ?? "") ?? 0
             guard let maxLevel = maxLevelByProfile[profileNum], levelNum > maxLevel else { return line }
             return line.replacingOccurrences(of: "level-id=\(levelNum)", with: "level-id=\(maxLevel)",
                                              options: .caseInsensitive)
@@ -199,9 +199,9 @@ enum SDPMunger {
 
     private static func rtpName(for codec: VideoCodec) -> String {
         switch codec {
-        case .h264: return "h264"
-        case .h265: return "h265"
-        case .av1:  return "av1"
+        case .h264: "h264"
+        case .h265: "h265"
+        case .av1: "av1"
         }
     }
 

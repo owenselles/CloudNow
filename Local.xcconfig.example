@@ -1,0 +1,5 @@
+// Local signing configuration — copy this file to Local.xcconfig and fill in your Team ID.
+// Find your Team ID at developer.apple.com → Account → Membership.
+// To attach: Xcode → project → Info tab → select a configuration → set "Based on" to Local.xcconfig.
+
+DEVELOPMENT_TEAM = YOUR_TEAM_ID_HERE

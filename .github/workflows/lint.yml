@@ -1,0 +1,43 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install SwiftFormat 0.61.1
+        run: |
+          mkdir -p "$RUNNER_TEMP/swiftformat"
+          curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
+            https://github.com/nicklockwood/SwiftFormat/releases/download/0.61.1/swiftformat.artifactbundle.zip
+          unzip -qo "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat"
+          SF_BIN=$(find "$RUNNER_TEMP/swiftformat" -type f -name swiftformat -perm -111 | head -1)
+          sudo install -m 0755 "$SF_BIN" /usr/local/bin/swiftformat
+          swiftformat --version
+
+      - name: Install SwiftLint 0.63.3
+        run: |
+          mkdir -p "$RUNNER_TEMP/swiftlint"
+          curl -fsSL -o "$RUNNER_TEMP/swiftlint.zip" \
+            https://github.com/realm/SwiftLint/releases/download/0.63.3/portable_swiftlint.zip
+          unzip -qo "$RUNNER_TEMP/swiftlint.zip" -d "$RUNNER_TEMP/swiftlint"
+          SL_BIN=$(find "$RUNNER_TEMP/swiftlint" -type f -name swiftlint -perm -111 | head -1)
+          sudo install -m 0755 "$SL_BIN" /usr/local/bin/swiftlint
+          swiftlint version
+
+      - name: SwiftFormat (format check)
+        run: swiftformat --lint --config .swiftformat --reporter github-actions-log CloudNow
+
+      - name: SwiftLint (strict)
+        run: swiftlint --strict --config .swiftlint.yml --reporter github-actions-logging CloudNow
