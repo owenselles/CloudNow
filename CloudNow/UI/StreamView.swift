@@ -43,9 +43,9 @@ struct StreamView: View {
                 connectingView
             case .streaming:
                 streamingView
-            case .reconnecting(let attempt):
+            case let .reconnecting(attempt):
                 reconnectingView(attempt: attempt)
-            case .disconnected(let reason):
+            case let .disconnected(reason):
                 disconnectedView(reason)
             case let .failed(message):
                 failedView(message)
@@ -56,7 +56,7 @@ struct StreamView: View {
         .ignoresSafeArea()
         .task {
             streamController.onReconnectNeeded = { [self] in
-                await self.reclaimSession()
+                await reclaimSession()
             }
             await startSession()
         }
@@ -700,13 +700,12 @@ struct StreamView: View {
     }
 
     private func createNewSession(appId: String, token: String, base: String) async throws -> SessionInfo {
-        let sessionBase: String
-        if let preferred = settings.preferredZoneUrl {
-            sessionBase = preferred
+        let sessionBase: String = if let preferred = settings.preferredZoneUrl {
+            preferred
         } else if let best = await viewModel.bestZoneUrl() {
-            sessionBase = best
+            best
         } else {
-            sessionBase = base
+            base
         }
         print("[Session] creating new session, appId=\(appId), sessionBase=\(sessionBase)")
 

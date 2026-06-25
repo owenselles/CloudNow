@@ -274,7 +274,9 @@ actor CloudMatchClient {
                 .appending(queryItems: queryItems)
             var request = URLRequest(url: params)
             request.httpMethod = "POST"
-            for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+            for (k, v) in headers {
+                request.setValue(v, forHTTPHeaderField: k)
+            }
             request.setValue("\(bodyData.count)", forHTTPHeaderField: "Content-Length")
             request.httpBody = bodyData
             print("[CloudMatch] createSession POST \(params), appId=\(input.appId)")
@@ -290,7 +292,8 @@ actor CloudMatchClient {
             print("[CloudMatch] createSession failed: HTTP \(statusCode) body: \(raw.prefix(500))")
             // Clean up phantom session the server allocated despite the error
             if let errPayload = try? JSONDecoder().decode(CloudMatchResponse.self, from: data),
-               !errPayload.session.sessionId.isEmpty {
+               !errPayload.session.sessionId.isEmpty
+            {
                 let sid = errPayload.session.sessionId
                 print("[CloudMatch] cleaning phantom session \(sid)")
                 try? await stopSession(sessionId: sid, token: input.token, base: base)
@@ -348,7 +351,9 @@ actor CloudMatchClient {
         let clientId = UUID().uuidString
         let deviceId = UUID().uuidString
         let headers = gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: false)
-        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        for (k, v) in headers {
+            request.setValue(v, forHTTPHeaderField: k)
+        }
         let (data, resp) = try await urlSession.data(for: request)
         let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1
         print("[CloudMatch] getActiveSessions HTTP \(httpStatus), \(data.count) bytes")

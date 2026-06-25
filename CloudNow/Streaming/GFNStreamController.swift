@@ -143,7 +143,7 @@ final class GFNStreamController: NSObject {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
         switch state {
         case .connecting, .streaming:
-            gfnLog.info("connect: already \(String(describing: self.state)), ignoring")
+            gfnLog.info("connect: already \(String(describing: state)), ignoring")
             return
         default: break
         }
@@ -288,26 +288,27 @@ final class GFNStreamController: NSObject {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self else { return }
-            guard case .reconnecting = self.state else { return }
+            guard case .reconnecting = state else { return }
 
-            guard let reclaim = self.onReconnectNeeded,
-                  let session = await reclaim() else {
+            guard let reclaim = onReconnectNeeded,
+                  let session = await reclaim()
+            else {
                 gfnLog.info("attemptReconnect: reclaim failed on attempt \(attempt)")
                 if attempt >= Self.maxReconnectAttempts {
-                    self.state = .sessionEnded
+                    state = .sessionEnded
                 }
                 return
             }
 
             gfnLog.info("attemptReconnect: reclaimed session, reconnecting WebRTC")
-            self.sessionInfo = session
-            self.setupSignaling(session: session)
+            sessionInfo = session
+            setupSignaling(session: session)
             do {
-                try await self.signaling?.connect()
+                try await signaling?.connect()
             } catch {
                 gfnLog.error("attemptReconnect: signaling failed: \(error)")
                 if attempt >= Self.maxReconnectAttempts {
-                    self.state = .sessionEnded
+                    state = .sessionEnded
                 }
             }
         }
@@ -898,25 +899,25 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
             guard let self else { return }
             switch newState {
             case .connected, .completed:
-                self.wasStreaming = true
-                self.reconnectAttempt = 0
-                self.state = .streaming
-                self.startStatsTimer()
+                wasStreaming = true
+                reconnectAttempt = 0
+                state = .streaming
+                startStatsTimer()
             case .disconnected:
-                self.statsTimer?.invalidate()
-                self.statsTimer = nil
-                if self.wasStreaming {
-                    self.attemptReconnect()
+                statsTimer?.invalidate()
+                statsTimer = nil
+                if wasStreaming {
+                    attemptReconnect()
                 } else {
-                    self.state = .disconnected(reason: "ICE disconnected")
+                    state = .disconnected(reason: "ICE disconnected")
                 }
             case .failed:
-                self.statsTimer?.invalidate()
-                self.statsTimer = nil
-                if self.wasStreaming {
-                    self.attemptReconnect()
+                statsTimer?.invalidate()
+                statsTimer = nil
+                if wasStreaming {
+                    attemptReconnect()
                 } else {
-                    self.state = .failed(message: "ICE connection failed")
+                    state = .failed(message: "ICE connection failed")
                 }
             default:
                 break

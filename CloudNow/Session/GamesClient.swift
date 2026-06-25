@@ -19,47 +19,47 @@ actor GamesClient {
     private var metadataCache: [String: AppData] = [:]
 
     private static let browseQuery = """
-        query GetFilterBrowseResults($vpcId: String!, $locale: String!, $sortString: String!, $fetchCount: Int!, $cursor: String!, $filters: AppFilterFields!) {
-            apps(vpcId: $vpcId, language: $locale, orderBy: $sortString, first: $fetchCount, after: $cursor, filters: $filters) {
-                numberReturned pageInfo { hasNextPage endCursor totalCount }
-                items {
-                    id title
-                    images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                    variants { id appStore supportedControls gfn { status library { status selected } } }
-                    gfn { playabilityState minimumMembershipTierLabel }
-                }
+    query GetFilterBrowseResults($vpcId: String!, $locale: String!, $sortString: String!, $fetchCount: Int!, $cursor: String!, $filters: AppFilterFields!) {
+        apps(vpcId: $vpcId, language: $locale, orderBy: $sortString, first: $fetchCount, after: $cursor, filters: $filters) {
+            numberReturned pageInfo { hasNextPage endCursor totalCount }
+            items {
+                id title
+                images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
+                variants { id appStore supportedControls gfn { status library { status selected } } }
+                gfn { playabilityState minimumMembershipTierLabel }
             }
         }
-        """
+    }
+    """
 
     private static let searchQuery = """
-        query GetSearchFilterResults($vpcId: String!, $locale: String!, $sortString: String!, $fetchCount: Int!, $cursor: String!, $searchString: String!, $filters: AppFilterFields!) {
-            apps(vpcId: $vpcId, language: $locale, orderBy: $sortString, first: $fetchCount, after: $cursor, searchQuery: $searchString, filters: $filters) {
-                numberReturned pageInfo { hasNextPage endCursor totalCount }
-                items {
-                    id title
-                    images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                    variants { id appStore supportedControls gfn { status library { status selected } } }
-                    gfn { playabilityState minimumMembershipTierLabel }
-                }
+    query GetSearchFilterResults($vpcId: String!, $locale: String!, $sortString: String!, $fetchCount: Int!, $cursor: String!, $searchString: String!, $filters: AppFilterFields!) {
+        apps(vpcId: $vpcId, language: $locale, orderBy: $sortString, first: $fetchCount, after: $cursor, searchQuery: $searchString, filters: $filters) {
+            numberReturned pageInfo { hasNextPage endCursor totalCount }
+            items {
+                id title
+                images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
+                variants { id appStore supportedControls gfn { status library { status selected } } }
+                gfn { playabilityState minimumMembershipTierLabel }
             }
         }
-        """
+    }
+    """
 
     // MARK: Fetch Full Catalog (browse API)
 
     func fetchMainGames(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
-        let vpcId = (try? await fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
         return try await browseCatalog(token: token, vpcId: vpcId, filters: [:], maxPages: 15)
     }
 
     // MARK: Fetch Library (owned/purchased games via browse filter)
 
     func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
-        let vpcId = (try? await fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
         let libraryFilter: [String: Any] = ["variants": ["gfn": ["library": ["status": ["notEquals": "NOT_OWNED"]]]]]
         let games = try await browseCatalog(token: token, vpcId: vpcId, filters: libraryFilter, maxPages: 10)
-        return (try? await enrich(token: token, vpcId: vpcId, games: games)) ?? games
+        return await (try? enrich(token: token, vpcId: vpcId, games: games)) ?? games
     }
 
     // MARK: - Catalog Browse
@@ -69,7 +69,7 @@ actor GamesClient {
         var seen = Set<String>()
         var cursor = ""
 
-        for _ in 0..<maxPages {
+        for _ in 0 ..< maxPages {
             var variables: [String: Any] = [
                 "vpcId": vpcId,
                 "locale": "en_US",
@@ -135,7 +135,7 @@ actor GamesClient {
 
         let selectedIndex = item.variants?.firstIndex { $0.gfn?.library?.selected == true } ?? 0
         let safeIndex = min(max(0, selectedIndex), max(0, variants.count - 1))
-        if safeIndex > 0 && safeIndex < variants.count {
+        if safeIndex > 0, safeIndex < variants.count {
             let selected = variants.remove(at: safeIndex)
             variants.insert(selected, at: 0)
         }

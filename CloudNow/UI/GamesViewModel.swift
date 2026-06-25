@@ -75,8 +75,9 @@ class GamesViewModel {
             streamSettings = settings
         }
         if let data = UserDefaults.standard.data(forKey: "gfn.lastSession"),
-           let session = try? JSONDecoder().decode(LastSessionRecord.self, from: data) {
-            self.lastSession = session
+           let session = try? JSONDecoder().decode(LastSessionRecord.self, from: data)
+        {
+            lastSession = session
         }
         // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
         // If Apple raises the cap in a future tvOS release this will automatically unlock.
@@ -181,7 +182,7 @@ class GamesViewModel {
             }
 
             mainGames = fetchedMain
-            let catalogOwned = fetchedMain.filter { $0.isInLibrary }
+            let catalogOwned = fetchedMain.filter(\.isInLibrary)
             var merged = panelLibrary
             var seen = Set(panelLibrary.map(\.id))
             for game in catalogOwned where seen.insert(game.id).inserted {
@@ -199,16 +200,16 @@ class GamesViewModel {
     }
 
     private func fetchLibrarySafe(token: String, base: String) async -> [GameInfo] {
-        (try? await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)) ?? []
+        await (try? gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)) ?? []
     }
 
     private func fetchSessionsSafe(token: String, base: String) async -> [ActiveSessionInfo] {
-        (try? await cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+        await (try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
     }
 
     private func fetchSubscriptionSafe(authManager: AuthManager, token: String, base: String) async -> SubscriptionInfo? {
         guard let userId = authManager.session?.user.userId else { return nil }
-        let vpcId = (try? await MESClient.shared.fetchVpcId(token: token, base: base)) ?? ""
+        let vpcId = await (try? MESClient.shared.fetchVpcId(token: token, base: base)) ?? ""
         return try? await MESClient.shared.fetchSubscription(token: token, vpcId: vpcId, userId: userId)
     }
 
@@ -217,7 +218,7 @@ class GamesViewModel {
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    private func saveCache<T: Encodable>(_ key: String, data: T) {
+    private func saveCache(_ key: String, data: some Encodable) {
         if let encoded = try? JSONEncoder().encode(data) {
             UserDefaults.standard.set(encoded, forKey: key)
         }
@@ -340,7 +341,8 @@ class GamesViewModel {
         let isUnlimited = subscription?.isUnlimited ?? false
         topZones = Array(reachable
             .sorted { autoZoneScore($0, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited) <
-                      autoZoneScore($1, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited) }
+                autoZoneScore($1, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited)
+            }
             .prefix(5))
         print("[Zones] top 5: \(topZones.map { "\($0.id) ping=\($0.pingMs!)ms queue=\($0.queuePosition)" }.joined(separator: ", "))")
     }

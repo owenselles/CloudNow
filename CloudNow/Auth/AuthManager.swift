@@ -206,9 +206,9 @@ final class AuthManager {
     private func performRefresh(session s: AuthSession) async throws -> AuthSession {
         var updated = s
         print("[Auth] performRefresh: accessToken expires=\(s.tokens.expiresAt), " +
-              "clientToken=\(s.tokens.clientToken != nil ? "yes" : "nil") expires=\(s.tokens.clientTokenExpiresAt?.description ?? "nil"), " +
-              "refreshToken=\(s.tokens.refreshToken != nil ? "yes" : "nil"), " +
-              "idToken=\(s.tokens.idToken != nil ? "yes" : "nil")")
+            "clientToken=\(s.tokens.clientToken != nil ? "yes" : "nil") expires=\(s.tokens.clientTokenExpiresAt?.description ?? "nil"), " +
+            "refreshToken=\(s.tokens.refreshToken != nil ? "yes" : "nil"), " +
+            "idToken=\(s.tokens.idToken != nil ? "yes" : "nil")")
         let clientTokenUsable = s.tokens.clientToken != nil &&
             (s.tokens.clientTokenExpiresAt.map { $0 > Date() } ?? false)
         if !clientTokenUsable {
