@@ -17,6 +17,16 @@ struct CloudNowApp: App {
             memoryCapacity: 50 * 1024 * 1024,
             diskCapacity: 200 * 1024 * 1024
         )
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: "com.owenselles.CloudNow.tokenRefresh",
+            using: nil
+        ) { [authManager] task in
+            Task { @MainActor in
+                await authManager.refreshIfNeeded()
+                authManager.scheduleBackgroundRefresh()
+                task.setTaskCompleted(success: true)
+            }
+        }
     }
 
     var body: some Scene {
@@ -29,21 +39,7 @@ struct CloudNowApp: App {
                 }
             }
             .environment(authManager)
-            .onAppear { registerBGTasks() }
             .task { await authManager.initialize() }
-        }
-    }
-
-    private func registerBGTasks() {
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: "com.owenselles.CloudNow.tokenRefresh",
-            using: nil
-        ) { task in
-            Task { @MainActor in
-                await authManager.refreshIfNeeded()
-                authManager.scheduleBackgroundRefresh()
-                task.setTaskCompleted(success: true)
-            }
         }
     }
 }

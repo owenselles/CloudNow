@@ -5,10 +5,10 @@ import SwiftUI
 /// Reports start / pause / finish lifecycle events back to CloudMatch.
 struct QueueAdPlayerView: View {
     let ad: SessionAdInfo
-    let onStart:  (String) -> Void          // adId
-    let onPause:  (String) -> Void          // adId
-    let onResume: (String) -> Void          // adId
-    let onFinish: (String, Int) -> Void     // adId, watchedTimeMs
+    let onStart: (String) -> Void // adId
+    let onPause: (String) -> Void // adId
+    let onResume: (String) -> Void // adId
+    let onFinish: (String, Int) -> Void // adId, watchedTimeMs
     let message: String?
 
     @State private var player = AVPlayer()
@@ -160,7 +160,7 @@ struct QueueAdPlayerView: View {
 private struct AVPlayerViewRepresentable: UIViewControllerRepresentable {
     let player: AVPlayer
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
+    func makeUIViewController(context _: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
         vc.showsPlaybackControls = false
@@ -168,7 +168,7 @@ private struct AVPlayerViewRepresentable: UIViewControllerRepresentable {
         return vc
     }
 
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+    func updateUIViewController(_ vc: AVPlayerViewController, context _: Context) {
         vc.player = player
     }
 }

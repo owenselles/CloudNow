@@ -43,3 +43,6 @@ AuthKey_*.p8
 
 # Local signing config (each dev sets their own DEVELOPMENT_TEAM)
 Local.xcconfig
+
+# Opencode / AI workflow (local-only)
+.omo/

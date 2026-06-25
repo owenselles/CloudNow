@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-struct VideoPipelineSnapshot: Sendable {
+struct VideoPipelineSnapshot {
     var callbackFrames: Int = 0
     var softwareConvertedFrames: Int = 0
     var enqueuedFrames: Int = 0
@@ -187,7 +187,7 @@ final class VideoPipelineDiagnostics: @unchecked Sendable {
         state.withLock { $0.snapshot }
     }
 
-    nonisolated private static func averageMilliseconds(totalNanoseconds: UInt64, count: Int) -> Double {
+    private nonisolated static func averageMilliseconds(totalNanoseconds: UInt64, count: Int) -> Double {
         guard count > 0 else { return 0 }
         return Double(totalNanoseconds) / Double(count) / 1_000_000
     }

@@ -84,6 +84,41 @@ On first launch the app prompts you to sign in. A QR code and PIN are displayed 
 
 ---
 
+## Linting
+
+CloudNow uses SwiftLint and SwiftFormat. CI gates PRs on lint failures.
+
+### Install (one-time)
+
+```bash
+brew install swiftlint swiftformat pre-commit
+```
+
+### Run locally
+
+```bash
+# Format check (no mutation)
+swiftformat --lint --config .swiftformat CloudNow
+# Lint check
+swiftlint --strict --config .swiftlint.yml CloudNow
+# Auto-fix everything fixable
+swiftformat --config .swiftformat CloudNow && swiftlint --fix --config .swiftlint.yml CloudNow
+```
+
+### Optional pre-commit hook
+
+```bash
+pre-commit install
+```
+
+After installing, every `git commit` runs SwiftFormat then SwiftLint --fix against your staged files. On fixable issues, files are auto-corrected in the working tree and the commit is aborted with "Files were modified by this hook" — run `git add` and `git commit` again to land the fixed version. On unfixable issues, the hook prints the violation and aborts; edit the file manually and try again.
+
+### Pinned versions
+
+CI uses SwiftLint 0.63.3 and SwiftFormat 0.61.1. Local installs via Homebrew should match or exceed these; verify with `swiftlint version` and `swiftformat --version`.
+
+---
+
 ## Architecture
 
 ```

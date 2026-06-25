@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **CloudNow** is a native tvOS app — a reverse-engineered GeForce NOW client for Apple TV. It streams PC games over WebRTC using NVIDIA's GFN protocol over WebRTC, using [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) as the WebRTC transport.
 
+## Git
+
+- **Upstream**: `origin` → `owenselles/CloudNow` (original author)
+- **Fork**: `fork` → `yowmamasita/CloudNow` (our fork — push here)
+- `project.pbxproj` contains our dev team ID (`7RX5G7H8DW`) and deployment target (`18.0`) — don't commit this to branches intended for upstream PRs
+
 ## Building
 
 - **Xcode 16+**, targeting tvOS 17+
@@ -13,6 +19,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Required SPM dependency**: Add [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) via Xcode → File → Add Package Dependencies before building
 - Distribution is sideload-only (no App Store target)
 - No test suite, no linter configured
+
+## Linting
+
+Run lint after every Swift edit. CI fails PRs on violations.
+
+```bash
+# Format check (no mutation)
+swiftformat --lint --config .swiftformat CloudNow
+# Lint check
+swiftlint --strict --config .swiftlint.yml CloudNow
+# Auto-fix everything fixable
+swiftformat --config .swiftformat CloudNow && swiftlint --fix --config .swiftlint.yml CloudNow
+```
+
+### Escape-hatch convention
+
+When a rule genuinely cannot apply (e.g., a force-cast guarded by `layerClass`), use a single-line disable directive WITH a rationale:
+
+```swift
+// swiftlint:disable:next force_cast - reason: <one-sentence why>
+```
+
+Never use block `disable`/`enable` pairs and never omit the rationale.
+
+### Pinned versions
+
+Tools pinned in `.pre-commit-config.yaml` and `.github/workflows/lint.yml`: SwiftLint 0.63.3, SwiftFormat 0.61.1.
 
 ## Architecture
 

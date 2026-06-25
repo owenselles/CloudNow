@@ -4,7 +4,7 @@ import LiveKitWebRTC
 import os
 
 final class I420FrameConverter: @unchecked Sendable {
-    nonisolated private final class PoolBox: @unchecked Sendable {
+    private final nonisolated class PoolBox: @unchecked Sendable {
         let pool: CVPixelBufferPool
 
         init(_ pool: CVPixelBufferPool) {
@@ -12,7 +12,7 @@ final class I420FrameConverter: @unchecked Sendable {
         }
     }
 
-    nonisolated private struct PoolState: @unchecked Sendable {
+    private nonisolated struct PoolState: @unchecked Sendable {
         var width = 0
         var height = 0
         var poolBox: PoolBox?
@@ -44,7 +44,8 @@ final class I420FrameConverter: @unchecked Sendable {
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
 
         guard copyLuma(i420, to: pixelBuffer, width: width, height: height),
-              interleaveChroma(i420, to: pixelBuffer, width: width, height: height) else {
+              interleaveChroma(i420, to: pixelBuffer, width: width, height: height)
+        else {
             return nil
         }
         applySDRColorAttachments(to: pixelBuffer)
@@ -104,7 +105,7 @@ final class I420FrameConverter: @unchecked Sendable {
             memcpy(destination, i420.dataY, width * height)
             return true
         }
-        for row in 0..<height {
+        for row in 0 ..< height {
             memcpy(
                 destination.advanced(by: row * destinationStride),
                 i420.dataY.advanced(by: row * sourceStride),

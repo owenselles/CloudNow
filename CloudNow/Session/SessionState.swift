@@ -5,7 +5,10 @@ import Foundation
 struct StreamSettings: Codable, Equatable {
     var resolution: String = "1920x1080"
     var fps: Int = 60
-    var maxBitrateKbps: Int = 20_000 { didSet { maxBitrateKbps = min(maxBitrateKbps, 100_000) } }
+    var maxBitrateKbps: Int = 20000 {
+        didSet { maxBitrateKbps = min(maxBitrateKbps, 100_000) }
+    }
+
     var codec: VideoCodec = .h264
     var colorQuality: ColorQuality = .sdr8bit
     var keyboardLayout: String = "en-US"
@@ -43,10 +46,11 @@ struct StreamSettings: Codable, Equatable {
 }
 
 // MARK: - StreamSettings: resilient decoding
-//
-// Synthesized Decodable throws keyNotFound when a newly-added field is missing from
-// previously-persisted JSON, which would silently reset ALL settings to defaults on upgrade.
-// decodeIfPresent + default fallbacks keep existing settings intact across versions.
+
+///
+/// Synthesized Decodable throws keyNotFound when a newly-added field is missing from
+/// previously-persisted JSON, which would silently reset ALL settings to defaults on upgrade.
+/// decodeIfPresent + default fallbacks keep existing settings intact across versions.
 extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorQuality, keyboardLayout
@@ -60,57 +64,62 @@ extension StreamSettings {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = StreamSettings()
         self.init()
-        resolution            = try c.decodeIfPresent(String.self,            forKey: .resolution)            ?? d.resolution
-        fps                   = try c.decodeIfPresent(Int.self,               forKey: .fps)                   ?? d.fps
-        maxBitrateKbps        = try c.decodeIfPresent(Int.self,               forKey: .maxBitrateKbps)        ?? d.maxBitrateKbps
-        codec                 = try c.decodeIfPresent(VideoCodec.self,        forKey: .codec)                 ?? d.codec
-        colorQuality          = try c.decodeIfPresent(ColorQuality.self,      forKey: .colorQuality)          ?? d.colorQuality
-        keyboardLayout        = try c.decodeIfPresent(String.self,            forKey: .keyboardLayout)        ?? d.keyboardLayout
-        gameLanguage          = try c.decodeIfPresent(String.self,            forKey: .gameLanguage)          ?? d.gameLanguage
-        enableL4S             = try c.decodeIfPresent(Bool.self,              forKey: .enableL4S)             ?? d.enableL4S
-        micEnabled            = try c.decodeIfPresent(Bool.self,              forKey: .micEnabled)            ?? d.micEnabled
-        controllerDeadzone    = try c.decodeIfPresent(Double.self,            forKey: .controllerDeadzone)    ?? d.controllerDeadzone
-        overlayTriggerButton  = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
-        defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self,  forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
-        preferredZoneUrl      = try c.decodeIfPresent(String.self,            forKey: .preferredZoneUrl)
-        enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self,         forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
-        statsMode             = try c.decodeIfPresent(StreamStatsMode.self,  forKey: .statsMode)             ?? d.statsMode
-        enableRtcEventLog     = try c.decodeIfPresent(Bool.self,              forKey: .enableRtcEventLog)     ?? d.enableRtcEventLog
+        resolution = try c.decodeIfPresent(String.self, forKey: .resolution) ?? d.resolution
+        fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
+        maxBitrateKbps = try c.decodeIfPresent(Int.self, forKey: .maxBitrateKbps) ?? d.maxBitrateKbps
+        codec = try c.decodeIfPresent(VideoCodec.self, forKey: .codec) ?? d.codec
+        colorQuality = try c.decodeIfPresent(ColorQuality.self, forKey: .colorQuality) ?? d.colorQuality
+        keyboardLayout = try c.decodeIfPresent(String.self, forKey: .keyboardLayout) ?? d.keyboardLayout
+        gameLanguage = try c.decodeIfPresent(String.self, forKey: .gameLanguage) ?? d.gameLanguage
+        enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
+        micEnabled = try c.decodeIfPresent(Bool.self, forKey: .micEnabled) ?? d.micEnabled
+        controllerDeadzone = try c.decodeIfPresent(Double.self, forKey: .controllerDeadzone) ?? d.controllerDeadzone
+        overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
+        defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
+        preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)
+        enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self, forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
+        statsMode = try c.decodeIfPresent(StreamStatsMode.self, forKey: .statsMode) ?? d.statsMode
+        enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
     }
 }
 
-enum StreamStatsMode: String, Codable, CaseIterable, Sendable {
+enum StreamStatsMode: String, Codable, CaseIterable {
     case off
     case hud
     case diagnostic
 
     var label: String {
         switch self {
-        case .off: return "Off"
-        case .hud: return "HUD"
-        case .diagnostic: return "Diagnostic"
+        case .off: "Off"
+        case .hud: "HUD"
+        case .diagnostic: "Diagnostic"
         }
     }
 }
 
 enum OverlayTriggerButton: String, Codable, CaseIterable {
-    case start   = "Start (≡)"
+    case start = "Start (≡)"
     case options = "Options/Back (⊟)"
 }
 
 enum VideoCodec: String, Codable, CaseIterable {
     case h264 = "H264"
     case h265 = "H265"
-    case av1  = "AV1"
+    case av1 = "AV1"
 }
 
 enum ColorQuality: String, Codable, CaseIterable {
-    case sdr8bit  = "SDR8bit"
+    case sdr8bit = "SDR8bit"
     case sdr10bit = "SDR10bit"
     case hdr10bit = "HDR10bit"
 
-    var bitDepth: Int { self == .sdr8bit ? 8 : 10 }
-    var chromaFormat: Int { self == .hdr10bit ? 2 : 1 }
+    var bitDepth: Int {
+        self == .sdr8bit ? 8 : 10
+    }
+
+    var chromaFormat: Int {
+        self == .hdr10bit ? 2 : 1
+    }
 }
 
 // MARK: - ICE Server
@@ -134,7 +143,9 @@ struct SessionAdInfo: Codable, Equatable, Identifiable {
     let mediaUrl: String?
     let adMediaFiles: [SessionAdMediaFile]
     let adLengthInSeconds: Double?
-    var id: String { adId }
+    var id: String {
+        adId
+    }
 
     /// Returns the best available media URL.
     var preferredMediaURL: URL? {
@@ -200,7 +211,9 @@ struct EntitledResolution: Equatable {
     let heightInPixels: Int
     let framesPerSecond: Int
 
-    var resolutionLabel: String { "\(widthInPixels)x\(heightInPixels)" }
+    var resolutionLabel: String {
+        "\(widthInPixels)x\(heightInPixels)"
+    }
 }
 
 struct SubscriptionInfo {
@@ -213,7 +226,7 @@ struct SubscriptionInfo {
 
 // MARK: - Games
 
-struct GameInfo: Identifiable, Equatable {
+struct GameInfo: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let boxArtUrl: String?
@@ -232,11 +245,11 @@ struct GameInfo: Identifiable, Equatable {
 
     /// Stores this game is owned through (drives the Library filter chips).
     var ownedStores: [String] {
-        variants.filter { $0.isOwned }.map { $0.appStore }
+        variants.filter(\.isOwned).map(\.appStore)
     }
 }
 
-struct GameVariant: Equatable {
+struct GameVariant: Equatable, Codable {
     let id: String
     let appStore: String
     var appId: String?
@@ -245,14 +258,14 @@ struct GameVariant: Equatable {
 
     var storeName: String {
         switch appStore {
-        case "STEAM": return "Steam"
-        case "EPIC_GAMES_STORE": return "Epic Games"
-        case "GOG": return "GOG"
-        case "EA_APP": return "EA App"
-        case "UBISOFT": return "Ubisoft Connect"
-        case "MICROSOFT": return "Xbox"
-        case "BATTLENET": return "Battle.net"
-        default: return appStore.replacingOccurrences(of: "_", with: " ").capitalized
+        case "STEAM": "Steam"
+        case "EPIC_GAMES_STORE": "Epic Games"
+        case "GOG": "GOG"
+        case "EA_APP": "EA App"
+        case "UBISOFT": "Ubisoft Connect"
+        case "MICROSOFT": "Xbox"
+        case "BATTLENET": "Battle.net"
+        default: appStore.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 }

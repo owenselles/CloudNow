@@ -11,11 +11,11 @@ struct LoginView: View {
             switch authManager.loginPhase {
             case .idle:
                 loginPrompt
-            case .showingPIN(let code, let url, let urlComplete):
+            case let .showingPIN(code, url, urlComplete):
                 pinView(code: code, url: url, urlComplete: urlComplete)
             case .exchangingTokens:
                 exchangingView
-            case .failed(let message):
+            case let .failed(message):
                 failedView(message: message)
             }
         }
