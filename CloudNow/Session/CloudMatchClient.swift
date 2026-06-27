@@ -138,8 +138,10 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     let resolutionParts = input.settings.resolution.split(separator: "x")
     let width = Int(resolutionParts.first ?? "1920") ?? 1920
     let height = Int(resolutionParts.last ?? "1080") ?? 1080
-    let tzOffset = -TimeZone.current.secondsFromGMT() * 1000
-    let isHdr = input.settings.colorQuality == .hdr10bit
+    let tzOffset = TimeZone.current.secondsFromGMT() * 1000
+    let trueHdr = false
+    let cloudMatchBitDepth = input.settings.colorQuality == .sdr8bit ? 0 : 10
+    let cloudMatchChromaFormat = input.settings.colorQuality == .hdr10bit ? 2 : 0
 
     return [
         "sessionRequestData": [
@@ -161,8 +163,8 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
                 "widthInPixels": width,
                 "heightInPixels": height,
                 "framesPerSecond": input.settings.fps,
-                "sdrHdrMode": isHdr ? 1 : 0,
-                "displayData": isHdr ? [
+                "sdrHdrMode": trueHdr ? 1 : 0,
+                "displayData": trueHdr ? [
                     "desiredContentMaxLuminance": 1000,
                     "desiredContentMinLuminance": 0,
                     "desiredContentMaxFrameAverageLuminance": 500,
@@ -181,8 +183,8 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
                 ["key": "clientPhysicalResolution", "value": "{\"horizontalPixels\":\(width),\"verticalPixels\":\(height)}"],
                 ["key": "surroundAudioInfo", "value": "2"],
             ],
-            "sdrHdrMode": isHdr ? 1 : 0,
-            "clientDisplayHdrCapabilities": isHdr ? [
+            "sdrHdrMode": trueHdr ? 1 : 0,
+            "clientDisplayHdrCapabilities": trueHdr ? [
                 "version": 1,
                 "hdrEdrSupportedFlagsInUint32": 1,
                 "staticMetadataDescriptorId": 0,
@@ -199,22 +201,22 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
             "userAge": 26,
             "requestedStreamingFeatures": [
                 "reflex": input.settings.fps >= 120,
-                "bitDepth": input.settings.colorQuality.bitDepth,
+                "bitDepth": cloudMatchBitDepth,
                 "cloudGsync": false,
                 "enabledL4S": input.settings.enableL4S,
                 "mouseMovementFlags": 0,
-                "trueHdr": isHdr,
+                "trueHdr": trueHdr,
                 "supportedHidDevices": 0,
                 "profile": 0,
                 "fallbackToLogicalResolution": false,
                 "hidDevices": NSNull(),
-                "chromaFormat": input.settings.colorQuality.chromaFormat,
+                "chromaFormat": cloudMatchChromaFormat,
                 "prefilterMode": 0,
                 "prefilterSharpness": 0,
                 "prefilterNoiseReduction": 0,
                 "hudStreamingMode": 0,
                 "sdrColorSpace": 2,
-                "hdrColorSpace": isHdr ? 4 : 0,
+                "hdrColorSpace": trueHdr ? 4 : 0,
             ],
         ],
     ]
