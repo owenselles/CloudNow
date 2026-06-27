@@ -253,7 +253,7 @@ struct GameVariant: Equatable, Codable {
     let id: String
     let appStore: String
     var appId: String?
-    /// True when GFN reports a library status other than `NOT_OWNED` for this variant.
+    /// True when GFN reports MANUAL, PLATFORM_SYNC, or IN_LIBRARY for this variant.
     var isOwned: Bool = false
 
     var storeName: String {
