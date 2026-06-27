@@ -19,10 +19,10 @@ struct StreamSettings: Codable, Equatable {
     var controllerDeadzone: Double = 0.15
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
     var overlayTriggerButton: OverlayTriggerButton = .start
-    /// Default Siri Remote input mode when a stream session starts.
+    /// Default remote/controller input mode when a stream session starts.
     var defaultRemoteInputMode: RemoteInputMode = .mouse
     /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
-    /// nil = let the GFN default VPC handle routing.
+    /// nil = choose an automatic zone when available, otherwise let the GFN default VPC route.
     var preferredZoneUrl: String? = nil
     /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
     /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
@@ -276,8 +276,8 @@ struct SessionCreateRequest {
     let appId: String
     let internalTitle: String?
     let token: String
-    let zone: String
     let streamingBaseUrl: String?
+    let routingZoneUrl: String?
     let settings: StreamSettings
     let accountLinked: Bool
 }

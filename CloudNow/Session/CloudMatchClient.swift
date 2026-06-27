@@ -11,7 +11,7 @@ private func gfnHeaders(token: String, clientId: String, deviceId: String, inclu
         "nv-client-id": clientId,
         "nv-client-streamer": "NVIDIA-CLASSIC",
         "nv-client-type": "NATIVE",
-        "nv-client-version": "2.0.83.130",
+        "nv-client-version": NVIDIAAuth.gfnClientVersion,
         "nv-device-make": "UNKNOWN",
         "nv-device-model": "UNKNOWN",
         "nv-device-os": "WINDOWS",
@@ -19,8 +19,8 @@ private func gfnHeaders(token: String, clientId: String, deviceId: String, inclu
         "x-device-id": deviceId,
     ]
     if includeOrigin {
-        h["Origin"] = "https://play.geforcenow.com"
-        h["Referer"] = "https://play.geforcenow.com/"
+        h["Origin"] = NVIDIAAuth.webOrigin
+        h["Referer"] = NVIDIAAuth.webReferer
     }
     return h
 }
@@ -134,7 +134,7 @@ private struct GetSessionsResponse: Decodable {
 
 // MARK: - Session Request Body
 
-private func buildSessionRequestBody(_ input: SessionCreateRequest) -> [String: Any] {
+private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
     let resolutionParts = input.settings.resolution.split(separator: "x")
     let width = Int(resolutionParts.first ?? "1920") ?? 1920
     let height = Int(resolutionParts.last ?? "1080") ?? 1080
@@ -149,7 +149,7 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest) -> [String: 
             "networkTestSessionId": NSNull(),
             "parentSessionId": NSNull(),
             "clientIdentification": "GFN-PC",
-            "deviceHashId": UUID().uuidString,
+            "deviceHashId": deviceId,
             "clientVersion": "30.0",
             "sdkVersion": "1.0",
             "streamerVersion": 1,
@@ -241,6 +241,8 @@ private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> Stri
 // MARK: - CloudMatchClient
 
 actor CloudMatchClient {
+    private static let defaultBase = "https://prod.cloudmatchbeta.nvidiagrid.net"
+
     private let urlSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpAdditionalHeaders = ["Accept": "application/json"]
@@ -251,13 +253,14 @@ actor CloudMatchClient {
 
     func createSession(_ input: SessionCreateRequest) async throws -> SessionInfo {
         let clientId = UUID().uuidString
-        let deviceId = UUID().uuidString
+        let deviceId = GFNDeviceIdentity.stableDeviceId()
         let preferredBase = input.streamingBaseUrl.map {
             $0.hasSuffix("/") ? String($0.dropLast()) : $0
-        } ?? "https://prod.cloudmatchbeta.nvidiagrid.net"
-        let fallbackBase = "https://prod.cloudmatchbeta.nvidiagrid.net"
+        } ?? Self.defaultBase
+        let fallbackBase = Self.defaultBase
+        let requestedRoutingZoneUrl = normalizedRoutingZoneUrl(input.routingZoneUrl)
 
-        let body = buildSessionRequestBody(input)
+        let body = buildSessionRequestBody(input, deviceId: deviceId)
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         print("[CloudMatch] bodySize: \(bodyData.count) bytes")
         let headers = gfnHeaders(token: input.token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
@@ -286,7 +289,19 @@ actor CloudMatchClient {
             print("[CloudMatch] createSession response: HTTP \(statusCode)")
             if statusCode == 200 {
                 let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-                return try toSessionInfo(base: base, routingZoneUrl: nil, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
+                let routingZoneUrl: String? = if base == preferredBase {
+                    requestedRoutingZoneUrl ?? normalizedRoutingZoneUrl(base)
+                } else {
+                    nil
+                }
+                return try toSessionInfo(
+                    base: base,
+                    routingZoneUrl: routingZoneUrl,
+                    payload: payload,
+                    rawData: data,
+                    clientId: clientId,
+                    deviceId: deviceId
+                )
             }
             let raw = String(data: data, encoding: .utf8) ?? ""
             print("[CloudMatch] createSession failed: HTTP \(statusCode) body: \(raw.prefix(500))")
@@ -296,7 +311,13 @@ actor CloudMatchClient {
             {
                 let sid = errPayload.session.sessionId
                 print("[CloudMatch] cleaning phantom session \(sid)")
-                try? await stopSession(sessionId: sid, token: input.token, base: base)
+                try? await stopSession(
+                    sessionId: sid,
+                    token: input.token,
+                    base: base,
+                    clientId: clientId,
+                    deviceId: deviceId
+                )
             }
             lastError = CloudMatchError.sessionCreateFailed(raw)
         }
@@ -334,12 +355,28 @@ actor CloudMatchClient {
 
     // MARK: Stop Session
 
-    func stopSession(sessionId: String, token: String, base: String) async throws {
-        let url = URL(string: "\(base)/v2/session/\(sessionId)")!
+    func stopSession(
+        sessionId: String,
+        token: String,
+        base: String,
+        serverIp: String? = nil,
+        clientId: String? = nil,
+        deviceId: String? = nil
+    ) async throws {
+        let effectiveBase = serverIp.map { "https://\($0)" } ?? base
+        let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
+        let lifecycleClientId = clientId ?? UUID().uuidString
+        let stableDeviceId = deviceId ?? GFNDeviceIdentity.stableDeviceId()
+        for (k, v) in gfnHeaders(
+            token: token,
+            clientId: lifecycleClientId,
+            deviceId: stableDeviceId,
+            includeOrigin: false
+        ) {
+            request.setValue(v, forHTTPHeaderField: k)
+        }
         _ = try await urlSession.data(for: request)
     }
 
@@ -349,7 +386,7 @@ actor CloudMatchClient {
         let url = URL(string: "\(base)/v2/session")!
         var request = URLRequest(url: url)
         let clientId = UUID().uuidString
-        let deviceId = UUID().uuidString
+        let deviceId = GFNDeviceIdentity.stableDeviceId()
         let headers = gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: false)
         for (k, v) in headers {
             request.setValue(v, forHTTPHeaderField: k)
@@ -384,12 +421,16 @@ actor CloudMatchClient {
         sessionId: String,
         serverIp: String,
         token: String,
-        base _: String,
+        base: String,
+        routingZoneUrl: String? = nil,
+        clientId existingClientId: String? = nil,
+        deviceId existingDeviceId: String? = nil,
         settings: StreamSettings
     ) async throws -> SessionInfo {
-        let clientId = UUID().uuidString
-        let deviceId = UUID().uuidString
+        let clientId = existingClientId ?? UUID().uuidString
+        let deviceId = existingDeviceId ?? GFNDeviceIdentity.stableDeviceId()
         let effectiveBase = "https://\(serverIp)"
+        let preservedRoutingZoneUrl = normalizedRoutingZoneUrl(routingZoneUrl) ?? normalizedRoutingZoneUrl(base)
 
         // Pre-flight: get current session state
         let preflight = try await pollSession(
@@ -397,7 +438,7 @@ actor CloudMatchClient {
             token: token,
             base: effectiveBase,
             serverIp: nil,
-            routingZoneUrl: nil,
+            routingZoneUrl: preservedRoutingZoneUrl,
             clientId: clientId,
             deviceId: deviceId
         )
@@ -506,7 +547,7 @@ actor CloudMatchClient {
         return SessionInfo(
             sessionId: s.sessionId,
             status: s.status,
-            zone: routingZoneUrl ?? "",
+            zone: normalizedRoutingZoneUrl(routingZoneUrl) ?? "",
             streamingBaseUrl: base,
             serverIp: serverIp,
             signalingServer: serverIp.contains(":") ? serverIp : "\(serverIp):443",
@@ -520,6 +561,21 @@ actor CloudMatchClient {
             deviceId: deviceId,
             adState: adState
         )
+    }
+
+    private func normalizedRoutingZoneUrl(_ url: String?) -> String? {
+        guard let raw = url?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let components = URLComponents(string: raw),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "https",
+              let host = components.host?.lowercased(),
+              host.hasPrefix("np-"),
+              host.hasSuffix(".nvidiagrid.net")
+        else {
+            return nil
+        }
+        return "\(scheme)://\(host)/"
     }
 
     /// Parses ad state from the raw response JSON, handling schema variations across GFN API versions.

@@ -18,9 +18,29 @@ enum NVIDIAAuth {
     static let defaultIdpId = "PDiAhv2kJTFeQ7WOPqiQ2tRZ7lGhR2X11dXvM4TZSxg"
     static let defaultStreamingUrl = "https://prod.cloudmatchbeta.nvidiagrid.net/"
     static let callbackScheme = "http"
+    static let gfnClientId = "ec7e38d4-03af-4b58-b131-cfb0495903ab"
+    static let gfnClientVersion = "2.0.80.173"
+    static let webOrigin = "https://play.geforcenow.com"
+    static let webReferer = "https://play.geforcenow.com/"
+    static let nvFileOrigin = "https://nvfile"
+    static let nvFileReferer = "https://nvfile/"
 
     /// Matches the official GFN PC client User-Agent so the NVIDIA backend accepts the token
-    static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 NVIDIACEFClient/HEAD/debb5919f6 GFN-PC/2.0.83.130"
+    static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 NVIDIACEFClient/HEAD/debb5919f6 GFN-PC/\(gfnClientVersion)"
+}
+
+enum GFNDeviceIdentity {
+    private static let defaultsKey = "gfn.stableDeviceId"
+
+    static func stableDeviceId() -> String {
+        let defaults = UserDefaults.standard
+        if let existing = defaults.string(forKey: defaultsKey), !existing.isEmpty {
+            return existing
+        }
+        let generated = UUID().uuidString
+        defaults.set(generated, forKey: defaultsKey)
+        return generated
+    }
 }
 
 // MARK: - PKCE Helpers

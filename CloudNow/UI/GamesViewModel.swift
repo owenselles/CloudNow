@@ -23,7 +23,46 @@ struct LastSessionRecord: Codable {
     let serverIp: String
     let appId: String
     let base: String
+    let routingZoneUrl: String?
+    let clientId: String?
+    let deviceId: String?
     let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt
+    }
+
+    init(
+        sessionId: String,
+        serverIp: String,
+        appId: String,
+        base: String,
+        routingZoneUrl: String?,
+        clientId: String?,
+        deviceId: String?,
+        createdAt: Date
+    ) {
+        self.sessionId = sessionId
+        self.serverIp = serverIp
+        self.appId = appId
+        self.base = base
+        self.routingZoneUrl = routingZoneUrl
+        self.clientId = clientId
+        self.deviceId = deviceId
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        serverIp = try c.decode(String.self, forKey: .serverIp)
+        appId = try c.decode(String.self, forKey: .appId)
+        base = try c.decode(String.self, forKey: .base)
+        routingZoneUrl = try c.decodeIfPresent(String.self, forKey: .routingZoneUrl)
+        clientId = try c.decodeIfPresent(String.self, forKey: .clientId)
+        deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
 }
 
 @Observable

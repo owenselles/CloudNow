@@ -519,6 +519,9 @@ struct StreamView: View {
                     serverIp: direct.serverIp,
                     token: token,
                     base: base,
+                    routingZoneUrl: direct.zone,
+                    clientId: direct.clientId,
+                    deviceId: direct.deviceId,
                     settings: settings
                 )
                 streamLog.info("startSession: claimed session, status=\(sessionInfo.status)")
@@ -560,7 +563,12 @@ struct StreamView: View {
         if let session = createdSession, let token = sessionToken, existingSession == nil {
             streamLog.info("startSession: stopping previous session \(session.sessionId)")
             try? await cloudMatchClient.stopSession(
-                sessionId: session.sessionId, token: token, base: session.streamingBaseUrl
+                sessionId: session.sessionId,
+                token: token,
+                base: session.streamingBaseUrl,
+                serverIp: session.serverIp.isEmpty ? nil : session.serverIp,
+                clientId: session.clientId,
+                deviceId: session.deviceId
             )
         }
         createdSession = nil
@@ -584,6 +592,15 @@ struct StreamView: View {
                     serverIp: serverIp,
                     token: token,
                     base: base,
+                    routingZoneUrl: viewModel.lastSession?.sessionId == existing.sessionId
+                        ? viewModel.lastSession?.routingZoneUrl
+                        : nil,
+                    clientId: viewModel.lastSession?.sessionId == existing.sessionId
+                        ? viewModel.lastSession?.clientId
+                        : nil,
+                    deviceId: viewModel.lastSession?.sessionId == existing.sessionId
+                        ? viewModel.lastSession?.deviceId
+                        : nil,
                     settings: settings
                 )
                 streamLog.info("startSession: claimed, status=\(sessionInfo.status)")
@@ -603,13 +620,23 @@ struct StreamView: View {
                             serverIp: last.serverIp,
                             token: token,
                             base: last.base,
+                            routingZoneUrl: last.routingZoneUrl,
+                            clientId: last.clientId,
+                            deviceId: last.deviceId,
                             settings: settings
                         )
                         print("[Resume] claimed session, status=\(sessionInfo.status)")
                         createdSession = sessionInfo
                     } catch {
                         print("[Resume] claim failed: \(error), stopping old session and creating new")
-                        try? await cloudMatchClient.stopSession(sessionId: last.sessionId, token: token, base: last.base)
+                        try? await cloudMatchClient.stopSession(
+                            sessionId: last.sessionId,
+                            token: token,
+                            base: last.base,
+                            serverIp: last.serverIp.isEmpty ? nil : last.serverIp,
+                            clientId: last.clientId,
+                            deviceId: last.deviceId
+                        )
                         viewModel.clearLastSession()
                         // Fall through to create new session below
                         sessionInfo = try await createNewSession(appId: appId, token: token, base: base)
@@ -617,7 +644,14 @@ struct StreamView: View {
                 } else {
                     if let last = viewModel.lastSession {
                         print("[Resume] saved session appId=\(last.appId) != game appId=\(appId), stopping it")
-                        try? await cloudMatchClient.stopSession(sessionId: last.sessionId, token: token, base: last.base)
+                        try? await cloudMatchClient.stopSession(
+                            sessionId: last.sessionId,
+                            token: token,
+                            base: last.base,
+                            serverIp: last.serverIp.isEmpty ? nil : last.serverIp,
+                            clientId: last.clientId,
+                            deviceId: last.deviceId
+                        )
                         viewModel.clearLastSession()
                     }
                     sessionInfo = try await createNewSession(appId: appId, token: token, base: base)
@@ -632,6 +666,9 @@ struct StreamView: View {
                     serverIp: sessionInfo.serverIp,
                     appId: appId,
                     base: sessionInfo.streamingBaseUrl,
+                    routingZoneUrl: sessionInfo.zone.isEmpty ? nil : sessionInfo.zone,
+                    clientId: sessionInfo.clientId,
+                    deviceId: sessionInfo.deviceId,
                     createdAt: Date()
                 ))
             }
@@ -696,6 +733,9 @@ struct StreamView: View {
                 serverIp: session.serverIp,
                 token: token,
                 base: session.streamingBaseUrl,
+                routingZoneUrl: session.zone,
+                clientId: session.clientId,
+                deviceId: session.deviceId,
                 settings: settings
             )
             createdSession = reclaimed
@@ -727,7 +767,10 @@ struct StreamView: View {
                 try? await cloudMatchClient.stopSession(
                     sessionId: session.sessionId,
                     token: token,
-                    base: session.streamingBaseUrl
+                    base: session.streamingBaseUrl,
+                    serverIp: session.serverIp.isEmpty ? nil : session.serverIp,
+                    clientId: session.clientId,
+                    deviceId: session.deviceId
                 )
             }
         }
@@ -736,21 +779,21 @@ struct StreamView: View {
     }
 
     private func createNewSession(appId: String, token: String, base: String) async throws -> SessionInfo {
-        let sessionBase: String = if let preferred = settings.preferredZoneUrl {
-            preferred
+        let routeSelection: (base: String, routingZoneUrl: String?) = if let preferred = settings.preferredZoneUrl {
+            (preferred, preferred)
         } else if let best = await viewModel.bestZoneUrl() {
-            best
+            (best, best)
         } else {
-            base
+            (base, nil)
         }
-        print("[Session] creating new session, appId=\(appId), sessionBase=\(sessionBase)")
+        print("[Session] creating new session, appId=\(appId), sessionBase=\(routeSelection.base), routingZoneUrl=\(routeSelection.routingZoneUrl ?? "nil")")
 
         let request = SessionCreateRequest(
             appId: appId,
             internalTitle: game.title,
             token: token,
-            zone: "",
-            streamingBaseUrl: sessionBase,
+            streamingBaseUrl: routeSelection.base,
+            routingZoneUrl: routeSelection.routingZoneUrl,
             settings: settings,
             accountLinked: true
         )
