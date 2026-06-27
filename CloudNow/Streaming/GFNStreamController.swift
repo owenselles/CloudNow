@@ -560,14 +560,12 @@ final class GFNStreamController: NSObject {
         let serverMediaIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
             ?? Self.extractIpFromHost(signaling?.connectedHost ?? "")
         let fixedSdp = serverMediaIp.map { ip in
-            sdp
-                .replacingOccurrences(of: "c=IN IP4 0.0.0.0", with: "c=IN IP4 \(ip)")
-                .replacingOccurrences(of: "c=IN IP4 127.0.0.1", with: "c=IN IP4 \(ip)")
+            Self.rewriteOfferConnectionAddresses(sdp, serverIp: ip)
         } ?? sdp
         if let ip = serverMediaIp {
-            print("[Stream] Fixed c= lines in offer SDP: 0.0.0.0 → \(ip)")
+            print("[Stream] Fixed placeholder IPs in offer SDP: 0.0.0.0/127.0.0.1 -> \(ip)")
         } else {
-            print("[Stream] Warning: no server IP available — offer c= lines left as 0.0.0.0")
+            print("[Stream] Warning: no server IP available — offer placeholder IPs left unchanged")
         }
         // Normalize H.265 fmtp in the offer before setRemoteDescription so WebRTC
         // keeps H.265 in the generated answer (tier-flag and level-id must be valid).
@@ -790,6 +788,14 @@ final class GFNStreamController: NSObject {
         let dashParts = label.components(separatedBy: "-")
         guard dashParts.count == 4, dashParts.allSatisfy({ Int($0) != nil }) else { return nil }
         return dashParts.joined(separator: ".")
+    }
+
+    private static func rewriteOfferConnectionAddresses(_ sdp: String, serverIp: String) -> String {
+        sdp
+            .replacingOccurrences(of: "c=IN IP4 0.0.0.0", with: "c=IN IP4 \(serverIp)")
+            .replacingOccurrences(of: "c=IN IP4 127.0.0.1", with: "c=IN IP4 \(serverIp)")
+            .replacingOccurrences(of: " 0.0.0.0 ", with: " \(serverIp) ")
+            .replacingOccurrences(of: " 127.0.0.1 ", with: " \(serverIp) ")
     }
 
     private func addRemoteICE(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
