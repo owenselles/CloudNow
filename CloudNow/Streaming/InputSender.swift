@@ -413,6 +413,11 @@ final class InputSender {
         let bitmap: UInt8
     }
 
+    private struct ControllerTouchpad {
+        let surface: GCControllerDirectionPad
+        let button: GCControllerButtonInput
+    }
+
     /// Called when the user long-presses the overlay trigger button to toggle the GFN overlay.
     var menuToggleHandler: (() -> Void)?
 
@@ -440,10 +445,13 @@ final class InputSender {
     private var lastSnapshotSend: [Int: UInt64] = [:]
 
     private var lastMicroDpad: (x: Float, y: Float) = (0, 0)
-    private var lastDualSenseTouchpad: (x: Float, y: Float) = (0, 0)
+    private var lastControllerTouchpad: (x: Float, y: Float) = (0, 0)
     private var pointerDelta: (x: Float, y: Float) = (0, 0)
     private var microPointerDelta: (x: Float, y: Float) = (0, 0)
-    private var dualSensePointerDelta: (x: Float, y: Float) = (0, 0)
+    private var controllerTouchpadPointerDelta: (x: Float, y: Float) = (0, 0)
+    private var suppressMicroPointerUntil: UInt64 = 0
+    private var suppressMicroButtonUntil: UInt64 = 0
+    private var suppressingMicroButtonA = false
     private var lastHeartbeat: UInt64 = 0
     private var heldKeys: [UInt32: (vk: UInt16, scancode: UInt16, modifiers: UInt16)] = [:]
     private var heldMouseButtons = Set<UInt8>()
@@ -457,6 +465,7 @@ final class InputSender {
     private static let heartbeatInterval = UInt64(2_000_000_000)
     private static let overlayLongPressThreshold = 216
     private static let steamLongPressThreshold = 120
+    private static let microGamepadSuppressionWindow = UInt64(100_000_000)
 
     init(channel: DataChannelSender) {
         self.channel = channel
@@ -473,7 +482,7 @@ final class InputSender {
 
             // attachController(autoSwitch:false) won't promote the mode, so do it here for a controller present at start.
             if !extendedControllers.isEmpty, remoteMode == .mouse {
-                remoteMode = .gamepad
+                remoteMode = preferredControllerModeForCurrentControllers
                 applyRemoteMode()
                 notifyRemoteModeChanged()
             }
@@ -533,9 +542,12 @@ final class InputSender {
             isPaused = paused
             pointerDelta = (0, 0)
             microPointerDelta = (0, 0)
-            dualSensePointerDelta = (0, 0)
+            controllerTouchpadPointerDelta = (0, 0)
             lastMicroDpad = (0, 0)
-            lastDualSenseTouchpad = (0, 0)
+            lastControllerTouchpad = (0, 0)
+            suppressMicroPointerUntil = 0
+            suppressMicroButtonUntil = 0
+            suppressingMicroButtonA = false
             if paused {
                 overlayPresses.removeAll()
                 overlayReplaySlots.removeAll()
@@ -566,10 +578,13 @@ final class InputSender {
 
     private func applyRemoteMode() {
         lastMicroDpad = (0, 0)
-        lastDualSenseTouchpad = (0, 0)
+        lastControllerTouchpad = (0, 0)
         pointerDelta = (0, 0)
         microPointerDelta = (0, 0)
-        dualSensePointerDelta = (0, 0)
+        controllerTouchpadPointerDelta = (0, 0)
+        suppressMicroPointerUntil = 0
+        suppressMicroButtonUntil = 0
+        suppressingMicroButtonA = false
         releaseHeldMouseButtons()
         overlayPresses.removeAll()
         overlayReplaySlots.removeAll()
@@ -582,6 +597,9 @@ final class InputSender {
             } else {
                 releaseControllerInput(controller)
             }
+        }
+        for controller in microControllers {
+            controller.microGamepad?.reportsAbsoluteDpadValues = (remoteMode == .mouse)
         }
     }
 
@@ -625,9 +643,9 @@ final class InputSender {
             }
 
             if remoteMode == .dualsense,
-               let controller = extendedControllers.first(where: { $0.extendedGamepad is GCDualSenseGamepad })
+               let controller = extendedControllers.first(where: { controllerTouchpad(for: $0) != nil })
             {
-                handleDualSenseTouchpad(controller)
+                handleControllerTouchpad(controller)
             }
 
             if extendedControllers.isEmpty, let remote = microControllers.first {
@@ -661,7 +679,9 @@ final class InputSender {
 
         switch remoteMode {
         case .mouse:
-            if isTouching, wasTouching {
+            if now < suppressMicroPointerUntil {
+                microPointerDelta = (0, 0)
+            } else if isTouching, wasTouching {
                 microPointerDelta.x += dx * Self.remoteSensitivity
                 microPointerDelta.y += -dy * Self.remoteSensitivity
             } else {
@@ -693,26 +713,26 @@ final class InputSender {
             )
 
         case .dualsense:
-            break // Siri Remote is suppressed in DualSense mode; touchpad handled separately
+            break // Siri Remote is suppressed in controller touchpad mode
         }
     }
 
-    private func handleDualSenseTouchpad(_ controller: GCController) {
-        guard let dualSense = controller.extendedGamepad as? GCDualSenseGamepad else { return }
-        let curX = dualSense.touchpadPrimary.xAxis.value
-        let curY = dualSense.touchpadPrimary.yAxis.value
+    private func handleControllerTouchpad(_ controller: GCController) {
+        guard let touchpad = controllerTouchpad(for: controller) else { return }
+        let curX = touchpad.surface.xAxis.value
+        let curY = touchpad.surface.yAxis.value
 
         let isTouching = abs(curX) > 0.02 || abs(curY) > 0.02
-        let wasTouching = abs(lastDualSenseTouchpad.x) > 0.02 || abs(lastDualSenseTouchpad.y) > 0.02
-        let dx = curX - lastDualSenseTouchpad.x
-        let dy = curY - lastDualSenseTouchpad.y
-        lastDualSenseTouchpad = (curX, curY)
+        let wasTouching = abs(lastControllerTouchpad.x) > 0.02 || abs(lastControllerTouchpad.y) > 0.02
+        let dx = curX - lastControllerTouchpad.x
+        let dy = curY - lastControllerTouchpad.y
+        lastControllerTouchpad = (curX, curY)
 
         if isTouching, wasTouching {
-            dualSensePointerDelta.x += dx * Self.remoteSensitivity
-            dualSensePointerDelta.y += -dy * Self.remoteSensitivity
+            controllerTouchpadPointerDelta.x += dx * Self.remoteSensitivity
+            controllerTouchpadPointerDelta.y += -dy * Self.remoteSensitivity
         } else {
-            dualSensePointerDelta = (0, 0)
+            controllerTouchpadPointerDelta = (0, 0)
         }
     }
 
@@ -959,9 +979,9 @@ final class InputSender {
     private func flushPointerMotion() {
         let physical = drainWholePixels(from: &pointerDelta)
         let micro = drainWholePixels(from: &microPointerDelta)
-        let dualSense = drainWholePixels(from: &dualSensePointerDelta)
-        let dx = Int16(clamping: physical.x + micro.x + dualSense.x)
-        let dy = Int16(clamping: physical.y + micro.y + dualSense.y)
+        let controllerTouchpad = drainWholePixels(from: &controllerTouchpadPointerDelta)
+        let dx = Int16(clamping: physical.x + micro.x + controllerTouchpad.x)
+        let dy = Int16(clamping: physical.y + micro.y + controllerTouchpad.y)
         guard dx != 0 || dy != 0 else { return }
         sendEncoded(category: .mouseMove) { encoder.encodeMouseMove(dx: dx, dy: dy, into: $0) }
     }
@@ -988,9 +1008,9 @@ final class InputSender {
     private func sendMouseButtonNow(down: Bool, button: UInt8) {
         guard !isPaused else { return }
         if down {
-            heldMouseButtons.insert(button)
+            guard heldMouseButtons.insert(button).inserted else { return }
         } else {
-            heldMouseButtons.remove(button)
+            guard heldMouseButtons.remove(button) != nil else { return }
         }
         emitMouseButton(down: down, button: button)
     }
@@ -1057,6 +1077,20 @@ final class InputSender {
                 modifiers: key.modifiers
             )
         }
+    }
+
+    private var preferredControllerModeForCurrentControllers: RemoteInputMode {
+        extendedControllers.contains(where: { controllerTouchpad(for: $0) != nil }) ? .dualsense : .gamepad
+    }
+
+    private func controllerTouchpad(for controller: GCController) -> ControllerTouchpad? {
+        if let dualSense = controller.extendedGamepad as? GCDualSenseGamepad {
+            return ControllerTouchpad(surface: dualSense.touchpadPrimary, button: dualSense.touchpadButton)
+        }
+        if let dualShock = controller.extendedGamepad as? GCDualShockGamepad {
+            return ControllerTouchpad(surface: dualShock.touchpadPrimary, button: dualShock.touchpadButton)
+        }
+        return nil
     }
 
     // MARK: Private — Controller Notifications
@@ -1151,13 +1185,14 @@ final class InputSender {
         guard let pad = controller.extendedGamepad else { return }
         // Prevent tvOS from intercepting any face/shoulder button as system navigation
         // (O/Circle and B are mapped to "back" by the OS by default)
-        let buttons: [GCControllerButtonInput?] = [
+        var buttons: [GCControllerButtonInput?] = [
             pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY,
             pad.buttonMenu, pad.buttonOptions,
             pad.leftShoulder, pad.rightShoulder,
             pad.leftTrigger, pad.rightTrigger,
             pad.leftThumbstickButton, pad.rightThumbstickButton,
         ]
+        buttons.append(controllerTouchpad(for: controller)?.button)
         for btn in buttons.compactMap({ $0 }) {
             btn.preferredSystemGestureState = .disabled
         }
@@ -1165,13 +1200,14 @@ final class InputSender {
 
     private func releaseControllerInput(_ controller: GCController) {
         guard let pad = controller.extendedGamepad else { return }
-        let buttons: [GCControllerButtonInput?] = [
+        var buttons: [GCControllerButtonInput?] = [
             pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY,
             pad.buttonMenu, pad.buttonOptions,
             pad.leftShoulder, pad.rightShoulder,
             pad.leftTrigger, pad.rightTrigger,
             pad.leftThumbstickButton, pad.rightThumbstickButton,
         ]
+        buttons.append(controllerTouchpad(for: controller)?.button)
         for btn in buttons.compactMap({ $0 }) {
             btn.preferredSystemGestureState = .enabled
         }
@@ -1191,14 +1227,14 @@ final class InputSender {
                 guard let controller else { return }
                 self?.handleExtendedValueChange(controller)
             }
-            if let dualSense = pad as? GCDualSenseGamepad {
-                dualSense.touchpadButton.pressedChangedHandler = { [weak self] _, _, pressed in
-                    self?.sendDualSenseTouchpadButton(pressed)
+            if let touchpad = controllerTouchpad(for: controller) {
+                touchpad.button.pressedChangedHandler = { [weak self] _, _, pressed in
+                    self?.sendControllerTouchpadButton(pressed)
                 }
             }
 
             if autoSwitch && remoteMode == .mouse {
-                remoteMode = .gamepad
+                remoteMode = controllerTouchpad(for: controller) == nil ? .gamepad : .dualsense
                 applyRemoteMode()
                 notifyRemoteModeChanged()
             } else if remoteMode == .gamepad || remoteMode == .dualsense {
@@ -1211,6 +1247,7 @@ final class InputSender {
         guard let pad = controller.microGamepad,
               !microControllers.contains(where: { $0 === controller }) else { return }
         microControllers.append(controller)
+        pad.reportsAbsoluteDpadValues = (remoteMode == .mouse)
         pad.buttonA.pressedChangedHandler = { [weak self] _, _, pressed in
             self?.sendMicroButtonA(pressed)
         }
@@ -1264,14 +1301,20 @@ final class InputSender {
         controller.extendedGamepad?.valueChangedHandler = nil
         controller.microGamepad?.buttonA.pressedChangedHandler = nil
         (controller.extendedGamepad as? GCDualSenseGamepad)?.touchpadButton.pressedChangedHandler = nil
+        (controller.extendedGamepad as? GCDualShockGamepad)?.touchpadButton.pressedChangedHandler = nil
     }
 
     private func sendMicroButtonA(_ pressed: Bool) {
         guard remoteMode == .mouse else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        if now < suppressMicroButtonUntil || suppressingMicroButtonA {
+            suppressingMicroButtonA = pressed
+            return
+        }
         sendMouseButtonNow(down: pressed, button: 1)
     }
 
-    private func sendDualSenseTouchpadButton(_ pressed: Bool) {
+    private func sendControllerTouchpadButton(_ pressed: Bool) {
         guard remoteMode == .dualsense else { return }
         sendMouseButtonNow(down: pressed, button: 1)
     }
@@ -1310,13 +1353,18 @@ extension InputSender: InputEventHandler {
     func sendMouseMove(dx: Int16, dy: Int16) {
         inputQueue.async { [weak self] in
             guard let self, !self.isPaused else { return }
+            suppressMicroPointerUntil = DispatchTime.now().uptimeNanoseconds
+                &+ Self.microGamepadSuppressionWindow
             accumulatePointer(x: Float(dx), y: Float(dy))
         }
     }
 
     func sendMouseButton(down: Bool, button: UInt8) {
         inputQueue.async { [weak self] in
-            self?.sendMouseButtonNow(down: down, button: button)
+            guard let self else { return }
+            suppressMicroButtonUntil = DispatchTime.now().uptimeNanoseconds
+                &+ Self.microGamepadSuppressionWindow
+            sendMouseButtonNow(down: down, button: button)
         }
     }
 
