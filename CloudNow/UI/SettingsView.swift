@@ -229,11 +229,11 @@ struct SettingsView: View {
                     Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
                         Text("Mouse").tag(RemoteInputMode.mouse)
                         Text("Gamepad").tag(RemoteInputMode.gamepad)
-                        Text("DualSense").tag(RemoteInputMode.dualsense)
+                        Text("Touchpad").tag(RemoteInputMode.dualsense)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Default Input Mode")
-                            Text("Siri Remote mode at stream start. Can be changed mid-session from the overlay menu.")
+                            Text("Input mode at stream start. Touchpad mode supports DualShock 4 and DualSense trackpads.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

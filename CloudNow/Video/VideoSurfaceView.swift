@@ -26,6 +26,11 @@ final class VideoSurfaceView: UIView {
     private lazy var renderer = WebRTCFrameRenderer(diagnostics: pipelineDiagnostics)
     private var currentTrack: LKRTCVideoTrack?
     private var notificationTokens: [NSObjectProtocol] = []
+    private var activeRemoteTouch: UITouch?
+    private var lastRemoteTouchLocation: CGPoint?
+    private var remoteSelectMouseDown = false
+
+    private static let remoteTouchSensitivity: CGFloat = 1.0
 
     /// Set by GFNStreamController once the input data channel handshake completes.
     weak var inputHandler: InputEventHandler?
@@ -37,11 +42,19 @@ final class VideoSurfaceView: UIView {
 
     /// When true, an extended gamepad owns input. UIKit presses from the controller
     /// (e.g. Options mapping to .playPause) are suppressed to avoid double-firing the overlay.
-    var gamepadModeActive = false
+    var gamepadModeActive = false {
+        didSet {
+            if gamepadModeActive { cancelRemoteMouseTracking() }
+        }
+    }
 
     /// Tracks whether the pause overlay is currently visible. Used to decide whether a
     /// .menu press should close the overlay or be silently consumed.
-    var overlayVisible: Bool = false
+    var overlayVisible: Bool = false {
+        didSet {
+            if overlayVisible { cancelRemoteMouseTracking() }
+        }
+    }
 
     var videoTrack: LKRTCVideoTrack? {
         didSet {
@@ -145,6 +158,10 @@ final class VideoSurfaceView: UIView {
                 // via Options long press detected in InputSender.tick().
                 menuPressHandler?()
                 handled = true
+            } else if press.type == .select, remoteMouseInputEnabled {
+                inputHandler?.sendMouseButton(down: true, button: 1)
+                remoteSelectMouseDown = true
+                handled = true
             } else if let key = press.key {
                 inputHandler?.sendKeyEvent(
                     down: true,
@@ -160,7 +177,11 @@ final class VideoSurfaceView: UIView {
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if let key = press.key {
+            if press.type == .select, remoteSelectMouseDown {
+                inputHandler?.sendMouseButton(down: false, button: 1)
+                remoteSelectMouseDown = false
+                handled = true
+            } else if let key = press.key {
                 inputHandler?.sendKeyEvent(
                     down: false,
                     keyCode: key.keyCode,
@@ -174,6 +195,95 @@ final class VideoSurfaceView: UIView {
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         pressesEnded(presses, with: event)
+    }
+
+    // MARK: - Siri Remote Touch Surface
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard remoteMouseInputEnabled,
+              activeRemoteTouch == nil,
+              let touch = touches.first(where: isRemoteTouch) else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+
+        activeRemoteTouch = touch
+        lastRemoteTouchLocation = touch.location(in: self)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard remoteMouseInputEnabled else {
+            clearRemoteTouchTracking()
+            super.touchesMoved(touches, with: event)
+            return
+        }
+        guard let trackedTouch = activeRemoteTouch,
+              touches.contains(where: { $0 === trackedTouch }) else {
+            super.touchesMoved(touches, with: event)
+            return
+        }
+
+        let location = trackedTouch.location(in: self)
+        let previous = lastRemoteTouchLocation ?? trackedTouch.previousLocation(in: self)
+        lastRemoteTouchLocation = location
+        forwardRemoteTouchDelta(from: previous, to: location)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let trackedTouch = activeRemoteTouch,
+              touches.contains(where: { $0 === trackedTouch }) else {
+            super.touchesEnded(touches, with: event)
+            return
+        }
+
+        activeRemoteTouch = nil
+        lastRemoteTouchLocation = nil
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let trackedTouch = activeRemoteTouch,
+              touches.contains(where: { $0 === trackedTouch }) else {
+            super.touchesCancelled(touches, with: event)
+            return
+        }
+
+        activeRemoteTouch = nil
+        lastRemoteTouchLocation = nil
+    }
+
+    private func isRemoteTouch(_ touch: UITouch) -> Bool {
+        switch touch.type {
+        case .indirect, .indirectPointer:
+            true
+        default:
+            false
+        }
+    }
+
+    private func forwardRemoteTouchDelta(from previous: CGPoint, to location: CGPoint) {
+        let dx = (location.x - previous.x) * Self.remoteTouchSensitivity
+        let dy = (location.y - previous.y) * Self.remoteTouchSensitivity
+        let packetDX = Int16(clamping: Int(dx.rounded()))
+        let packetDY = Int16(clamping: Int(dy.rounded()))
+        guard packetDX != 0 || packetDY != 0 else { return }
+        inputHandler?.sendMouseMove(dx: packetDX, dy: packetDY)
+    }
+
+    private var remoteMouseInputEnabled: Bool {
+        !gamepadModeActive && !overlayVisible
+    }
+
+    private func clearRemoteTouchTracking() {
+        activeRemoteTouch = nil
+        lastRemoteTouchLocation = nil
+    }
+
+    private func cancelRemoteMouseTracking() {
+        clearRemoteTouchTracking()
+        if remoteSelectMouseDown {
+            inputHandler?.sendMouseButton(down: false, button: 1)
+            remoteSelectMouseDown = false
+        }
     }
 }
 
