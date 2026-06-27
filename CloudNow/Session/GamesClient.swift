@@ -12,8 +12,8 @@ actor GamesClient {
     private static let graphqlURL = "https://games.geforce.com/graphql"
     private static let metadataQueryHash = "cf8b620dfd03617017ba7c858cee65197e1ace5180e41be194b39227227ced63"
     private static let ownedAppsQueryHash = "698bbc7e16a17c8e3fc56944a0e6d62e7d70296b29dfb35fb4d83ebd66dd10f1"
-    private static let clientId = "ec7e38d4-03af-4b58-b131-cfb0495903ab"
-    private static let clientVersion = "2.0.80.173"
+    private static let clientId = NVIDIAAuth.gfnClientId
+    private static let clientVersion = NVIDIAAuth.gfnClientVersion
 
     private let urlSession = URLSession.shared
     private var metadataCache: [String: AppData] = [:]
@@ -129,11 +129,13 @@ actor GamesClient {
                 id: vid,
                 appStore: v.appStore ?? "unknown",
                 appId: isNumericId(vid) ? vid : nil,
-                isOwned: v.gfn?.library?.selected == true
+                isOwned: v.gfn?.library?.isOwned == true
             )
         } ?? []
 
-        let selectedIndex = item.variants?.firstIndex { $0.gfn?.library?.selected == true } ?? 0
+        let selectedIndex = item.variants?.firstIndex { $0.gfn?.library?.selected == true }
+            ?? item.variants?.firstIndex { $0.gfn?.library?.isOwned == true }
+            ?? 0
         let safeIndex = min(max(0, selectedIndex), max(0, variants.count - 1))
         if safeIndex > 0, safeIndex < variants.count {
             let selected = variants.remove(at: safeIndex)
@@ -145,7 +147,7 @@ actor GamesClient {
             title: item.title ?? id,
             boxArtUrl: item.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) },
             heroBannerUrl: (item.images?.TV_BANNER ?? item.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) },
-            isInLibrary: item.variants?.contains { $0.gfn?.library?.selected == true } ?? false,
+            isInLibrary: item.variants?.contains { $0.gfn?.library?.isOwned == true } ?? false,
             variants: variants
         )
     }
@@ -347,11 +349,7 @@ actor GamesClient {
         let base = baseUrl.hasSuffix("/") ? baseUrl : "\(baseUrl)/"
         let url = URL(string: "\(base)v2/serverInfo")!
         var request = URLRequest(url: url)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue(GamesClient.clientId, forHTTPHeaderField: "nv-client-id")
-        request.setValue("NVIDIA-CLASSIC", forHTTPHeaderField: "nv-client-streamer")
+        setServerInfoHeaders(on: &request, token: token)
         let (data, _) = try await urlSession.data(for: request)
         let payload = try JSONDecoder().decode(ServerInfoResponse.self, from: data)
         return payload.requestStatus?.serverId ?? "GFN-PC"
@@ -369,13 +367,30 @@ actor GamesClient {
 
     private func setGFNHeaders(on request: inout URLRequest, token: String) {
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
-        request.setValue("https://play.geforcenow.com", forHTTPHeaderField: "Origin")
-        request.setValue("https://play.geforcenow.com/", forHTTPHeaderField: "Referer")
+        request.setValue(NVIDIAAuth.webOrigin, forHTTPHeaderField: "Origin")
+        request.setValue(NVIDIAAuth.webReferer, forHTTPHeaderField: "Referer")
         request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(GamesClient.clientId, forHTTPHeaderField: "nv-client-id")
         request.setValue("NATIVE", forHTTPHeaderField: "nv-client-type")
         request.setValue(GamesClient.clientVersion, forHTTPHeaderField: "nv-client-version")
         request.setValue("NVIDIA-CLASSIC", forHTTPHeaderField: "nv-client-streamer")
+        request.setValue("WINDOWS", forHTTPHeaderField: "nv-device-os")
+        request.setValue("DESKTOP", forHTTPHeaderField: "nv-device-type")
+        request.setValue("UNKNOWN", forHTTPHeaderField: "nv-device-make")
+        request.setValue("UNKNOWN", forHTTPHeaderField: "nv-device-model")
+        request.setValue("CHROME", forHTTPHeaderField: "nv-browser-type")
+        request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
+    }
+
+    private func setServerInfoHeaders(on request: inout URLRequest, token: String) {
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(NVIDIAAuth.webOrigin, forHTTPHeaderField: "Origin")
+        request.setValue(NVIDIAAuth.webReferer, forHTTPHeaderField: "Referer")
+        request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(GamesClient.clientId, forHTTPHeaderField: "nv-client-id")
+        request.setValue("BROWSER", forHTTPHeaderField: "nv-client-type")
+        request.setValue(GamesClient.clientVersion, forHTTPHeaderField: "nv-client-version")
+        request.setValue("WEBRTC", forHTTPHeaderField: "nv-client-streamer")
         request.setValue("WINDOWS", forHTTPHeaderField: "nv-device-os")
         request.setValue("DESKTOP", forHTTPHeaderField: "nv-device-type")
         request.setValue("UNKNOWN", forHTTPHeaderField: "nv-device-make")
@@ -464,7 +479,16 @@ private struct BrowseResponse: Decodable {
                 let gfn: GFNMeta?
                 struct GFNMeta: Decodable {
                     let library: LibraryMeta?
-                    struct LibraryMeta: Decodable { let selected: Bool? }
+                    struct LibraryMeta: Decodable {
+                        let status: String?
+                        let selected: Bool?
+
+                        var isOwned: Bool {
+                            guard let status else { return false }
+                            let ownedStatuses = ["MANUAL", "PLATFORM_SYNC", "IN_LIBRARY"]
+                            return ownedStatuses.contains(status.uppercased())
+                        }
+                    }
                 }
             }
         }
@@ -526,7 +550,8 @@ private struct AppData: Decodable {
 
                 var isOwned: Bool {
                     guard let status else { return false }
-                    return status.caseInsensitiveCompare("NOT_OWNED") != .orderedSame
+                    let ownedStatuses = ["MANUAL", "PLATFORM_SYNC", "IN_LIBRARY"]
+                    return ownedStatuses.contains(status.uppercased())
                 }
             }
         }
