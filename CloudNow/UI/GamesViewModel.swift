@@ -23,6 +23,7 @@ struct LastSessionRecord: Codable {
     let serverIp: String
     let appId: String
     let base: String
+    let routingZoneUrl: String?
     let createdAt: Date
 }
 
