@@ -28,16 +28,42 @@ private func gfnHeaders(token: String, clientId: String, deviceId: String, inclu
 // MARK: - CloudMatch Response Types
 
 private struct CloudMatchResponse: Decodable {
-    let session: SessionPayload
+    let requestStatus: RequestStatus?
+    let session: SessionPayload?
+    struct RequestStatus: Decodable {
+        let statusCode: Int
+        let statusDescription: String?
+    }
+
     struct SessionPayload: Decodable {
         let sessionId: String
         let status: Int
         let gpuType: String?
         let queuePosition: Int?
         let seatSetupStep: Int?
+        let seatSetupInfo: SeatSetupInfo?
+        let sessionProgress: SessionProgress?
+        let progressInfo: SessionProgress?
         let connectionInfo: [ConnectionInfo]?
         let iceServerConfiguration: IceServerConfig?
         let sessionControlInfo: SessionControlInfo?
+
+        var resolvedQueuePosition: Int? {
+            queuePosition ?? seatSetupInfo?.queuePosition ?? sessionProgress?.queuePosition ?? progressInfo?.queuePosition
+        }
+
+        var resolvedSeatSetupStep: Int? {
+            seatSetupStep ?? seatSetupInfo?.seatSetupStep
+        }
+
+        struct SeatSetupInfo: Decodable {
+            let queuePosition: Int?
+            let seatSetupStep: Int?
+        }
+
+        struct SessionProgress: Decodable {
+            let queuePosition: Int?
+        }
 
         struct ConnectionInfo: Decodable {
             let usage: Int
@@ -251,6 +277,37 @@ actor CloudMatchClient {
         return URLSession(configuration: config)
     }()
 
+    private func validateHTTPStatus(_ response: URLResponse, data: Data, context: String) throws {
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard statusCode == 200 else {
+            let raw = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
+            throw CloudMatchError.requestFailed(context: context, message: raw)
+        }
+    }
+
+    private func validateAPIStatus(_ payload: CloudMatchResponse, context: String) throws {
+        guard let status = payload.requestStatus else {
+            throw CloudMatchError.apiStatus(context: context, statusCode: -1, description: "Missing requestStatus")
+        }
+        guard status.statusCode == 1 else {
+            throw CloudMatchError.apiStatus(
+                context: context,
+                statusCode: status.statusCode,
+                description: status.statusDescription
+            )
+        }
+    }
+
+    private func validateAPIStatus(_ payload: GetSessionsResponse, context: String) throws {
+        guard payload.requestStatus.statusCode == 1 else {
+            throw CloudMatchError.apiStatus(
+                context: context,
+                statusCode: payload.requestStatus.statusCode,
+                description: payload.requestStatus.statusDescription
+            )
+        }
+    }
+
     // MARK: Create Session
 
     func createSession(_ input: SessionCreateRequest) async throws -> SessionInfo {
@@ -291,6 +348,7 @@ actor CloudMatchClient {
             print("[CloudMatch] createSession response: HTTP \(statusCode)")
             if statusCode == 200 {
                 let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+                try validateAPIStatus(payload, context: "createSession")
                 let routingZoneUrl: String? = if base == preferredBase {
                     requestedRoutingZoneUrl ?? normalizedRoutingZoneUrl(base)
                 } else {
@@ -309,9 +367,10 @@ actor CloudMatchClient {
             print("[CloudMatch] createSession failed: HTTP \(statusCode) body: \(raw.prefix(500))")
             // Clean up phantom session the server allocated despite the error
             if let errPayload = try? JSONDecoder().decode(CloudMatchResponse.self, from: data),
-               !errPayload.session.sessionId.isEmpty
+               let session = errPayload.session,
+               !session.sessionId.isEmpty
             {
-                let sid = errPayload.session.sessionId
+                let sid = session.sessionId
                 print("[CloudMatch] cleaning phantom session \(sid)")
                 try? await stopSession(
                     sessionId: sid,
@@ -343,8 +402,10 @@ actor CloudMatchClient {
         for (k, v) in gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: false) {
             request.setValue(v, forHTTPHeaderField: k)
         }
-        let (data, _) = try await urlSession.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
+        try validateHTTPStatus(response, data: data, context: "pollSession")
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+        try validateAPIStatus(payload, context: "pollSession")
         return try toSessionInfo(
             base: effectiveBase,
             routingZoneUrl: routingZoneUrl,
@@ -397,7 +458,9 @@ actor CloudMatchClient {
         let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1
         print("[CloudMatch] getActiveSessions HTTP \(httpStatus), \(data.count) bytes")
         if let raw = String(data: data, encoding: .utf8) { print("[CloudMatch] getActiveSessions raw: \(raw.prefix(500))") }
+        try validateHTTPStatus(resp, data: data, context: "getActiveSessions")
         let decoded = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
+        try validateAPIStatus(decoded, context: "getActiveSessions")
         return (decoded.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
             let appId = entry.sessionRequestData?.appId?.value
             let sigConn = entry.connectionInfo?.first { $0.usage == 14 && $0.ip?.value != nil }
@@ -467,11 +530,9 @@ actor CloudMatchClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await urlSession.data(for: request)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            let msg = String(data: data, encoding: .utf8) ?? ""
-            throw CloudMatchError.sessionCreateFailed("Resume failed: \(msg)")
-        }
+        try validateHTTPStatus(resp, data: data, context: "claimSession")
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+        try validateAPIStatus(payload, context: "claimSession")
         return try toSessionInfo(
             base: effectiveBase,
             routingZoneUrl: preflight.zone,
@@ -492,7 +553,9 @@ actor CloudMatchClient {
         clientId: String,
         deviceId: String
     ) throws -> SessionInfo {
-        let s = payload.session
+        guard let s = payload.session else {
+            throw CloudMatchError.missingSession(context: "CloudMatch response")
+        }
         let connections = s.connectionInfo ?? []
         let connInfoLog = connections.map { c -> String in
             let ipStr = c.ip.map { $0.value ?? "value_nil" } ?? "field_nil"
@@ -555,8 +618,8 @@ actor CloudMatchClient {
             signalingServer: serverIp.contains(":") ? serverIp : "\(serverIp):443",
             signalingUrl: signalingUrl,
             gpuType: s.gpuType,
-            queuePosition: s.queuePosition,
-            seatSetupStep: s.seatSetupStep,
+            queuePosition: s.resolvedQueuePosition,
+            seatSetupStep: s.resolvedSeatSetupStep,
             iceServers: iceServers,
             mediaConnectionInfo: media,
             clientId: clientId,
@@ -717,11 +780,18 @@ actor CloudMatchClient {
 enum CloudMatchError: Error, LocalizedError {
     case sessionCreateFailed(String)
     case missingServerIp
+    case missingSession(context: String)
+    case requestFailed(context: String, message: String)
+    case apiStatus(context: String, statusCode: Int, description: String?)
 
     var errorDescription: String? {
         switch self {
         case let .sessionCreateFailed(msg): "Session creation failed: \(msg)"
         case .missingServerIp: "CloudMatch response missing server IP."
+        case let .missingSession(context): "\(context) missing session data."
+        case let .requestFailed(context, message): "\(context) failed: \(message)"
+        case let .apiStatus(context, statusCode, description):
+            "\(context) rejected by CloudMatch: statusCode=\(statusCode) \(description ?? "")"
         }
     }
 }
