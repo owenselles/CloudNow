@@ -38,7 +38,8 @@ final class GFNSignalingClient {
     private var heartbeatTask: Task<Void, Never>?
     private var receiveTask: Task<Void, Never>?
     private var ackCounter = 0
-    private let peerId = 2
+    private var localPeerId = 2
+    private var remotePeerId = 1
     private let peerName: String
     private(set) var connectedHost: String = ""
     private(set) var resolvedIPs: [String] = []
@@ -73,6 +74,8 @@ final class GFNSignalingClient {
         comps.queryItems = [
             URLQueryItem(name: "peer_id", value: peerName),
             URLQueryItem(name: "version", value: "2"),
+            URLQueryItem(name: "peer_role", value: "1"),
+            URLQueryItem(name: "pairing_id", value: sessionId),
         ]
         guard comps.url != nil else { throw SignalingError.invalidUrl(signalingUrl) }
 
@@ -155,7 +158,7 @@ final class GFNSignalingClient {
         var payload: [String: Any] = ["type": "answer", "sdp": sdp]
         if let nvstSdp { payload["nvstSdp"] = nvstSdp }
         sendJson([
-            "peer_msg": ["from": peerId, "to": 1, "msg": jsonString(payload)],
+            "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString(payload)],
             "ackid": nextAckId(),
         ])
     }
@@ -163,11 +166,15 @@ final class GFNSignalingClient {
     // MARK: Send ICE Candidate
 
     func sendICECandidate(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
+        guard !isTCPIceCandidate(candidate) else {
+            print("[Signaling] Dropping local TCP ICE candidate")
+            return
+        }
         var payload: [String: Any] = ["candidate": candidate]
         if let sdpMid { payload["sdpMid"] = sdpMid }
         if let sdpMLineIndex { payload["sdpMLineIndex"] = sdpMLineIndex }
         sendJson([
-            "peer_msg": ["from": peerId, "to": 1, "msg": jsonString(payload)],
+            "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString(payload)],
             "ackid": nextAckId(),
         ])
     }
@@ -176,7 +183,7 @@ final class GFNSignalingClient {
 
     func requestKeyframe(reason: String = "decoder_recovery", backlogFrames: Int = 0, attempt: Int = 1) {
         sendJson([
-            "peer_msg": ["from": peerId, "to": 1, "msg": jsonString([
+            "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString([
                 "type": "request_keyframe",
                 "reason": reason,
                 "backlogFrames": backlogFrames,
@@ -204,9 +211,9 @@ final class GFNSignalingClient {
                 "browser": "Chrome",
                 "browserVersion": "131",
                 "connected": true,
-                "id": peerId,
+                "id": localPeerId,
                 "name": peerName,
-                "peerRole": 0,
+                "peerRole": 1,
                 "resolution": resolution,
                 "version": 2,
             ],
@@ -314,9 +321,19 @@ final class GFNSignalingClient {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 
+        if let peerInfo = obj["peer_info"] as? [String: Any],
+           let id = peerInfo["id"] as? Int
+        {
+            if peerInfo["name"] as? String == peerName {
+                localPeerId = id
+            } else if id != localPeerId {
+                remotePeerId = id
+            }
+        }
+
         // ACK
         if let ackId = obj["ackid"] as? Int {
-            let shouldAck = (obj["peer_info"] as? [String: Any])?["id"] as? Int != peerId
+            let shouldAck = (obj["peer_info"] as? [String: Any])?["id"] as? Int != localPeerId
             if shouldAck { sendJson(["ack": ackId]) }
         }
 
@@ -332,6 +349,9 @@ final class GFNSignalingClient {
               let msgData = msgStr.data(using: .utf8),
               let payload = try? JSONSerialization.jsonObject(with: msgData) as? [String: Any]
         else { return }
+        if let from = peerMsg["from"] as? Int, from != localPeerId {
+            remotePeerId = from
+        }
 
         // SDP offer
         if payload["type"] as? String == "offer", let sdp = payload["sdp"] as? String {
@@ -359,6 +379,10 @@ final class GFNSignalingClient {
     private func nextAckId() -> Int {
         ackCounter += 1
         return ackCounter
+    }
+
+    private func isTCPIceCandidate(_ candidate: String) -> Bool {
+        candidate.lowercased().components(separatedBy: " ").contains("tcp")
     }
 
     private struct ConnectedCandidate {
