@@ -153,17 +153,22 @@ private struct GetSessionsResponse: Decodable {
         let sessionControlInfo: CtrlEntry?
 
         struct SessionRequestData: Decodable { let appId: AnyCodableString? }
-        struct ConnEntry: Decodable { let ip: AnyCodableString?; let port: Int?; let usage: Int? }
+        struct ConnEntry: Decodable { let ip: AnyCodableString?; let port: Int?; let usage: Int?; let resourcePath: String? }
         struct CtrlEntry: Decodable { let ip: AnyCodableString? }
     }
 }
 
 // MARK: - Session Request Body
 
-private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
-    let resolutionParts = input.settings.resolution.split(separator: "x")
+private func resolutionPixels(for settings: StreamSettings) -> (width: Int, height: Int) {
+    let resolutionParts = settings.resolution.split(separator: "x")
     let width = Int(resolutionParts.first ?? "1920") ?? 1920
     let height = Int(resolutionParts.last ?? "1080") ?? 1080
+    return (width, height)
+}
+
+private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
+    let (width, height) = resolutionPixels(for: input.settings)
     let tzOffset = TimeZone.current.secondsFromGMT() * 1000
     let trueHdr = false
     let cloudMatchBitDepth = input.settings.colorQuality == .sdr8bit ? 0 : 10
@@ -248,6 +253,47 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     ]
 }
 
+private func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String) -> [String: Any] {
+    let (width, height) = resolutionPixels(for: settings)
+    var requestData: [String: Any] = [
+        "availableSupportedControllers": [],
+        "networkTestSessionId": NSNull(),
+        "parentSessionId": NSNull(),
+        "clientIdentification": "GFN-PC",
+        "deviceHashId": deviceId,
+        "clientVersion": "30.0",
+        "sdkVersion": "1.0",
+        "streamerVersion": 1,
+        "clientPlatformName": "windows",
+        "clientRequestMonitorSettings": [[
+            "monitorId": 0,
+            "positionX": 0,
+            "positionY": 0,
+            "widthInPixels": width,
+            "heightInPixels": height,
+            "framesPerSecond": settings.fps,
+            "sdrHdrMode": 0,
+            "displayData": NSNull(),
+            "hdr10PlusGamingData": NSNull(),
+            "dpi": 100,
+        ]],
+        "clientTimezoneOffset": TimeZone.current.secondsFromGMT() * 1000,
+        "metaData": [
+            ["key": "SubSessionId", "value": UUID().uuidString],
+            ["key": "wssignaling", "value": "1"],
+            ["key": "GSStreamerType", "value": "WebRTC"],
+            ["key": "networkType", "value": "Unknown"],
+            ["key": "ClientImeSupport", "value": "0"],
+            ["key": "clientPhysicalResolution", "value": "{\"horizontalPixels\":\(width),\"verticalPixels\":\(height)}"],
+            ["key": "surroundAudioInfo", "value": "2"],
+        ],
+    ]
+    if let appId {
+        requestData["appId"] = appId
+    }
+    return requestData
+}
+
 // MARK: - Signaling URL Resolution
 
 private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> String {
@@ -264,6 +310,11 @@ private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> Stri
     if resourcePath.hasPrefix("wss://") { return resourcePath }
     if resourcePath.hasPrefix("/") { return "wss://\(serverIp):443\(resourcePath)" }
     return "wss://\(serverIp):443/nvst/"
+}
+
+private func hostFromResourcePath(_ resourcePath: String?) -> String? {
+    guard let resourcePath, !resourcePath.isEmpty, !resourcePath.hasPrefix("/") else { return nil }
+    return URL(string: resourcePath)?.host
 }
 
 // MARK: - CloudMatchClient
@@ -306,6 +357,14 @@ actor CloudMatchClient {
                 description: payload.requestStatus.statusDescription
             )
         }
+    }
+
+    private func shouldRepollThroughResolvedServer(currentBase: String, resolvedServer: String) -> Bool {
+        guard !resolvedServer.isEmpty,
+              let currentHost = URLComponents(string: currentBase)?.host?.lowercased()
+        else { return false }
+        let resolvedHost = resolvedServer.lowercased()
+        return currentHost != resolvedHost
     }
 
     // MARK: Create Session
@@ -406,7 +465,7 @@ actor CloudMatchClient {
         try validateHTTPStatus(response, data: data, context: "pollSession")
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
         try validateAPIStatus(payload, context: "pollSession")
-        return try toSessionInfo(
+        let sessionInfo = try toSessionInfo(
             base: effectiveBase,
             routingZoneUrl: routingZoneUrl,
             payload: payload,
@@ -414,6 +473,21 @@ actor CloudMatchClient {
             clientId: clientId,
             deviceId: deviceId
         )
+        if serverIp == nil,
+           (sessionInfo.status == 2 || sessionInfo.status == 3),
+           shouldRepollThroughResolvedServer(currentBase: effectiveBase, resolvedServer: sessionInfo.serverIp)
+        {
+            return try await pollSession(
+                sessionId: sessionId,
+                token: token,
+                base: base,
+                serverIp: sessionInfo.serverIp,
+                routingZoneUrl: routingZoneUrl ?? sessionInfo.zone,
+                clientId: clientId,
+                deviceId: deviceId
+            )
+        }
+        return sessionInfo
     }
 
     // MARK: Stop Session
@@ -463,10 +537,10 @@ actor CloudMatchClient {
         try validateAPIStatus(decoded, context: "getActiveSessions")
         return (decoded.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
             let appId = entry.sessionRequestData?.appId?.value
-            let sigConn = entry.connectionInfo?.first { $0.usage == 14 && $0.ip?.value != nil }
-                ?? entry.connectionInfo?.first { $0.ip?.value != nil }
-            let serverIp = sigConn?.ip?.value ?? entry.sessionControlInfo?.ip?.value
-            let signalingUrl = serverIp.map { "wss://\($0):443/nvst/" }
+            let sigConn = entry.connectionInfo?.first { $0.usage == 14 }
+            let serverIp = sigConn.flatMap { $0.ip?.value ?? hostFromResourcePath($0.resourcePath) }
+                ?? entry.sessionControlInfo?.ip?.value
+            let signalingUrl = serverIp.map { resolveSignalingUrl(serverIp: $0, resourcePath: sigConn?.resourcePath ?? "/nvst/") }
             return ActiveSessionInfo(
                 sessionId: entry.sessionId,
                 status: entry.status,
@@ -490,18 +564,19 @@ actor CloudMatchClient {
         routingZoneUrl: String? = nil,
         clientId existingClientId: String? = nil,
         deviceId existingDeviceId: String? = nil,
+        appId: String? = nil,
         settings: StreamSettings
     ) async throws -> SessionInfo {
         let clientId = existingClientId ?? UUID().uuidString
         let deviceId = existingDeviceId ?? GFNDeviceIdentity.stableDeviceId()
-        let effectiveBase = "https://\(serverIp)"
+        let initialBase = "https://\(serverIp)"
         let preservedRoutingZoneUrl = normalizedRoutingZoneUrl(routingZoneUrl) ?? normalizedRoutingZoneUrl(base)
 
         // Pre-flight: get current session state
         let preflight = try await pollSession(
             sessionId: sessionId,
             token: token,
-            base: effectiveBase,
+            base: initialBase,
             serverIp: nil,
             routingZoneUrl: preservedRoutingZoneUrl,
             clientId: clientId,
@@ -512,7 +587,8 @@ actor CloudMatchClient {
         if preflight.status == 1 || preflight.isInQueue { return preflight }
 
         // Status 2 or 3: send RESUME PUT
-        var comps = URLComponents(string: "\(effectiveBase)/v2/session/\(sessionId)")!
+        let resumeBase = preflight.streamingBaseUrl
+        var comps = URLComponents(string: "\(resumeBase)/v2/session/\(sessionId)")!
         comps.queryItems = [
             URLQueryItem(name: "keyboardLayout", value: settings.keyboardLayout),
             URLQueryItem(name: "languageCode", value: settings.gameLanguage),
@@ -521,7 +597,7 @@ actor CloudMatchClient {
         let body: [String: Any] = [
             "action": 2,
             "data": "RESUME",
-            "sessionRequestData": [String: Any](),
+            "sessionRequestData": buildResumeSessionRequestData(appId: appId, settings: settings, deviceId: deviceId),
         ]
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
@@ -534,7 +610,7 @@ actor CloudMatchClient {
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
         try validateAPIStatus(payload, context: "claimSession")
         return try toSessionInfo(
-            base: effectiveBase,
+            base: resumeBase,
             routingZoneUrl: preflight.zone,
             payload: payload,
             rawData: data,
@@ -585,9 +661,10 @@ actor CloudMatchClient {
         }
 
         // Signaling server: usage=14
-        let sigConn = connections.first { $0.usage == 14 && $0.ip?.value != nil }
-            ?? connections.first { $0.ip?.value != nil }
-        let serverIp = sigConn?.ip?.value ?? s.sessionControlInfo?.ip?.value ?? ""
+        let sigConn = connections.first { $0.usage == 14 }
+        let serverIp = sigConn.flatMap { serverHost(from: $0) }
+            ?? s.sessionControlInfo?.ip?.value
+            ?? ""
         let resourcePath = sigConn?.resourcePath ?? "/nvst/"
         let signalingUrl = resolveSignalingUrl(serverIp: serverIp, resourcePath: resourcePath)
 
@@ -597,13 +674,7 @@ actor CloudMatchClient {
             ? defaultIceServers()
             : rawIceServers.map { IceServer(urls: $0.urls.values, username: $0.username, credential: $0.credential) }
 
-        // Media connection — priority: usage=2 → usage=17 → usage=14 highest-port (IP from resourcePath)
-        let mediaConn = connections.first { $0.usage == 2 }
-            ?? connections.first { $0.usage == 17 }
-        let media: MediaConnectionInfo? = mediaConn.flatMap { mc -> MediaConnectionInfo? in
-            guard let ip = mc.ip?.value, mc.port > 0 else { return nil }
-            return MediaConnectionInfo(ip: ip, port: mc.port)
-        } ?? extractMediaFromUsage14(connections)
+        let media = mediaConnectionInfo(from: connections, fallbackServerIp: serverIp)
         print("[CloudMatch] mediaConnectionInfo: \(media.map { "\($0.ip):\($0.port)" } ?? "nil")")
 
         // Ad state — parse raw JSON for flexibility since ad schema varies
@@ -733,27 +804,44 @@ actor CloudMatchClient {
         _ = try? await urlSession.data(for: request)
     }
 
-    /// For sessions without usage=2/17 connectionInfo, derive media IP+port from usage=14 entries.
-    /// The highest-port usage=14 entry is the media endpoint (e.g. 48322);
-    /// the lowest-port entry (e.g. 322) is the RTSPS signaling port.
-    /// IP is extracted from the dash-encoded hostname in the rtsps:// resourcePath when the ip
-    /// field is absent (e.g. "rtsps://80-84-170-153.cloudmatchbeta.nvidiagrid.net:48322").
-    private func extractMediaFromUsage14(
-        _ connections: [CloudMatchResponse.SessionPayload.ConnectionInfo]
+    private func serverHost(from conn: CloudMatchResponse.SessionPayload.ConnectionInfo) -> String? {
+        conn.ip?.value ?? hostFromResourcePath(conn.resourcePath)
+    }
+
+    private func mediaConnectionInfo(
+        from connections: [CloudMatchResponse.SessionPayload.ConnectionInfo],
+        fallbackServerIp: String
     ) -> MediaConnectionInfo? {
-        let candidates = connections
+        if let usage2 = connections.first(where: { $0.usage == 2 }),
+           let media = mediaConnectionInfo(from: usage2, fallbackServerIp: nil)
+        {
+            return media
+        }
+        if let usage17 = connections.first(where: { $0.usage == 17 }),
+           let media = mediaConnectionInfo(from: usage17, fallbackServerIp: nil)
+        {
+            return media
+        }
+
+        return connections
             .filter { $0.usage == 14 }
-            .compactMap { conn -> MediaConnectionInfo? in
-                if let ip = conn.ip?.value, conn.port > 0 {
-                    return MediaConnectionInfo(ip: ip, port: conn.port)
-                }
-                guard let path = conn.resourcePath,
-                      let host = URL(string: path)?.host,
-                      let ip = extractIpFromDashHost(host),
-                      conn.port > 0 else { return nil }
-                return MediaConnectionInfo(ip: ip, port: conn.port)
-            }
-        return candidates.max(by: { $0.port < $1.port })
+            .compactMap { mediaConnectionInfo(from: $0, fallbackServerIp: fallbackServerIp) }
+            .max(by: { $0.port < $1.port })
+    }
+
+    private func mediaConnectionInfo(
+        from conn: CloudMatchResponse.SessionPayload.ConnectionInfo,
+        fallbackServerIp: String?
+    ) -> MediaConnectionInfo? {
+        guard conn.port > 0 else { return nil }
+        guard let host = conn.ip?.value
+            ?? hostFromResourcePath(conn.resourcePath)
+            ?? (conn.usage == 14 ? fallbackServerIp : nil),
+            !host.isEmpty
+        else {
+            return nil
+        }
+        return MediaConnectionInfo(ip: extractIpFromDashHost(host) ?? host, port: conn.port)
     }
 
     /// Extracts a dotted-decimal IP from a dash-encoded hostname label.

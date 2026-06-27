@@ -522,6 +522,7 @@ struct StreamView: View {
                     routingZoneUrl: direct.zone,
                     clientId: direct.clientId,
                     deviceId: direct.deviceId,
+                    appId: game.variants.first?.appId ?? game.variants.first?.id,
                     settings: settings
                 )
                 streamLog.info("startSession: claimed session, status=\(sessionInfo.status)")
@@ -601,6 +602,7 @@ struct StreamView: View {
                     deviceId: viewModel.lastSession?.sessionId == existing.sessionId
                         ? viewModel.lastSession?.deviceId
                         : nil,
+                    appId: existing.appId,
                     settings: settings
                 )
                 streamLog.info("startSession: claimed, status=\(sessionInfo.status)")
@@ -623,6 +625,7 @@ struct StreamView: View {
                             routingZoneUrl: last.routingZoneUrl,
                             clientId: last.clientId,
                             deviceId: last.deviceId,
+                            appId: last.appId,
                             settings: settings
                         )
                         print("[Resume] claimed session, status=\(sessionInfo.status)")
@@ -736,6 +739,7 @@ struct StreamView: View {
                 routingZoneUrl: session.zone,
                 clientId: session.clientId,
                 deviceId: session.deviceId,
+                appId: game.variants.first?.appId ?? game.variants.first?.id,
                 settings: settings
             )
             createdSession = reclaimed
