@@ -337,7 +337,7 @@ struct StreamView: View {
         switch streamController.remoteMode {
         case .mouse: "Remote: Mouse"
         case .gamepad: "Remote: Gamepad"
-        case .dualsense: "Remote: DualSense"
+        case .dualsense: "Remote: Touchpad"
         }
     }
 
