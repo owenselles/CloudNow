@@ -519,6 +519,7 @@ struct StreamView: View {
                     serverIp: direct.serverIp,
                     token: token,
                     base: base,
+                    routingZoneUrl: direct.zone,
                     settings: settings
                 )
                 streamLog.info("startSession: claimed session, status=\(sessionInfo.status)")
@@ -584,6 +585,9 @@ struct StreamView: View {
                     serverIp: serverIp,
                     token: token,
                     base: base,
+                    routingZoneUrl: viewModel.lastSession?.sessionId == existing.sessionId
+                        ? viewModel.lastSession?.routingZoneUrl
+                        : nil,
                     settings: settings
                 )
                 streamLog.info("startSession: claimed, status=\(sessionInfo.status)")
@@ -603,6 +607,7 @@ struct StreamView: View {
                             serverIp: last.serverIp,
                             token: token,
                             base: last.base,
+                            routingZoneUrl: last.routingZoneUrl,
                             settings: settings
                         )
                         print("[Resume] claimed session, status=\(sessionInfo.status)")
@@ -632,6 +637,7 @@ struct StreamView: View {
                     serverIp: sessionInfo.serverIp,
                     appId: appId,
                     base: sessionInfo.streamingBaseUrl,
+                    routingZoneUrl: sessionInfo.zone.isEmpty ? nil : sessionInfo.zone,
                     createdAt: Date()
                 ))
             }
@@ -696,6 +702,7 @@ struct StreamView: View {
                 serverIp: session.serverIp,
                 token: token,
                 base: session.streamingBaseUrl,
+                routingZoneUrl: session.zone,
                 settings: settings
             )
             createdSession = reclaimed
@@ -736,21 +743,21 @@ struct StreamView: View {
     }
 
     private func createNewSession(appId: String, token: String, base: String) async throws -> SessionInfo {
-        let sessionBase: String = if let preferred = settings.preferredZoneUrl {
-            preferred
+        let routeSelection: (base: String, routingZoneUrl: String?) = if let preferred = settings.preferredZoneUrl {
+            (preferred, preferred)
         } else if let best = await viewModel.bestZoneUrl() {
-            best
+            (best, best)
         } else {
-            base
+            (base, nil)
         }
-        print("[Session] creating new session, appId=\(appId), sessionBase=\(sessionBase)")
+        print("[Session] creating new session, appId=\(appId), sessionBase=\(routeSelection.base), routingZoneUrl=\(routeSelection.routingZoneUrl ?? "nil")")
 
         let request = SessionCreateRequest(
             appId: appId,
             internalTitle: game.title,
             token: token,
-            zone: "",
-            streamingBaseUrl: sessionBase,
+            streamingBaseUrl: routeSelection.base,
+            routingZoneUrl: routeSelection.routingZoneUrl,
             settings: settings,
             accountLinked: true
         )

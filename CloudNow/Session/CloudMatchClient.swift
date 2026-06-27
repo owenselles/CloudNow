@@ -241,6 +241,8 @@ private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> Stri
 // MARK: - CloudMatchClient
 
 actor CloudMatchClient {
+    private static let defaultBase = "https://prod.cloudmatchbeta.nvidiagrid.net"
+
     private let urlSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.httpAdditionalHeaders = ["Accept": "application/json"]
@@ -254,8 +256,9 @@ actor CloudMatchClient {
         let deviceId = UUID().uuidString
         let preferredBase = input.streamingBaseUrl.map {
             $0.hasSuffix("/") ? String($0.dropLast()) : $0
-        } ?? "https://prod.cloudmatchbeta.nvidiagrid.net"
-        let fallbackBase = "https://prod.cloudmatchbeta.nvidiagrid.net"
+        } ?? Self.defaultBase
+        let fallbackBase = Self.defaultBase
+        let requestedRoutingZoneUrl = normalizedRoutingZoneUrl(input.routingZoneUrl)
 
         let body = buildSessionRequestBody(input)
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -286,7 +289,19 @@ actor CloudMatchClient {
             print("[CloudMatch] createSession response: HTTP \(statusCode)")
             if statusCode == 200 {
                 let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
-                return try toSessionInfo(base: base, routingZoneUrl: nil, payload: payload, rawData: data, clientId: clientId, deviceId: deviceId)
+                let routingZoneUrl: String? = if base == preferredBase {
+                    requestedRoutingZoneUrl ?? normalizedRoutingZoneUrl(base)
+                } else {
+                    nil
+                }
+                return try toSessionInfo(
+                    base: base,
+                    routingZoneUrl: routingZoneUrl,
+                    payload: payload,
+                    rawData: data,
+                    clientId: clientId,
+                    deviceId: deviceId
+                )
             }
             let raw = String(data: data, encoding: .utf8) ?? ""
             print("[CloudMatch] createSession failed: HTTP \(statusCode) body: \(raw.prefix(500))")
@@ -384,12 +399,14 @@ actor CloudMatchClient {
         sessionId: String,
         serverIp: String,
         token: String,
-        base _: String,
+        base: String,
+        routingZoneUrl: String? = nil,
         settings: StreamSettings
     ) async throws -> SessionInfo {
         let clientId = UUID().uuidString
         let deviceId = UUID().uuidString
         let effectiveBase = "https://\(serverIp)"
+        let preservedRoutingZoneUrl = normalizedRoutingZoneUrl(routingZoneUrl) ?? normalizedRoutingZoneUrl(base)
 
         // Pre-flight: get current session state
         let preflight = try await pollSession(
@@ -397,7 +414,7 @@ actor CloudMatchClient {
             token: token,
             base: effectiveBase,
             serverIp: nil,
-            routingZoneUrl: nil,
+            routingZoneUrl: preservedRoutingZoneUrl,
             clientId: clientId,
             deviceId: deviceId
         )
@@ -506,7 +523,7 @@ actor CloudMatchClient {
         return SessionInfo(
             sessionId: s.sessionId,
             status: s.status,
-            zone: routingZoneUrl ?? "",
+            zone: normalizedRoutingZoneUrl(routingZoneUrl) ?? "",
             streamingBaseUrl: base,
             serverIp: serverIp,
             signalingServer: serverIp.contains(":") ? serverIp : "\(serverIp):443",
@@ -520,6 +537,21 @@ actor CloudMatchClient {
             deviceId: deviceId,
             adState: adState
         )
+    }
+
+    private func normalizedRoutingZoneUrl(_ url: String?) -> String? {
+        guard let raw = url?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let components = URLComponents(string: raw),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "https",
+              let host = components.host?.lowercased(),
+              host.hasPrefix("np-"),
+              host.hasSuffix(".nvidiagrid.net")
+        else {
+            return nil
+        }
+        return "\(scheme)://\(host)/"
     }
 
     /// Parses ad state from the raw response JSON, handling schema variations across GFN API versions.
