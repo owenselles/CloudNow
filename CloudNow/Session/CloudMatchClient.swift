@@ -474,7 +474,7 @@ actor CloudMatchClient {
             deviceId: deviceId
         )
         if serverIp == nil,
-           (sessionInfo.status == 2 || sessionInfo.status == 3),
+           sessionInfo.status == 2 || sessionInfo.status == 3,
            shouldRepollThroughResolvedServer(currentBase: effectiveBase, resolvedServer: sessionInfo.serverIp)
         {
             return try await pollSession(
