@@ -750,10 +750,14 @@ actor CloudMatchClient {
                 let profile = f["encodingProfile"] as? String
                 guard url != nil || profile != nil else { return nil }
                 return SessionAdMediaFile(mediaFileUrl: url, encodingProfile: profile)
+            }.sorted {
+                adMediaPreference($0.encodingProfile) < adMediaPreference($1.encodingProfile)
             }
             let adUrl = ad["adUrl"] as? String
             let mediaUrl = (ad["mediaUrl"] ?? ad["videoUrl"] ?? ad["url"]) as? String
-            let lengthSeconds = (ad["adLengthInSeconds"] ?? ad["durationMs"]) as? Double
+            let lengthSeconds = doubleValue("adLengthInSeconds", in: ad)
+                ?? doubleValue("durationMs", in: ad).map { $0 / 1000 }
+                ?? doubleValue("durationInMs", in: ad).map { $0 / 1000 }
             return SessionAdInfo(adId: adId, adUrl: adUrl, mediaUrl: mediaUrl,
                                  adMediaFiles: mediaFiles, adLengthInSeconds: lengthSeconds)
         }
@@ -768,6 +772,20 @@ actor CloudMatchClient {
             message: message,
             ads: ads
         )
+    }
+
+    private func doubleValue(_ key: String, in obj: [String: Any]) -> Double? {
+        if let number = obj[key] as? NSNumber { return number.doubleValue }
+        if let string = obj[key] as? String { return Double(string) }
+        return nil
+    }
+
+    private func adMediaPreference(_ profile: String?) -> Int {
+        let profile = profile?.lowercased() ?? ""
+        if profile.contains("mp4deinterlaced720p") { return 0 }
+        if profile.contains("webm") { return 1 }
+        if profile.contains("hlsadaptive") { return 2 }
+        return 3
     }
 
     // MARK: Report Ad Event
