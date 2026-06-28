@@ -202,7 +202,8 @@ final class VideoSurfaceView: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard remoteMouseInputEnabled,
               activeRemoteTouch == nil,
-              let touch = touches.first(where: isRemoteTouch) else {
+              let touch = touches.first(where: isRemoteTouch)
+        else {
             super.touchesBegan(touches, with: event)
             return
         }
@@ -218,7 +219,8 @@ final class VideoSurfaceView: UIView {
             return
         }
         guard let trackedTouch = activeRemoteTouch,
-              touches.contains(where: { $0 === trackedTouch }) else {
+              touches.contains(where: { $0 === trackedTouch })
+        else {
             super.touchesMoved(touches, with: event)
             return
         }
@@ -231,7 +233,8 @@ final class VideoSurfaceView: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let trackedTouch = activeRemoteTouch,
-              touches.contains(where: { $0 === trackedTouch }) else {
+              touches.contains(where: { $0 === trackedTouch })
+        else {
             super.touchesEnded(touches, with: event)
             return
         }
@@ -242,7 +245,8 @@ final class VideoSurfaceView: UIView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let trackedTouch = activeRemoteTouch,
-              touches.contains(where: { $0 === trackedTouch }) else {
+              touches.contains(where: { $0 === trackedTouch })
+        else {
             super.touchesCancelled(touches, with: event)
             return
         }
