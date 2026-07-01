@@ -61,7 +61,7 @@ struct DecodedVideoFormat: Codable, Equatable {
     let colorPrimaries: String?
     let yCbCrMatrix: String?
     let colorRange: String?
-    let hasMasteringDisplayMetadata: Bool
+    let hasDisplayColorVolumeMetadata: Bool
     let hasContentLightLevelMetadata: Bool
     let decoderPath: VideoDecoderPath
 }
@@ -102,7 +102,7 @@ enum DecodedVideoFormatInspector {
             colorPrimaries: colorPrimaries,
             yCbCrMatrix: yCbCrMatrix,
             colorRange: colorRange,
-            hasMasteringDisplayMetadata: attachmentExists(pixelBuffer, kCVImageBufferMasteringDisplayColorVolumeKey),
+            hasDisplayColorVolumeMetadata: attachmentExists(pixelBuffer, kCVImageBufferMasteringDisplayColorVolumeKey),
             hasContentLightLevelMetadata: attachmentExists(pixelBuffer, kCVImageBufferContentLightLevelInfoKey),
             decoderPath: decoderPath
         )
