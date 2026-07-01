@@ -10,6 +10,7 @@ import Observation
 import os.log
 
 private let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
+private let videoColorLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "VideoColor")
 
 // MARK: - Session Time Warning
 
@@ -128,6 +129,14 @@ final class GFNStreamController: NSObject {
     private(set) var videoTrack: LKRTCVideoTrack?
     private(set) var statsMode: StreamStatsMode = .hud
     private(set) var videoDiagnostics = VideoPipelineSnapshot()
+    private(set) var colorState = StreamColorState(
+        preference: .automatic,
+        requestedMode: .sdr8,
+        negotiatedMode: nil,
+        detectedMode: nil,
+        displayHDRSupport: .unknown,
+        fallbackReason: nil
+    )
     private(set) var rtcEventLogURL: URL?
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
@@ -208,10 +217,21 @@ final class GFNStreamController: NSObject {
         default: break
         }
         let settings = settings.normalizedForClient
+        let localCapabilities = LocalVideoCapabilities.detect(codec: settings.codec)
+        let colorRequest = settings.colorRequest(localCapabilities: localCapabilities)
         gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl)")
+        videoColorLog.info("request preference=\(settings.colorPreference.rawValue) requested=\(colorRequest.mode.rawValue) bitDepth=\(colorRequest.bitDepth) hdr=\(colorRequest.hdrRequested) codec=\(settings.codec.rawValue) decoder10Bit=\(localCapabilities.supportsHardware10BitDecode) hdrPipeline=\(localCapabilities.supportsHDRRendering) displayHDR=\(localCapabilities.displaySupportsHDR)")
         state = .connecting
         sessionInfo = session
         self.settings = settings
+        colorState = StreamColorState(
+            preference: settings.colorPreference,
+            requestedMode: colorRequest.mode,
+            negotiatedMode: nil,
+            detectedMode: nil,
+            displayHDRSupport: localCapabilities.displaySupportsHDR ? .supported : .unsupported,
+            fallbackReason: nil
+        )
         setStatsMode(settings.statsMode)
         stats = StreamStats()
         stats.gpuType = session.gpuType ?? ""
@@ -246,6 +266,11 @@ final class GFNStreamController: NSObject {
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
         view.setDiagnosticsEnabled(statsMode == .diagnostic)
+        view.onDecodedVideoFormatChanged = { [weak self] format in
+            Task { @MainActor [weak self] in
+                self?.applyDecodedVideoFormat(format)
+            }
+        }
         view.inputHandler = inputSender
         view.menuPressHandler = { [weak self] in self?.handleMenuPress() }
     }
@@ -357,11 +382,20 @@ final class GFNStreamController: NSObject {
         lastZoneRttFeedbackAt = nil
         videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
+        videoView?.onDecodedVideoFormatChanged = nil
         videoView = nil
         remoteMode = .mouse
         menuPressCount = 0
         timeWarning = nil
         videoDiagnostics = VideoPipelineSnapshot()
+        colorState = StreamColorState(
+            preference: .automatic,
+            requestedMode: .sdr8,
+            negotiatedMode: nil,
+            detectedMode: nil,
+            displayHDRSupport: .unknown,
+            fallbackReason: nil
+        )
         state = .idle
     }
 
@@ -469,6 +503,43 @@ final class GFNStreamController: NSObject {
 
     // MARK: Private — WebRTC Peer Connection
 
+    private func configureAudioSession(microphoneRequested: Bool) -> Bool {
+        let audioSession = AVAudioSession.sharedInstance()
+        if microphoneRequested, audioSession.availableCategories.contains(.playAndRecord) {
+            do {
+                try audioSession.setCategory(
+                    .playAndRecord,
+                    mode: .voiceChat,
+                    options: [.allowBluetoothHFP, .allowBluetoothA2DP]
+                )
+                try audioSession.setActive(true)
+                guard audioSession.isInputAvailable else {
+                    print("[Stream] AVAudioSession has no input route, falling back to playback")
+                    return configurePlaybackAudioSession(audioSession)
+                }
+                print("[Stream] AVAudioSession configured for playback + microphone")
+                return true
+            } catch {
+                print("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error)")
+            }
+        } else if microphoneRequested {
+            print("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
+        }
+
+        return configurePlaybackAudioSession(audioSession)
+    }
+
+    private func configurePlaybackAudioSession(_ audioSession: AVAudioSession) -> Bool {
+        do {
+            try audioSession.setCategory(.playback, mode: .moviePlayback, options: [])
+            try audioSession.setActive(true)
+            print("[Stream] AVAudioSession configured for playback")
+        } catch {
+            print("[Stream] AVAudioSession playback configuration failed: \(error)")
+        }
+        return false
+    }
+
     private func handleOffer(sdp: String) async {
         guard let session = sessionInfo else { return }
         #if DEBUG
@@ -476,19 +547,7 @@ final class GFNStreamController: NSObject {
             sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
         #endif
 
-        // Configure audio session for real-time streaming before creating the peer connection.
-        // .playback + .moviePlayback gives the lowest latency path; allowBluetooth covers
-        // Bluetooth headsets paired to Apple TV.
-        do {
-            try AVAudioSession.sharedInstance().setCategory(
-                .playback,
-                mode: .moviePlayback,
-                options: [.allowBluetoothHFP, .allowBluetoothA2DP]
-            )
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("[Stream] AVAudioSession configuration failed (non-fatal): \(error)")
-        }
+        let microphoneEnabledForConnection = configureAudioSession(microphoneRequested: settings.micEnabled)
 
         // The lifetime is immutable after channel creation, so resolve the server's value first.
         if let match = sdp.range(of: #"ri\.partialReliableThresholdMs[: ]+(\d+)"#, options: .regularExpression),
@@ -544,7 +603,7 @@ final class GFNStreamController: NSObject {
 
         // Attach microphone audio track if enabled (must happen before answer creation
         // so the m=audio sendrecv line is included in the SDP)
-        if settings.micEnabled {
+        if microphoneEnabledForConnection {
             await attachMicrophone(to: pc)
         }
 
@@ -724,7 +783,7 @@ final class GFNStreamController: NSObject {
             "a=vqos.bw.maximumBitrateKbps:\(settings.maxBitrateKbps)",
             "a=vqos.bw.minimumBitrateKbps:\(minBitrateKbps)",
             "a=vqos.bw.peakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=video.bitDepth:\(settings.colorQuality.bitDepth)",
+            "a=video.bitDepth:\(settings.colorRequest(localCapabilities: .detect(codec: settings.codec)).bitDepth)",
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
         ]
@@ -1099,6 +1158,43 @@ final class GFNStreamController: NSObject {
         appendHistory(&bitrateHistory, value: Double(stats.bitrateKbps) / 1000.0)
     }
 
+    private func applyDecodedVideoFormat(_ format: DecodedVideoFormat) {
+        videoColorLog.info(
+            "decoded mode=\(format.mode.rawValue) path=\(format.decoderPath.rawValue) \(format.width)x\(format.height) pixelFormat=\(format.pixelFormatName) bitDepth=\(format.bitDepth ?? -1) transfer=\(format.transferFunction ?? "nil") primaries=\(format.colorPrimaries ?? "nil") matrix=\(format.yCbCrMatrix ?? "nil") range=\(format.colorRange ?? "nil")"
+        )
+        colorState.detectedMode = format.mode
+        colorState.fallbackReason = fallbackReason(for: format)
+    }
+
+    private func applyNegotiatedHDRMode(_ rawMode: Int) {
+        videoColorLog.info("negotiated gameSessionHdrMode=\(rawMode)")
+        if rawMode == 0 {
+            if colorState.requestedMode != .hdr10 {
+                colorState.negotiatedMode = colorState.requestedMode
+            } else if colorState.fallbackReason == nil {
+                colorState.fallbackReason = .serverReturnedSDR
+            }
+        } else {
+            colorState.negotiatedMode = .hdr10
+        }
+    }
+
+    private func fallbackReason(for format: DecodedVideoFormat) -> ColorFallbackReason? {
+        if format.decoderPath == .softwareI420 {
+            return .softwareDecoder
+        }
+        switch (colorState.requestedMode, format.mode) {
+        case (.hdr10, .sdr10), (.hdr10, .sdr8):
+            return .serverReturnedSDR
+        case (.sdr10, .sdr8):
+            return .decoderReturned8Bit
+        case (_, .unknown10Bit), (_, .unknown8Bit):
+            return .missingColorMetadata
+        default:
+            return nil
+        }
+    }
+
     private func intervalAverage(_ current: Double, _ previous: Double, count: Double) -> Double {
         guard count > 0 else { return 0 }
         return max(0, current - previous) / count * 1000
@@ -1366,6 +1462,14 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                     Task { @MainActor [weak self] in
                         self?.timeWarning = StreamTimeWarning(code: code, secondsLeft: secondsLeft)
                     }
+                }
+            }
+            if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
+               let hdrMode = json["gameSessionHdrMode"] as? [String: Any],
+               let rawMode = hdrMode["hdrMode"] as? Int
+            {
+                Task { @MainActor [weak self] in
+                    self?.applyNegotiatedHDRMode(rawMode)
                 }
             }
             return

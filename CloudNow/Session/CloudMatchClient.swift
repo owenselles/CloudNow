@@ -170,9 +170,7 @@ private func resolutionPixels(for settings: StreamSettings) -> (width: Int, heig
 private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
     let (width, height) = resolutionPixels(for: input.settings)
     let tzOffset = TimeZone.current.secondsFromGMT() * 1000
-    let trueHdr = false
-    let cloudMatchBitDepth = input.settings.colorQuality == .sdr8bit ? 0 : 1
-    let cloudMatchChromaFormat = 1
+    let color = input.settings.colorRequest(localCapabilities: .detect(codec: input.settings.codec))
 
     return [
         "sessionRequestData": [
@@ -194,12 +192,8 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
                 "widthInPixels": width,
                 "heightInPixels": height,
                 "framesPerSecond": input.settings.fps,
-                "sdrHdrMode": trueHdr ? 1 : 0,
-                "displayData": trueHdr ? [
-                    "desiredContentMaxLuminance": 1000,
-                    "desiredContentMinLuminance": 0,
-                    "desiredContentMaxFrameAverageLuminance": 500,
-                ] as Any : NSNull(),
+                "sdrHdrMode": cloudMatchSdrHdrMode(color),
+                "displayData": cloudMatchDisplayData(color),
                 "hdr10PlusGamingData": NSNull(),
                 "dpi": 100,
             ]],
@@ -214,12 +208,8 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
                 ["key": "clientPhysicalResolution", "value": "{\"horizontalPixels\":\(width),\"verticalPixels\":\(height)}"],
                 ["key": "surroundAudioInfo", "value": "2"],
             ],
-            "sdrHdrMode": trueHdr ? 1 : 0,
-            "clientDisplayHdrCapabilities": trueHdr ? [
-                "version": 1,
-                "hdrEdrSupportedFlagsInUint32": 1,
-                "staticMetadataDescriptorId": 0,
-            ] : NSNull(),
+            "sdrHdrMode": cloudMatchSdrHdrMode(color),
+            "clientDisplayHdrCapabilities": cloudMatchDisplayCapabilities(color),
             "surroundAudioInfo": 0,
             "remoteControllersBitmap": 0,
             "clientTimezoneOffset": tzOffset,
@@ -232,12 +222,12 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
             "userAge": 26,
             "requestedStreamingFeatures": [
                 "reflex": input.settings.fps >= 120,
-                "bitDepth": cloudMatchBitDepth,
+                "bitDepth": cloudMatchBitDepth(color),
                 "cloudGsync": false,
                 "enabledL4S": input.settings.enableL4S,
                 "profile": 0,
                 "fallbackToLogicalResolution": false,
-                "chromaFormat": cloudMatchChromaFormat,
+                "chromaFormat": cloudMatchChromaFormat(color),
                 "prefilterMode": 0,
                 "prefilterSharpness": 0,
                 "prefilterNoiseReduction": 0,
@@ -249,6 +239,7 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
 
 private func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String) -> [String: Any] {
     let (width, height) = resolutionPixels(for: settings)
+    let color = settings.colorRequest(localCapabilities: .detect(codec: settings.codec))
     var requestData: [String: Any] = [
         "availableSupportedControllers": [],
         "networkTestSessionId": NSNull(),
@@ -266,8 +257,8 @@ private func buildResumeSessionRequestData(appId: String?, settings: StreamSetti
             "widthInPixels": width,
             "heightInPixels": height,
             "framesPerSecond": settings.fps,
-            "sdrHdrMode": 0,
-            "displayData": NSNull(),
+            "sdrHdrMode": cloudMatchSdrHdrMode(color),
+            "displayData": cloudMatchDisplayData(color),
             "hdr10PlusGamingData": NSNull(),
             "dpi": 100,
         ]],
@@ -281,11 +272,58 @@ private func buildResumeSessionRequestData(appId: String?, settings: StreamSetti
             ["key": "clientPhysicalResolution", "value": "{\"horizontalPixels\":\(width),\"verticalPixels\":\(height)}"],
             ["key": "surroundAudioInfo", "value": "2"],
         ],
+        "sdrHdrMode": cloudMatchSdrHdrMode(color),
+        "clientDisplayHdrCapabilities": cloudMatchDisplayCapabilities(color),
+        "requestedStreamingFeatures": [
+            "reflex": settings.fps >= 120,
+            "bitDepth": cloudMatchBitDepth(color),
+            "cloudGsync": false,
+            "enabledL4S": settings.enableL4S,
+            "profile": 0,
+            "fallbackToLogicalResolution": false,
+            "chromaFormat": cloudMatchChromaFormat(color),
+            "prefilterMode": 0,
+            "prefilterSharpness": 0,
+            "prefilterNoiseReduction": 0,
+            "hudStreamingMode": 0,
+        ],
     ]
     if let appId {
         requestData["appId"] = appId
     }
     return requestData
+}
+
+private func cloudMatchSdrHdrMode(_ color: StreamColorRequest) -> Int {
+    color.hdrRequested ? 1 : 0
+}
+
+private func cloudMatchBitDepth(_ color: StreamColorRequest) -> Int {
+    // CloudMatch has historically used 0 for 8-bit and 1 for 10-bit in this client.
+    color.bitDepth >= 10 ? 1 : 0
+}
+
+private func cloudMatchChromaFormat(_ color: StreamColorRequest) -> Int {
+    // Meaning is undocumented. Preserve the known-working 4:2:0 value for SDR8, SDR10, and HDR10.
+    color.chromaFormat ?? 1
+}
+
+private func cloudMatchDisplayData(_ color: StreamColorRequest) -> Any {
+    guard let capabilities = color.displayCapabilities else { return NSNull() }
+    return [
+        "desiredContentMaxLuminance": capabilities.desiredContentMaxLuminance,
+        "desiredContentMinLuminance": capabilities.desiredContentMinLuminance,
+        "desiredContentMaxFrameAverageLuminance": capabilities.desiredContentMaxFrameAverageLuminance,
+    ]
+}
+
+private func cloudMatchDisplayCapabilities(_ color: StreamColorRequest) -> Any {
+    guard let capabilities = color.displayCapabilities else { return NSNull() }
+    return [
+        "version": 1,
+        "hdrEdrSupportedFlagsInUint32": capabilities.hdrEdrSupportedFlags,
+        "staticMetadataDescriptorId": 0,
+    ]
 }
 
 // MARK: - Signaling URL Resolution

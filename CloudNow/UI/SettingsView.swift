@@ -43,34 +43,20 @@ struct SettingsView: View {
                             Text(codec.rawValue).tag(codec)
                         }
                     }
-                    .onChange(of: vm.streamSettings.codec) { _, codec in
-                        if codec == .av1 {
-                            vm.streamSettings.colorQuality = .sdr8bit
-                        }
-                    }
 
-                    Picker(selection: $vm.streamSettings.colorQuality) {
-                        ForEach(ColorQuality.allCases, id: \.self) { q in
-                            Text(colorQualityLabel(q)).tag(q)
-                                .disabled(vm.streamSettings.codec == .av1 && q != .sdr8bit)
+                    Picker(selection: $vm.streamSettings.colorPreference) {
+                        ForEach(ColorModePreference.allCases, id: \.self) { preference in
+                            Text(preference.label).tag(preference)
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Color Quality")
+                            Text("Color Mode")
                             if vm.streamSettings.codec == .av1 {
-                                Text("AV1 uses the software I420 path and is limited to SDR 8-bit BT.709.")
+                                Text("AV1 currently uses the software I420 path and will fall back to SDR 8-bit BT.709.")
                                     .font(.caption)
                                     .foregroundStyle(.orange)
-                            } else if vm.streamSettings.colorQuality == .hdr10bit {
-                                Text("⚠️ Experimental — GFN may downscale to ~540p when HDR is enabled.")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            } else if vm.streamSettings.colorQuality == .sdr10bit {
-                                Text("Recommended — full resolution with better color than 8-bit.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                             } else {
-                                Text("Standard dynamic range, widely compatible.")
+                                Text(vm.streamSettings.colorPreference.description)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -320,14 +306,6 @@ struct SettingsView: View {
         ResolutionEntry(res: "2560x1440", badge: "2K", symbol: "tv"),
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
-
-    private func colorQualityLabel(_ q: ColorQuality) -> String {
-        switch q {
-        case .sdr8bit: "SDR 8-bit"
-        case .sdr10bit: "SDR 10-bit"
-        case .hdr10bit: "HDR 10-bit"
-        }
-    }
 
     private func statsModeDescription(_ mode: StreamStatsMode) -> String {
         switch mode {

@@ -10,7 +10,7 @@ struct StreamSettings: Codable, Equatable {
     }
 
     var codec: VideoCodec = .h264
-    var colorQuality: ColorQuality = .sdr8bit
+    var colorPreference: ColorModePreference = .automatic
     var keyboardLayout: String = "en-US"
     var gameLanguage: String = "en_US"
     var enableL4S: Bool = false
@@ -34,10 +34,6 @@ struct StreamSettings: Codable, Equatable {
 
     var normalizedForClient: StreamSettings {
         var normalized = self
-        // The software I420 path is 8-bit video-range BT.709 and cannot preserve HDR/10-bit metadata.
-        if normalized.codec == .av1 {
-            normalized.colorQuality = .sdr8bit
-        }
         if normalized.statsMode != .diagnostic {
             normalized.enableRtcEventLog = false
         }
@@ -53,11 +49,12 @@ struct StreamSettings: Codable, Equatable {
 /// decodeIfPresent + default fallbacks keep existing settings intact across versions.
 extension StreamSettings {
     enum CodingKeys: String, CodingKey {
-        case resolution, fps, maxBitrateKbps, codec, colorQuality, keyboardLayout
+        case resolution, fps, maxBitrateKbps, codec, colorPreference, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, controllerDeadzone, overlayTriggerButton
         case defaultRemoteInputMode, preferredZoneUrl
         case enableSteamOverlayGesture
         case statsMode, enableRtcEventLog
+        case colorQuality
     }
 
     init(from decoder: Decoder) throws {
@@ -68,7 +65,9 @@ extension StreamSettings {
         fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
         maxBitrateKbps = try c.decodeIfPresent(Int.self, forKey: .maxBitrateKbps) ?? d.maxBitrateKbps
         codec = try c.decodeIfPresent(VideoCodec.self, forKey: .codec) ?? d.codec
-        colorQuality = try c.decodeIfPresent(ColorQuality.self, forKey: .colorQuality) ?? d.colorQuality
+        colorPreference = try c.decodeIfPresent(ColorModePreference.self, forKey: .colorPreference)
+            ?? (c.decodeIfPresent(ColorQuality.self, forKey: .colorQuality))?.preference
+            ?? d.colorPreference
         keyboardLayout = try c.decodeIfPresent(String.self, forKey: .keyboardLayout) ?? d.keyboardLayout
         gameLanguage = try c.decodeIfPresent(String.self, forKey: .gameLanguage) ?? d.gameLanguage
         enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
@@ -80,6 +79,26 @@ extension StreamSettings {
         enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self, forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
         statsMode = try c.decodeIfPresent(StreamStatsMode.self, forKey: .statsMode) ?? d.statsMode
         enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(resolution, forKey: .resolution)
+        try c.encode(fps, forKey: .fps)
+        try c.encode(maxBitrateKbps, forKey: .maxBitrateKbps)
+        try c.encode(codec, forKey: .codec)
+        try c.encode(colorPreference, forKey: .colorPreference)
+        try c.encode(keyboardLayout, forKey: .keyboardLayout)
+        try c.encode(gameLanguage, forKey: .gameLanguage)
+        try c.encode(enableL4S, forKey: .enableL4S)
+        try c.encode(micEnabled, forKey: .micEnabled)
+        try c.encode(controllerDeadzone, forKey: .controllerDeadzone)
+        try c.encode(overlayTriggerButton, forKey: .overlayTriggerButton)
+        try c.encode(defaultRemoteInputMode, forKey: .defaultRemoteInputMode)
+        try c.encodeIfPresent(preferredZoneUrl, forKey: .preferredZoneUrl)
+        try c.encode(enableSteamOverlayGesture, forKey: .enableSteamOverlayGesture)
+        try c.encode(statsMode, forKey: .statsMode)
+        try c.encode(enableRtcEventLog, forKey: .enableRtcEventLog)
     }
 }
 
@@ -108,17 +127,189 @@ enum VideoCodec: String, Codable, CaseIterable {
     case av1 = "AV1"
 }
 
+enum ColorModePreference: String, Codable, CaseIterable {
+    case automatic
+    case preferHDR
+    case preferSDR10
+    case forceSDR8
+
+    var label: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .preferHDR: "Prefer HDR"
+        case .preferSDR10: "Prefer 10-bit SDR"
+        case .forceSDR8: "Compatibility SDR"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .automatic: "Uses HDR only when support is known and the full pipeline qualifies."
+        case .preferHDR: "Attempts HDR when the local pipeline supports it and falls back safely."
+        case .preferSDR10: "Uses 10-bit SDR where possible."
+        case .forceSDR8: "Uses 8-bit SDR for maximum compatibility."
+        }
+    }
+}
+
+enum StreamColorMode: String, Codable, Equatable {
+    case sdr8
+    case sdr10
+    case hdr10
+
+    var bitDepth: Int {
+        self == .sdr8 ? 8 : 10
+    }
+}
+
+enum DetectedColorMode: String, Codable, Equatable {
+    case sdr8
+    case sdr10
+    case hdr10
+    case unknown8Bit
+    case unknown10Bit
+}
+
+enum HDRSupport: String, Codable {
+    case supported
+    case unsupported
+    case unknown
+}
+
+enum ColorFallbackReason: String, Codable {
+    case gameHDRUnknown
+    case gameHDRUnsupported
+    case accountHDRUnavailable
+    case serverHDRUnavailable
+    case displayHDRUnavailable
+    case decoder10BitUnavailable
+    case hdrRenderPipelineUnavailable
+    case serverReturnedSDR
+    case decoderReturned8Bit
+    case softwareDecoder
+    case missingColorMetadata
+    case unsupportedPixelFormat
+    case unstablePlayback
+    case sessionNegotiationFailed
+}
+
+struct StreamColorState: Codable, Equatable {
+    let preference: ColorModePreference
+    var requestedMode: StreamColorMode
+    var negotiatedMode: StreamColorMode?
+    var detectedMode: DetectedColorMode?
+    var displayHDRSupport: HDRSupport
+    var fallbackReason: ColorFallbackReason?
+}
+
+struct StreamColorCapabilities {
+    let gameHDRSupport: HDRSupport
+    let accountAllowsHDR: Bool?
+    let serverAllowsHDR: Bool?
+    let decoderSupports10Bit: Bool
+    let hdrRenderPipelineAvailable: Bool
+    let displaySupportsHDR: Bool
+}
+
+struct HDRDisplayCapabilities: Codable, Equatable {
+    let desiredContentMaxLuminance: Int
+    let desiredContentMinLuminance: Int
+    let desiredContentMaxFrameAverageLuminance: Int
+    let hdrEdrSupportedFlags: Int
+
+    static let conservativeHDR10 = HDRDisplayCapabilities(
+        desiredContentMaxLuminance: 1000,
+        desiredContentMinLuminance: 0,
+        desiredContentMaxFrameAverageLuminance: 500,
+        hdrEdrSupportedFlags: 1
+    )
+}
+
+struct StreamColorRequest: Codable, Equatable {
+    let mode: StreamColorMode
+    let bitDepth: Int
+    let hdrRequested: Bool
+    let chromaFormat: Int?
+    let displayCapabilities: HDRDisplayCapabilities?
+
+    static func resolve(
+        preference: ColorModePreference,
+        capabilities: StreamColorCapabilities
+    ) -> StreamColorRequest {
+        let mode = resolveColorMode(preference: preference, capabilities: capabilities)
+        return StreamColorRequest(
+            mode: mode,
+            bitDepth: mode.bitDepth,
+            hdrRequested: mode == .hdr10,
+            chromaFormat: 1,
+            displayCapabilities: mode == .hdr10 ? .conservativeHDR10 : nil
+        )
+    }
+
+    static func resolveColorMode(
+        preference: ColorModePreference,
+        capabilities: StreamColorCapabilities
+    ) -> StreamColorMode {
+        switch preference {
+        case .forceSDR8:
+            return .sdr8
+        case .preferSDR10:
+            return capabilities.decoderSupports10Bit ? .sdr10 : .sdr8
+        case .preferHDR:
+            if capabilities.decoderSupports10Bit,
+               capabilities.hdrRenderPipelineAvailable,
+               capabilities.displaySupportsHDR,
+               capabilities.accountAllowsHDR != false,
+               capabilities.serverAllowsHDR != false
+            {
+                return .hdr10
+            }
+            return capabilities.decoderSupports10Bit ? .sdr10 : .sdr8
+        case .automatic:
+            if capabilities.gameHDRSupport == .supported,
+               capabilities.decoderSupports10Bit,
+               capabilities.hdrRenderPipelineAvailable,
+               capabilities.displaySupportsHDR,
+               capabilities.accountAllowsHDR == true,
+               capabilities.serverAllowsHDR == true
+            {
+                return .hdr10
+            }
+            return capabilities.decoderSupports10Bit ? .sdr10 : .sdr8
+        }
+    }
+}
+
+extension StreamSettings {
+    func colorRequest(
+        localCapabilities: LocalVideoCapabilities = .detect(codec: nil),
+        gameHDRSupport: HDRSupport = .unknown,
+        accountAllowsHDR: Bool? = nil,
+        serverAllowsHDR: Bool? = nil
+    ) -> StreamColorRequest {
+        let capabilities = StreamColorCapabilities(
+            gameHDRSupport: gameHDRSupport,
+            accountAllowsHDR: accountAllowsHDR,
+            serverAllowsHDR: serverAllowsHDR,
+            decoderSupports10Bit: localCapabilities.supportsHardware10BitDecode && codec != .av1,
+            hdrRenderPipelineAvailable: localCapabilities.supportsHDRRendering,
+            displaySupportsHDR: localCapabilities.displaySupportsHDR
+        )
+        return StreamColorRequest.resolve(preference: colorPreference, capabilities: capabilities)
+    }
+}
+
 enum ColorQuality: String, Codable, CaseIterable {
     case sdr8bit = "SDR8bit"
     case sdr10bit = "SDR10bit"
     case hdr10bit = "HDR10bit"
 
-    var bitDepth: Int {
-        self == .sdr8bit ? 8 : 10
-    }
-
-    var chromaFormat: Int {
-        self == .hdr10bit ? 2 : 1
+    var preference: ColorModePreference {
+        switch self {
+        case .sdr8bit: .forceSDR8
+        case .sdr10bit: .preferSDR10
+        case .hdr10bit: .preferHDR
+        }
     }
 }
 

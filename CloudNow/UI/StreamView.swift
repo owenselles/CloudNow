@@ -321,6 +321,20 @@ struct StreamView: View {
                     systemImage: "video"
                 )
             }
+            Label(
+                "Color \(streamController.colorState.preference.label) · requested \(streamController.colorState.requestedMode.rawValue.uppercased()) · detected \(streamController.colorState.detectedMode?.rawValue.uppercased() ?? "UNKNOWN") · display \(streamController.colorState.displayHDRSupport.rawValue)",
+                systemImage: "circle.lefthalf.filled"
+            )
+            if let fallback = streamController.colorState.fallbackReason {
+                Label("Fallback \(fallback.rawValue)", systemImage: "arrow.down.right.circle")
+                    .foregroundStyle(.orange)
+            }
+            if let format = pipeline.decodedVideoFormat {
+                Label(
+                    "\(format.decoderPath.rawValue) \(format.pixelFormatName) \(format.bitDepth.map { "\($0)-bit" } ?? "unknown-bit") \(format.transferFunction ?? "no-transfer")",
+                    systemImage: "scope"
+                )
+            }
             if streamController.rtcEventLogURL != nil {
                 Label("RTC event log active", systemImage: "doc.text.magnifyingglass")
             }

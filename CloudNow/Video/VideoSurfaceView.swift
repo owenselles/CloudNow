@@ -40,6 +40,12 @@ final class VideoSurfaceView: UIView {
     /// the press bubble up to the system (which opens the Apple TV control center).
     var menuPressHandler: (() -> Void)?
 
+    var onDecodedVideoFormatChanged: ((DecodedVideoFormat) -> Void)? {
+        didSet {
+            renderer.onDecodedVideoFormatChanged = onDecodedVideoFormatChanged
+        }
+    }
+
     /// When true, an extended gamepad owns input. UIKit presses from the controller
     /// (e.g. Options mapping to .playPause) are suppressed to avoid double-firing the overlay.
     var gamepadModeActive = false {
@@ -303,6 +309,8 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
 
     private struct State {
         var formatDescription: CMVideoFormatDescription?
+        var formatSignature: VideoFormatSignature?
+        var decodedFormatSignature: VideoFormatSignature?
         var isFlushing = false
         var generation: UInt64 = 0
         var metricsRequestInFlight = false
@@ -311,6 +319,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     }
 
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
+    var onDecodedVideoFormatChanged: ((DecodedVideoFormat) -> Void)?
     private let diagnostics: VideoPipelineDiagnostics
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let i420Converter = I420FrameConverter()
@@ -342,8 +351,10 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         // H.265/HDR/AV1 can fall back to software decoding (LKRTCI420Buffer) on some
         // hardware — convert to a planar CVPixelBuffer so the display layer can render it.
         let cvBuf: CVPixelBuffer
+        let decoderPath: VideoDecoderPath
         if let hwBuf = frame.buffer as? LKRTCCVPixelBuffer {
             cvBuf = hwBuf.pixelBuffer
+            decoderPath = .hardware
         } else if let i420 = frame.buffer as? LKRTCI420Buffer {
             let conversionStart = diagnostics.beginConversion(trace)
             guard let converted = i420Converter.convert(i420) else {
@@ -353,14 +364,27 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             }
             diagnostics.endConversion(trace, startedAt: conversionStart)
             cvBuf = converted
+            decoderPath = .softwareI420
         } else {
             print("[WebRTCFrameRenderer] Unhandled frame type: \(type(of: frame.buffer))")
             diagnostics.recordDrop(trace)
             return
         }
 
+        let decodedFormat = DecodedVideoFormatInspector.inspect(pixelBuffer: cvBuf, decoderPath: decoderPath)
+        let decodedSignature = DecodedVideoFormatInspector.signature(for: decodedFormat)
+        let shouldPublishFormat = state.withLock { state -> Bool in
+            guard state.decodedFormatSignature != decodedSignature else { return false }
+            state.decodedFormatSignature = decodedSignature
+            return true
+        }
+        if shouldPublishFormat {
+            diagnostics.updateDecodedVideoFormat(decodedFormat)
+            onDecodedVideoFormatChanged?(decodedFormat)
+        }
+
         let sampleCreationStart = diagnostics.beginSampleCreation(trace)
-        guard let formatDescription = formatDescription(for: cvBuf) else {
+        guard let formatDescription = formatDescription(for: cvBuf, signature: decodedSignature) else {
             diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
             diagnostics.recordDrop(trace)
             return
@@ -468,6 +492,8 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             state.isFlushing = true
             state.generation &+= 1
             state.formatDescription = nil
+            state.formatSignature = nil
+            state.decodedFormatSignature = nil
             let request = FlushRequest(
                 generation: state.generation,
                 removeDisplayedImage: !preservingDisplayedImage
@@ -506,9 +532,13 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         }
     }
 
-    private func formatDescription(for pixelBuffer: CVPixelBuffer) -> CMVideoFormatDescription? {
+    private func formatDescription(
+        for pixelBuffer: CVPixelBuffer,
+        signature: VideoFormatSignature
+    ) -> CMVideoFormatDescription? {
         state.withLock { state in
             if let cached = state.formatDescription,
+               state.formatSignature == signature,
                CMVideoFormatDescriptionMatchesImageBuffer(cached, imageBuffer: pixelBuffer)
             {
                 return cached
@@ -522,6 +552,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             )
             guard status == noErr else { return nil }
             state.formatDescription = created
+            state.formatSignature = signature
             return created
         }
     }
