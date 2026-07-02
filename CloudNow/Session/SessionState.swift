@@ -3,10 +3,14 @@ import Foundation
 // MARK: - Stream Settings
 
 struct StreamSettings: Codable, Equatable {
+    static let maxSelectableBitrateKbps = 100_000
+    static let minControllerDeadzone = 0.0
+    static let maxControllerDeadzone = 0.30
+
     var resolution: String = "1920x1080"
     var fps: Int = 60
     var maxBitrateKbps: Int = 20000 {
-        didSet { maxBitrateKbps = min(maxBitrateKbps, 100_000) }
+        didSet { maxBitrateKbps = min(maxBitrateKbps, Self.maxSelectableBitrateKbps) }
     }
 
     var codec: VideoCodec = .h264
@@ -16,7 +20,9 @@ struct StreamSettings: Codable, Equatable {
     var enableL4S: Bool = false
     var micEnabled: Bool = false
     /// Radial deadzone applied to analog stick axes (0.0–1.0). Default 15%.
-    var controllerDeadzone: Double = 0.15
+    var controllerDeadzone: Double = 0.15 {
+        didSet { controllerDeadzone = min(max(controllerDeadzone, Self.minControllerDeadzone), Self.maxControllerDeadzone) }
+    }
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
     var overlayTriggerButton: OverlayTriggerButton = .start
     /// Default remote/controller input mode when a stream session starts.

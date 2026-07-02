@@ -117,7 +117,7 @@ struct SettingsView: View {
                                 .frame(minWidth: 72)
                                 .padding(.horizontal, 24)
                             Button {
-                                vm.streamSettings.maxBitrateKbps = min(100_000, vm.streamSettings.maxBitrateKbps + 5000)
+                                vm.streamSettings.maxBitrateKbps = min(StreamSettings.maxSelectableBitrateKbps, vm.streamSettings.maxBitrateKbps + 5000)
                             } label: {
                                 Image(systemName: "plus.circle")
                             }
@@ -179,7 +179,7 @@ struct SettingsView: View {
                     LabeledContent {
                         HStack(spacing: 16) {
                             Button {
-                                vm.streamSettings.controllerDeadzone = max(0.05, vm.streamSettings.controllerDeadzone - 0.01)
+                                vm.streamSettings.controllerDeadzone = max(StreamSettings.minControllerDeadzone, vm.streamSettings.controllerDeadzone - 0.01)
                             } label: {
                                 Image(systemName: "minus.circle")
                             }
@@ -189,7 +189,7 @@ struct SettingsView: View {
                                 .frame(minWidth: 44)
                                 .padding(.horizontal, 24)
                             Button {
-                                vm.streamSettings.controllerDeadzone = min(0.30, vm.streamSettings.controllerDeadzone + 0.01)
+                                vm.streamSettings.controllerDeadzone = min(StreamSettings.maxControllerDeadzone, vm.streamSettings.controllerDeadzone + 0.01)
                             } label: {
                                 Image(systemName: "plus.circle")
                             }
