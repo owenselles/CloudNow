@@ -23,6 +23,7 @@ struct StreamSettings: Codable, Equatable {
     var controllerDeadzone: Double = 0.15 {
         didSet { controllerDeadzone = min(max(controllerDeadzone, Self.minControllerDeadzone), Self.maxControllerDeadzone) }
     }
+
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
     var overlayTriggerButton: OverlayTriggerButton = .start
     /// Default remote/controller input mode when a stream session starts.
