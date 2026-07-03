@@ -413,10 +413,11 @@ actor CloudMatchClient {
         let body = buildSessionRequestBody(input, deviceId: deviceId)
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         print("[CloudMatch] bodySize: \(bodyData.count) bytes")
+        print("[CloudMatch] createSession languageCode=\(input.settings.effectiveGameLanguage) keyboardLayout=\(input.settings.keyboardLayout)")
         let headers = gfnHeaders(token: input.token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
         let queryItems = [
             URLQueryItem(name: "keyboardLayout", value: input.settings.keyboardLayout),
-            URLQueryItem(name: "languageCode", value: input.settings.gameLanguage),
+            URLQueryItem(name: "languageCode", value: input.settings.effectiveGameLanguage),
         ]
 
         let bases = preferredBase == fallbackBase ? [preferredBase] : [preferredBase, fallbackBase]
@@ -623,8 +624,9 @@ actor CloudMatchClient {
         var comps = URLComponents(string: "\(resumeBase)/v2/session/\(sessionId)")!
         comps.queryItems = [
             URLQueryItem(name: "keyboardLayout", value: settings.keyboardLayout),
-            URLQueryItem(name: "languageCode", value: settings.gameLanguage),
+            URLQueryItem(name: "languageCode", value: settings.effectiveGameLanguage),
         ]
+        print("[CloudMatch] claimSession languageCode=\(settings.effectiveGameLanguage) keyboardLayout=\(settings.keyboardLayout)")
         guard let url = comps.url else { throw CloudMatchError.sessionCreateFailed("Invalid resume URL") }
         let body: [String: Any] = [
             "action": 2,

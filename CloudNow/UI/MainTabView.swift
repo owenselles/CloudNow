@@ -10,7 +10,7 @@ struct MainTabView: View {
 
     var body: some View {
         TabView {
-            Tab("Home", systemImage: "house.fill") {
+            Tab(L10n.text("home"), systemImage: "house.fill") {
                 HomeView(
                     onPlay: { game in
                         directSessionToResume = nil
@@ -29,13 +29,13 @@ struct MainTabView: View {
                     }
                 )
             }
-            Tab("Library", systemImage: "books.vertical.fill") {
+            Tab(L10n.text("library"), systemImage: "books.vertical.fill") {
                 LibraryView(games: viewModel.libraryGames, onPlay: { gameToPlay = $0 })
             }
-            Tab("Store", systemImage: "bag.fill") {
+            Tab(L10n.text("store"), systemImage: "bag.fill") {
                 StoreView(games: viewModel.mainGames, onPlay: { gameToPlay = $0 })
             }
-            Tab("Settings", systemImage: "gearshape.fill") {
+            Tab(L10n.text("settings"), systemImage: "gearshape.fill") {
                 SettingsView()
             }
         }

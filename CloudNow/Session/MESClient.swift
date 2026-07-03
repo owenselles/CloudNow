@@ -45,7 +45,7 @@ actor MESClient {
         var comps = URLComponents(string: "https://mes.geforcenow.com/v4/subscriptions")!
         comps.queryItems = [
             URLQueryItem(name: "serviceName", value: "gfn_pc"),
-            URLQueryItem(name: "languageCode", value: "en_US"),
+            URLQueryItem(name: "languageCode", value: L10n.nvidiaLocaleCode()),
             URLQueryItem(name: "vpcId", value: effectiveVpcId),
             URLQueryItem(name: "userId", value: userId),
         ]

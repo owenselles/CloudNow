@@ -11,12 +11,12 @@ struct SettingsView: View {
 
         NavigationStack {
             Form {
-                Section("Stream Quality") {
-                    Picker("Resolution", selection: $vm.streamSettings.resolution) {
+                Section(L10n.text("stream_quality")) {
+                    Picker(L10n.text("resolution"), selection: $vm.streamSettings.resolution) {
                         let common = commonResolutions.filter { viewModel.availableResolutions.contains($0.res) }
                         let other = viewModel.availableResolutions.filter { res in !commonResolutions.map(\.res).contains(res) }
                         if !common.isEmpty {
-                            Section("TV Standards") {
+                            Section(L10n.text("tv_standards")) {
                                 ForEach(common, id: \.res) { item in
                                     Label("\(item.res)  —  \(item.badge)", systemImage: item.symbol)
                                         .tag(item.res)
@@ -24,7 +24,7 @@ struct SettingsView: View {
                             }
                         }
                         if !other.isEmpty {
-                            Section("Other") {
+                            Section(L10n.text("other")) {
                                 ForEach(other, id: \.self) { res in
                                     Text(res).tag(res)
                                 }
@@ -32,15 +32,15 @@ struct SettingsView: View {
                         }
                     }
 
-                    Picker("Frame Rate", selection: $vm.streamSettings.fps) {
+                    Picker(L10n.text("frame_rate"), selection: $vm.streamSettings.fps) {
                         ForEach(viewModel.availableFps, id: \.self) { fps in
                             Text("\(fps) fps").tag(fps)
                         }
                     }
 
-                    Picker("Codec", selection: $vm.streamSettings.codec) {
+                    Picker(L10n.text("codec"), selection: $vm.streamSettings.codec) {
                         ForEach(VideoCodec.allCases, id: \.self) { codec in
-                            Text(codec.rawValue).tag(codec)
+                            Text(codec.label).tag(codec)
                         }
                     }
 
@@ -50,9 +50,9 @@ struct SettingsView: View {
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Color Mode")
+                            Text(L10n.text("color_mode"))
                             if vm.streamSettings.codec == .av1 {
-                                Text("AV1 currently uses the software I420 path and will fall back to SDR 8-bit BT.709.")
+                                Text(L10n.text("av1_software_path_warning"))
                                     .font(.caption)
                                     .foregroundStyle(.orange)
                             } else {
@@ -64,20 +64,14 @@ struct SettingsView: View {
                         .padding(.vertical, 8)
                     }
 
-                    Picker("Keyboard Layout", selection: $vm.streamSettings.keyboardLayout) {
-                        Text("English (US)").tag("en-US")
-                        Text("English (UK)").tag("en-GB")
-                        Text("French").tag("fr-FR")
-                        Text("German").tag("de-DE")
-                        Text("Spanish").tag("es-ES")
-                        Text("Italian").tag("it-IT")
-                        Text("Portuguese (Brazil)").tag("pt-BR")
-                        Text("Hindi (India)").tag("hi-IN")
-                        Text("Japanese").tag("ja-JP")
-                        Text("Korean").tag("ko-KR")
+                    Picker(L10n.text("keyboard_layout"), selection: $vm.streamSettings.keyboardLayout) {
+                        ForEach(L10n.supportedLanguageCodes, id: \.self) { code in
+                            Text(L10n.localizedLanguageName(for: code)).tag(code)
+                        }
                     }
 
-                    Picker("Game Language", selection: $vm.streamSettings.gameLanguage) {
+                    Picker(L10n.text("game_language"), selection: $vm.streamSettings.gameLanguage) {
+                        Text(L10n.text("automatic")).tag(StreamSettings.automaticGameLanguage)
                         Text("English (US)").tag("en_US")
                         Text("English (UK)").tag("en_GB")
                         Text("French").tag("fr_FR")
@@ -88,9 +82,29 @@ struct SettingsView: View {
                         Text("Hindi").tag("hi_IN")
                         Text("Japanese").tag("ja_JP")
                         Text("Korean").tag("ko_KR")
+                        Text("Chinese (Simplified)").tag("zh_CN")
+                        Text("Chinese (Traditional)").tag("zh_TW")
+                        Text("Russian").tag("ru_RU")
+                        Text("Arabic").tag("ar_SA")
+                        Text("Dutch").tag("nl_NL")
+                        Text("Polish").tag("pl_PL")
+                        Text("Swedish").tag("sv_SE")
+                        Text("Finnish").tag("fi_FI")
+                        Text("Turkish").tag("tr_TR")
+                        Text("Greek").tag("el_GR")
+                        Text("Hebrew").tag("he_IL")
+                        Text("Czech").tag("cs_CZ")
+                        Text("Danish").tag("da_DK")
+                        Text("Croatian").tag("hr_HR")
+                        Text("Hungarian").tag("hu_HU")
+                        Text("Indonesian").tag("id_ID")
+                        Text("Malay").tag("ms_MY")
+                        Text("Romanian").tag("ro_RO")
+                        Text("Slovak").tag("sk_SK")
+                        Text("Vietnamese").tag("vi_VN")
+                        Text("Ukrainian").tag("uk_UA")
                     }
-
-                    LabeledContent("Max Bitrate") {
+                    LabeledContent(L10n.text("max_bitrate")) {
                         HStack(spacing: 16) {
                             Button {
                                 vm.streamSettings.maxBitrateKbps = max(15000, vm.streamSettings.maxBitrateKbps - 5000)
@@ -113,8 +127,8 @@ struct SettingsView: View {
 
                     Toggle(isOn: $vm.streamSettings.enableL4S) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Low Latency Mode (L4S)")
-                            Text("Reduces buffering on networks with L4S support (requires a compatible router and ISP).")
+                            Text(L10n.text("low_latency_mode"))
+                            Text(L10n.text("low_latency_mode_description"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -122,14 +136,14 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Server Region") {
+                Section(L10n.text("server_region")) {
                     Button {
                         showZonePicker = true
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Preferred Zone")
-                                Text("Auto routing picks the best balance of ping and queue depth. Tap to pin a specific region.")
+                                Text(L10n.text("preferred_zone"))
+                                Text(L10n.text("preferred_zone_description"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -142,18 +156,18 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
 
                     if vm.streamSettings.preferredZoneUrl != nil {
-                        Button("Clear — use automatic routing") {
+                        Button(L10n.text("clear_use_automatic_routing")) {
                             vm.streamSettings.preferredZoneUrl = nil
                         }
                         .foregroundStyle(.secondary)
                     }
                 }
 
-                Section("Microphone") {
+                Section(L10n.text("microphone")) {
                     Toggle(isOn: $vm.streamSettings.micEnabled) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Use Microphone")
-                            Text("Enables voice chat via a connected Bluetooth headset or AirPods. Requires microphone permission.")
+                            Text(L10n.text("use_microphone"))
+                            Text(L10n.text("microphone_description"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -161,7 +175,7 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Controller") {
+                Section(L10n.text("controller")) {
                     LabeledContent {
                         HStack(spacing: 16) {
                             Button {
@@ -183,8 +197,8 @@ struct SettingsView: View {
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Deadzone")
-                            Text("Increase if your controller drifts at rest. Default: 15%.")
+                            Text(L10n.text("deadzone"))
+                            Text(L10n.text("deadzone_description"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -192,12 +206,12 @@ struct SettingsView: View {
                     }
                     Picker(selection: $vm.streamSettings.overlayTriggerButton) {
                         ForEach(OverlayTriggerButton.allCases, id: \.self) { btn in
-                            Text(btn.rawValue).tag(btn)
+                            Text(btn.label).tag(btn)
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Overlay Button")
-                            Text("Long-press this button during play to open the app overlay. Switch if it conflicts with an in-game action.")
+                            Text(L10n.text("overlay_button"))
+                            Text(L10n.text("overlay_button_description"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -205,37 +219,37 @@ struct SettingsView: View {
                     }
                     Toggle(isOn: $vm.streamSettings.enableSteamOverlayGesture) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Steam Overlay Gesture")
-                            Text("Long-press the OTHER button (the one not set as Overlay Button) to send Shift+Tab and open the Steam overlay. e.g. with Overlay on Start, long-press View/Back.")
+                            Text(L10n.text("steam_overlay_gesture"))
+                            Text(L10n.text("steam_overlay_gesture_description"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 8)
                     }
                     Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
-                        Text("Mouse").tag(RemoteInputMode.mouse)
-                        Text("Gamepad").tag(RemoteInputMode.gamepad)
-                        Text("Touchpad").tag(RemoteInputMode.dualsense)
+                        Text(L10n.remoteInputModeLabel(.mouse)).tag(RemoteInputMode.mouse)
+                        Text(L10n.remoteInputModeLabel(.gamepad)).tag(RemoteInputMode.gamepad)
+                        Text(L10n.remoteInputModeLabel(.dualsense)).tag(RemoteInputMode.dualsense)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Default Input Mode")
-                            Text("Input mode at stream start. Touchpad mode supports DualShock 4 and DualSense trackpads.")
+                            Text(L10n.text("default_input_mode"))
+                            Text(L10n.text("default_input_mode_description"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 8)
                     }
-                    LabeledContent("Protocol", value: "XInput over GFN v2/v3")
+                    LabeledContent(L10n.text("protocol"), value: "XInput over GFN v2/v3")
                 }
 
-                Section("Diagnostics") {
+                Section(L10n.text("diagnostics")) {
                     Picker(selection: $vm.streamSettings.statsMode) {
                         ForEach(StreamStatsMode.allCases, id: \.self) { mode in
                             Text(mode.label).tag(mode)
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Statistics Mode")
+                            Text(L10n.text("statistics_mode"))
                             Text(statsModeDescription(vm.streamSettings.statsMode))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -250,8 +264,8 @@ struct SettingsView: View {
 
                     Toggle(isOn: $vm.streamSettings.enableRtcEventLog) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("RTC Event Log")
-                            Text("Writes a bounded WebRTC event log to the app caches directory for the next stream.")
+                            Text(L10n.text("rtc_event_log"))
+                            Text(L10n.text("rtc_event_log_description"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -260,28 +274,28 @@ struct SettingsView: View {
                     .disabled(vm.streamSettings.statsMode != .diagnostic)
                 }
 
-                Section("Account") {
+                Section(L10n.text("account")) {
                     if let user = authManager.session?.user {
-                        LabeledContent("Name", value: user.displayName)
+                        LabeledContent(L10n.text("name"), value: user.displayName)
                         if let email = user.email {
-                            LabeledContent("Email", value: email)
+                            LabeledContent(L10n.text("email"), value: email)
                         }
                         if let sub = viewModel.subscription {
-                            LabeledContent("Membership", value: sub.membershipTier)
+                            LabeledContent(L10n.text("membership"), value: sub.membershipTier)
                             if !sub.isUnlimited, let remaining = sub.remainingMinutes {
                                 let hours = remaining / 60
                                 let mins = remaining % 60
-                                LabeledContent("Time Remaining", value: hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m")
+                                LabeledContent(L10n.text("time_remaining"), value: hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m")
                             }
                         } else {
-                            LabeledContent("Membership", value: user.membershipTier)
+                            LabeledContent(L10n.text("membership"), value: user.membershipTier)
                         }
                     }
 
                     Button(role: .destructive) {
                         authManager.logout()
                     } label: {
-                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        Label(L10n.text("sign_out"), systemImage: "rectangle.portrait.and.arrow.right")
                     }
                 }
             }
@@ -293,7 +307,7 @@ struct SettingsView: View {
     }
 
     private func zoneLabel(_ url: String?) -> String {
-        guard let url else { return "Automatic" }
+        guard let url else { return L10n.text("automatic") }
         // Extract zone ID from URL like "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
         let host = URL(string: url)?.host ?? url
         return host.components(separatedBy: ".").first?.uppercased() ?? url
@@ -308,11 +322,7 @@ struct SettingsView: View {
     ]
 
     private func statsModeDescription(_ mode: StreamStatsMode) -> String {
-        switch mode {
-        case .off: "Disables periodic WebRTC statistics collection."
-        case .hud: "Collects the lightweight statistics shown in the in-stream overlay."
-        case .diagnostic: "Adds receiver timing, renderer metrics, frame counters, and Instruments signposts."
-        }
+        L10n.streamStatsModeDescription(mode)
     }
 }
 
@@ -349,10 +359,12 @@ private struct ZonePickerView: View {
         NavigationStack {
             Group {
                 if isLoading {
-                    ProgressView("Loading servers…")
+                    ProgressView {
+                        Text(L10n.text("loading_servers"))
+                    }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error {
-                    ContentUnavailableView("Can't Load Servers", systemImage: "wifi.exclamationmark",
+                    ContentUnavailableView(L10n.text("cant_load_servers"), systemImage: "wifi.exclamationmark",
                                            description: Text(error))
                 } else {
                     List {
@@ -363,10 +375,10 @@ private struct ZonePickerView: View {
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading) {
-                                        Text("Automatic")
+                                        Text(L10n.text("automatic"))
                                             .font(.body.weight(.semibold))
                                         if let best = autoZone {
-                                            Text("Best: \(best.id) · Q\(best.queuePosition)\(best.pingMs.map { " · \($0) ms" } ?? "")")
+                                            Text("\(L10n.text("best_prefix")) \(best.id) · Q\(best.queuePosition)\(best.pingMs.map { " · \($0) ms" } ?? "")")
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
                                         }
@@ -408,7 +420,7 @@ private struct ZonePickerView: View {
                                             if selectedZoneUrl == zone.zoneUrl {
                                                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                                             } else if autoZone?.id == zone.id {
-                                                Text("Best")
+                                                Text(L10n.text("best"))
                                                     .font(.caption.bold())
                                                     .foregroundStyle(.green)
                                                     .padding(.horizontal, 6)
@@ -424,7 +436,7 @@ private struct ZonePickerView: View {
                     }
                 }
             }
-            .navigationTitle("Server Region")
+            .navigationTitle(L10n.text("server_region"))
             .task {
                 await loadZones()
             }

@@ -10,7 +10,6 @@ struct LibraryFetchResult {
 /// Fetches the GFN game catalog via the GraphQL browse API and persisted-query metadata enrichment.
 actor GamesClient {
     private static let graphqlURL = "https://games.geforce.com/graphql"
-    private static let publicCatalogURL = "https://static.nvidiagrid.net/supported-public-game-list/locales/gfnpc-en-US.json"
     private static let metadataQueryHash = "cf8b620dfd03617017ba7c858cee65197e1ace5180e41be194b39227227ced63"
     private static let ownedAppsQueryHash = "698bbc7e16a17c8e3fc56944a0e6d62e7d70296b29dfb35fb4d83ebd66dd10f1"
     private static let clientId = NVIDIAAuth.gfnClientId
@@ -18,6 +17,7 @@ actor GamesClient {
 
     private let urlSession = URLSession.shared
     private var metadataCache: [String: AppData] = [:]
+    private var localeCode: String { L10n.nvidiaLocaleCode() }
 
     private static let browseQuery = """
     query GetFilterBrowseResults($vpcId: String!, $locale: String!, $sortString: String!, $fetchCount: Int!, $cursor: String!, $filters: AppFilterFields!) {
@@ -75,7 +75,7 @@ actor GamesClient {
         for _ in 0 ..< maxPages {
             var variables: [String: Any] = [
                 "vpcId": vpcId,
-                "locale": "en_US",
+                "locale": localeCode,
                 "sortString": "sortName:ASC",
                 "fetchCount": 200,
                 "cursor": cursor,
@@ -158,7 +158,8 @@ actor GamesClient {
     // MARK: - Public Catalog Fallback
 
     private func fetchPublicCatalog() async throws -> [GameInfo] {
-        guard let url = URL(string: GamesClient.publicCatalogURL) else { return [] }
+        let publicCatalogURL = "https://static.nvidiagrid.net/supported-public-game-list/locales/gfnpc-\(L10n.keyboardLayoutCode()).json"
+        guard let url = URL(string: publicCatalogURL) else { return [] }
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
@@ -341,7 +342,7 @@ actor GamesClient {
     }
 
     private func fetchMetadataChunk(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
-        let variables: [String: Any] = ["vpcId": vpcId, "locale": "en_US", "appIds": appIds]
+        let variables: [String: Any] = ["vpcId": vpcId, "locale": localeCode, "appIds": appIds]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.metadataQueryHash]]
         let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0 ..< Int.max), radix: 16))"
 
@@ -426,7 +427,7 @@ actor GamesClient {
     private func fetchOwnedAppsPage(token: String, vpcId: String, cursor: String) async throws -> AppsContainer {
         let variables: [String: Any] = [
             "vpcId": vpcId,
-            "locale": "en_US",
+            "locale": localeCode,
             "fetchCount": 749,
             "cursor": cursor,
             "filters": [

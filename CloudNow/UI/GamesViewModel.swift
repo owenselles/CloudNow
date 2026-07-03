@@ -125,6 +125,9 @@ class GamesViewModel {
             streamSettings.fps = screenMax
         }
         streamSettings = streamSettings.normalizedForClient
+        print(
+            "[Localization] preferred=\(Locale.preferredLanguages.first ?? "nil") ui=\(L10n.localeCode) keyboard=\(streamSettings.keyboardLayout) gameLanguage=\(streamSettings.gameLanguage) effectiveGameLanguage=\(streamSettings.effectiveGameLanguage)"
+        )
     }
 
     // MARK: Computed — Entitled Resolutions & FPS

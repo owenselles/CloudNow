@@ -29,10 +29,10 @@ struct LoginView: View {
                 Image(systemName: "play.tv.fill")
                     .font(.system(size: 80))
                     .foregroundStyle(.white)
-                Text("CloudNow")
+                Text(L10n.text("app_name"))
                     .font(.system(size: 52, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
-                Text("GeForce NOW for Apple TV")
+                Text(L10n.text("app_tagline"))
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
@@ -40,7 +40,7 @@ struct LoginView: View {
             Button {
                 authManager.login()
             } label: {
-                Label("Sign in with NVIDIA", systemImage: "person.badge.key")
+                Label(L10n.text("sign_in_with_nvidia"), systemImage: "person.badge.key")
                     .font(.title2.weight(.semibold))
                     .padding(.horizontal, 40)
                     .padding(.vertical, 16)
@@ -55,7 +55,7 @@ struct LoginView: View {
 
     private func pinView(code: String, url: String, urlComplete: String) -> some View {
         VStack(spacing: 40) {
-            Text("Sign in to GeForce NOW")
+            Text(L10n.text("sign_in_to_geforce_now"))
                 .font(.title.weight(.semibold))
                 .foregroundStyle(.white)
 
@@ -71,13 +71,13 @@ struct LoginView: View {
 
             // Instructions
             VStack(spacing: 12) {
-                Text("Scan the QR code, or go to:")
+                Text(L10n.text("scan_qr_or_go_to"))
                     .font(.title3)
                     .foregroundStyle(.secondary)
                 Text(url)
                     .font(.system(size: 32, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white)
-                Text("and enter this PIN:")
+                Text(L10n.text("and_enter_pin"))
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
@@ -93,12 +93,12 @@ struct LoginView: View {
             HStack(spacing: 12) {
                 ProgressView()
                     .tint(.secondary)
-                Text("Waiting for sign in...")
+                Text(L10n.text("waiting_for_sign_in"))
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
 
-            Button("Cancel") {
+            Button(L10n.text("cancel")) {
                 authManager.cancelLogin()
             }
             .buttonStyle(.bordered)
@@ -114,7 +114,7 @@ struct LoginView: View {
             ProgressView()
                 .scaleEffect(2)
                 .tint(.white)
-            Text("Signing in...")
+            Text(L10n.text("signing_in"))
                 .font(.title2)
                 .foregroundStyle(.white)
         }
@@ -127,7 +127,7 @@ struct LoginView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 60))
                 .foregroundStyle(.yellow)
-            Text("Sign In Failed")
+            Text(L10n.text("sign_in_failed"))
                 .font(.title.weight(.semibold))
                 .foregroundStyle(.white)
             Text(message)
@@ -136,13 +136,13 @@ struct LoginView: View {
                 .multilineTextAlignment(.center)
 
             HStack(spacing: 24) {
-                Button("Try Again") {
+                Button(L10n.text("try_again")) {
                     authManager.login()
                 }
                 .buttonStyle(.bordered)
                 .tint(.green)
 
-                Button("Cancel") {
+                Button(L10n.text("cancel")) {
                     authManager.cancelLogin()
                 }
                 .buttonStyle(.bordered)

@@ -51,11 +51,11 @@ struct StoreView: View {
                 gameGrid
             }
         }
-        .searchable(text: $searchText, prompt: "Search games")
-        .alert("Not in Your Library", isPresented: $showNotOwned, presenting: notOwnedGame) { _ in
-            Button("OK") {}
+        .searchable(text: $searchText, prompt: Text(L10n.text("search_games")))
+        .alert(L10n.text("not_in_your_library"), isPresented: $showNotOwned, presenting: notOwnedGame) { _ in
+            Button(L10n.text("ok")) {}
         } message: { game in
-            Text("\(game.title) is not in your GeForce NOW library. Add it via the GeForce NOW store on another device.")
+            Text(L10n.format("not_in_your_library_message", game.title))
         }
     }
 
@@ -65,7 +65,7 @@ struct StoreView: View {
                 if availableStores.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
-                            filterChip("All", isSelected: selectedStore == nil) { selectedStore = nil }
+                            filterChip(L10n.text("all"), isSelected: selectedStore == nil) { selectedStore = nil }
                             ForEach(availableStores, id: \.self) { store in
                                 filterChip(storeName(store), isSelected: selectedStore == store) {
                                     selectedStore = selectedStore == store ? nil : store
@@ -98,12 +98,12 @@ struct StoreView: View {
                                 } label: {
                                     let isFav = viewModel.favoriteIds.contains(game.id)
                                     Label(
-                                        isFav ? "Remove from Favorites" : "Add to Favorites",
+                                        isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
                                         systemImage: isFav ? "star.slash.fill" : "star"
                                     )
                                 }
                                 if game.variants.count > 1 {
-                                    Menu("Launch via...") {
+                                    Menu(L10n.text("launch_via")) {
                                         ForEach(game.variants, id: \.id) { variant in
                                             Button {
                                                 viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
@@ -146,7 +146,7 @@ struct StoreView: View {
             Image(systemName: viewModel.error != nil ? "exclamationmark.triangle" : "bag")
                 .font(.system(size: 60))
                 .foregroundStyle(.secondary)
-            Text(viewModel.error != nil ? "Failed to Load Games" : "No games available")
+            Text(viewModel.error != nil ? L10n.text("failed_to_load_games") : L10n.text("no_games_available"))
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
             if let err = viewModel.error {
@@ -183,7 +183,7 @@ private struct StoreCardLabel: View {
                 .padding(10)
 
             if game.isInLibrary {
-                Text("In Library")
+                Text(L10n.text("in_library"))
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 8)

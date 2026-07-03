@@ -6,6 +6,9 @@ struct StreamSettings: Codable, Equatable {
     static let maxSelectableBitrateKbps = 100_000
     static let minControllerDeadzone = 0.0
     static let maxControllerDeadzone = 0.30
+    static let defaultKeyboardLayout = L10n.keyboardLayoutCode()
+    static let automaticGameLanguage = "automatic"
+    static let defaultGameLanguage = automaticGameLanguage
 
     var resolution: String = "1920x1080"
     var fps: Int = 60
@@ -15,8 +18,8 @@ struct StreamSettings: Codable, Equatable {
 
     var codec: VideoCodec = .h264
     var colorPreference: ColorModePreference = .automatic
-    var keyboardLayout: String = "en-US"
-    var gameLanguage: String = "en_US"
+    var keyboardLayout: String = Self.defaultKeyboardLayout
+    var gameLanguage: String = Self.defaultGameLanguage
     var enableL4S: Bool = false
     var micEnabled: Bool = false
     /// Radial deadzone applied to analog stick axes (0.0–1.0). Default 15%.
@@ -45,6 +48,10 @@ struct StreamSettings: Codable, Equatable {
             normalized.enableRtcEventLog = false
         }
         return normalized
+    }
+
+    var effectiveGameLanguage: String {
+        gameLanguage == Self.automaticGameLanguage ? L10n.nvidiaLocaleCode() : gameLanguage
     }
 }
 
@@ -116,9 +123,9 @@ enum StreamStatsMode: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .off: "Off"
-        case .hud: "HUD"
-        case .diagnostic: "Diagnostic"
+        case .off: L10n.text("off")
+        case .hud: L10n.text("hud")
+        case .diagnostic: L10n.text("diagnostic")
         }
     }
 }
@@ -126,12 +133,20 @@ enum StreamStatsMode: String, Codable, CaseIterable {
 enum OverlayTriggerButton: String, Codable, CaseIterable {
     case start = "Start (≡)"
     case options = "Options/Back (⊟)"
+
+    var label: String {
+        L10n.overlayTriggerButtonLabel(self)
+    }
 }
 
 enum VideoCodec: String, Codable, CaseIterable {
     case h264 = "H264"
     case h265 = "H265"
     case av1 = "AV1"
+
+    var label: String {
+        L10n.videoCodecLabel(self)
+    }
 }
 
 enum ColorModePreference: String, Codable, CaseIterable {
@@ -141,21 +156,11 @@ enum ColorModePreference: String, Codable, CaseIterable {
     case forceSDR8
 
     var label: String {
-        switch self {
-        case .automatic: "Automatic"
-        case .preferHDR: "Prefer HDR"
-        case .preferSDR10: "Prefer 10-bit SDR"
-        case .forceSDR8: "Compatibility SDR"
-        }
+        L10n.colorModeLabel(self)
     }
 
     var description: String {
-        switch self {
-        case .automatic: "Uses HDR only when support is known and the full pipeline qualifies."
-        case .preferHDR: "Attempts HDR when the local pipeline supports it and falls back safely."
-        case .preferSDR10: "Uses 10-bit SDR where possible."
-        case .forceSDR8: "Uses 8-bit SDR for maximum compatibility."
-        }
+        L10n.colorModeDescription(self)
     }
 }
 
@@ -455,16 +460,7 @@ struct GameVariant: Equatable, Codable {
     var isOwned: Bool = false
 
     var storeName: String {
-        switch appStore {
-        case "STEAM": "Steam"
-        case "EPIC_GAMES_STORE": "Epic Games"
-        case "GOG": "GOG"
-        case "EA_APP": "EA App"
-        case "UBISOFT": "Ubisoft Connect"
-        case "MICROSOFT": "Xbox"
-        case "BATTLENET": "Battle.net"
-        default: appStore.replacingOccurrences(of: "_", with: " ").capitalized
-        }
+        L10n.storeName(for: appStore)
     }
 }
 

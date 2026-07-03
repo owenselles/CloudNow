@@ -87,7 +87,7 @@ struct StreamView: View {
                     .scaleEffect(2)
                     .tint(.white)
             }
-            Text("Starting \(game.title)…")
+            Text(L10n.format("starting_game", game.title))
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
             Text(loadingLabel)
@@ -113,11 +113,11 @@ struct StreamView: View {
 
             HStack(spacing: 24) {
                 if case .timedOut = loadingPhase {
-                    Button("Retry") { Task { await startSession() } }
+                    Button(L10n.text("retry")) { Task { await startSession() } }
                         .buttonStyle(.bordered)
                         .tint(.blue)
                 }
-                Button("Cancel") { disconnect() }
+                Button(L10n.text("cancel")) { disconnect() }
                     .buttonStyle(.bordered)
                     .tint(loadingPhase == .timedOut ? .red : .secondary)
             }
@@ -127,14 +127,14 @@ struct StreamView: View {
     private var loadingLabel: String {
         switch loadingPhase {
         case .finding:
-            return "Connecting to a GeForce NOW server…"
+            return L10n.text("connecting_to_server")
         case let .inQueue(pos):
-            if let pos { return "In queue · Position \(pos)" }
-            return "In queue…"
+            if let pos { return L10n.format("in_queue_position", pos) }
+            return L10n.text("in_queue")
         case .preparing:
-            return "Preparing your game… This can take a minute"
+            return L10n.text("preparing_game")
         case .timedOut:
-            return "Server took too long to respond."
+            return L10n.text("server_took_too_long")
         }
     }
 
@@ -163,11 +163,11 @@ struct StreamView: View {
             // navigates overlay buttons instead of moving the in-game character.
             streamController.setInputPaused(showing && streamController.remoteMode != .mouse)
         }
-        .alert("End Session?", isPresented: $showExitConfirmation) {
-            Button("End Session", role: .destructive) { disconnect() }
-            Button("Keep Playing", role: .cancel) {}
+        .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
+            Button(L10n.text("end_session"), role: .destructive) { disconnect() }
+            Button(L10n.text("keep_playing"), role: .cancel) {}
         } message: {
-            Text("This will end your GeForce NOW session. To return later, use Leave Game instead.")
+            Text(L10n.text("end_session_message"))
         }
     }
 
@@ -180,7 +180,7 @@ struct StreamView: View {
                 Button {
                     toggleOverlay()
                 } label: {
-                    Label("Resume", systemImage: "play.fill")
+                    Label(L10n.text("resume"), systemImage: "play.fill")
                         .frame(minWidth: 180)
                 }
                 .buttonStyle(.borderedProminent)
@@ -198,7 +198,7 @@ struct StreamView: View {
                 Button {
                     leave()
                 } label: {
-                    Label("Leave Game", systemImage: "house")
+                    Label(L10n.text("leave_game"), systemImage: "house")
                         .frame(minWidth: 180)
                 }
                 .buttonStyle(.borderedProminent)
@@ -207,7 +207,7 @@ struct StreamView: View {
                 Button(role: .destructive) {
                     showExitConfirmation = true
                 } label: {
-                    Label("End Session", systemImage: "xmark.circle")
+                    Label(L10n.text("end_session"), systemImage: "xmark.circle")
                         .frame(minWidth: 180)
                 }
                 .buttonStyle(.bordered)
@@ -217,33 +217,33 @@ struct StreamView: View {
             // Live stats
             VStack(alignment: .leading, spacing: 10) {
                 if streamController.statsMode == .off {
-                    Label("Statistics disabled", systemImage: "chart.bar.xaxis")
+                    Label(L10n.text("statistics_disabled"), systemImage: "chart.bar.xaxis")
                         .foregroundStyle(.secondary)
                 } else {
                     metricRow(
                         icon: "network",
-                        label: "RTT",
+                        label: L10n.text("rtt"),
                         value: "\(Int(streamController.stats.rttMs)) ms",
                         history: streamController.pingHistory,
                         color: pingColor(streamController.stats.rttMs)
                     )
                     metricRow(
                         icon: "speedometer",
-                        label: "FPS",
+                        label: L10n.text("fps"),
                         value: "\(Int(streamController.stats.fps))",
                         history: streamController.fpsHistory,
                         color: fpsColor(streamController.stats.fps)
                     )
                     metricRow(
                         icon: "wifi",
-                        label: "Bitrate",
+                        label: L10n.text("bitrate"),
                         value: "\(streamController.stats.bitrateKbps / 1000) Mbps",
                         history: streamController.bitrateHistory,
                         color: .cyan
                     )
                     Divider().overlay(.white.opacity(0.4))
                     Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
-                    Label("Loss \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
+                    Label("\(L10n.text("loss")) \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
                     Label(streamController.stats.selectedNetworkPath, systemImage: "point.3.connected.trianglepath.dotted")
                     Label(
                         "Input p95 \(String(format: "%.1f", streamController.stats.inputQueueP95Ms)) ms · \(streamController.stats.inputBufferedBytes) B queued",
@@ -326,7 +326,7 @@ struct StreamView: View {
                 systemImage: "circle.lefthalf.filled"
             )
             if let fallback = streamController.colorState.fallbackReason {
-                Label("Fallback \(fallback.rawValue)", systemImage: "arrow.down.right.circle")
+                Label("\(L10n.text("fallback")) \(fallback.rawValue)", systemImage: "arrow.down.right.circle")
                     .foregroundStyle(.orange)
             }
             if let format = pipeline.decodedVideoFormat {
@@ -336,11 +336,11 @@ struct StreamView: View {
                 )
             }
             if streamController.rtcEventLogURL != nil {
-                Label("RTC event log active", systemImage: "doc.text.magnifyingglass")
+                Label(L10n.text("rtc_event_log_active"), systemImage: "doc.text.magnifyingglass")
             }
         }
-        .font(.caption2.monospacedDigit())
-        .foregroundStyle(.white.opacity(0.85))
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white.opacity(0.85))
     }
 
     private func formatMs(_ value: Double) -> String {
@@ -348,11 +348,7 @@ struct StreamView: View {
     }
 
     private var remoteModeLabel: String {
-        switch streamController.remoteMode {
-        case .mouse: "Remote: Mouse"
-        case .gamepad: "Remote: Gamepad"
-        case .dualsense: "Remote: Touchpad"
-        }
+        L10n.remoteInputModeLabel(streamController.remoteMode)
     }
 
     private var remoteModeIcon: String {
@@ -404,9 +400,9 @@ struct StreamView: View {
         let (color, icon, message): (Color, String, String) = {
             let timeText = warning.secondsLeft.map { " (\($0)s left)" } ?? ""
             switch warning.code {
-            case 3: return (.red, "clock.badge.xmark", "Session ending soon\(timeText)")
-            case 2: return (.orange, "clock.badge.exclamationmark", "~5 minutes remaining\(timeText)")
-            default: return (.yellow, "clock", "Session limit approaching\(timeText)")
+            case 3: return (.red, "clock.badge.xmark", L10n.text("session_ending_soon") + timeText)
+            case 2: return (.orange, "clock.badge.exclamationmark", L10n.text("five_minutes_remaining") + timeText)
+            default: return (.yellow, "clock", L10n.text("session_limit_approaching") + timeText)
             }
         }()
         return Label(message, systemImage: icon)
@@ -424,13 +420,13 @@ struct StreamView: View {
         VStack(spacing: 24) {
             ProgressView()
                 .scaleEffect(1.5)
-            Text("Reconnecting…")
+            Text(L10n.text("reconnecting"))
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Attempt \(attempt) of 3")
+            Text(L10n.format("attempt_of", attempt))
                 .font(.body)
                 .foregroundStyle(.secondary)
-            Button("Cancel") { disconnect() }
+            Button(L10n.text("cancel")) { disconnect() }
                 .buttonStyle(.bordered)
                 .tint(.red)
         }
@@ -442,13 +438,13 @@ struct StreamView: View {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 60))
                 .foregroundStyle(.green)
-            Text("Session Ended")
+            Text(L10n.text("session_ended"))
                 .font(.title.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Your game session has ended.")
+            Text(L10n.text("your_game_session_has_ended"))
                 .font(.body)
                 .foregroundStyle(.secondary)
-            Button("Exit") { disconnect() }
+            Button(L10n.text("exit")) { disconnect() }
                 .buttonStyle(.bordered)
                 .tint(.blue)
         }
@@ -458,7 +454,7 @@ struct StreamView: View {
     private func disconnectedView(_ reason: String) -> some View {
         statusView(
             icon: "wifi.slash",
-            title: "Disconnected",
+            title: L10n.text("disconnected"),
             message: reason,
             color: .yellow
         )
@@ -467,7 +463,7 @@ struct StreamView: View {
     private func failedView(_ message: String) -> some View {
         statusView(
             icon: "exclamationmark.triangle",
-            title: "Stream Failed",
+            title: L10n.text("stream_failed"),
             message: entitlementMessage(from: message),
             color: .red
         )
@@ -475,10 +471,10 @@ struct StreamView: View {
 
     private func entitlementMessage(from raw: String) -> String {
         if raw.uppercased().contains("ENTITLEMENT") || raw.contains("3237093650") {
-            return "\(game.title) is not in your GeForce NOW library."
+            return L10n.format("not_in_library", game.title)
         }
         if raw.contains("SESSION_LIMIT_EXCEEDED") {
-            return "A previous session is still active. Please wait a moment and try again."
+            return L10n.text("previous_session_still_active")
         }
         return raw
     }
@@ -496,10 +492,10 @@ struct StreamView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             HStack(spacing: 24) {
-                Button("Retry") { Task { await startSession() } }
+                Button(L10n.text("retry")) { Task { await startSession() } }
                     .buttonStyle(.bordered)
                     .tint(.blue)
-                Button("Exit") { disconnect() }
+                Button(L10n.text("exit")) { disconnect() }
                     .buttonStyle(.bordered)
                     .tint(.red)
             }

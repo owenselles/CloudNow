@@ -46,14 +46,14 @@ struct HomeView: View {
 
                         VStack(alignment: .leading, spacing: 48) {
                             if !viewModel.continuePlaying.isEmpty {
-                                gameRow(title: "Resume Stream", games: viewModel.continuePlaying, badge: "LIVE")
+                                gameRow(title: L10n.text("resume_stream"), games: viewModel.continuePlaying, badge: L10n.text("live"))
                             }
                             let recentWithoutHero = viewModel.recentlyPlayedGames.filter { $0.id != heroGame?.id }
                             if !recentWithoutHero.isEmpty {
-                                gameRow(title: "Recently Played", games: recentWithoutHero)
+                                gameRow(title: L10n.text("recently_played"), games: recentWithoutHero)
                             }
                             if !viewModel.favoriteGames.isEmpty {
-                                gameRow(title: "Favorites", games: viewModel.favoriteGames, isFavoritesRow: true)
+                                gameRow(title: L10n.text("favorites"), games: viewModel.favoriteGames, isFavoritesRow: true)
                             }
                         }
                         .padding(.top, 48)
@@ -113,18 +113,18 @@ struct HomeView: View {
                             .font(.largeTitle.weight(.bold))
                             .foregroundStyle(.white)
                             .shadow(radius: 4)
-                        Text("SESSION ACTIVE")
+                        Text(L10n.text("session_active"))
                             .font(.caption.weight(.bold))
                             .foregroundStyle(.black)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(.green, in: Capsule())
                     }
-                    Text("Session expires in \(rs.secondsRemaining)s — tap to jump back in")
+                    Text(L10n.format("session_expires_in", rs.secondsRemaining))
                         .font(.callout)
                         .foregroundStyle(.white.opacity(0.8))
                     Button { onResume(rs) } label: {
-                        Label("Rejoin Session", systemImage: "arrow.counterclockwise")
+                        Label(L10n.text("rejoin_session"), systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
@@ -168,12 +168,12 @@ struct HomeView: View {
                             GameCardView(game: game) { onPlay(game) }
                                 .frame(width: 200)
                                 .contextMenu {
-                                    Button {
-                                        viewModel.toggleFavorite(game.id)
-                                    } label: {
-                                        Label("Remove from Favorites", systemImage: "star.slash.fill")
-                                    }
-                                }
+                    Button {
+                        viewModel.toggleFavorite(game.id)
+                    } label: {
+                                        Label(L10n.text("remove_from_favorites"), systemImage: "star.slash.fill")
+                    }
+                }
                         } else {
                             GameCardView(game: game) { onPlay(game) }
                                 .frame(width: 200)
@@ -216,10 +216,10 @@ struct HomeView: View {
             Image(systemName: "gamecontroller")
                 .font(.system(size: 60))
                 .foregroundStyle(.secondary)
-            Text("Nothing here yet")
+            Text(L10n.text("nothing_here_yet"))
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Start playing a game to see it here, or add favorites from the Library.")
+            Text(L10n.text("empty_home_message"))
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -276,7 +276,7 @@ private struct HeroBannerView: View {
                 Button {
                     onPlay(game)
                 } label: {
-                    Label("Play", systemImage: "play.fill")
+                    Label(L10n.text("play"), systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
