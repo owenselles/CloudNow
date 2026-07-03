@@ -133,7 +133,7 @@ final class InputEncoder {
     // MARK: Gamepad
 
     /// Encodes a gamepad state packet.
-    /// - Parameter gamepadBitmap: Bitmask of connected controller slots (bit i = controller i active).
+    /// - Parameter gamepadBitmap: Bitmask of connected controller slots (bit i = active, bit i+8 = XInput style).
     func encodeGamepad(
         controllerId: Int,
         buttons: UInt16,
@@ -143,7 +143,7 @@ final class InputEncoder {
         leftStickY: Int16,
         rightStickX: Int16,
         rightStickY: Int16,
-        gamepadBitmap: UInt8,
+        gamepadBitmap: UInt16,
         into packet: EncodedInputPacket
     ) {
         let timestamp = currentTimestamp()
@@ -166,7 +166,7 @@ final class InputEncoder {
         writeUInt32LE(buf, offset: payloadOffset, value: 12)
         writeUInt16LE(buf, offset: payloadOffset + 4, value: 26)
         writeUInt16LE(buf, offset: payloadOffset + 6, value: UInt16(controllerId & 3))
-        writeUInt16LE(buf, offset: payloadOffset + 8, value: UInt16(gamepadBitmap))
+        writeUInt16LE(buf, offset: payloadOffset + 8, value: gamepadBitmap)
         writeUInt16LE(buf, offset: payloadOffset + 10, value: 20)
         writeUInt16LE(buf, offset: payloadOffset + 12, value: buttons)
         buf[payloadOffset + 14] = leftTrigger
@@ -410,7 +410,7 @@ final class InputSender {
         let leftStickY: Int16
         let rightStickX: Int16
         let rightStickY: Int16
-        let bitmap: UInt8
+        let bitmap: UInt16
     }
 
     private struct ControllerTouchpad {
@@ -439,7 +439,7 @@ final class InputSender {
     private var extendedControllers: [GCController] = []
     private var microControllers: [GCController] = []
     private var controllerSlots: [ObjectIdentifier: Int] = [:]
-    private var gamepadBitmap: UInt8 = 0
+    private var gamepadBitmap: UInt16 = 0
     private var lastButtons: [Int: UInt16] = [:]
     private var lastSnapshots: [Int: GamepadSnapshot] = [:]
     private var lastSnapshotSend: [Int: UInt64] = [:]
@@ -706,7 +706,7 @@ final class InputSender {
                     leftStickY: 0,
                     rightStickX: 0,
                     rightStickY: 0,
-                    bitmap: gamepadBitmap | 1
+                    bitmap: gamepadBitmap | Self.connectedGamepadBit(for: 0)
                 ),
                 slot: 0,
                 now: now
@@ -925,7 +925,7 @@ final class InputSender {
 
     private func sendNeutralGamepads() {
         if extendedControllers.isEmpty, remoteMode == .gamepad {
-            sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap | 1), slot: 0, force: true)
+            sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap | Self.connectedGamepadBit(for: 0)), slot: 0, force: true)
         } else {
             for controller in extendedControllers {
                 guard let slot = controllerSlots[ObjectIdentifier(controller)] else { continue }
@@ -934,7 +934,7 @@ final class InputSender {
         }
     }
 
-    private func neutralSnapshot(bitmap: UInt8) -> GamepadSnapshot {
+    private func neutralSnapshot(bitmap: UInt16) -> GamepadSnapshot {
         GamepadSnapshot(
             buttons: 0,
             leftTrigger: 0,
@@ -1221,7 +1221,7 @@ final class InputSender {
             extendedControllers.append(controller)
             controllerSlots[ObjectIdentifier(controller)] = slot
             controller.playerIndex = playerIndex(for: slot)
-            gamepadBitmap |= 1 << UInt8(slot)
+            gamepadBitmap |= Self.extendedGamepadBitmapMask(for: slot)
             lastButtons[slot] = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
             pad.valueChangedHandler = { [weak self, weak controller] _, _ in
                 guard let controller else { return }
@@ -1259,7 +1259,7 @@ final class InputSender {
         let id = ObjectIdentifier(controller)
         if let slot = controllerSlots.removeValue(forKey: id) {
             extendedControllers.removeAll { $0 === controller }
-            gamepadBitmap &= ~(1 << UInt8(slot))
+            gamepadBitmap &= ~Self.extendedGamepadBitmapMask(for: slot)
             lastButtons[slot] = nil
             lastSnapshots[slot] = nil
             lastSnapshotSend[slot] = nil
@@ -1281,6 +1281,14 @@ final class InputSender {
     private var firstFreeSlot: Int? {
         let used = Set(controllerSlots.values)
         return (0 ..< 4).first { !used.contains($0) }
+    }
+
+    private static func connectedGamepadBit(for slot: Int) -> UInt16 {
+        UInt16(1) << UInt16(slot)
+    }
+
+    private static func extendedGamepadBitmapMask(for slot: Int) -> UInt16 {
+        connectedGamepadBit(for: slot) | (UInt16(1) << UInt16(slot + 8))
     }
 
     private func playerIndex(for slot: Int) -> GCControllerPlayerIndex {
