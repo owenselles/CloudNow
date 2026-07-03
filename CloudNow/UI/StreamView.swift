@@ -339,8 +339,8 @@ struct StreamView: View {
                 Label(L10n.text("rtc_event_log_active"), systemImage: "doc.text.magnifyingglass")
             }
         }
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.white.opacity(0.85))
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.white.opacity(0.85))
     }
 
     private func formatMs(_ value: Double) -> String {

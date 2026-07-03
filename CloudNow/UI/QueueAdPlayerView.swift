@@ -64,13 +64,13 @@ struct QueueAdPlayerView: View {
                 .onChange(of: ad.adId) { reload(url: url) }
                 .onDisappear { teardown() }
             } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.secondary.opacity(0.15))
-                        .frame(height: 200)
-                        .overlay(
-                            Label(L10n.text("ad_media_unavailable"), systemImage: "video.slash.fill")
-                                .foregroundStyle(.secondary)
-                        )
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(0.15))
+                    .frame(height: 200)
+                    .overlay(
+                        Label(L10n.text("ad_media_unavailable"), systemImage: "video.slash.fill")
+                            .foregroundStyle(.secondary)
+                    )
             }
 
             if let msg = message, !msg.isEmpty {

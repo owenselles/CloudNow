@@ -362,7 +362,7 @@ private struct ZonePickerView: View {
                     ProgressView {
                         Text(L10n.text("loading_servers"))
                     }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error {
                     ContentUnavailableView(L10n.text("cant_load_servers"), systemImage: "wifi.exclamationmark",
                                            description: Text(error))

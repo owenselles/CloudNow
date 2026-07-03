@@ -17,7 +17,9 @@ actor GamesClient {
 
     private let urlSession = URLSession.shared
     private var metadataCache: [String: AppData] = [:]
-    private var localeCode: String { L10n.nvidiaLocaleCode() }
+    private var localeCode: String {
+        L10n.nvidiaLocaleCode()
+    }
 
     private static let browseQuery = """
     query GetFilterBrowseResults($vpcId: String!, $locale: String!, $sortString: String!, $fetchCount: Int!, $cursor: String!, $filters: AppFilterFields!) {

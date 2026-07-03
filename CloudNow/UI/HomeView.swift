@@ -168,12 +168,12 @@ struct HomeView: View {
                             GameCardView(game: game) { onPlay(game) }
                                 .frame(width: 200)
                                 .contextMenu {
-                    Button {
-                        viewModel.toggleFavorite(game.id)
-                    } label: {
+                                    Button {
+                                        viewModel.toggleFavorite(game.id)
+                                    } label: {
                                         Label(L10n.text("remove_from_favorites"), systemImage: "star.slash.fill")
-                    }
-                }
+                                    }
+                                }
                         } else {
                             GameCardView(game: game) { onPlay(game) }
                                 .frame(width: 200)

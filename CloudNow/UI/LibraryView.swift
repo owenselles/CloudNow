@@ -113,7 +113,7 @@ struct LibraryView: View {
                 }
                 if availableStores.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
+                        HStack(spacing: 12) {
                             filterChip(L10n.text("all"), isSelected: selectedStore == nil) { selectedStore = nil }
                             ForEach(availableStores, id: \.self) { store in
                                 filterChip(storeName(store), isSelected: selectedStore == store) {
@@ -136,20 +136,20 @@ struct LibraryView: View {
                         .aspectRatio(2 / 3, contentMode: .fit)
                         .buttonStyle(.card)
                         .contextMenu {
-                                    Button {
-                                        viewModel.toggleFavorite(game.id)
-                                    } label: {
-                                        let isFav = viewModel.favoriteIds.contains(game.id)
-                                    Label(
-                                        isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
-                                        systemImage: isFav ? "star.slash.fill" : "star"
-                                    )
-                                    }
-                                    if game.variants.count > 1 {
+                            Button {
+                                viewModel.toggleFavorite(game.id)
+                            } label: {
+                                let isFav = viewModel.favoriteIds.contains(game.id)
+                                Label(
+                                    isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
+                                    systemImage: isFav ? "star.slash.fill" : "star"
+                                )
+                            }
+                            if game.variants.count > 1 {
                                 Menu(L10n.text("launch_via")) {
-                                        ForEach(game.variants, id: \.id) { variant in
-                                            Button {
-                                                viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
+                                    ForEach(game.variants, id: \.id) { variant in
+                                        Button {
+                                            viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
                                         } label: {
                                             let isSelected = viewModel.preferredVariantId(for: game) == variant.id
                                             if isSelected {

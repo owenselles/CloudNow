@@ -82,80 +82,80 @@ enum L10n {
 
     static func storeName(for appStore: String) -> String {
         switch appStore {
-        case "STEAM": return "Steam"
-        case "EPIC_GAMES_STORE": return "Epic Games"
-        case "GOG": return "GOG"
-        case "EA_APP": return "EA App"
-        case "UBISOFT": return "Ubisoft Connect"
-        case "MICROSOFT": return "Xbox"
-        case "BATTLENET": return "Battle.net"
-        default: return appStore.replacingOccurrences(of: "_", with: " ").capitalized
+        case "STEAM": "Steam"
+        case "EPIC_GAMES_STORE": "Epic Games"
+        case "GOG": "GOG"
+        case "EA_APP": "EA App"
+        case "UBISOFT": "Ubisoft Connect"
+        case "MICROSOFT": "Xbox"
+        case "BATTLENET": "Battle.net"
+        default: appStore.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 
     static func streamStatsModeLabel(_ mode: StreamStatsMode) -> String {
         switch mode {
-        case .off: return text("off")
-        case .hud: return text("hud")
-        case .diagnostic: return text("diagnostic")
+        case .off: text("off")
+        case .hud: text("hud")
+        case .diagnostic: text("diagnostic")
         }
     }
 
     static func colorModeLabel(_ mode: ColorModePreference) -> String {
         switch mode {
-        case .automatic: return text("automatic")
-        case .preferHDR: return text("prefer_hdr")
-        case .preferSDR10: return text("prefer_10_bit_sdr")
-        case .forceSDR8: return text("compatibility_sdr")
+        case .automatic: text("automatic")
+        case .preferHDR: text("prefer_hdr")
+        case .preferSDR10: text("prefer_10_bit_sdr")
+        case .forceSDR8: text("compatibility_sdr")
         }
     }
 
     static func colorModeDescription(_ mode: ColorModePreference) -> String {
         switch mode {
-        case .automatic: return text("uses_hdr_only_when_support_is_known_and_the_full_pipeline_qualifies")
-        case .preferHDR: return text("attempts_hdr_when_the_local_pipeline_supports_it_and_falls_back_safely")
-        case .preferSDR10: return text("uses_10_bit_sdr_where_possible")
-        case .forceSDR8: return text("uses_8_bit_sdr_for_maximum_compatibility")
+        case .automatic: text("uses_hdr_only_when_support_is_known_and_the_full_pipeline_qualifies")
+        case .preferHDR: text("attempts_hdr_when_the_local_pipeline_supports_it_and_falls_back_safely")
+        case .preferSDR10: text("uses_10_bit_sdr_where_possible")
+        case .forceSDR8: text("uses_8_bit_sdr_for_maximum_compatibility")
         }
     }
 
     static func videoCodecLabel(_ codec: VideoCodec) -> String {
         switch codec {
-        case .h264: return "H264"
-        case .h265: return "H265"
-        case .av1: return "AV1"
+        case .h264: "H264"
+        case .h265: "H265"
+        case .av1: "AV1"
         }
     }
 
     static func streamStatsModeDescription(_ mode: StreamStatsMode) -> String {
         switch mode {
-        case .off: return text("disables_periodic_webrtc_statistics_collection")
-        case .hud: return text("collects_the_lightweight_statistics_shown_in_the_in_stream_overlay")
-        case .diagnostic: return text("adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts")
+        case .off: text("disables_periodic_webrtc_statistics_collection")
+        case .hud: text("collects_the_lightweight_statistics_shown_in_the_in_stream_overlay")
+        case .diagnostic: text("adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts")
         }
     }
 
     static func overlayTriggerButtonLabel(_ button: OverlayTriggerButton) -> String {
         switch button {
-        case .start: return text("start_(≡)")
-        case .options: return text("options/back_(⊟)")
+        case .start: text("start_(≡)")
+        case .options: text("options/back_(⊟)")
         }
     }
 
     static func remoteInputModeLabel(_ mode: RemoteInputMode) -> String {
         switch mode {
-        case .mouse: return text("remote_mouse")
-        case .gamepad: return text("remote_gamepad")
-        case .dualsense: return text("remote_touchpad")
+        case .mouse: text("remote_mouse")
+        case .gamepad: text("remote_gamepad")
+        case .dualsense: text("remote_touchpad")
         }
     }
 
     static func librarySortLabel(_ order: LibrarySortOrder) -> String {
         switch order {
-        case .default: return text("default")
-        case .titleAZ: return text("title_az")
-        case .titleZA: return text("title_za")
-        case .recentFirst: return text("recently_played_sort")
+        case .default: text("default")
+        case .titleAZ: text("title_az")
+        case .titleZA: text("title_za")
+        case .recentFirst: text("recently_played_sort")
         }
     }
 
