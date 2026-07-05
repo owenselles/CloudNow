@@ -654,7 +654,12 @@ final class GFNStreamController: NSObject {
             }
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
-            let codecFilteredSdp = SDPMunger.preferCodec(answer.sdp, codec: settings.codec)
+            let answerColorRequest = settings.colorRequest(localCapabilities: .detect(codec: settings.codec))
+            let codecFilteredSdp = SDPMunger.preferCodec(
+                answer.sdp,
+                codec: settings.codec,
+                preferTenBit: answerColorRequest.bitDepth >= 10
+            )
             // For H.265: rewrite tier-flag=1→0 and cap level-id to hardware-safe values.
             // Apple's decoder may reject High-tier or above-spec level-id advertisements.
             let h265SafeSdp = settings.codec == .h265
