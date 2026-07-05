@@ -22,7 +22,11 @@ struct LocalVideoCapabilities: Equatable {
         } else {
             1
         }
-        let displaySupportsHDR = displayEDRHeadroom > 1.0
+        // tvOS switches the whole display into HDR for HDR content rather than compositing
+        // EDR, so potentialEDRHeadroom reports 1.0 even on a 4K-HDR display. AVPlayer's
+        // availableHDRModes reflects the connected display's actual HDR capability
+        // (empty == SDR-only), which is the correct signal on tvOS.
+        let displaySupportsHDR = !AVPlayer.availableHDRModes.isEmpty || displayEDRHeadroom > 1.0
         var codecs: Set<VideoCodec> = [.h264]
         if hevcHardwareDecode {
             codecs.insert(.h265)
