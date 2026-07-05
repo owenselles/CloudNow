@@ -303,7 +303,9 @@ extension StreamSettings {
             gameHDRSupport: gameHDRSupport,
             accountAllowsHDR: accountAllowsHDR,
             serverAllowsHDR: serverAllowsHDR,
-            decoderSupports10Bit: localCapabilities.supportsHardware10BitDecode && codec != .av1,
+            // 10-bit (sdr10/hdr10) requires H.265 — H.264 is 8-bit only and AV1 is excluded
+            // from the 10-bit decode path, so either forces an 8-bit SDR downgrade.
+            decoderSupports10Bit: localCapabilities.supportsHardware10BitDecode && codec == .h265,
             hdrRenderPipelineAvailable: localCapabilities.supportsHDRRendering,
             displaySupportsHDR: localCapabilities.displaySupportsHDR
         )
