@@ -19,7 +19,7 @@ enum NVIDIAAuth {
     static let defaultStreamingUrl = "https://prod.cloudmatchbeta.nvidiagrid.net/"
     static let callbackScheme = "http"
     static let gfnClientId = "ec7e38d4-03af-4b58-b131-cfb0495903ab"
-    static let gfnClientVersion = "2.0.80.173"
+    static let gfnClientVersion = "2.0.86.124"
     static let webOrigin = "https://play.geforcenow.com"
     static let webReferer = "https://play.geforcenow.com/"
     static let nvFileOrigin = "https://nvfile"
