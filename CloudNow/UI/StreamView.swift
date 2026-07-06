@@ -72,6 +72,10 @@ struct StreamView: View {
                 disconnect()
             }
         }
+        .onPlayPauseCommand {
+            guard streamController.state == .streaming else { return }
+            toggleOverlay()
+        }
     }
 
     // MARK: Connecting
@@ -242,23 +246,33 @@ struct StreamView: View {
                         color: .cyan
                     )
                     Divider().overlay(.white.opacity(0.4))
-                    Label("\(streamController.stats.resolutionWidth)×\(streamController.stats.resolutionHeight) @ \(Int(streamController.stats.fps))fps", systemImage: "tv")
-                    Label("\(L10n.text("loss")) \(String(format: "%.1f", streamController.stats.packetLossPercent))%", systemImage: "arrow.triangle.2.circlepath")
-                    Label(streamController.stats.selectedNetworkPath, systemImage: "point.3.connected.trianglepath.dotted")
                     Label(
-                        "Input p95 \(String(format: "%.1f", streamController.stats.inputQueueP95Ms)) ms · \(streamController.stats.inputBufferedBytes) B queued",
+                        L10n.format("resolution_fps_status", streamController.stats.resolutionWidth, streamController.stats.resolutionHeight, Int(streamController.stats.fps)),
+                        systemImage: "tv"
+                    )
+                    Label(
+                        L10n.format("loss_status", L10n.text("loss"), String(format: "%.1f", streamController.stats.packetLossPercent)),
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                    Label(L10n.text(streamController.stats.selectedNetworkPath), systemImage: "point.3.connected.trianglepath.dotted")
+                    Label(
+                        L10n.format(
+                            "input_queue_status",
+                            String(format: "%.1f", streamController.stats.inputQueueP95Ms),
+                            String(streamController.stats.inputBufferedBytes)
+                        ),
                         systemImage: "gamecontroller"
                     )
                     if streamController.stats.inputDropped > 0 {
                         Label(
-                            "Input drops \(streamController.stats.inputDropped)",
+                            L10n.format("input_drops_status", streamController.stats.inputDropped),
                             systemImage: "exclamationmark.triangle"
                         )
                         .foregroundStyle(.orange)
                     }
                     if streamController.stats.inputSuperseded > 0 {
                         Label(
-                            "Analog snapshots coalesced \(streamController.stats.inputSuperseded)",
+                            L10n.format("analog_snapshots_coalesced_status", streamController.stats.inputSuperseded),
                             systemImage: "arrow.triangle.merge"
                         )
                         .foregroundStyle(.secondary)
@@ -295,43 +309,99 @@ struct StreamView: View {
         let pipeline = streamController.videoDiagnostics
         return Group {
             Divider().overlay(.white.opacity(0.4))
+            if !streamController.diagnosticSessionSummary.isEmpty {
+                Label(
+                    streamController.diagnosticSessionSummary,
+                    systemImage: "dot.radiowaves.left.and.right"
+                )
+            }
             Label(
-                "Jitter buffer \(formatMs(streamController.stats.jitterBufferDelayMs)) / target \(formatMs(streamController.stats.jitterBufferTargetDelayMs))",
+                L10n.format(
+                    "jitter_buffer_status",
+                    formatMs(streamController.stats.jitterBufferDelayMs),
+                    formatMs(streamController.stats.jitterBufferTargetDelayMs)
+                ),
                 systemImage: "waveform.path"
             )
             Label(
-                "Decode \(formatMs(streamController.stats.decodeTimeMs)) · process \(formatMs(streamController.stats.processingDelayMs))",
+                L10n.format(
+                    "decode_process_status",
+                    formatMs(streamController.stats.decodeTimeMs),
+                    formatMs(streamController.stats.processingDelayMs)
+                ),
                 systemImage: "cpu"
             )
             Label(
-                "App \(pipeline.enqueuedFrames) enqueued · \(pipeline.droppedFrames) dropped · \(pipeline.backpressureEvents) backpressure",
+                L10n.format(
+                    "app_queue_status",
+                    pipeline.enqueuedFrames,
+                    pipeline.droppedFrames,
+                    pipeline.backpressureEvents
+                ),
                 systemImage: "rectangle.stack"
             )
             Label(
-                "Sample \(formatMs(pipeline.averageSampleCreationMs)) · convert \(formatMs(pipeline.averageConversionMs))",
+                L10n.format(
+                    "sample_and_convert_status",
+                    formatMs(pipeline.averageSampleCreationMs),
+                    formatMs(pipeline.averageConversionMs)
+                ),
                 systemImage: "timer"
             )
             Label(
-                "AV interval \(pipeline.avTotalFrames) frames · \(pipeline.avDroppedFrames) dropped · \(pipeline.avCorruptedFrames) corrupt · \(formatMs(pipeline.avAccumulatedFrameDelayMs)) late",
+                L10n.displayLayerMetrics(
+                    totalFrames: pipeline.avTotalFrames,
+                    droppedFrames: pipeline.avDroppedFrames,
+                    corruptedFrames: pipeline.avCorruptedFrames,
+                    accumulatedFrameDelayMs: pipeline.avAccumulatedFrameDelayMs
+                ),
                 systemImage: "display"
             )
             if !streamController.stats.decoderImplementation.isEmpty {
                 Label(
-                    "\(streamController.stats.decoderImplementation)\(streamController.stats.powerEfficientDecoder == true ? " · hardware" : "")",
+                    L10n.format(
+                        "decoder_implementation_status",
+                        streamController.stats.decoderImplementation,
+                        streamController.stats.powerEfficientDecoder == true ? L10n.text("hardware") : ""
+                    ),
                     systemImage: "video"
                 )
             }
             Label(
-                "Color \(streamController.colorState.preference.label) · requested \(streamController.colorState.requestedMode.rawValue.uppercased()) · detected \(streamController.colorState.detectedMode?.rawValue.uppercased() ?? "UNKNOWN") · display \(streamController.colorState.displayHDRSupport.rawValue)",
+                L10n.colorDiagnosticStatus(
+                    preference: streamController.colorState.preference.label,
+                    requested: L10n.streamColorModeLabel(streamController.colorState.requestedMode),
+                    detected: {
+                        if let format = pipeline.decodedVideoFormat {
+                            return L10n.detectedColorModeLabel(format.mode)
+                        }
+                        if let detected = streamController.colorState.detectedMode {
+                            return L10n.detectedColorModeLabel(detected)
+                        }
+                        return L10n.text("unknown")
+                    }(),
+                    display: L10n.hdrSupportLabel(streamController.colorState.displayHDRSupport)
+                ),
                 systemImage: "circle.lefthalf.filled"
             )
             if let fallback = streamController.colorState.fallbackReason {
-                Label("\(L10n.text("fallback")) \(fallback.rawValue)", systemImage: "arrow.down.right.circle")
-                    .foregroundStyle(.orange)
+                Label(
+                    "\(L10n.text("fallback")) \(L10n.colorFallbackReasonLabel(fallback))",
+                    systemImage: "arrow.down.right.circle"
+                )
+                .foregroundStyle(.orange)
             }
             if let format = pipeline.decodedVideoFormat {
                 Label(
-                    "\(format.decoderPath.rawValue) \(format.pixelFormatName) \(format.bitDepth.map { "\($0)-bit" } ?? "unknown-bit") \(format.transferFunction ?? "no-transfer")",
+                    L10n.decodedVideoStatus(
+                        decoderPath: L10n.decoderPathLabel(format.decoderPath),
+                        mode: L10n.detectedColorModeLabel(format.mode),
+                        width: format.width,
+                        height: format.height,
+                        pixelFormatName: format.pixelFormatName,
+                        bitDepth: format.bitDepth.map { "\($0)-bit" } ?? L10n.text("unknown_bit_depth"),
+                        metadataSummary: format.metadataDiagnosticSummary
+                    ),
                     systemImage: "scope"
                 )
             }
@@ -812,9 +882,25 @@ struct StreamView: View {
             accountLinked: true
         )
 
-        let sessionInfo = try await cloudMatchClient.createSession(request)
-        print("[Session] created, sessionId=\(sessionInfo.sessionId), status=\(sessionInfo.status)")
-        return sessionInfo
+        do {
+            let sessionInfo = try await cloudMatchClient.createSession(request)
+            print("[Session] created, sessionId=\(sessionInfo.sessionId), status=\(sessionInfo.status)")
+            return sessionInfo
+        } catch {
+            guard shouldForceStopExistingSession(error) else { throw error }
+
+            print("[Session] active session conflict detected for appId=\(appId), stopping matches and retrying once")
+            await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
+
+            let sessionInfo = try await cloudMatchClient.createSession(request)
+            print("[Session] created after conflict cleanup, sessionId=\(sessionInfo.sessionId), status=\(sessionInfo.status)")
+            return sessionInfo
+        }
+    }
+
+    private func shouldForceStopExistingSession(_ error: Error) -> Bool {
+        guard case let CloudMatchError.sessionCreateFailed(raw) = error else { return false }
+        return raw.contains("SESSION_LIMIT_EXCEEDED_STATUS") || raw.contains("REQUEST_LIMIT_EXCEEDED_STATUS")
     }
 
     private func reportAd(id: String, action: AdAction, watchedMs: Int? = nil) {

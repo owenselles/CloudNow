@@ -38,7 +38,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Microphone support** — voice chat via AirPods or any Bluetooth headset; toggle in Settings; permission requested on first use; if no valid input route exists, CloudNow falls back to playback-only audio instead of breaking session audio
 - **Favorites** — long-press any game card in Library or Store to add/remove from Favorites; persisted locally
 - **Full GFN streaming** — WebRTC-based, up to 4K@60fps depending on your GFN plan (tvOS caps at 60 Hz; 120fps ready for when Apple raises the limit)
-- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (5–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start)
+- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (5–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
 - **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
 - **Live stats overlay** — bitrate, resolution, FPS, RTT, real packet loss %, decoder info, and remaining session time (Free/Priority tier) — toggle with Play/Pause (Siri Remote) or long-press the overlay button (controller, default: Start/≡, configurable in Settings)
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
@@ -91,6 +91,8 @@ On first launch the app prompts you to sign in. A QR code and PIN are displayed 
 CloudNow automatically localizes the entire UI to the active tvOS language. No app-side language picker is required for the interface. If a supported locale is unavailable, the app falls back to English.
 
 The game language setting is separate from the app UI language. In Settings, choose `Automatic` if you want CloudNow to send the tvOS language to GeForce NOW, or pick a specific game language manually.
+
+In the main app menu, LB/RB on a connected controller switches between Home, Library, Store, and Settings. Once a stream is open, those shoulder buttons stay with the streaming controller path instead of the menu.
 
 ### Supported tvOS languages
 
@@ -232,7 +234,7 @@ CloudNow/
 │   └── L10nXX.swift                One file per supported locale, easy to edit independently
 └── UI/
     ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings
-    ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings)
+    ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings) with controller tab cycling
     ├── HomeView.swift              Hero banner + Continue Playing + Favorites rows
     ├── LibraryView.swift           LIBRARY panel grid with favorite toggles
     ├── StoreView.swift             MAIN catalog grid with "In Library" badges

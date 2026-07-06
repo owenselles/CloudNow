@@ -68,7 +68,7 @@ struct StreamStats {
     var remoteCandidateAddress: String = ""
     var availableIncomingBitrateKbps: Int = 0
     var candidatePairChanges: Int = 0
-    var selectedNetworkPath: String = "Unknown"
+    var selectedNetworkPath: String = "unknown"
     var inputGenerated: UInt64 = 0
     var inputSubmitted: UInt64 = 0
     var inputAccepted: UInt64 = 0
@@ -137,6 +137,7 @@ final class GFNStreamController: NSObject {
         displayHDRSupport: .unknown,
         fallbackReason: nil
     )
+    private(set) var diagnosticSessionSummary: String = ""
     private(set) var rtcEventLogURL: URL?
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
@@ -231,6 +232,13 @@ final class GFNStreamController: NSObject {
             detectedMode: nil,
             displayHDRSupport: localCapabilities.displaySupportsHDR ? .supported : .unsupported,
             fallbackReason: nil
+        )
+        diagnosticSessionSummary = L10n.diagnosticSessionSummary(
+            sessionIdPrefix: String(session.sessionId.prefix(8)),
+            serverIp: session.serverIp,
+            resolution: settings.resolution,
+            fps: settings.fps,
+            codec: L10n.videoCodecLabel(settings.codec)
         )
         setStatsMode(settings.statsMode)
         stats = StreamStats()
@@ -396,6 +404,7 @@ final class GFNStreamController: NSObject {
             displayHDRSupport: .unknown,
             fallbackReason: nil
         )
+        diagnosticSessionSummary = ""
         state = .idle
     }
 
@@ -1069,13 +1078,13 @@ final class GFNStreamController: NSObject {
             : remote?.protocolName ?? ""
         let usesRelay = local?.candidateType == "relay" || remote?.candidateType == "relay"
         let selectedNetworkPath = if protocolName == "tcp" || protocolName == "tls" {
-            "TCP/TLS fallback"
+            "tcp_tls_fallback"
         } else if usesRelay, protocolName == "udp" {
-            "TURN/UDP relay"
+            "turn_udp_relay"
         } else if protocolName == "udp" {
-            "Direct UDP"
+            "direct_udp"
         } else {
-            "Unknown"
+            "unknown"
         }
         return ConnectionStatsSnapshot(
             rttMs: selectedPair.rttMs,
@@ -1272,13 +1281,13 @@ final class GFNStreamController: NSObject {
         let usesRelay = stats.localCandidateType.lowercased() == "relay"
             || stats.remoteCandidateType.lowercased() == "relay"
         if protocolName == "tcp" || protocolName == "tls" {
-            stats.selectedNetworkPath = "TCP/TLS fallback"
+            stats.selectedNetworkPath = "tcp_tls_fallback"
         } else if usesRelay, protocolName == "udp" {
-            stats.selectedNetworkPath = "TURN/UDP relay"
+            stats.selectedNetworkPath = "turn_udp_relay"
         } else if protocolName == "udp" {
-            stats.selectedNetworkPath = "Direct UDP"
+            stats.selectedNetworkPath = "direct_udp"
         } else {
-            stats.selectedNetworkPath = "Unknown"
+            stats.selectedNetworkPath = "unknown"
         }
 
         let now = Date()

@@ -119,6 +119,115 @@ enum L10n {
         }
     }
 
+    static func streamColorModeLabel(_ mode: StreamColorMode) -> String {
+        switch mode {
+        case .sdr8: text("sdr_8_bit")
+        case .sdr10: text("sdr_10_bit")
+        case .hdr10: text("hdr10")
+        }
+    }
+
+    static func detectedColorModeLabel(_ mode: DetectedColorMode) -> String {
+        switch mode {
+        case .sdr8: text("sdr_8_bit")
+        case .sdr10: text("sdr_10_bit")
+        case .hdr10: text("hdr10")
+        case .unknown8Bit: text("unknown_8_bit")
+        case .unknown10Bit: text("unknown_10_bit")
+        }
+    }
+
+    static func hdrSupportLabel(_ support: HDRSupport) -> String {
+        switch support {
+        case .supported: text("supported")
+        case .unsupported: text("unsupported")
+        case .unknown: text("unknown")
+        }
+    }
+
+    static func colorFallbackReasonLabel(_ reason: ColorFallbackReason) -> String {
+        switch reason {
+        case .gameHDRUnknown: text("game_hdr_unknown")
+        case .gameHDRUnsupported: text("game_hdr_unsupported")
+        case .accountHDRUnavailable: text("account_hdr_unavailable")
+        case .serverHDRUnavailable: text("server_hdr_unavailable")
+        case .displayHDRUnavailable: text("display_hdr_unavailable")
+        case .decoder10BitUnavailable: text("decoder_10_bit_unavailable")
+        case .hdrRenderPipelineUnavailable: text("hdr_render_pipeline_unavailable")
+        case .serverReturnedSDR: text("server_returned_sdr")
+        case .decoderReturned8Bit: text("decoder_returned_8_bit")
+        case .softwareDecoder: text("software_decoder")
+        case .missingColorMetadata: text("missing_color_metadata")
+        case .unsupportedPixelFormat: text("unsupported_pixel_format")
+        case .unstablePlayback: text("unstable_playback")
+        case .sessionNegotiationFailed: text("session_negotiation_failed")
+        }
+    }
+
+    static func decoderPathLabel(_ path: VideoDecoderPath) -> String {
+        switch path {
+        case .hardware: text("hardware")
+        case .softwareI420: text("software_i420")
+        case .unknown: text("unknown")
+        }
+    }
+
+    static func metadataDiagnosticSummary(
+        transferFunction: String?,
+        colorPrimaries: String?,
+        yCbCrMatrix: String?,
+        hasDisplayColorVolumeMetadata: Bool,
+        hasContentLightLevelMetadata: Bool
+    ) -> String {
+        var parts: [String] = []
+        if transferFunction == nil { parts.append(text("no_transfer")) }
+        if colorPrimaries == nil { parts.append(text("no_primaries")) }
+        if yCbCrMatrix == nil { parts.append(text("no_matrix")) }
+        if !hasDisplayColorVolumeMetadata { parts.append(text("no_mastering_metadata")) }
+        if !hasContentLightLevelMetadata { parts.append(text("no_content_light_metadata")) }
+        return parts.isEmpty ? text("metadata_complete") : parts.joined(separator: " · ")
+    }
+
+    static func diagnosticSessionSummary(
+        sessionIdPrefix: String,
+        serverIp: String,
+        resolution: String,
+        fps: Int,
+        codec: String
+    ) -> String {
+        format("diagnostic_session_summary", sessionIdPrefix, serverIp, resolution, fps, codec)
+    }
+
+    static func displayLayerMetrics(
+        totalFrames: Int,
+        droppedFrames: Int,
+        corruptedFrames: Int,
+        accumulatedFrameDelayMs: Double
+    ) -> String {
+        format("display_layer_metrics", totalFrames, droppedFrames, corruptedFrames, accumulatedFrameDelayMs)
+    }
+
+    static func colorDiagnosticStatus(
+        preference: String,
+        requested: String,
+        detected: String,
+        display: String
+    ) -> String {
+        format("color_diagnostic_status", preference, requested, detected, display)
+    }
+
+    static func decodedVideoStatus(
+        decoderPath: String,
+        mode: String,
+        width: Int,
+        height: Int,
+        pixelFormatName: String,
+        bitDepth: String,
+        metadataSummary: String
+    ) -> String {
+        format("decoded_video_status", decoderPath, mode, width, height, pixelFormatName, bitDepth, metadataSummary)
+    }
+
     static func videoCodecLabel(_ codec: VideoCodec) -> String {
         switch codec {
         case .h264: "H264"

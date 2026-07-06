@@ -172,6 +172,10 @@ enum StreamColorMode: String, Codable, Equatable {
     var bitDepth: Int {
         self == .sdr8 ? 8 : 10
     }
+
+    var diagnosticLabel: String {
+        L10n.streamColorModeLabel(self)
+    }
 }
 
 enum DetectedColorMode: String, Codable, Equatable {
@@ -180,6 +184,19 @@ enum DetectedColorMode: String, Codable, Equatable {
     case hdr10
     case unknown8Bit
     case unknown10Bit
+
+    var diagnosticLabel: String {
+        L10n.detectedColorModeLabel(self)
+    }
+
+    var isUnknown: Bool {
+        switch self {
+        case .unknown8Bit, .unknown10Bit:
+            true
+        default:
+            false
+        }
+    }
 }
 
 enum HDRSupport: String, Codable {

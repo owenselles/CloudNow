@@ -154,14 +154,13 @@ final class VideoSurfaceView: UIView {
         for press in presses {
             if press.type == .menu {
                 // Always consume .menu — never let it bubble to the system as a back/dismiss
-                // gesture. The only valid exits are the in-overlay "Exit Session" button or
-                // force-quitting the app. If the overlay is open, treat this as "close overlay".
-                if overlayVisible { menuPressHandler?() }
+                // gesture. Use it as the universal overlay toggle so the user can both open
+                // and close the diagnostics overlay from Siri Remote or a controller.
+                menuPressHandler?()
                 handled = true
-            } else if press.type == .playPause, !gamepadModeActive {
-                // Play/Pause toggles the HUD overlay (Siri Remote only).
-                // Suppressed when a gamepad is in control — the overlay is toggled there
-                // via Options long press detected in InputSender.tick().
+            } else if press.type == .playPause {
+                // Play/Pause also toggles the overlay so Siri Remote users always have a
+                // direct way to open diagnostics, even when a controller is connected.
                 menuPressHandler?()
                 handled = true
             } else if press.type == .select, remoteMouseInputEnabled {
@@ -610,6 +609,9 @@ struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: StreamingViewController, context _: Context) {
         vc.videoSurface.videoTrack = streamController.videoTrack
+        // Route controller input to the GameController layer during gameplay so the
+        // overlay trigger button can be sampled. Switch to the responder chain only
+        // while the overlay is visible so SwiftUI focus navigation works there.
         vc.controllerUserInteractionEnabled = showOverlay
         vc.videoSurface.overlayVisible = showOverlay
     }

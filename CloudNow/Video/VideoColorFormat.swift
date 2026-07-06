@@ -68,6 +68,16 @@ struct DecodedVideoFormat: Codable, Equatable {
     let hasDisplayColorVolumeMetadata: Bool
     let hasContentLightLevelMetadata: Bool
     let decoderPath: VideoDecoderPath
+
+    var metadataDiagnosticSummary: String {
+        L10n.metadataDiagnosticSummary(
+            transferFunction: transferFunction,
+            colorPrimaries: colorPrimaries,
+            yCbCrMatrix: yCbCrMatrix,
+            hasDisplayColorVolumeMetadata: hasDisplayColorVolumeMetadata,
+            hasContentLightLevelMetadata: hasContentLightLevelMetadata
+        )
+    }
 }
 
 struct VideoFormatSignature: Hashable {

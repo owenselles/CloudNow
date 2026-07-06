@@ -584,6 +584,26 @@ actor CloudMatchClient {
         }
     }
 
+    func stopActiveSessions(matchingAppId appId: String, token: String, base: String) async {
+        do {
+            let activeSessions = try await getActiveSessions(token: token, base: base)
+            let matches = activeSessions.filter { $0.appId == appId }
+            guard !matches.isEmpty else { return }
+
+            print("[CloudMatch] stopping \(matches.count) active session(s) for appId=\(appId)")
+            for session in matches {
+                try? await stopSession(
+                    sessionId: session.sessionId,
+                    token: token,
+                    base: base,
+                    serverIp: session.serverIp
+                )
+            }
+        } catch {
+            print("[CloudMatch] stopActiveSessions failed: \(error)")
+        }
+    }
+
     // MARK: Claim / Resume Session
 
     /// Attaches to an existing session. Sends a RESUME PUT for ready sessions (status 2/3),

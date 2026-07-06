@@ -222,6 +222,7 @@ class GamesViewModel {
             if let sub {
                 print("[MES] tier=\(sub.membershipTier) resolutions=\(sub.entitledResolutions.map(\.resolutionLabel))")
                 subscription = sub
+                normalizeStreamSettingsForCurrentEntitlements()
             }
 
             mainGames = fetchedMain
@@ -359,6 +360,22 @@ class GamesViewModel {
     func clearLastSession() {
         lastSession = nil
         UserDefaults.standard.removeObject(forKey: "gfn.lastSession")
+    }
+
+    private func normalizeStreamSettingsForCurrentEntitlements() {
+        let resolutions = availableResolutions
+        guard !resolutions.isEmpty else { return }
+
+        if !resolutions.contains(streamSettings.resolution) {
+            // Keep the tvOS Picker in a valid state if the persisted resolution is no
+            // longer entitled. Prefer the highest available value for the account.
+            streamSettings.resolution = resolutions.last ?? resolutions[0]
+        }
+
+        let fpsValues = availableFps
+        if !fpsValues.contains(streamSettings.fps), let fallbackFPS = fpsValues.last {
+            streamSettings.fps = fallbackFPS
+        }
     }
 
     // MARK: Zone Auto-Selection
