@@ -618,6 +618,13 @@ final nonisolated class InputSender: @unchecked Sendable {
         var triggered = false
     }
 
+    private struct KeyboardShortcutState {
+        var pendingButtons: UInt16
+        var deadline: UInt64
+        var triggered = false
+        var replayTapOnExpiry = false
+    }
+
     private struct GamepadSnapshot: Equatable {
         let buttons: UInt16
         let leftTrigger: UInt8
@@ -634,11 +641,21 @@ final nonisolated class InputSender: @unchecked Sendable {
         let button: GCControllerButtonInput
     }
 
+    private struct KeyboardReplayEvent {
+        let down: Bool
+        let vk: UInt16
+        let scancode: UInt16
+        let modifiers: UInt16
+    }
+
     /// Called when the user long-presses the overlay trigger button to toggle the GFN overlay.
     var menuToggleHandler: (@MainActor @Sendable () -> Void)?
 
     /// Called when remoteMode changes due to controller connect/disconnect auto-switching.
     var onRemoteModeChanged: (@MainActor @Sendable (RemoteInputMode) -> Void)?
+
+    /// Called when the user presses the controller keyboard shortcut.
+    var controllerKeyboardShortcutHandler: (() -> Void)?
 
     private weak var channel: DataChannelSender?
     private let encoder = InputEncoder()
@@ -678,6 +695,7 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private var overlayPresses: [Int: OverlayPressState] = [:]
     private var overlayReplaySlots = Set<Int>()
+    private var keyboardShortcutStates: [Int: KeyboardShortcutState] = [:]
     private var steamHoldTicks: [Int: Int] = [:]
     private var steamTriggeredSlots = Set<Int>()
     private static let sampleInterval = 8_333_333
@@ -686,6 +704,8 @@ final nonisolated class InputSender: @unchecked Sendable {
     private static let overlayLongPressThreshold = 216
     private static let steamLongPressThreshold = 120
     private static let microGamepadSuppressionWindow = UInt64(100_000_000)
+    private static let keyboardShortcutGraceWindow = UInt64(125_000_000)
+    private static let replayEventIntervalMs: Int = 18
 
     init(channel: DataChannelSender) {
         self.channel = channel
@@ -772,6 +792,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             if paused {
                 overlayPresses.removeAll()
                 overlayReplaySlots.removeAll()
+                keyboardShortcutStates.removeAll()
                 steamHoldTicks.removeAll()
                 steamTriggeredSlots.removeAll()
                 releaseHeldDiscreteInputs()
@@ -817,6 +838,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         releaseHeldMouseButtons()
         overlayPresses.removeAll()
         overlayReplaySlots.removeAll()
+        keyboardShortcutStates.removeAll()
         steamHoldTicks.removeAll()
         steamTriggeredSlots.removeAll()
         lastSnapshots.removeAll()
@@ -1031,6 +1053,13 @@ final nonisolated class InputSender: @unchecked Sendable {
             }
         }
 
+        state.buttons = applyKeyboardShortcutState(
+            buttons: state.buttons,
+            controller: controller,
+            slot: slot,
+            now: now
+        )
+
         // The trigger is withheld for the entire gesture. A short press is replayed
         // as down/up on release; a long press is consumed by the local overlay.
         if overlayPresses[slot] != nil || isOverlayButtonHeld(on: controller) {
@@ -1162,6 +1191,122 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
+    private func applyKeyboardShortcutState(
+        buttons: UInt16,
+        controller: GCController,
+        slot: Int,
+        now: UInt64
+    ) -> UInt16 {
+        let shortcutButtons = buttons & keyboardShortcutMask
+        if var state = keyboardShortcutStates[slot] {
+            state.pendingButtons |= shortcutButtons
+
+            if state.triggered {
+                if shortcutButtons == 0 {
+                    keyboardShortcutStates[slot] = nil
+                    return buttons
+                }
+                keyboardShortcutStates[slot] = state
+                return buttons & ~keyboardShortcutMask
+            }
+
+            if shortcutButtons == keyboardShortcutMask {
+                state.triggered = true
+                keyboardShortcutStates[slot] = state
+                notifyControllerKeyboardShortcut()
+                return buttons & ~keyboardShortcutMask
+            }
+
+            if shortcutButtons == 0 {
+                state.replayTapOnExpiry = true
+            }
+
+            if now >= state.deadline {
+                keyboardShortcutStates[slot] = nil
+                if state.replayTapOnExpiry {
+                    sendKeyboardShortcutTap(
+                        controller: controller,
+                        slot: slot,
+                        shortcutButtons: state.pendingButtons
+                    )
+                    return buttons & ~keyboardShortcutMask
+                }
+                return buttons
+            }
+
+            keyboardShortcutStates[slot] = state
+            return buttons & ~keyboardShortcutMask
+        }
+
+        guard shortcutButtons != 0 else { return buttons }
+
+        if shortcutButtons == keyboardShortcutMask {
+            notifyControllerKeyboardShortcut()
+            keyboardShortcutStates[slot] = KeyboardShortcutState(
+                pendingButtons: shortcutButtons,
+                deadline: now &+ Self.keyboardShortcutGraceWindow,
+                triggered: true
+            )
+            return buttons & ~keyboardShortcutMask
+        }
+
+        keyboardShortcutStates[slot] = KeyboardShortcutState(
+            pendingButtons: shortcutButtons,
+            deadline: now &+ Self.keyboardShortcutGraceWindow
+        )
+        return buttons & ~keyboardShortcutMask
+    }
+
+    private func sendKeyboardShortcutTap(
+        controller: GCController,
+        slot: Int,
+        shortcutButtons: UInt16
+    ) {
+        let state = mapGCControllerToXInput(controller, deadzone: deadzone)
+        let baseButtons = state.buttons & ~keyboardShortcutMask
+        let base = GamepadSnapshot(
+            buttons: baseButtons,
+            leftTrigger: state.leftTrigger,
+            rightTrigger: state.rightTrigger,
+            leftStickX: state.lx,
+            leftStickY: state.ly,
+            rightStickX: state.rx,
+            rightStickY: state.ry,
+            bitmap: gamepadBitmap
+        )
+        let down = GamepadSnapshot(
+            buttons: base.buttons | shortcutButtons,
+            leftTrigger: base.leftTrigger,
+            rightTrigger: base.rightTrigger,
+            leftStickX: base.leftStickX,
+            leftStickY: base.leftStickY,
+            rightStickX: base.rightStickX,
+            rightStickY: base.rightStickY,
+            bitmap: base.bitmap
+        )
+        sendGamepadSnapshot(down, slot: slot, force: true)
+        inputQueue.asyncAfter(deadline: .now() + .milliseconds(17)) { [weak self, weak controller] in
+            guard let self,
+                  let controller,
+                  controllerSlots[ObjectIdentifier(controller)] == slot else { return }
+            let current = mapGCControllerToXInput(controller, deadzone: deadzone)
+            sendGamepadSnapshot(
+                GamepadSnapshot(
+                    buttons: current.buttons & ~keyboardShortcutMask,
+                    leftTrigger: current.leftTrigger,
+                    rightTrigger: current.rightTrigger,
+                    leftStickX: current.lx,
+                    leftStickY: current.ly,
+                    rightStickX: current.rx,
+                    rightStickY: current.ry,
+                    bitmap: gamepadBitmap
+                ),
+                slot: slot,
+                force: true
+            )
+        }
+    }
+
     private func sendNeutralGamepads() {
         if extendedControllers.isEmpty, remoteMode == .gamepad {
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap | Self.connectedGamepadBit(for: 0)), slot: 0, force: true)
@@ -1192,6 +1337,10 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private var steamButtonMask: UInt16 {
         overlayTriggerButton == .start ? GFNInput.back : GFNInput.start
+    }
+
+    private var keyboardShortcutMask: UInt16 {
+        GFNInput.back | GFNInput.buttonY
     }
 
     private func isOverlayButtonHeld(on controller: GCController) -> Bool {
@@ -1242,6 +1391,11 @@ final nonisolated class InputSender: @unchecked Sendable {
         let handler = onRemoteModeChanged
         let mode = remoteMode
         DispatchQueue.main.async { handler?(mode) }
+    }
+
+    private func notifyControllerKeyboardShortcut() {
+        let handler = controllerKeyboardShortcutHandler
+        DispatchQueue.main.async { handler?() }
     }
 
     private func sendMouseButtonNow(down: Bool, button: UInt8) {
@@ -1318,6 +1472,102 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
+    func replaySubmittedText(
+        _ text: String,
+        appendEnter: Bool = true,
+        completion: @escaping @Sendable () -> Void
+    ) {
+        inputQueue.async { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async(execute: completion)
+                return
+            }
+
+            releaseHeldDiscreteInputs()
+            sendNeutralGamepads()
+
+            var events = keyboardReplayEvents(for: text)
+            if appendEnter,
+               let enter = keyboardEvents(
+                   for: .keyboardReturnOrEnter,
+                   requiresShift: false
+               )
+            {
+                events.append(contentsOf: enter)
+            }
+
+            replayKeyboardEvents(events, index: 0, completion: completion)
+        }
+    }
+
+    private func replayKeyboardEvents(
+        _ events: [KeyboardReplayEvent],
+        index: Int,
+        completion: @escaping @Sendable () -> Void
+    ) {
+        guard index < events.count else {
+            DispatchQueue.main.async(execute: completion)
+            return
+        }
+
+        let event = events[index]
+        emitKeyboard(
+            down: event.down,
+            vk: event.vk,
+            scancode: event.scancode,
+            modifiers: event.modifiers
+        )
+
+        inputQueue.asyncAfter(deadline: .now() + .milliseconds(Self.replayEventIntervalMs)) { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async(execute: completion)
+                return
+            }
+            replayKeyboardEvents(events, index: index + 1, completion: completion)
+        }
+    }
+
+    private func keyboardReplayEvents(for text: String) -> [KeyboardReplayEvent] {
+        var events: [KeyboardReplayEvent] = []
+        for character in text {
+            guard let (usage, requiresShift) = Self.usageForCharacter(character) else {
+                inputLog.info("Skipping unsupported replay character: \(String(character), privacy: .public)")
+                continue
+            }
+            guard let keyEvents = keyboardEvents(for: usage, requiresShift: requiresShift) else {
+                inputLog.info("Skipping unsupported replay key usage: \(usage.rawValue)")
+                continue
+            }
+            events.append(contentsOf: keyEvents)
+        }
+        return events
+    }
+
+    private func keyboardEvents(
+        for usage: UIKeyboardHIDUsage,
+        requiresShift: Bool
+    ) -> [KeyboardReplayEvent]? {
+        guard let mapping = Self.hidToKeyMapping[usage] else { return nil }
+        let shiftModifiers: UInt16 = requiresShift ? 0x0001 : 0
+        var events: [KeyboardReplayEvent] = []
+
+        if requiresShift, let shift = Self.hidToKeyMapping[.keyboardLeftShift] {
+            events.append(KeyboardReplayEvent(down: true, vk: shift.vk, scancode: shift.scancode, modifiers: shiftModifiers))
+        }
+
+        events.append(KeyboardReplayEvent(down: true, vk: mapping.vk, scancode: mapping.scancode, modifiers: shiftModifiers))
+        events.append(KeyboardReplayEvent(down: false, vk: mapping.vk, scancode: mapping.scancode, modifiers: shiftModifiers))
+
+        if requiresShift, let shift = Self.hidToKeyMapping[.keyboardLeftShift] {
+            events.append(KeyboardReplayEvent(down: false, vk: shift.vk, scancode: shift.scancode, modifiers: 0))
+        }
+
+        return events
+    }
+
+    private var preferredControllerModeForCurrentControllers: RemoteInputMode {
+        extendedControllers.contains(where: { controllerTouchpad(for: $0) != nil }) ? .dualsense : .gamepad
+    }
     private func controllerTouchpad(for controller: GCController) -> ControllerTouchpad? {
         if let dualSense = controller.extendedGamepad as? GCDualSenseGamepad {
             return ControllerTouchpad(surface: dualSense.touchpadPrimary, button: dualSense.touchpadButton)
@@ -1500,6 +1750,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             lastSnapshotSend[slot] = nil
             overlayPresses[slot] = nil
             overlayReplaySlots.remove(slot)
+            keyboardShortcutStates[slot] = nil
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
@@ -1630,4 +1881,132 @@ extension InputSender: InputEventHandler {
         }
         return mods
     }
+
+    private static func usageForCharacter(_ character: Character) -> (UIKeyboardHIDUsage, Bool)? {
+        if character == " " {
+            return (.keyboardSpacebar, false)
+        }
+
+        if character == "\n" || character == "\r" {
+            return (.keyboardReturnOrEnter, false)
+        }
+
+        let string = String(character)
+        if let scalar = string.unicodeScalars.first, string.unicodeScalars.count == 1 {
+            switch scalar.value {
+            case 97 ... 122:
+                let raw = UIKeyboardHIDUsage.keyboardA.rawValue + UInt16(scalar.value - 97)
+                if let usage = UIKeyboardHIDUsage(rawValue: raw) {
+                    return (usage, false)
+                }
+            case 65 ... 90:
+                let raw = UIKeyboardHIDUsage.keyboardA.rawValue + UInt16(scalar.value - 65)
+                if let usage = UIKeyboardHIDUsage(rawValue: raw) {
+                    return (usage, true)
+                }
+            case 49 ... 57:
+                let raw = UIKeyboardHIDUsage.keyboard1.rawValue + UInt16(scalar.value - 49)
+                if let usage = UIKeyboardHIDUsage(rawValue: raw) {
+                    return (usage, false)
+                }
+            case 48:
+                return (.keyboard0, false)
+            default:
+                break
+            }
+        }
+
+        return shiftedCharacterMappings[character]
+    }
+
+    private static let shiftedCharacterMappings: [Character: (UIKeyboardHIDUsage, Bool)] = [
+        "-": (.keyboardHyphen, false),
+        "_": (.keyboardHyphen, true),
+        "=": (.keyboardEqualSign, false),
+        "+": (.keyboardEqualSign, true),
+        "[": (.keyboardOpenBracket, false),
+        "{": (.keyboardOpenBracket, true),
+        "]": (.keyboardCloseBracket, false),
+        "}": (.keyboardCloseBracket, true),
+        "\\": (.keyboardBackslash, false),
+        "|": (.keyboardBackslash, true),
+        ";": (.keyboardSemicolon, false),
+        ":": (.keyboardSemicolon, true),
+        "'": (.keyboardQuote, false),
+        "\"": (.keyboardQuote, true),
+        "`": (.keyboardGraveAccentAndTilde, false),
+        "~": (.keyboardGraveAccentAndTilde, true),
+        ",": (.keyboardComma, false),
+        "<": (.keyboardComma, true),
+        ".": (.keyboardPeriod, false),
+        ">": (.keyboardPeriod, true),
+        "/": (.keyboardSlash, false),
+        "?": (.keyboardSlash, true),
+        "!": (.keyboard1, true),
+        "@": (.keyboard2, true),
+        "#": (.keyboard3, true),
+        "$": (.keyboard4, true),
+        "%": (.keyboard5, true),
+        "^": (.keyboard6, true),
+        "&": (.keyboard7, true),
+        "*": (.keyboard8, true),
+        "(": (.keyboard9, true),
+        ")": (.keyboard0, true),
+    ]
+
+    private static let hidToKeyMapping: [UIKeyboardHIDUsage: (vk: UInt16, scancode: UInt16)] = [
+        .keyboardA: (0x41, 0x1E), .keyboardB: (0x42, 0x30), .keyboardC: (0x43, 0x2E),
+        .keyboardD: (0x44, 0x20), .keyboardE: (0x45, 0x12), .keyboardF: (0x46, 0x21),
+        .keyboardG: (0x47, 0x22), .keyboardH: (0x48, 0x23), .keyboardI: (0x49, 0x17),
+        .keyboardJ: (0x4A, 0x24), .keyboardK: (0x4B, 0x25), .keyboardL: (0x4C, 0x26),
+        .keyboardM: (0x4D, 0x32), .keyboardN: (0x4E, 0x31), .keyboardO: (0x4F, 0x18),
+        .keyboardP: (0x50, 0x19), .keyboardQ: (0x51, 0x10), .keyboardR: (0x52, 0x13),
+        .keyboardS: (0x53, 0x1F), .keyboardT: (0x54, 0x14), .keyboardU: (0x55, 0x16),
+        .keyboardV: (0x56, 0x2F), .keyboardW: (0x57, 0x11), .keyboardX: (0x58, 0x2D),
+        .keyboardY: (0x59, 0x15), .keyboardZ: (0x5A, 0x2C),
+
+        .keyboard1: (0x31, 0x02), .keyboard2: (0x32, 0x03), .keyboard3: (0x33, 0x04),
+        .keyboard4: (0x34, 0x05), .keyboard5: (0x35, 0x06), .keyboard6: (0x36, 0x07),
+        .keyboard7: (0x37, 0x08), .keyboard8: (0x38, 0x09), .keyboard9: (0x39, 0x0A),
+        .keyboard0: (0x30, 0x0B),
+
+        .keyboardReturnOrEnter: (0x0D, 0x1C), .keyboardEscape: (0x1B, 0x01),
+        .keyboardDeleteOrBackspace: (0x08, 0x0E), .keyboardTab: (0x09, 0x0F),
+        .keyboardSpacebar: (0x20, 0x39), .keyboardCapsLock: (0x14, 0x3A),
+
+        .keyboardHyphen: (0xBD, 0x0C), .keyboardEqualSign: (0xBB, 0x0D),
+        .keyboardOpenBracket: (0xDB, 0x1A), .keyboardCloseBracket: (0xDD, 0x1B),
+        .keyboardBackslash: (0xDC, 0x2B), .keyboardNonUSPound: (0xE2, 0x56),
+        .keyboardSemicolon: (0xBA, 0x27), .keyboardQuote: (0xDE, 0x28),
+        .keyboardGraveAccentAndTilde: (0xC0, 0x29), .keyboardComma: (0xBC, 0x33),
+        .keyboardPeriod: (0xBE, 0x34), .keyboardSlash: (0xBF, 0x35),
+
+        .keyboardF1: (0x70, 0x3B), .keyboardF2: (0x71, 0x3C), .keyboardF3: (0x72, 0x3D),
+        .keyboardF4: (0x73, 0x3E), .keyboardF5: (0x74, 0x3F), .keyboardF6: (0x75, 0x40),
+        .keyboardF7: (0x76, 0x41), .keyboardF8: (0x77, 0x42), .keyboardF9: (0x78, 0x43),
+        .keyboardF10: (0x79, 0x44), .keyboardF11: (0x7A, 0x57), .keyboardF12: (0x7B, 0x58),
+        .keyboardF13: (0x7C, 0x64),
+
+        .keyboardInsert: (0x2D, 0xE052), .keyboardHome: (0x24, 0xE047),
+        .keyboardPageUp: (0x21, 0xE049), .keyboardDeleteForward: (0x2E, 0xE053),
+        .keyboardEnd: (0x23, 0xE04F), .keyboardPageDown: (0x22, 0xE051),
+        .keyboardRightArrow: (0x27, 0xE04D), .keyboardLeftArrow: (0x25, 0xE04B),
+        .keyboardDownArrow: (0x28, 0xE050), .keyboardUpArrow: (0x26, 0xE048),
+
+        .keyboardPrintScreen: (0x2C, 0xE037), .keyboardScrollLock: (0x91, 0x46),
+        .keyboardPause: (0x13, 0x45), .keyboardApplication: (0x5D, 0xE05D),
+
+        .keypadNumLock: (0x90, 0xE045), .keypadSlash: (0x6F, 0xE035),
+        .keypadAsterisk: (0x6A, 0x37), .keypadHyphen: (0x6D, 0x4A),
+        .keypadPlus: (0x6B, 0x4E), .keypadEnter: (0x0D, 0xE01C),
+        .keypad1: (0x61, 0x4F), .keypad2: (0x62, 0x50), .keypad3: (0x63, 0x51),
+        .keypad4: (0x64, 0x4B), .keypad5: (0x65, 0x4C), .keypad6: (0x66, 0x4D),
+        .keypad7: (0x67, 0x47), .keypad8: (0x68, 0x48), .keypad9: (0x69, 0x49),
+        .keypad0: (0x60, 0x52), .keypadPeriod: (0x6E, 0x53),
+
+        .keyboardLeftControl: (0xA2, 0x1D), .keyboardRightControl: (0xA3, 0xE01D),
+        .keyboardLeftShift: (0xA0, 0x2A), .keyboardRightShift: (0xA1, 0x36),
+        .keyboardLeftAlt: (0xA4, 0x38), .keyboardRightAlt: (0xA5, 0xE038),
+        .keyboardLeftGUI: (0x5B, 0xE05B), .keyboardRightGUI: (0x5C, 0xE05C),
+    ]
 }
