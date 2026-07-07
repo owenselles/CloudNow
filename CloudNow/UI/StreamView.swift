@@ -25,7 +25,7 @@ struct StreamView: View {
     @Environment(CloudSessionCoordinator.self) private var cloudSessionCoordinator
     @Environment(\.colorScheme) private var colorScheme
     @State private var streamController = GFNStreamController()
-    @State private var showOverlay = false
+    @State private var overlayState: StreamOverlayState = .none
     @State private var showExitConfirmation = false
     @State private var loadingPhase: LoadingPhase = .finding
     @State private var createdSession: SessionInfo?
@@ -36,6 +36,8 @@ struct StreamView: View {
     @State private var localPeerLease: CloudLocalPeerLease?
     @State private var isEndingSession = false
     @State private var endConfirmationFailed = false
+    @State private var textEntryText = ""
+    @FocusState private var textEntryFocused: Bool
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
@@ -118,18 +120,23 @@ struct StreamView: View {
         // active: non-streaming states (loading, error) and while the pause menu holds focus —
         // there, B/Menu closes the menu just like Resume.
         .onChange(of: streamController.menuPressCount) { _, _ in
-            toggleOverlay()
+            togglePauseMenu()
+        }
+        .onChange(of: streamController.textEntryRequestCount) { _, _ in
+            presentControllerTextEntry()
         }
         .onExitCommand {
-            if showOverlay {
-                toggleOverlay()
+            if overlayState == .textEntry {
+                cancelControllerTextEntry()
+            } else if overlayState == .pauseMenu {
+                closeOverlay()
             } else if streamController.state != .streaming {
                 disconnect()
             }
         }
         .onPlayPauseCommand {
             guard streamController.state == .streaming else { return }
-            toggleOverlay()
+            togglePauseMenu()
         }
     }
 
@@ -328,7 +335,7 @@ struct StreamView: View {
     // MARK: Streaming
 
     private var streamingView: some View {
-        VideoSurfaceViewRepresentable(streamController: streamController, showOverlay: showOverlay)
+        VideoSurfaceViewRepresentable(streamController: streamController, showOverlay: overlayState != .none)
             .ignoresSafeArea()
             // The video is a UIViewControllerRepresentable, which (unlike a plain view) can
             // expand to the union of its ZStack siblings' content. A tall Statistics HUD
@@ -337,9 +344,14 @@ struct StreamView: View {
             // the HUD/menu/warning live here instead of as ZStack siblings.
             .overlay {
                 ZStack {
-                    if showOverlay {
+                    if overlayState == .pauseMenu {
                         pauseMenu
                             .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
+
+                    if overlayState == .textEntry {
+                        controllerTextEntryOverlay
+                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
 
                     // Stays visible while the pause menu is open (the menu is a left sidebar)
@@ -355,7 +367,7 @@ struct StreamView: View {
                         .transition(.opacity)
                     }
 
-                    if let warning = streamController.timeWarning, !showOverlay {
+                    if let warning = streamController.timeWarning, overlayState == .none {
                         timeWarningBanner(warning)
                             .transition(.move(edge: .top).combined(with: .opacity))
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -363,12 +375,11 @@ struct StreamView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
-            .animation(.easeInOut(duration: 0.2), value: showOverlay)
+            .animation(.easeInOut(duration: 0.2), value: overlayState)
             .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
-            .onChange(of: showOverlay) { _, showing in
-                // Pause game input while overlay is open in gamepad mode so D-pad
-                // navigates overlay buttons instead of moving the in-game character.
-                streamController.setInputPaused(showing)
+            .onChange(of: overlayState) { _, state in
+                streamController.setOverlayInputPaused(state != .none)
+                textEntryFocused = state == .textEntry
             }
             .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
                 Button(L10n.text("end_session"), role: .destructive) { disconnect() }
@@ -385,7 +396,7 @@ struct StreamView: View {
     private var pauseMenu: some View {
         CloudStreamPauseMenu(
             statsMode: streamController.statsMode,
-            onResume: toggleOverlay,
+            onResume: closeOverlay,
             onCycleStatistics: {
                 let next = streamController.statsMode.nextHUDLevel
                 streamController.setStatsMode(next)
@@ -429,6 +440,46 @@ struct StreamView: View {
                 }
             }
         )
+    }
+
+    private var controllerTextEntryOverlay: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(L10n.text("controller_text_entry_title"))
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Text(L10n.text("controller_text_entry_instructions"))
+                .font(.body)
+                .foregroundStyle(.secondary)
+
+            TextField(L10n.text("controller_text_entry_placeholder"), text: $textEntryText)
+                .textFieldStyle(.roundedBorder)
+                .focused($textEntryFocused)
+                .onSubmit {
+                    submitControllerTextEntry()
+                }
+
+            HStack(spacing: 20) {
+                Button(L10n.text("cancel")) {
+                    cancelControllerTextEntry()
+                }
+                .buttonStyle(.bordered)
+
+                Button(L10n.text("controller_text_entry_send")) {
+                    submitControllerTextEntry()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(textEntryText.isEmpty)
+            }
+        }
+        .frame(maxWidth: 620)
+        .padding(32)
+        .background(.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(.white.opacity(0.16), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.35), radius: 30, y: 12)
     }
 
     private var remoteModeLabel: String {
@@ -974,6 +1025,7 @@ struct StreamView: View {
     /// Leaves the stream locally without stopping the server session.
     /// GFN keeps the session alive for ~1–2 minutes so it can be resumed from home.
     private func leave() {
+        overlayState = .none
         if let session = createdSession {
             onLeave?(game, session)
         }
@@ -993,6 +1045,7 @@ struct StreamView: View {
     }
 
     private func disconnect() {
+        overlayState = .none
         guard !isEndingSession else { return }
         isEndingSession = true
         endConfirmationFailed = false
@@ -1240,11 +1293,32 @@ struct StreamView: View {
         }
     }
 
-    private func toggleOverlay() {
-        showOverlay.toggle()
-        // Pause input forwarding while the overlay is visible so swipes don't move
-        // the game cursor and keyboard shortcuts don't reach the game accidentally.
-        streamController.setInputPaused(showOverlay)
+    private func togglePauseMenu() {
+        guard overlayState != .textEntry else { return }
+        overlayState = overlayState == .pauseMenu ? .none : .pauseMenu
+    }
+
+    private func closeOverlay() {
+        overlayState = .none
+    }
+
+    private func presentControllerTextEntry() {
+        guard streamController.state == .streaming, overlayState == .none else { return }
+        textEntryText = ""
+        overlayState = .textEntry
+    }
+
+    private func cancelControllerTextEntry() {
+        overlayState = .none
+        textEntryText = ""
+        streamController.cancelControllerTextEntry()
+    }
+
+    private func submitControllerTextEntry() {
+        let text = textEntryText
+        overlayState = .none
+        textEntryText = ""
+        streamController.submitControllerTextEntry(text)
     }
 }
 
