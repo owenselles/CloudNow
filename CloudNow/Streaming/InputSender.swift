@@ -1218,7 +1218,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             let shortcutMask = keyboardShortcutMask(for: state.pendingButtons)
 
             if state.triggered {
-                if shortcutButtons == 0 {
+                if shortcutButtons.isEmpty {
                     keyboardShortcutStates[slot] = nil
                     return KeyboardShortcutResolution(
                         buttons: buttons,
@@ -1245,7 +1245,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                 )
             }
 
-            if shortcutButtons == 0 {
+            if shortcutButtons.isEmpty {
                 state.replayTapOnExpiry = true
             }
 
@@ -1279,7 +1279,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             )
         }
 
-        guard shortcutButtons != 0 else {
+        guard !shortcutButtons.isEmpty else {
             return KeyboardShortcutResolution(
                 buttons: buttons,
                 suppressesOverlayGestures: false,
@@ -2041,17 +2041,17 @@ extension InputSender: InputEventHandler {
         if let scalar = string.unicodeScalars.first, string.unicodeScalars.count == 1 {
             switch scalar.value {
             case 97 ... 122:
-                let raw = UIKeyboardHIDUsage.keyboardA.rawValue + UInt16(scalar.value - 97)
+                let raw = UIKeyboardHIDUsage.keyboardA.rawValue + Int(scalar.value - 97)
                 if let usage = UIKeyboardHIDUsage(rawValue: raw) {
                     return (usage, false)
                 }
             case 65 ... 90:
-                let raw = UIKeyboardHIDUsage.keyboardA.rawValue + UInt16(scalar.value - 65)
+                let raw = UIKeyboardHIDUsage.keyboardA.rawValue + Int(scalar.value - 65)
                 if let usage = UIKeyboardHIDUsage(rawValue: raw) {
                     return (usage, true)
                 }
             case 49 ... 57:
-                let raw = UIKeyboardHIDUsage.keyboard1.rawValue + UInt16(scalar.value - 49)
+                let raw = UIKeyboardHIDUsage.keyboard1.rawValue + Int(scalar.value - 49)
                 if let usage = UIKeyboardHIDUsage(rawValue: raw) {
                     return (usage, false)
                 }
