@@ -865,7 +865,6 @@ struct SettingsView: View {
     @State private var dataDialog: CloudNowDataDialog?
     @State private var isPerformingDataAction = false
     @State private var navigationPath: [SettingsNavigationRoute] = []
-    @State private var showTextInputSequenceCapture = false
 
     var body: some View {
         @Bindable var vm = viewModel
@@ -1098,8 +1097,12 @@ struct SettingsView: View {
                             )
                         }
                     )
-                    Button {
-                        showTextInputSequenceCapture = true
+                    NavigationLink {
+                        TextInputTriggerSequenceCaptureView(
+                            sequence: $vm.streamSettings.textInputTriggerSequence,
+                            overlayTriggerButton: vm.streamSettings.overlayTriggerButton,
+                            steamOverlayGestureEnabled: vm.streamSettings.enableSteamOverlayGesture
+                        )
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
@@ -1289,13 +1292,6 @@ struct SettingsView: View {
                 }
             } message: { dialog in
                 Text(dialog.message)
-            }
-            .sheet(isPresented: $showTextInputSequenceCapture) {
-                TextInputTriggerSequenceCaptureSheet(
-                    sequence: $vm.streamSettings.textInputTriggerSequence,
-                    overlayTriggerButton: vm.streamSettings.overlayTriggerButton,
-                    steamOverlayGestureEnabled: vm.streamSettings.enableSteamOverlayGesture
-                )
             }
         }
     }
@@ -1609,7 +1605,7 @@ struct SettingsView: View {
 
 // MARK: - Text Input Trigger Capture
 
-private struct TextInputTriggerSequenceCaptureSheet: View {
+private struct TextInputTriggerSequenceCaptureView: View {
     @Binding var sequence: ControllerButtonSequence
     let overlayTriggerButton: OverlayTriggerButton
     let steamOverlayGestureEnabled: Bool
@@ -1620,7 +1616,6 @@ private struct TextInputTriggerSequenceCaptureSheet: View {
     @State private var liveButtons = Set<ControllerSequenceButton>()
     @State private var lastDetectedSequence: ControllerButtonSequence?
     @State private var validationMessage: String?
-    @FocusState private var isCancelFocused: Bool
 
     private enum CapturePhase {
         case waiting
@@ -1628,81 +1623,45 @@ private struct TextInputTriggerSequenceCaptureSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.92),
-                        Color(red: 0.08, green: 0.09, blue: 0.18).opacity(0.96),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+        Form {
+            Section {
+                LabeledContent(
+                    L10n.text("current_sequence"),
+                    value: sequence.label
                 )
-                .ignoresSafeArea()
+            }
 
-                ScrollView {
-                    VStack(spacing: 28) {
-                        VStack(spacing: 12) {
-                            Text(L10n.text("capture_text_input_buttons"))
-                                .font(.system(size: 40, weight: .bold))
-                                .multilineTextAlignment(.center)
+            Section {
+                Text(L10n.text("capture_text_input_buttons_instructions"))
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 8)
 
-                            Text(L10n.text("capture_text_input_buttons_instructions"))
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: 620)
-                        }
+                Text(statusText)
+                    .font(.body.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 8)
 
-                        VStack(spacing: 18) {
-                            detailRow(
-                                title: L10n.text("current_sequence"),
-                                value: sequence.label
-                            )
+                if let detectedSequence {
+                    LabeledContent(
+                        L10n.text("detected_sequence"),
+                        value: detectedSequence.label
+                    )
+                }
 
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text(statusText)
-                                    .font(.title3.weight(.semibold))
-
-                                if let detectedSequence {
-                                    detailRow(
-                                        title: L10n.text("detected_sequence"),
-                                        value: detectedSequence.label
-                                    )
-                                }
-
-                                if let validationMessage {
-                                    Text(validationMessage)
-                                        .font(.body.weight(.medium))
-                                        .foregroundStyle(.orange)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 24)
-                            .background(cardBackground(cornerRadius: 24, opacity: 0.9))
-                        }
-                        .padding(28)
-                        .frame(maxWidth: 760)
-                        .background(cardBackground(cornerRadius: 32, opacity: 0.82))
-
-                        Button(L10n.text("cancel")) {
-                            dismiss()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .focused($isCancelFocused)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 56)
-                    .padding(.vertical, 48)
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(.body)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 8)
                 }
             }
-            .task {
-                isCancelFocused = true
-                await monitorControllerButtons()
-            }
+        }
+        .navigationTitle(L10n.text("capture_text_input_buttons"))
+        .task {
+            await monitorControllerButtons()
         }
     }
 
@@ -1720,35 +1679,6 @@ private struct TextInputTriggerSequenceCaptureSheet: View {
             return ControllerButtonSequence(buttons: Array(liveButtons))
         }
         return lastDetectedSequence
-    }
-
-    private func detailRow(title: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 24) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 16)
-
-            Text(value)
-                .font(.title3.weight(.semibold))
-                .multilineTextAlignment(.trailing)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
-        .background(cardBackground(cornerRadius: 20, opacity: 0.94))
-    }
-
-    @ViewBuilder
-    private func cardBackground(cornerRadius: CGFloat, opacity: Double) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(.regularMaterial)
-            .opacity(opacity)
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            }
     }
 
     @MainActor
