@@ -9,6 +9,10 @@ nonisolated struct StreamSettings: Codable, Equatable {
     static let maxControllerDeadzone = 0.30
     static let minRumbleIntensity = 0.0
     static let maxRumbleIntensity = 2.0
+    static let minTextInputTriggerDelayMs = 50
+    static let maxTextInputTriggerDelayMs = 1_500
+    static let textInputTriggerDelayStepMs = 50
+    static let defaultTextInputTriggerDelayMs = 150
     static let defaultKeyboardLayout = L10n.keyboardLayoutCode()
     static let automaticGameLanguage = "automatic"
     static let defaultGameLanguage = automaticGameLanguage
@@ -41,6 +45,15 @@ nonisolated struct StreamSettings: Codable, Equatable {
     var overlayTriggerButton: OverlayTriggerButton = .start
     /// Button chord that opens the local text-input overlay during streaming.
     var textInputTriggerSequence: ControllerButtonSequence = Self.defaultTextInputTriggerSequence
+    /// How long the text-input trigger chord must be held before opening the local keyboard.
+    var textInputTriggerDelayMs: Int = Self.defaultTextInputTriggerDelayMs {
+        didSet {
+            textInputTriggerDelayMs = min(
+                max(textInputTriggerDelayMs, Self.minTextInputTriggerDelayMs),
+                Self.maxTextInputTriggerDelayMs
+            )
+        }
+    }
     /// Default remote/controller input mode when a stream session starts.
     var defaultRemoteInputMode: RemoteInputMode = .gamepad
     /// How the streaming server is chosen. Server automatic delegates routing to
@@ -108,7 +121,7 @@ extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorPreference, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, rumbleEnabled, rumbleIntensity, controllerDeadzone, overlayTriggerButton
-        case textInputTriggerSequence
+        case textInputTriggerSequence, textInputTriggerDelayMs
         case defaultRemoteInputMode, preferredZoneUrl
         case serverRoutingMode, preferredRegionName, preferredRegionAddress
         case enableSteamOverlayGesture
@@ -160,6 +173,7 @@ extension StreamSettings {
         )
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
         textInputTriggerSequence = try c.decodeIfPresent(ControllerButtonSequence.self, forKey: .textInputTriggerSequence) ?? d.textInputTriggerSequence
+        textInputTriggerDelayMs = try c.decodeIfPresent(Int.self, forKey: .textInputTriggerDelayMs) ?? d.textInputTriggerDelayMs
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
         preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)
         serverRoutingMode = try c.decodeIfPresent(ServerRoutingMode.self, forKey: .serverRoutingMode)
@@ -207,6 +221,7 @@ extension StreamSettings {
         try c.encode(controllerDeadzone, forKey: .controllerDeadzone)
         try c.encode(overlayTriggerButton, forKey: .overlayTriggerButton)
         try c.encode(textInputTriggerSequence, forKey: .textInputTriggerSequence)
+        try c.encode(textInputTriggerDelayMs, forKey: .textInputTriggerDelayMs)
         try c.encode(defaultRemoteInputMode, forKey: .defaultRemoteInputMode)
         try c.encodeIfPresent(preferredZoneUrl, forKey: .preferredZoneUrl)
         try c.encode(serverRoutingMode, forKey: .serverRoutingMode)

@@ -2260,6 +2260,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 deadzone: Float(settings.controllerDeadzone),
                 overlayTriggerButton: settings.overlayTriggerButton,
                 textInputTriggerSequence: settings.textInputTriggerSequence,
+                textInputTriggerDelayMs: settings.textInputTriggerDelayMs,
                 steamOverlayGestureEnabled: settings.enableSteamOverlayGesture,
                 remoteMode: settings.defaultRemoteInputMode,
                 rumbleEnabled: settings.rumbleEnabled,

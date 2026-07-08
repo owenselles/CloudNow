@@ -673,6 +673,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var deadzone: Float = 0.15
     private var overlayTriggerButton: OverlayTriggerButton = .start
     private var textInputTriggerSequence = StreamSettings.defaultTextInputTriggerSequence
+    private var textInputTriggerDelayMs = StreamSettings.defaultTextInputTriggerDelayMs
     private var steamOverlayGestureEnabled = true
     private var isPaused = false
 
@@ -768,6 +769,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         deadzone: Float,
         overlayTriggerButton: OverlayTriggerButton,
         textInputTriggerSequence: ControllerButtonSequence,
+        textInputTriggerDelayMs: Int,
         steamOverlayGestureEnabled: Bool,
         remoteMode: RemoteInputMode,
         rumbleEnabled: Bool = true,
@@ -778,6 +780,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             self.deadzone = deadzone
             self.overlayTriggerButton = overlayTriggerButton
             self.textInputTriggerSequence = textInputTriggerSequence
+            self.textInputTriggerDelayMs = textInputTriggerDelayMs
             self.steamOverlayGestureEnabled = steamOverlayGestureEnabled
             self.remoteMode = remoteMode
             self.rumbleEnabled = rumbleEnabled
