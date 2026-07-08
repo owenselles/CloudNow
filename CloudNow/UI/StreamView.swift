@@ -1294,11 +1294,20 @@ struct StreamView: View {
     }
 
     private func togglePauseMenu() {
-        guard overlayState != .textEntry else { return }
+        if overlayState == .textEntry {
+            streamController.cancelControllerTextEntry()
+            textEntryText = ""
+            overlayState = .pauseMenu
+            return
+        }
         overlayState = overlayState == .pauseMenu ? .none : .pauseMenu
     }
 
     private func closeOverlay() {
+        if overlayState == .textEntry {
+            streamController.cancelControllerTextEntry()
+            textEntryText = ""
+        }
         overlayState = .none
     }
 
