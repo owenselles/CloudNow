@@ -196,6 +196,8 @@ enum L10nEN {
         "overlay_button_description": "Long-press this button during play to open the app overlay. Switch if it conflicts with an in-game action.",
         "text_input_buttons": "Text Input Buttons",
         "text_input_buttons_description": "Choose the controller button chord that opens the Apple TV keyboard during streaming.",
+        "text_input_hold_delay": "Text Input Hold Delay",
+        "text_input_hold_delay_description": "How long the text input buttons must be held before the Apple TV keyboard opens. Default: 150 ms.",
         "steam_overlay_gesture": "Steam Overlay Gesture",
         "steam_overlay_gesture_description": "Long-press the other button (the one not set as Overlay Button) to send Shift+Tab and open the Steam overlay. For example, with Overlay on Start, long-press View/Back.",
         "default_input_mode": "Default Input Mode",

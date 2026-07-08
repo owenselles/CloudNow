@@ -1118,6 +1118,40 @@ struct SettingsView: View {
                         }
                     }
                     .foregroundStyle(.primary)
+                    LabeledContent {
+                        HStack(spacing: 16) {
+                            Button {
+                                vm.streamSettings.textInputTriggerDelayMs = max(
+                                    StreamSettings.minTextInputTriggerDelayMs,
+                                    vm.streamSettings.textInputTriggerDelayMs - StreamSettings.textInputTriggerDelayStepMs
+                                )
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.plain)
+                            Text("\(vm.streamSettings.textInputTriggerDelayMs) ms")
+                                .monospacedDigit()
+                                .frame(minWidth: 92)
+                                .padding(.horizontal, 24)
+                            Button {
+                                vm.streamSettings.textInputTriggerDelayMs = min(
+                                    StreamSettings.maxTextInputTriggerDelayMs,
+                                    vm.streamSettings.textInputTriggerDelayMs + StreamSettings.textInputTriggerDelayStepMs
+                                )
+                            } label: {
+                                Image(systemName: "plus.circle")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("text_input_hold_delay"))
+                            Text(L10n.text("text_input_hold_delay_description"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
                     Toggle(isOn: $vm.streamSettings.enableSteamOverlayGesture) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(L10n.text("steam_overlay_gesture"))
