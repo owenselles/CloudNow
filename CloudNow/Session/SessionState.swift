@@ -12,6 +12,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
     static let defaultKeyboardLayout = L10n.keyboardLayoutCode()
     static let automaticGameLanguage = "automatic"
     static let defaultGameLanguage = automaticGameLanguage
+    static let defaultTextInputTriggerSequence = ControllerButtonSequence(buttons: [.options, .buttonY])
 
     var resolution: String = "1920x1080"
     var fps: Int = 60
@@ -38,6 +39,8 @@ nonisolated struct StreamSettings: Codable, Equatable {
 
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
     var overlayTriggerButton: OverlayTriggerButton = .start
+    /// Button chord that opens the local text-input overlay during streaming.
+    var textInputTriggerSequence: ControllerButtonSequence = Self.defaultTextInputTriggerSequence
     /// Default remote/controller input mode when a stream session starts.
     var defaultRemoteInputMode: RemoteInputMode = .gamepad
     /// How the streaming server is chosen. Server automatic delegates routing to
@@ -105,6 +108,7 @@ extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorPreference, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, rumbleEnabled, rumbleIntensity, controllerDeadzone, overlayTriggerButton
+        case textInputTriggerSequence
         case defaultRemoteInputMode, preferredZoneUrl
         case serverRoutingMode, preferredRegionName, preferredRegionAddress
         case enableSteamOverlayGesture
@@ -155,6 +159,7 @@ extension StreamSettings {
             Self.maxControllerDeadzone
         )
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
+        textInputTriggerSequence = try c.decodeIfPresent(ControllerButtonSequence.self, forKey: .textInputTriggerSequence) ?? d.textInputTriggerSequence
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
         preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)
         serverRoutingMode = try c.decodeIfPresent(ServerRoutingMode.self, forKey: .serverRoutingMode)
@@ -201,6 +206,7 @@ extension StreamSettings {
         try c.encode(rumbleIntensity, forKey: .rumbleIntensity)
         try c.encode(controllerDeadzone, forKey: .controllerDeadzone)
         try c.encode(overlayTriggerButton, forKey: .overlayTriggerButton)
+        try c.encode(textInputTriggerSequence, forKey: .textInputTriggerSequence)
         try c.encode(defaultRemoteInputMode, forKey: .defaultRemoteInputMode)
         try c.encodeIfPresent(preferredZoneUrl, forKey: .preferredZoneUrl)
         try c.encode(serverRoutingMode, forKey: .serverRoutingMode)
@@ -316,6 +322,76 @@ nonisolated enum AudioFormatPreference: String, Codable, CaseIterable {
         case .automatic:
             AVAudioSession.sharedInstance().maximumOutputNumberOfChannels >= 6 ? 6 : 2
         }
+    }
+}
+
+enum ControllerSequenceButton: String, Codable, CaseIterable, Hashable {
+    case dpadUp
+    case dpadDown
+    case dpadLeft
+    case dpadRight
+    case buttonA
+    case buttonB
+    case buttonX
+    case buttonY
+    case menu
+    case options
+    case leftShoulder
+    case rightShoulder
+    case leftThumbstick
+    case rightThumbstick
+
+    fileprivate var sortOrder: Int {
+        switch self {
+        case .dpadUp: 0
+        case .dpadDown: 1
+        case .dpadLeft: 2
+        case .dpadRight: 3
+        case .buttonA: 4
+        case .buttonB: 5
+        case .buttonX: 6
+        case .buttonY: 7
+        case .menu: 8
+        case .options: 9
+        case .leftShoulder: 10
+        case .rightShoulder: 11
+        case .leftThumbstick: 12
+        case .rightThumbstick: 13
+        }
+    }
+
+    var label: String {
+        L10n.controllerSequenceButtonLabel(self)
+    }
+}
+
+struct ControllerButtonSequence: Codable, Equatable {
+    static let maxButtons = 4
+
+    var buttons: [ControllerSequenceButton]
+
+    init(buttons: [ControllerSequenceButton]) {
+        self.buttons = Array(Set(buttons)).sorted { $0.sortOrder < $1.sortOrder }
+    }
+
+    var isEmpty: Bool {
+        buttons.isEmpty
+    }
+
+    var count: Int {
+        buttons.count
+    }
+
+    func contains(_ button: ControllerSequenceButton) -> Bool {
+        buttons.contains(button)
+    }
+
+    func asSet() -> Set<ControllerSequenceButton> {
+        Set(buttons)
+    }
+
+    var label: String {
+        L10n.controllerButtonSequenceLabel(self)
     }
 }
 
