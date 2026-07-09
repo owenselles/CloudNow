@@ -23,6 +23,7 @@ struct StreamView: View {
 
     @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var streamController = GFNStreamController()
     @State private var showOverlay = false
     @State private var showExitConfirmation = false
@@ -36,6 +37,8 @@ struct StreamView: View {
 
     var body: some View {
         ZStack {
+            hostBackground.ignoresSafeArea()
+
             switch streamController.state {
             case .idle, .connecting:
                 connectingView
@@ -87,11 +90,11 @@ struct StreamView: View {
             } else {
                 ProgressView()
                     .scaleEffect(2)
-                    .tint(.white)
+                    .tint(hostPrimaryForegroundColor)
             }
             Text(L10n.format("starting_game", game.title))
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(hostPrimaryForegroundColor)
             Text(loadingLabel)
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -490,7 +493,7 @@ struct StreamView: View {
                 .scaleEffect(1.5)
             Text(L10n.text("reconnecting"))
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(hostPrimaryForegroundColor)
             Text(L10n.format("attempt_of", attempt))
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -508,7 +511,7 @@ struct StreamView: View {
                 .foregroundStyle(.green)
             Text(L10n.text("session_ended"))
                 .font(.title.weight(.bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(hostPrimaryForegroundColor)
             Text(L10n.text("your_game_session_has_ended"))
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -554,7 +557,7 @@ struct StreamView: View {
                 .foregroundStyle(color)
             Text(title)
                 .font(.title.weight(.bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(hostPrimaryForegroundColor)
             Text(message)
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -569,6 +572,37 @@ struct StreamView: View {
             }
         }
         .padding(60)
+    }
+
+    @ViewBuilder
+    private var hostBackground: some View {
+        if colorScheme == .dark {
+            Color(white: 29.0 / 255.0)
+        } else {
+            LinearGradient(
+                colors: [
+                    Color(white: 0.74),
+                    Color(white: 0.68),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .overlay {
+                RadialGradient(
+                    colors: [
+                        Color.white.opacity(0.16),
+                        .clear,
+                    ],
+                    center: .top,
+                    startRadius: 0,
+                    endRadius: 1100
+                )
+            }
+        }
+    }
+
+    private var hostPrimaryForegroundColor: Color {
+        colorScheme == .dark ? .white : .black
     }
 
     // MARK: Actions
