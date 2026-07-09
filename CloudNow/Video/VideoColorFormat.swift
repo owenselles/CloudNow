@@ -182,10 +182,15 @@ enum DecodedVideoFormatInspector {
         CVBufferCopyAttachment(pixelBuffer, key, nil) != nil
     }
 
+    /// 'p420' — kCVPixelFormatType_420YpCbCr10PackedBiPlanarVideoRange. Not exposed in the
+    /// tvOS SDK, but VideoToolbox emits it as the native 10-bit HEVC output format.
+    private static let packed10BitBiPlanarVideoRange: OSType = 0x7034_3230
+
     private static func colorRange(for pixelFormat: OSType) -> String? {
         switch pixelFormat {
         case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-             kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
+             kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             packed10BitBiPlanarVideoRange:
             "Video"
         case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
@@ -201,11 +206,13 @@ enum DecodedVideoFormatInspector {
              kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
             return 8
         case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             packed10BitBiPlanarVideoRange:
             return 10
         default:
             let name = fourCC(pixelFormat).lowercased()
-            if name.hasPrefix("x") || name.contains("10") {
+            // 'x420'-style 10-bit biplanar and 'p420'-style packed 10-bit families.
+            if name.hasPrefix("x") || name.hasPrefix("p4") || name.contains("10") {
                 return 10
             }
             if name.contains("420") || name.contains("422") || name.contains("444") {

@@ -65,7 +65,9 @@ All source lives in `CloudNow/`. Five functional areas:
 ### Streaming
 - `GFNStreamController.swift` — `@Observable` WebRTC peer connection lifecycle. Opens the signaling WebSocket, negotiates SDP (server offer → munged answer), injects ICE candidates, attaches the video track, and collects live stats. Manages three data channels: `input_channel_v1` (reliable ordered), `input_channel_partially_reliable` (unordered, timed), and a server-opened `control_channel`. `InputSender` is started after receiving the server handshake on `input_channel_v1`.
 - `SignalingClient.swift` — Low-level WebSocket via `NWConnection` + `NWProtocolWebSocket`. Manages TLS options (cipher negotiation, cert bypass for GFN endpoints) and the JSON signaling message protocol.
-- `SDPMunger.swift` — Rewrites the SDP offer before sending: filters to preferred codec (H.264/H.265/AV1), clamps H.265 to Main profile, injects max bitrate.
+- `SDPMunger.swift` — Rewrites the client's SDP answer: filters to the preferred codec (H.264/H.265/AV1), front-loads H.265 Main10 for 10-bit/HDR requests, caps tier/level to hardware-safe values, injects max bitrate.
+- `GFNVideoDecoderFactory.swift` — Decoder factory advertising H.265 Main10 (profile-id=2) alongside the LiveKit defaults so GFN's 10-bit payload survives answer negotiation; routes H.265 to `GFNVideoDecoderH265`.
+- `GFNVideoDecoderH265.swift` — Custom VideoToolbox H.265 decoder preserving bit depth and VUI colorimetry (the bundled LiveKit decoder pins 8-bit NV12 and force-stamps BT.709/sRGB, breaking HDR10). Removable once the upstream webrtc-sdk fix ships.
 - `InputSender.swift` — Encodes GCController/keyboard/mouse/Siri Remote input into GFN binary protocol packets (XInput for gamepads; protocol v2 plain or v3 partially-reliable wrapping) and sends over the WebRTC data channel. Starts only after receiving the server handshake on `input_channel_v1`. Configurable analog stick deadzone via `deadzone: Float` property (set from `StreamSettings.controllerDeadzone`).
 
 ### Video

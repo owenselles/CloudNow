@@ -170,7 +170,10 @@ private func resolutionPixels(for settings: StreamSettings) -> (width: Int, heig
 private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
     let (width, height) = resolutionPixels(for: input.settings)
     let tzOffset = TimeZone.current.secondsFromGMT() * 1000
-    let color = input.settings.colorRequest(localCapabilities: .detect(codec: input.settings.codec))
+    let color = input.settings.colorRequest(
+        localCapabilities: .detect(codec: input.settings.codec),
+        accountAllowsHDR: input.accountAllowsHDR
+    )
 
     return [
         "sessionRequestData": [
@@ -237,9 +240,12 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     ]
 }
 
-private func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String) -> [String: Any] {
+private func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String, accountAllowsHDR: Bool?) -> [String: Any] {
     let (width, height) = resolutionPixels(for: settings)
-    let color = settings.colorRequest(localCapabilities: .detect(codec: settings.codec))
+    let color = settings.colorRequest(
+        localCapabilities: .detect(codec: settings.codec),
+        accountAllowsHDR: accountAllowsHDR
+    )
     var requestData: [String: Any] = [
         "availableSupportedControllers": [],
         "networkTestSessionId": NSNull(),
@@ -618,7 +624,8 @@ actor CloudMatchClient {
         clientId existingClientId: String? = nil,
         deviceId existingDeviceId: String? = nil,
         appId: String? = nil,
-        settings: StreamSettings
+        settings: StreamSettings,
+        accountAllowsHDR: Bool? = nil
     ) async throws -> SessionInfo {
         let clientId = existingClientId ?? UUID().uuidString
         let deviceId = existingDeviceId ?? GFNDeviceIdentity.stableDeviceId()
@@ -651,7 +658,7 @@ actor CloudMatchClient {
         let body: [String: Any] = [
             "action": 2,
             "data": "RESUME",
-            "sessionRequestData": buildResumeSessionRequestData(appId: appId, settings: settings, deviceId: deviceId),
+            "sessionRequestData": buildResumeSessionRequestData(appId: appId, settings: settings, deviceId: deviceId, accountAllowsHDR: accountAllowsHDR),
         ]
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"

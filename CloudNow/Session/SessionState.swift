@@ -295,12 +295,15 @@ struct StreamColorRequest: Codable, Equatable {
             }
             return capabilities.decoderSupports10Bit ? .sdr10 : .sdr8
         case .automatic:
-            if capabilities.gameHDRSupport == .supported,
+            // Game and server HDR support are permissive on unknown — GFN falls back to an
+            // SDR encode inside an HDR-capable session when the title doesn't support HDR.
+            // Account entitlement must be positively known so Free tiers don't request HDR.
+            if capabilities.gameHDRSupport != .unsupported,
                capabilities.decoderSupports10Bit,
                capabilities.hdrRenderPipelineAvailable,
                capabilities.displaySupportsHDR,
                capabilities.accountAllowsHDR == true,
-               capabilities.serverAllowsHDR == true
+               capabilities.serverAllowsHDR != false
             {
                 return .hdr10
             }
@@ -444,6 +447,16 @@ struct SubscriptionInfo {
     let remainingMinutes: Int?
     let totalMinutes: Int?
     let entitledResolutions: [EntitledResolution]
+
+    /// HDR entitlement by tier: Ultimate and Performance (formerly Priority) stream HDR,
+    /// Free is SDR-only. Unrecognized tiers stay undetermined (nil).
+    var allowsHDR: Bool? {
+        let tier = membershipTier.uppercased()
+        if tier.contains("ULTIMATE") || tier.contains("PERFORMANCE") || tier.contains("PRIORITY") {
+            return true
+        }
+        return tier.contains("FREE") ? false : nil
+    }
 }
 
 // MARK: - Games
@@ -493,4 +506,5 @@ struct SessionCreateRequest {
     let routingZoneUrl: String?
     let settings: StreamSettings
     let accountLinked: Bool
+    let accountAllowsHDR: Bool?
 }
