@@ -194,6 +194,9 @@ final class GFNStreamController: NSObject {
     private var wasStreaming = false
     private var reconnectAttempt = 0
     private static let maxReconnectAttempts = 3
+    /// Set when the server sends an `exitMessage` (game closed, session ended, kicked). The
+    /// subsequent ICE disconnect is then treated as a normal end — not a reconnect candidate.
+    private var serverStopped = false
     /// Set by the caller to enable auto-reconnect on ICE disconnect.
     var onReconnectNeeded: (() async -> SessionInfo?)?
     private var previousSelectedCandidatePairId = ""
@@ -223,6 +226,7 @@ final class GFNStreamController: NSObject {
         gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl)")
         videoColorLog.info("request preference=\(settings.colorPreference.rawValue) requested=\(colorRequest.mode.rawValue) bitDepth=\(colorRequest.bitDepth) hdr=\(colorRequest.hdrRequested) codec=\(settings.codec.rawValue) decoder10Bit=\(localCapabilities.supportsHardware10BitDecode) hdrPipeline=\(localCapabilities.supportsHDRRendering) displayHDR=\(localCapabilities.displaySupportsHDR)")
         state = .connecting
+        serverStopped = false
         sessionInfo = session
         self.settings = settings
         colorState = StreamColorState(
@@ -360,6 +364,7 @@ final class GFNStreamController: NSObject {
         stopStatsTimer()
         wasStreaming = false
         reconnectAttempt = 0
+        serverStopped = false
         inputSender?.stop()
         signaling?.disconnect()
         videoView?.videoTrack = nil
@@ -1352,14 +1357,18 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                 startStatsTimer()
             case .disconnected:
                 stopStatsTimer()
-                if wasStreaming {
+                if serverStopped {
+                    state = .sessionEnded
+                } else if wasStreaming {
                     attemptReconnect()
                 } else {
                     state = .disconnected(reason: "ICE disconnected")
                 }
             case .failed:
                 stopStatsTimer()
-                if wasStreaming {
+                if serverStopped {
+                    state = .sessionEnded
+                } else if wasStreaming {
                     attemptReconnect()
                 } else {
                     state = .failed(message: "ICE connection failed")
@@ -1484,6 +1493,20 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             {
                 Task { @MainActor [weak self] in
                     self?.applyNegotiatedHDRMode(rawMode)
+                }
+            }
+            // The server sends an `exitMessage` when it deliberately ends the stream — the user
+            // closed the game, the session was stopped, a time limit was hit, or an idle kick.
+            // Mark it so the ICE disconnect that follows ends the session instead of triggering a
+            // pointless reconnect (the seat is being torn down; a reclaim would fail anyway).
+            if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
+               json["exitMessage"] != nil
+            {
+                gfnLog.info("control channel exitMessage received — server ended stream, not reconnecting")
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    serverStopped = true
+                    state = .sessionEnded
                 }
             }
             return
