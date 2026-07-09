@@ -214,7 +214,7 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
             "remoteControllersBitmap": 0,
             "clientTimezoneOffset": tzOffset,
             "enhancedStreamMode": 1,
-            "appLaunchMode": 1,
+            "appLaunchMode": input.settings.appLaunchMode.cloudMatchValue,
             "secureRTSPSupported": false,
             "partnerCustomData": "",
             "accountLinked": input.accountLinked,
@@ -274,6 +274,7 @@ private func buildResumeSessionRequestData(appId: String?, settings: StreamSetti
         ],
         "sdrHdrMode": cloudMatchSdrHdrMode(color),
         "clientDisplayHdrCapabilities": cloudMatchDisplayCapabilities(color),
+        "appLaunchMode": settings.appLaunchMode.cloudMatchValue,
         "requestedStreamingFeatures": [
             "reflex": settings.fps >= 120,
             "bitDepth": cloudMatchBitDepth(color),

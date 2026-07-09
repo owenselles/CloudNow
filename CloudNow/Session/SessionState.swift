@@ -41,6 +41,10 @@ struct StreamSettings: Codable, Equatable {
     var statsMode: StreamStatsMode = .hud
     /// Captures a bounded WebRTC event log for the duration of the next stream.
     var enableRtcEventLog: Bool = false
+    /// How the GFN server presents launched games. Big Picture requests the "GamepadFriendly"
+    /// mode that NVIDIA's TV clients (e.g. Shield TV) use, opening launchers such as Steam
+    /// in their TV interface.
+    var appLaunchMode: AppLaunchMode = .default
 
     var normalizedForClient: StreamSettings {
         var normalized = self
@@ -68,6 +72,7 @@ extension StreamSettings {
         case defaultRemoteInputMode, preferredZoneUrl
         case enableSteamOverlayGesture
         case statsMode, enableRtcEventLog
+        case appLaunchMode
         case colorQuality
     }
 
@@ -93,6 +98,7 @@ extension StreamSettings {
         enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self, forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
         statsMode = try c.decodeIfPresent(StreamStatsMode.self, forKey: .statsMode) ?? d.statsMode
         enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
+        appLaunchMode = try c.decodeIfPresent(AppLaunchMode.self, forKey: .appLaunchMode) ?? d.appLaunchMode
     }
 
     func encode(to encoder: Encoder) throws {
@@ -113,6 +119,7 @@ extension StreamSettings {
         try c.encode(enableSteamOverlayGesture, forKey: .enableSteamOverlayGesture)
         try c.encode(statsMode, forKey: .statsMode)
         try c.encode(enableRtcEventLog, forKey: .enableRtcEventLog)
+        try c.encode(appLaunchMode, forKey: .appLaunchMode)
     }
 }
 
@@ -136,6 +143,20 @@ enum OverlayTriggerButton: String, Codable, CaseIterable {
 
     var label: String {
         L10n.overlayTriggerButtonLabel(self)
+    }
+}
+
+enum AppLaunchMode: String, Codable, CaseIterable {
+    case `default`
+    case bigPicture
+
+    /// CloudMatch sessionRequestData wire values: 1 = Default, 2 = GamepadFriendly, 3 = TouchFriendly.
+    var cloudMatchValue: Int {
+        self == .bigPicture ? 2 : 1
+    }
+
+    var label: String {
+        L10n.appLaunchModeLabel(self)
     }
 }
 

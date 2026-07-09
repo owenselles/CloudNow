@@ -244,6 +244,13 @@ enum L10n {
         }
     }
 
+    static func appLaunchModeLabel(_ mode: AppLaunchMode) -> String {
+        switch mode {
+        case .default: text("default")
+        case .bigPicture: text("launch_mode_big_picture")
+        }
+    }
+
     static func overlayTriggerButtonLabel(_ button: OverlayTriggerButton) -> String {
         switch button {
         case .start: text("start_(≡)")

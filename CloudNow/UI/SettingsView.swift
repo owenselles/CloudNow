@@ -104,6 +104,21 @@ struct SettingsView: View {
                         Text("Vietnamese").tag("vi_VN")
                         Text("Ukrainian").tag("uk_UA")
                     }
+
+                    Picker(selection: $vm.streamSettings.appLaunchMode) {
+                        ForEach(AppLaunchMode.allCases, id: \.self) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("game_launch_mode"))
+                            Text(L10n.text("game_launch_mode_description"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+
                     LabeledContent(L10n.text("max_bitrate")) {
                         HStack(spacing: 16) {
                             Button {
