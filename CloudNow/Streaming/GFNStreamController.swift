@@ -11,6 +11,7 @@ import os.log
 
 private let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
 private let videoColorLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "VideoColor")
+private let audioSyncLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "AudioSync")
 
 // MARK: - Session Time Warning
 
@@ -114,6 +115,30 @@ private struct ConnectionStatsSnapshot {
     var selectedNetworkPath: String
 }
 
+/// Audio-pipeline latency counters sampled from the full statistics report in diagnostic mode.
+/// All values cumulative (interval-averaged at log time), mirroring VideoStatsSnapshot, to
+/// pinpoint where the audio→video lag accumulates: NetEQ jitter buffer vs device playout.
+private struct AudioSyncStatsSnapshot {
+    var timestampUs: Double = 0
+    var packetsReceived: Double = 0
+    var packetsLost: Double = 0
+    var jitterSeconds: Double = 0
+    var jitterBufferDelaySeconds: Double = 0
+    var jitterBufferTargetDelaySeconds: Double = 0
+    var jitterBufferMinimumDelaySeconds: Double = 0
+    var jitterBufferEmittedCount: Double = 0
+    var concealedSamples: Double = 0
+    var insertedSamplesForDeceleration: Double = 0
+    var removedSamplesForAcceleration: Double = 0
+    var totalPlayoutDelaySeconds: Double = 0
+    var playoutSamplesCount: Double = 0
+    /// estimatedPlayoutTimestamp of the audio/video inbound-rtp streams (sender clock domain).
+    /// video − audio > 0 means audio is playing older media, i.e. audio lags video by that much.
+    /// Requires RTCP SR from the server for the RTP→NTP mapping; nil when absent.
+    var audioPlayoutTimestampMs: Double?
+    var videoPlayoutTimestampMs: Double?
+}
+
 private let streamStatsParsingQueue = DispatchQueue(
     label: "com.cloudnow.stream-stats",
     qos: .utility
@@ -190,6 +215,7 @@ final class GFNStreamController: NSObject {
     private var controlChannel: LKRTCDataChannel?
     private var inputReady = false
     private var previousVideoStats: VideoStatsSnapshot?
+    private var previousAudioSyncStats: AudioSyncStatsSnapshot?
     private var statsTick = 0
     private var statsGeneration = 0
     private var videoStatsRequestInFlight = false
@@ -209,7 +235,16 @@ final class GFNStreamController: NSObject {
         LKRTCInitializeSSL()
         let encoderFactory = LKRTCDefaultVideoEncoderFactory()
         let decoderFactory = GFNVideoDecoderFactory()
-        return LKRTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
+        // Bypass Apple's Voice-Processing I/O unit: it is built for calls (AEC/AGC/NS) and adds
+        // output latency plus voice-band filtering to what is here full-range game audio.
+        // Trade-off: no echo cancellation for the (rarely used) microphone path.
+        return LKRTCPeerConnectionFactory(
+            audioDeviceModuleType: .platformDefault,
+            bypassVoiceProcessing: true,
+            encoderFactory: encoderFactory,
+            decoderFactory: decoderFactory,
+            audioProcessingModule: nil
+        )
     }()
 
     // MARK: Connect
@@ -531,12 +566,14 @@ final class GFNStreamController: NSObject {
                     mode: .voiceChat,
                     options: [.allowBluetoothHFP, .allowBluetoothA2DP]
                 )
+                try audioSession.setPreferredIOBufferDuration(0.01)
                 try audioSession.setActive(true)
                 guard audioSession.isInputAvailable else {
                     print("[Stream] AVAudioSession has no input route, falling back to playback")
                     return configurePlaybackAudioSession(audioSession)
                 }
                 print("[Stream] AVAudioSession configured for playback + microphone")
+                logAudioSessionConfiguration(audioSession)
                 return true
             } catch {
                 print("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error)")
@@ -550,13 +587,38 @@ final class GFNStreamController: NSObject {
 
     private func configurePlaybackAudioSession(_ audioSession: AVAudioSession) -> Bool {
         do {
-            try audioSession.setCategory(.playback, mode: .moviePlayback, options: [])
+            // .default mode, not .moviePlayback: movie mode engages tvOS's high-latency,
+            // quality-optimized output path (measured 80 ms outputLatency + 20 ms IO buffer
+            // = 100 ms device playout delay over HDMI), which puts game audio ~100 ms behind
+            // our zero-buffer video. A short preferred IO buffer keeps the render quantum small.
+            try audioSession.setCategory(.playback, mode: .default, options: [])
+            try audioSession.setPreferredIOBufferDuration(0.01)
             try audioSession.setActive(true)
             print("[Stream] AVAudioSession configured for playback")
+            logAudioSessionConfiguration(audioSession)
         } catch {
             print("[Stream] AVAudioSession playback configuration failed: \(error)")
         }
         return false
+    }
+
+    /// Logs the OS-level audio output configuration — the latency layer WebRTC stats can't see.
+    /// outputLatency is the route's hardware/driver delay (HDMI vs TV speakers vs Bluetooth,
+    /// which alone can add 100–200 ms); ioBufferDuration is the render quantum.
+    private func logAudioSessionConfiguration(_ session: AVAudioSession) {
+        let route = session.currentRoute.outputs
+            .map { "\($0.portType.rawValue):\($0.portName)" }
+            .joined(separator: ", ")
+        let message = String(
+            format: "session category %@ mode %@ | sampleRate %.0f Hz ioBuffer %.1fms outputLatency %.1fms | route [%@]",
+            session.category.rawValue,
+            session.mode.rawValue,
+            session.sampleRate,
+            session.ioBufferDuration * 1000,
+            session.outputLatency * 1000,
+            route
+        )
+        audioSyncLog.info("\(message, privacy: .public)")
     }
 
     private func handleOffer(sdp: String) async {
@@ -585,6 +647,13 @@ final class GFNStreamController: NSObject {
         config.continualGatheringPolicy = .gatherContinually
         config.bundlePolicy = .maxBundle
         config.rtcpMuxPolicy = .require
+        // Keep the audio jitter buffer lean: measured NetEQ delay sat ~20 ms above its own
+        // target without ever draining (stretch -0 ms). Fast-accelerate time-compresses the
+        // excess away; the packet cap (50 × 10 ms = 500 ms) bounds worst-case buildup. The
+        // GFN server sends no RTCP SR, so WebRTC cannot lip-sync — audio latency is all we
+        // can trim, and video is rendered unbuffered by design (input latency).
+        config.audioJitterBufferFastAccelerate = true
+        config.audioJitterBufferMaxPackets = 50
 
         let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let pc = GFNStreamController.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
@@ -914,6 +983,7 @@ final class GFNStreamController: NSObject {
         videoStatsRequestInFlight = false
         connectionStatsRequestInFlight = false
         previousVideoStats = nil
+        previousAudioSyncStats = nil
         statsTick = 0
     }
 
@@ -948,11 +1018,16 @@ final class GFNStreamController: NSObject {
             }
         }
 
-        if statsTick == 1 || statsTick.isMultiple(of: 5), !connectionStatsRequestInFlight {
+        // Diagnostic mode samples the full report every tick so the AudioSync log has
+        // 1 s resolution; otherwise every 5th tick is enough for RTT/path display.
+        let wantFullReport = statsTick == 1 || statsTick.isMultiple(of: 5) || statsMode == .diagnostic
+        if wantFullReport, !connectionStatsRequestInFlight {
             connectionStatsRequestInFlight = true
+            let diagnoseAudio = statsMode == .diagnostic
             peerConnection.statistics { [weak self] report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseConnectionStats(report)
+                    let audioSample = diagnoseAudio ? Self.parseAudioSyncStats(report) : nil
                     Task { @MainActor [weak self] in
                         guard let self, statsGeneration == generation else { return }
                         connectionStatsRequestInFlight = false
@@ -960,6 +1035,7 @@ final class GFNStreamController: NSObject {
                             stats.rttMs = snapshot.rttMs
                             stats.selectedNetworkPath = snapshot.selectedNetworkPath
                         }
+                        if let audioSample { logAudioSyncStats(audioSample) }
                     }
                 }
             }
@@ -1106,6 +1182,40 @@ final class GFNStreamController: NSObject {
         )
     }
 
+    /// Extracts the audio-pipeline latency stats needed to diagnose audio↔video desync:
+    /// NetEQ jitter-buffer delays (inbound-rtp kind=audio), device-side playout delay
+    /// (media-playout), and both estimated playout timestamps for the direct A/V offset.
+    private nonisolated static func parseAudioSyncStats(_ report: LKRTCStatisticsReport) -> AudioSyncStatsSnapshot? {
+        guard let audio = report.statistics.values.first(where: {
+            $0.type == "inbound-rtp" && $0.values["kind"] as? String == "audio"
+        }) else { return nil }
+
+        var snapshot = AudioSyncStatsSnapshot()
+        snapshot.timestampUs = Double(audio.timestamp_us)
+        snapshot.packetsReceived = numericValue(audio.values["packetsReceived"])
+        snapshot.packetsLost = numericValue(audio.values["packetsLost"])
+        snapshot.jitterSeconds = numericValue(audio.values["jitter"])
+        snapshot.jitterBufferDelaySeconds = numericValue(audio.values["jitterBufferDelay"])
+        snapshot.jitterBufferTargetDelaySeconds = numericValue(audio.values["jitterBufferTargetDelay"])
+        snapshot.jitterBufferMinimumDelaySeconds = numericValue(audio.values["jitterBufferMinimumDelay"])
+        snapshot.jitterBufferEmittedCount = numericValue(audio.values["jitterBufferEmittedCount"])
+        snapshot.concealedSamples = numericValue(audio.values["concealedSamples"])
+        snapshot.insertedSamplesForDeceleration = numericValue(audio.values["insertedSamplesForDeceleration"])
+        snapshot.removedSamplesForAcceleration = numericValue(audio.values["removedSamplesForAcceleration"])
+        snapshot.audioPlayoutTimestampMs = (audio.values["estimatedPlayoutTimestamp"] as? NSNumber)?.doubleValue
+
+        if let playout = report.statistics.values.first(where: { $0.type == "media-playout" }) {
+            snapshot.totalPlayoutDelaySeconds = numericValue(playout.values["totalPlayoutDelay"])
+            snapshot.playoutSamplesCount = numericValue(playout.values["totalSamplesCount"])
+        }
+        if let video = report.statistics.values.first(where: {
+            $0.type == "inbound-rtp" && $0.values["kind"] as? String == "video"
+        }) {
+            snapshot.videoPlayoutTimestampMs = (video.values["estimatedPlayoutTimestamp"] as? NSNumber)?.doubleValue
+        }
+        return snapshot
+    }
+
     private nonisolated static func numericValue(_ value: Any?) -> Double {
         (value as? NSNumber)?.doubleValue ?? 0
     }
@@ -1221,6 +1331,50 @@ final class GFNStreamController: NSObject {
         default:
             return nil
         }
+    }
+
+    /// Logs one compact AudioSync line per stats tick (diagnostic mode only), interval-averaged
+    /// over the last tick like the video stats. Reading the line:
+    /// - neteq: actual/target/floor delay of WebRTC's adaptive audio jitter buffer. A raised
+    ///   floor (min) means something external — e.g. the lip-sync module — is holding audio back.
+    /// - device: playout delay after the jitter buffer (ADM + OS output buffers).
+    /// - stretch: NetEQ time-stretching (+slowed/−accelerated) and concealment, ms of audio.
+    /// - av-offset: video − audio estimated playout timestamps; positive = audio behind video.
+    private func logAudioSyncStats(_ sample: AudioSyncStatsSnapshot) {
+        defer { previousAudioSyncStats = sample }
+        guard let previous = previousAudioSyncStats else { return }
+
+        let emitted = max(0, sample.jitterBufferEmittedCount - previous.jitterBufferEmittedCount)
+        let neteqMs = intervalAverage(sample.jitterBufferDelaySeconds, previous.jitterBufferDelaySeconds, count: emitted)
+        let targetMs = intervalAverage(sample.jitterBufferTargetDelaySeconds, previous.jitterBufferTargetDelaySeconds, count: emitted)
+        let minMs = intervalAverage(sample.jitterBufferMinimumDelaySeconds, previous.jitterBufferMinimumDelaySeconds, count: emitted)
+
+        let playoutSamples = max(0, sample.playoutSamplesCount - previous.playoutSamplesCount)
+        let deviceMs = intervalAverage(sample.totalPlayoutDelaySeconds, previous.totalPlayoutDelaySeconds, count: playoutSamples)
+
+        // NetEQ time-stretching over the interval, converted from samples to ms at 48 kHz
+        let sloweddMs = max(0, sample.insertedSamplesForDeceleration - previous.insertedSamplesForDeceleration) / 48
+        let acceleratedMs = max(0, sample.removedSamplesForAcceleration - previous.removedSamplesForAcceleration) / 48
+        let concealedMs = max(0, sample.concealedSamples - previous.concealedSamples) / 48
+
+        let offset = if let audioTs = sample.audioPlayoutTimestampMs,
+                        let videoTs = sample.videoPlayoutTimestampMs
+        {
+            String(format: "%+.0fms", videoTs - audioTs)
+        } else {
+            "n/a (no RTCP SR mapping)"
+        }
+
+        let lost = max(0, sample.packetsLost - previous.packetsLost)
+        // Live OS output latency: the media-playout stat can be absent depending on the active
+        // audio unit (then device reads 0), so also sample the route's latency directly.
+        let osOutputLatencyMs = AVAudioSession.sharedInstance().outputLatency * 1000
+        let message = String(
+            format: "neteq %.0fms (target %.0f, min %.0f) | device %.0fms out %.0fms | stretch +%.0f/-%.0fms conceal %.0fms | jitter %.1fms lost %.0f | av-offset %@",
+            neteqMs, targetMs, minMs, deviceMs, osOutputLatencyMs, sloweddMs, acceleratedMs, concealedMs,
+            sample.jitterSeconds * 1000, lost, offset
+        )
+        audioSyncLog.info("\(message, privacy: .public)")
     }
 
     private func intervalAverage(_ current: Double, _ previous: Double, count: Double) -> Double {
