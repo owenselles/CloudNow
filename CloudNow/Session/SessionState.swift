@@ -53,6 +53,9 @@ struct StreamSettings: Codable, Equatable {
     /// mode that NVIDIA's TV clients (e.g. Shield TV) use, opening launchers such as Steam
     /// in their TV interface — the natural default for a TV client.
     var appLaunchMode: AppLaunchMode = .bigPicture
+    /// Persist in-game graphics settings across sessions on the cloud rig. A premium-tier
+    /// (Performance/Ultimate) feature; the server ignores the flag for non-entitled accounts.
+    var persistInGameSettings: Bool = true
 
     var normalizedForClient: StreamSettings {
         var normalized = self
@@ -81,6 +84,7 @@ extension StreamSettings {
         case enableSteamOverlayGesture
         case statsMode, enableRtcEventLog
         case appLaunchMode
+        case persistInGameSettings
         case colorQuality
     }
 
@@ -109,6 +113,7 @@ extension StreamSettings {
         statsMode = try c.decodeIfPresent(StreamStatsMode.self, forKey: .statsMode) ?? d.statsMode
         enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
         appLaunchMode = try c.decodeIfPresent(AppLaunchMode.self, forKey: .appLaunchMode) ?? d.appLaunchMode
+        persistInGameSettings = try c.decodeIfPresent(Bool.self, forKey: .persistInGameSettings) ?? d.persistInGameSettings
     }
 
     func encode(to encoder: Encoder) throws {
@@ -132,6 +137,7 @@ extension StreamSettings {
         try c.encode(statsMode, forKey: .statsMode)
         try c.encode(enableRtcEventLog, forKey: .enableRtcEventLog)
         try c.encode(appLaunchMode, forKey: .appLaunchMode)
+        try c.encode(persistInGameSettings, forKey: .persistInGameSettings)
     }
 }
 
@@ -484,6 +490,16 @@ struct SubscriptionInfo {
     /// HDR entitlement by tier: Ultimate and Performance (formerly Priority) stream HDR,
     /// Free is SDR-only. Unrecognized tiers stay undetermined (nil).
     var allowsHDR: Bool? {
+        let tier = membershipTier.uppercased()
+        if tier.contains("ULTIMATE") || tier.contains("PERFORMANCE") || tier.contains("PRIORITY") {
+            return true
+        }
+        return tier.contains("FREE") ? false : nil
+    }
+
+    /// Whether the tier includes in-game graphics settings persistence: premium tiers
+    /// (Ultimate/Performance, formerly Priority) yes, Free no, unrecognized tiers nil.
+    var allowsInGameSettingsPersistence: Bool? {
         let tier = membershipTier.uppercased()
         if tier.contains("ULTIMATE") || tier.contains("PERFORMANCE") || tier.contains("PRIORITY") {
             return true

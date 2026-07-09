@@ -296,6 +296,28 @@ struct SettingsView: View {
                     LabeledContent(L10n.text("protocol"), value: "XInput over GFN v2/v3")
                 }
 
+                Section(L10n.text("game")) {
+                    if viewModel.subscription?.allowsInGameSettingsPersistence == false {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("save_in_game_settings"))
+                            Text(L10n.text("save_in_game_settings_free_unavailable"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    } else {
+                        Toggle(isOn: $vm.streamSettings.persistInGameSettings) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.text("save_in_game_settings"))
+                                Text(L10n.text("save_in_game_settings_description"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 8)
+                        }
+                    }
+                }
+
                 Section(L10n.text("diagnostics")) {
                     Picker(selection: $vm.streamSettings.statsMode) {
                         ForEach(StreamStatsMode.allCases, id: \.self) { mode in

@@ -221,7 +221,7 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
             "secureRTSPSupported": false,
             "partnerCustomData": "",
             "accountLinked": input.accountLinked,
-            "enablePersistingInGameSettings": true,
+            "enablePersistingInGameSettings": input.settings.persistInGameSettings,
             "userAge": 26,
             "requestedStreamingFeatures": [
                 "reflex": input.settings.fps >= 120,
@@ -281,6 +281,7 @@ private func buildResumeSessionRequestData(appId: String?, settings: StreamSetti
         "sdrHdrMode": cloudMatchSdrHdrMode(color),
         "clientDisplayHdrCapabilities": cloudMatchDisplayCapabilities(color),
         "appLaunchMode": settings.appLaunchMode.cloudMatchValue,
+        "enablePersistingInGameSettings": settings.persistInGameSettings,
         "requestedStreamingFeatures": [
             "reflex": settings.fps >= 120,
             "bitDepth": cloudMatchBitDepth(color),
