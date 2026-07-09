@@ -13,7 +13,7 @@ private let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", category: "H
 /// color attachments on every frame, which crushes HEVC Main10 HDR10 streams to washed-out
 /// 8-bit SDR. This decoder lets VideoToolbox emit its native output format (10-bit for
 /// Main10) and propagate the bitstream's VUI colorimetry (PQ/BT.2020 for HDR10) untouched.
-/// An upstream fix will be proposed to webrtc-sdk/webrtc; once it ships in a LiveKitWebRTC
+/// The upstream fix is proposed as webrtc-sdk/webrtc#267; once it ships in a LiveKitWebRTC
 /// release this class can be deleted and `GFNVideoDecoderFactory` reverted to the default
 /// decoder.
 final class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder {
