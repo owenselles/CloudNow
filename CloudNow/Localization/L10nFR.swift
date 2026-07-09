@@ -95,6 +95,8 @@ enum L10nFR {
         "in_queue": "En file d'attente…",
         "in_queue_position": "En file d'attente · Position %d",
         "preparing_game": "Préparation de votre jeu… Cela peut prendre une minute",
+        "waiting_for_storage": "Préparation du stockage…",
+        "previous_session_cleanup": "Nettoyage d'une session précédente…",
         "server_took_too_long": "Le serveur a mis trop de temps à répondre.",
         "end_session_title": "Terminer la session ?",
         "end_session": "Terminer la session",

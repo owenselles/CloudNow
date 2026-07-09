@@ -100,6 +100,8 @@ enum L10nNB {
         "in_queue": "I kø…",
         "in_queue_position": "I kø · Plassering %d",
         "preparing_game": "Forbereder spillet ditt… Dette kan ta et minutt",
+        "waiting_for_storage": "Forbereder lagring…",
+        "previous_session_cleanup": "Rydder opp i en tidligere økt…",
         "server_took_too_long": "Serveren brukte for lang tid på å svare.",
         "end_session_title": "Avslutte økt?",
         "end_session": "Avslutt økt",

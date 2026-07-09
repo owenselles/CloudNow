@@ -100,6 +100,8 @@ enum L10nRO {
         "in_queue": "În coadă…",
         "in_queue_position": "În coadă · Poziția %d",
         "preparing_game": "Se pregătește jocul dvs.… Poate dura un minut",
+        "waiting_for_storage": "Se pregătește stocarea…",
+        "previous_session_cleanup": "Se curăță o sesiune anterioară…",
         "server_took_too_long": "Serverul a răspuns prea târziu.",
         "end_session_title": "Terminați sesiunea?",
         "end_session": "Termină sesiunea",

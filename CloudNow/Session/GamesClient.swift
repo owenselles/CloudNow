@@ -28,7 +28,7 @@ actor GamesClient {
             items {
                 id title
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                variants { id appStore supportedControls gfn { status library { status selected } } }
+                variants { id appStore supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
                 gfn { playabilityState minimumMembershipTierLabel }
             }
         }
@@ -42,7 +42,7 @@ actor GamesClient {
             items {
                 id title
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                variants { id appStore supportedControls gfn { status library { status selected } } }
+                variants { id appStore supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
                 gfn { playabilityState minimumMembershipTierLabel }
             }
         }
@@ -152,9 +152,30 @@ actor GamesClient {
             title: item.title ?? id,
             boxArtUrl: item.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) },
             heroBannerUrl: (item.images?.TV_BANNER ?? item.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) },
+            heroImageUrl: (item.images?.HERO_IMAGE ?? item.images?.TV_BANNER).flatMap { optimizeImageUrl($0, width: 1920) },
+            supportedFeatures: Self.deriveFeatures(from: item.variants),
             isInLibrary: item.variants?.contains { $0.gfn?.library?.isOwned == true } ?? false,
             variants: variants
         )
+    }
+
+    /// Maps GFN's per-variant feature flags to the badge features, unioned across variants.
+    /// HDR is signalled either by HDR_ENABLED or a non-empty SUPPORTED_HDR_VERSION list.
+    private static func deriveFeatures(from variants: [BrowseResponse.BrowseApps.BrowseApp.Variant]?) -> [GameFeature] {
+        guard let variants else { return [] }
+        var found = Set<GameFeature>()
+        for variant in variants {
+            for flag in variant.gfn?.features ?? [] {
+                switch flag.key {
+                case "RTX_ENABLED": if flag.value == "true" { found.insert(.rtx) }
+                case "HDR_ENABLED": if flag.value == "true" { found.insert(.hdr) }
+                case "SUPPORTED_HDR_VERSION": if !(flag.values ?? []).isEmpty { found.insert(.hdr) }
+                case "REFLEX_ENABLED": if flag.value == "true" { found.insert(.reflex) }
+                default: break
+                }
+            }
+        }
+        return GameFeature.allCases.filter { found.contains($0) }
     }
 
     // MARK: - Public Catalog Fallback
@@ -232,6 +253,9 @@ actor GamesClient {
         let hero = stringValue(entry["heroBannerUrl"])
             ?? stringValue(entry["heroImage"])
             ?? stringValue(entry["tvBanner"])
+        let heroImage = stringValue(entry["heroImageUrl"])
+            ?? stringValue(entry["heroImage"])
+            ?? hero
         let variants = publicCatalogVariants(in: entry, fallbackId: id)
         guard !variants.isEmpty else { return nil }
         return GameInfo(
@@ -239,6 +263,8 @@ actor GamesClient {
             title: title,
             boxArtUrl: boxArt.flatMap { optimizeImageUrl($0) },
             heroBannerUrl: hero.flatMap { optimizeImageUrl($0, width: 1920) },
+            heroImageUrl: heroImage.flatMap { optimizeImageUrl($0, width: 1920) },
+            supportedFeatures: nil,
             isInLibrary: false,
             variants: variants
         )
@@ -296,11 +322,14 @@ actor GamesClient {
             guard let meta = metaById[game.id] else { return game }
             let boxArt = meta.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) }
             let hero = (meta.images?.TV_BANNER ?? meta.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) }
+            let heroImage = (meta.images?.HERO_IMAGE ?? meta.images?.TV_BANNER).flatMap { optimizeImageUrl($0, width: 1920) }
             return GameInfo(
                 id: game.id,
                 title: meta.title ?? game.title,
                 boxArtUrl: boxArt ?? game.boxArtUrl,
                 heroBannerUrl: hero ?? game.heroBannerUrl,
+                heroImageUrl: heroImage ?? game.heroImageUrl,
+                supportedFeatures: game.supportedFeatures,
                 isInLibrary: game.isInLibrary,
                 variants: game.variants
             )
@@ -614,6 +643,15 @@ private struct BrowseResponse: Decodable {
                 let gfn: GFNMeta?
                 struct GFNMeta: Decodable {
                     let library: LibraryMeta?
+                    let features: [FeatureFlag]?
+                    /// A GfnSubscriptionFeature union member: `key` on the interface, `value` on
+                    /// GfnSubscriptionFeatureValue, `values` on GfnSubscriptionFeatureValueList.
+                    struct FeatureFlag: Decodable {
+                        let key: String?
+                        let value: String?
+                        let values: [String]?
+                    }
+
                     struct LibraryMeta: Decodable {
                         let status: String?
                         let selected: Bool?

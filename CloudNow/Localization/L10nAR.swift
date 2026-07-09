@@ -100,6 +100,8 @@ enum L10nAR {
         "in_queue": "في قائمة الانتظار…",
         "in_queue_position": "في قائمة الانتظار · الموضع %d",
         "preparing_game": "جارٍ تجهيز لعبتك… قد يستغرق ذلك دقيقة",
+        "waiting_for_storage": "جارٍ تجهيز التخزين…",
+        "previous_session_cleanup": "جارٍ تنظيف جلسة سابقة…",
         "server_took_too_long": "استغرق الخادم وقتًا طويلًا للرد.",
         "end_session_title": "إنهاء الجلسة؟",
         "end_session": "إنهاء الجلسة",

@@ -100,6 +100,8 @@ enum L10nHE {
         "in_queue": "בתור…",
         "in_queue_position": "בתור · מיקום %d",
         "preparing_game": "מכין את המשחק שלך… זה עשוי לקחת דקה",
+        "waiting_for_storage": "מכין אחסון…",
+        "previous_session_cleanup": "מנקה הפעלה קודמת…",
         "server_took_too_long": "לשרת לקח זמן רב מדי להגיב.",
         "end_session_title": "לסיים סשן?",
         "end_session": "סיים סשן",

@@ -100,6 +100,8 @@ enum L10nHU {
         "in_queue": "Sorban…",
         "in_queue_position": "Sorban · Pozíció %d",
         "preparing_game": "A játék előkészítése… Ez eltarthat egy percig",
+        "waiting_for_storage": "Tárhely előkészítése…",
+        "previous_session_cleanup": "Előző munkamenet törlése…",
         "server_took_too_long": "A szerver túl sokáig válaszolt.",
         "end_session_title": "Munkamenet befejezése?",
         "end_session": "Munkamenet befejezése",

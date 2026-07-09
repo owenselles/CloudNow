@@ -100,6 +100,8 @@ enum L10nUK {
         "in_queue": "У черзі…",
         "in_queue_position": "У черзі · Місце %d",
         "preparing_game": "Підготовка гри… Це може тривати хвилину",
+        "waiting_for_storage": "Підготовка сховища…",
+        "previous_session_cleanup": "Очищення попереднього сеансу…",
         "server_took_too_long": "Сервер відповідав занадто довго.",
         "end_session_title": "Завершити сеанс?",
         "end_session": "Завершити сеанс",

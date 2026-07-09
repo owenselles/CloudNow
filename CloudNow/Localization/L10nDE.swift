@@ -95,6 +95,8 @@ enum L10nDE {
         "in_queue": "In Warteschlange…",
         "in_queue_position": "In Warteschlange · Position %d",
         "preparing_game": "Ihr Spiel wird vorbereitet… Das kann eine Minute dauern",
+        "waiting_for_storage": "Speicher wird vorbereitet…",
+        "previous_session_cleanup": "Vorherige Sitzung wird bereinigt…",
         "server_took_too_long": "Server hat zu lange geantwortet.",
         "end_session_title": "Sitzung beenden?",
         "end_session": "Sitzung beenden",

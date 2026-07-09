@@ -100,6 +100,8 @@ enum L10nID {
         "in_queue": "Dalam antrean…",
         "in_queue_position": "Dalam antrean · Posisi %d",
         "preparing_game": "Menyiapkan game Anda… Ini bisa memakan waktu satu menit",
+        "waiting_for_storage": "Menyiapkan penyimpanan…",
+        "previous_session_cleanup": "Membersihkan sesi sebelumnya…",
         "server_took_too_long": "Server terlalu lama merespons.",
         "end_session_title": "Akhiri sesi?",
         "end_session": "Akhiri sesi",

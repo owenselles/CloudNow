@@ -100,6 +100,8 @@ enum L10nTR {
         "in_queue": "Kuyrukta…",
         "in_queue_position": "Kuyrukta · Sıra %d",
         "preparing_game": "Oyununuz hazırlanıyor… Bu bir dakika sürebilir",
+        "waiting_for_storage": "Depolama hazırlanıyor…",
+        "previous_session_cleanup": "Önceki oturum temizleniyor…",
         "server_took_too_long": "Sunucunun yanıt vermesi çok uzun sürdü.",
         "end_session_title": "Oturum sonlandırılsın mı?",
         "end_session": "Oturumu sonlandır",

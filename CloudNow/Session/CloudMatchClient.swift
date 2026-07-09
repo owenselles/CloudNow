@@ -56,9 +56,16 @@ private struct CloudMatchResponse: Decodable {
             seatSetupStep ?? seatSetupInfo?.seatSetupStep
         }
 
+        /// Estimated time remaining for queue/setup, in milliseconds (0 when unknown).
+        var resolvedSeatSetupEtaMs: Int? {
+            guard let eta = seatSetupInfo?.seatSetupEta, eta > 0 else { return nil }
+            return eta
+        }
+
         struct SeatSetupInfo: Decodable {
             let queuePosition: Int?
             let seatSetupStep: Int?
+            let seatSetupEta: Int?
         }
 
         struct SessionProgress: Decodable {
@@ -753,6 +760,7 @@ actor CloudMatchClient {
             gpuType: s.gpuType,
             queuePosition: s.resolvedQueuePosition,
             seatSetupStep: s.resolvedSeatSetupStep,
+            seatSetupEtaMs: s.resolvedSeatSetupEtaMs,
             iceServers: iceServers,
             mediaConnectionInfo: media,
             clientId: clientId,

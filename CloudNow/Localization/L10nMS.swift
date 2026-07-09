@@ -100,6 +100,8 @@ enum L10nMS {
         "in_queue": "Dalam giliran…",
         "in_queue_position": "Dalam giliran · Kedudukan %d",
         "preparing_game": "Menyediakan permainan anda… Ini mungkin mengambil masa seminit",
+        "waiting_for_storage": "Menyediakan storan…",
+        "previous_session_cleanup": "Membersihkan sesi sebelumnya…",
         "server_took_too_long": "Pelayan mengambil masa terlalu lama untuk bertindak balas.",
         "end_session_title": "Tamatkan sesi?",
         "end_session": "Tamatkan sesi",

@@ -100,6 +100,8 @@ enum L10nSK {
         "in_queue": "V rade…",
         "in_queue_position": "V rade · Pozícia %d",
         "preparing_game": "Pripravuje sa vaša hra… Môže to trvať minútu",
+        "waiting_for_storage": "Príprava úložiska…",
+        "previous_session_cleanup": "Čistenie predchádzajúcej relácie…",
         "server_took_too_long": "Server odpovedal príliš dlho.",
         "end_session_title": "Ukončiť reláciu?",
         "end_session": "Ukončiť reláciu",

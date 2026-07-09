@@ -100,6 +100,8 @@ enum L10nVI {
         "in_queue": "Đang xếp hàng…",
         "in_queue_position": "Đang xếp hàng · Vị trí %d",
         "preparing_game": "Đang chuẩn bị trò chơi của bạn… Việc này có thể mất một phút",
+        "waiting_for_storage": "Đang chuẩn bị bộ nhớ…",
+        "previous_session_cleanup": "Đang dọn dẹp phiên trước…",
         "server_took_too_long": "Máy chủ mất quá nhiều thời gian để phản hồi.",
         "end_session_title": "Kết thúc phiên?",
         "end_session": "Kết thúc phiên",

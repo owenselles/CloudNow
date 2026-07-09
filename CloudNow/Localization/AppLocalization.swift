@@ -266,6 +266,16 @@ enum L10n {
         }
     }
 
+    static func setupStageLabel(_ stage: SetupStage) -> String {
+        switch stage {
+        case .connecting: text("connecting_to_server")
+        case .inQueue: text("in_queue")
+        case .configuring: text("preparing_game")
+        case .waitingForStorage: text("waiting_for_storage")
+        case .previousSessionCleanup: text("previous_session_cleanup")
+        }
+    }
+
     static func librarySortLabel(_ order: LibrarySortOrder) -> String {
         switch order {
         case .default: text("default")

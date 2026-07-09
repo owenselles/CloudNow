@@ -100,6 +100,8 @@ enum L10nHI {
         "in_queue": "क्यू में…",
         "in_queue_position": "क्यू में · स्थान %d",
         "preparing_game": "आपका गेम तैयार किया जा रहा है… इसमें एक मिनट लग सकता है",
+        "waiting_for_storage": "स्टोरेज तैयार हो रहा है…",
+        "previous_session_cleanup": "पिछला सत्र साफ़ किया जा रहा है…",
         "server_took_too_long": "सर्वर को जवाब देने में बहुत समय लगा।",
         "end_session_title": "सेशन समाप्त करें?",
         "end_session": "सेशन समाप्त करें",

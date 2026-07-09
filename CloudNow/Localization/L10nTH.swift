@@ -100,6 +100,8 @@ enum L10nTH {
         "in_queue": "อยู่ในคิว…",
         "in_queue_position": "อยู่ในคิว · ลำดับที่ %d",
         "preparing_game": "กำลังเตรียมเกมของคุณ… อาจใช้เวลาหนึ่งนาที",
+        "waiting_for_storage": "กำลังเตรียมพื้นที่จัดเก็บ…",
+        "previous_session_cleanup": "กำลังล้างเซสชันก่อนหน้า…",
         "server_took_too_long": "เซิร์ฟเวอร์ตอบสนองช้าเกินไป",
         "end_session_title": "จบเซสชัน?",
         "end_session": "จบเซสชัน",

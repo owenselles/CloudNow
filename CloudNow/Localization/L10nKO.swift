@@ -95,6 +95,8 @@ enum L10nKO {
         "in_queue": "대기열 대기 중…",
         "in_queue_position": "대기열 · 위치 %d",
         "preparing_game": "게임을 준비 중… 잠시만 기다려 주세요",
+        "waiting_for_storage": "저장소를 준비하는 중…",
+        "previous_session_cleanup": "이전 세션을 정리하는 중…",
         "server_took_too_long": "서버 응답이 너무 오래 걸렸습니다.",
         "end_session_title": "세션을 종료할까요?",
         "end_session": "세션 종료",

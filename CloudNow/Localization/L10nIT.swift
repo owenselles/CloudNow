@@ -95,6 +95,8 @@ enum L10nIT {
         "in_queue": "In coda…",
         "in_queue_position": "In coda · Posizione %d",
         "preparing_game": "Preparazione del gioco… Può richiedere un minuto",
+        "waiting_for_storage": "Preparazione dello spazio di archiviazione…",
+        "previous_session_cleanup": "Pulizia di una sessione precedente…",
         "server_took_too_long": "Il server ha impiegato troppo tempo a rispondere.",
         "end_session_title": "Terminare la sessione?",
         "end_session": "Termina sessione",

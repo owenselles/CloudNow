@@ -100,6 +100,8 @@ enum L10nHR {
         "in_queue": "U redu čekanja…",
         "in_queue_position": "U redu čekanja · Pozicija %d",
         "preparing_game": "Priprema vaše igre… To može potrajati minutu",
+        "waiting_for_storage": "Priprema pohrane…",
+        "previous_session_cleanup": "Čišćenje prethodne sesije…",
         "server_took_too_long": "Poslužitelju je trebalo previše dugo da odgovori.",
         "end_session_title": "Završiti sesiju?",
         "end_session": "Završi sesiju",

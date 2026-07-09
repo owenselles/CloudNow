@@ -100,6 +100,8 @@ enum L10nRU {
         "in_queue": "В очереди…",
         "in_queue_position": "В очереди · Место %d",
         "preparing_game": "Подготовка игры… Это может занять минуту",
+        "waiting_for_storage": "Подготовка хранилища…",
+        "previous_session_cleanup": "Очистка предыдущего сеанса…",
         "server_took_too_long": "Сервер слишком долго отвечал.",
         "end_session_title": "Завершить сеанс?",
         "end_session": "Завершить сеанс",

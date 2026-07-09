@@ -95,6 +95,8 @@ enum L10nJA {
         "in_queue": "待機中…",
         "in_queue_position": "待機中 · 位置 %d",
         "preparing_game": "ゲームを準備中… しばらくお待ちください",
+        "waiting_for_storage": "ストレージを準備しています…",
+        "previous_session_cleanup": "前のセッションをクリーンアップしています…",
         "server_took_too_long": "サーバーの応答が遅すぎました。",
         "end_session_title": "セッションを終了しますか？",
         "end_session": "セッションを終了",

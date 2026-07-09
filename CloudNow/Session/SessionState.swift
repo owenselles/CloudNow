@@ -434,6 +434,8 @@ struct SessionInfo {
     let gpuType: String?
     let queuePosition: Int?
     let seatSetupStep: Int?
+    /// Estimated queue/setup time remaining, in milliseconds (nil when unknown).
+    let seatSetupEtaMs: Int?
     let iceServers: [IceServer]
     let mediaConnectionInfo: MediaConnectionInfo?
     let clientId: String
@@ -444,6 +446,41 @@ struct SessionInfo {
     var isInQueue: Bool {
         if seatSetupStep == 1 { return true }
         return (queuePosition ?? 0) > 1
+    }
+
+    /// ETA remaining as a TimeInterval, when the server provides one.
+    var seatSetupEta: TimeInterval? {
+        seatSetupEtaMs.map { TimeInterval($0) / 1000 }
+    }
+
+    /// Setup stage derived from seatSetupStep, for the loading UI label.
+    var setupStage: SetupStage {
+        SetupStage(seatSetupStep: seatSetupStep)
+    }
+}
+
+/// Server-reported setup stage during session provisioning, matching the official client's
+/// seatSetupStep values (0 Connecting, 1 InQueue, 5 PreviousSessionCleanup, 6 WaitingForStorage;
+/// anything else is treated as generic Configuring).
+enum SetupStage: Equatable {
+    case connecting
+    case inQueue
+    case configuring
+    case waitingForStorage
+    case previousSessionCleanup
+
+    init(seatSetupStep: Int?) {
+        switch seatSetupStep {
+        case 0: self = .connecting
+        case 1: self = .inQueue
+        case 5: self = .previousSessionCleanup
+        case 6: self = .waitingForStorage
+        default: self = .configuring
+        }
+    }
+
+    var label: String {
+        L10n.setupStageLabel(self)
     }
 }
 
@@ -494,11 +531,43 @@ struct SubscriptionInfo {
 
 // MARK: - Games
 
+/// A streaming feature GFN surfaces as a loading-screen badge. Matches the three feature keys
+/// the official client shows there (RTX_ENABLED, HDR, REFLEX_ENABLED); labels are brand terms
+/// shown untranslated. Symbols are Apple SF Symbols to avoid third-party badge artwork.
+enum GameFeature: String, Codable, CaseIterable {
+    case rtx
+    case hdr
+    case reflex
+
+    var label: String {
+        switch self {
+        case .rtx: "RTX"
+        case .hdr: "HDR"
+        case .reflex: "Reflex"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .rtx: "sparkles"
+        case .hdr: "sun.max.fill"
+        case .reflex: "bolt.fill"
+        }
+    }
+}
+
 struct GameInfo: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let boxArtUrl: String?
+    /// Wide 16:9 banner (GFN TV_BANNER) for tiles and Home rows.
     let heroBannerUrl: String?
+    /// Full-bleed cinematic key art (GFN HERO_IMAGE) for the full-screen loading background,
+    /// matching the official client. Optional Codable field: absent in older persisted JSON → nil.
+    let heroImageUrl: String?
+    /// Streaming features the game supports (RTX/HDR/Reflex), from GFN's per-variant feature flags.
+    /// Optional Codable field: absent in older persisted JSON → nil.
+    let supportedFeatures: [GameFeature]?
     var isInLibrary: Bool
     var variants: [GameVariant]
 

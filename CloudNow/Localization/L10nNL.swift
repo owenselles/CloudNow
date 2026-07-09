@@ -100,6 +100,8 @@ enum L10nNL {
         "in_queue": "In wachtrij…",
         "in_queue_position": "In wachtrij · Positie %d",
         "preparing_game": "Je spel wordt voorbereid… Dit kan een minuut duren",
+        "waiting_for_storage": "Opslag voorbereiden…",
+        "previous_session_cleanup": "Een vorige sessie opschonen…",
         "server_took_too_long": "Server deed te lang over het antwoord.",
         "end_session_title": "Sessie beëindigen?",
         "end_session": "Sessie beëindigen",

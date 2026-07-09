@@ -100,6 +100,8 @@ enum L10nDA {
         "in_queue": "I kø…",
         "in_queue_position": "I kø · Position %d",
         "preparing_game": "Forbereder dit spil… Det kan tage et minut",
+        "waiting_for_storage": "Forbereder lagring…",
+        "previous_session_cleanup": "Rydder op i en tidligere session…",
         "server_took_too_long": "Serveren tog for lang tid om at svare.",
         "end_session_title": "Afslut session?",
         "end_session": "Afslut session",

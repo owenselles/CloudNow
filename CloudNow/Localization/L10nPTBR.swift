@@ -95,6 +95,8 @@ enum L10nPTBR {
         "in_queue": "Na fila…",
         "in_queue_position": "Na fila · Posição %d",
         "preparing_game": "Preparando seu jogo… Isso pode levar um minuto",
+        "waiting_for_storage": "Preparando o armazenamento…",
+        "previous_session_cleanup": "Limpando uma sessão anterior…",
         "server_took_too_long": "O servidor demorou demais para responder.",
         "end_session_title": "Encerrar sessão?",
         "end_session": "Encerrar sessão",

@@ -100,6 +100,8 @@ enum L10nCS {
         "in_queue": "Ve frontě…",
         "in_queue_position": "Ve frontě · Pozice %d",
         "preparing_game": "Připravuje se vaše hra… Může to trvat minutu",
+        "waiting_for_storage": "Příprava úložiště…",
+        "previous_session_cleanup": "Čištění předchozí relace…",
         "server_took_too_long": "Server odpovídal příliš dlouho.",
         "end_session_title": "Ukončit relaci?",
         "end_session": "Ukončit relaci",

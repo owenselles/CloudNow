@@ -95,6 +95,8 @@ enum L10nES {
         "in_queue": "En cola…",
         "in_queue_position": "En cola · Posición %d",
         "preparing_game": "Preparando tu juego… Esto puede tardar un minuto",
+        "waiting_for_storage": "Preparando el almacenamiento…",
+        "previous_session_cleanup": "Limpiando una sesión anterior…",
         "server_took_too_long": "El servidor tardó demasiado en responder.",
         "end_session_title": "¿Terminar sesión?",
         "end_session": "Terminar sesión",

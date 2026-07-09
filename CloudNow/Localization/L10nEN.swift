@@ -104,6 +104,8 @@ enum L10nEN {
         "in_queue": "In queue…",
         "in_queue_position": "In queue · Position %d",
         "preparing_game": "Preparing your game… This can take a minute",
+        "waiting_for_storage": "Preparing storage…",
+        "previous_session_cleanup": "Cleaning up a previous session…",
         "server_took_too_long": "Server took too long to respond.",
         "end_session_title": "End Session?",
         "end_session": "End Session",

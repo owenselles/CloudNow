@@ -100,6 +100,8 @@ enum L10nSV {
         "in_queue": "I kö…",
         "in_queue_position": "I kö · Position %d",
         "preparing_game": "Förbereder ditt spel… Det kan ta en minut",
+        "waiting_for_storage": "Förbereder lagring…",
+        "previous_session_cleanup": "Rensar en tidigare session…",
         "server_took_too_long": "Servern tog för lång tid på sig att svara.",
         "end_session_title": "Avsluta session?",
         "end_session": "Avsluta session",
