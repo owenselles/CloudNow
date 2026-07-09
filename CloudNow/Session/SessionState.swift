@@ -43,8 +43,8 @@ struct StreamSettings: Codable, Equatable {
     var enableRtcEventLog: Bool = false
     /// How the GFN server presents launched games. Big Picture requests the "GamepadFriendly"
     /// mode that NVIDIA's TV clients (e.g. Shield TV) use, opening launchers such as Steam
-    /// in their TV interface.
-    var appLaunchMode: AppLaunchMode = .default
+    /// in their TV interface — the natural default for a TV client.
+    var appLaunchMode: AppLaunchMode = .bigPicture
 
     var normalizedForClient: StreamSettings {
         var normalized = self
