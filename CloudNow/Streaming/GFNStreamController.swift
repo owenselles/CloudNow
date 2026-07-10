@@ -580,7 +580,13 @@ final class GFNStreamController: NSObject {
             return
         }
 
-        guard inputSender.validateSubmittedText(text) == .supported else {
+        let result = inputSender.replaySubmittedText(text) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.replayInputPaused = false
+                self?.syncInputPauseState()
+            }
+        }
+        guard result == .supported else {
             completion(.unsupportedCharacters)
             return
         }
@@ -589,13 +595,6 @@ final class GFNStreamController: NSObject {
         replayInputPaused = true
         syncInputPauseState()
         completion(.accepted)
-
-        inputSender.replaySubmittedText(text) { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.replayInputPaused = false
-                self?.syncInputPauseState()
-            }
-        }
     }
 
     // MARK: Fail (external error surfacing)
