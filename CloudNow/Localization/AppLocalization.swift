@@ -93,14 +93,6 @@ enum L10n {
         }
     }
 
-    static func streamStatsModeLabel(_ mode: StreamStatsMode) -> String {
-        switch mode {
-        case .off: text("off")
-        case .hud: text("hud")
-        case .diagnostic: text("diagnostic")
-        }
-    }
-
     static func colorModeLabel(_ mode: ColorModePreference) -> String {
         switch mode {
         case .automatic: text("automatic")
@@ -233,14 +225,6 @@ enum L10n {
         case .h264: "H264"
         case .h265: "H265"
         case .av1: "AV1"
-        }
-    }
-
-    static func streamStatsModeDescription(_ mode: StreamStatsMode) -> String {
-        switch mode {
-        case .off: text("disables_periodic_webrtc_statistics_collection")
-        case .hud: text("collects_the_lightweight_statistics_shown_in_the_in_stream_overlay")
-        case .diagnostic: text("adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts")
         }
     }
 

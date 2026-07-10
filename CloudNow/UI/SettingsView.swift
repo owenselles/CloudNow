@@ -333,21 +333,17 @@ struct SettingsView: View {
                 }
 
                 Section(L10n.text("diagnostics")) {
-                    Picker(selection: $vm.streamSettings.statsMode) {
-                        ForEach(StreamStatsMode.allCases, id: \.self) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    } label: {
+                    Toggle(isOn: $vm.streamSettings.diagnosticsEnabled) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("statistics_mode"))
-                            Text(statsModeDescription(vm.streamSettings.statsMode))
+                            Text(L10n.text("diagnostic"))
+                            Text(L10n.text("adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 8)
                     }
-                    .onChange(of: vm.streamSettings.statsMode) { _, mode in
-                        if mode != .diagnostic {
+                    .onChange(of: vm.streamSettings.diagnosticsEnabled) { _, enabled in
+                        if !enabled {
                             vm.streamSettings.enableRtcEventLog = false
                         }
                     }
@@ -361,7 +357,7 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    .disabled(vm.streamSettings.statsMode != .diagnostic)
+                    .disabled(!vm.streamSettings.diagnosticsEnabled)
                 }
 
                 Section(L10n.text("account")) {
@@ -410,10 +406,6 @@ struct SettingsView: View {
         ResolutionEntry(res: "2560x1440", badge: "2K", symbol: "tv"),
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
-
-    private func statsModeDescription(_ mode: StreamStatsMode) -> String {
-        L10n.streamStatsModeDescription(mode)
-    }
 }
 
 // MARK: - Zone Picker

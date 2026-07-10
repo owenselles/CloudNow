@@ -275,6 +275,13 @@ extension GFNAudioDevice: LKRTCAudioDevice {
         AVAudioSession.sharedInstance().outputLatency
     }
 
+    /// Human-readable output port name(s) of the active route, e.g. "HDMI".
+    var outputRouteName: String {
+        AVAudioSession.sharedInstance().currentRoute.outputs
+            .map(\.portName)
+            .joined(separator: ", ")
+    }
+
     var isInitialized: Bool {
         delegate != nil
     }

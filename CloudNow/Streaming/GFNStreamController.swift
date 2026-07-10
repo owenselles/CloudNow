@@ -70,6 +70,9 @@ struct StreamStats {
     var availableIncomingBitrateKbps: Int = 0
     var candidatePairChanges: Int = 0
     var selectedNetworkPath: String = "unknown"
+    /// Short GFN zone label the session runs in (e.g. "FRK-08"), derived from the
+    /// CloudMatch routing zone URL to match the official client's display.
+    var serverZone: String = ""
     var inputGenerated: UInt64 = 0
     var inputSubmitted: UInt64 = 0
     var inputAccepted: UInt64 = 0
@@ -80,6 +83,28 @@ struct StreamStats {
     var inputQueueMaxMs: Double = 0
     var newestGamepadAgeMs: Double = 0
     var inputChannelState: String = "closed"
+}
+
+/// Audio metrics surfaced in the statistics HUD, refreshed once per stats tick.
+/// NetEQ values are interval averages derived from AudioSyncStatsSnapshot pairs;
+/// device/route fields are sampled from the live audio session.
+struct AudioStats {
+    var jitterBufferCurrentMs: Double = 0
+    var jitterBufferTargetMs: Double = 0
+    var devicePlayoutMs: Double = 0
+    var packetsLost: Int = 0
+    var jitterMs: Double = 0
+    var concealedMsPerSecond: Double = 0
+    var stretchedMsPerSecond: Double = 0
+    var acceleratedMsPerSecond: Double = 0
+    /// video − audio playout timestamp; positive = audio lags video. nil without RTCP SR.
+    var avOffsetMs: Double?
+    var outputLatencyMs: Double = 0
+    var outputChannels: Int = 0
+    var outputSampleRateHz: Double = 0
+    var outputRouteName: String = ""
+    var codecName: String = ""
+    var codecChannels: Int = 0
 }
 
 private struct VideoStatsSnapshot {
@@ -151,9 +176,13 @@ private let streamStatsParsingQueue = DispatchQueue(
 final class GFNStreamController: NSObject {
     private(set) var state: StreamState = .idle
     private(set) var stats = StreamStats()
+    private(set) var audioStats = AudioStats()
     private(set) var videoTrack: LKRTCVideoTrack?
-    private(set) var statsMode: StreamStatsMode = .hud
+    private(set) var statsMode: StreamStatsMode = .off
+    private(set) var diagnosticsEnabled = false
     private(set) var videoDiagnostics = VideoPipelineSnapshot()
+    /// Wall-clock start of the current stream, for the HUD's session duration row.
+    private(set) var streamingStartedAt: Date?
     private(set) var colorState = StreamColorState(
         preference: .automatic,
         requestedMode: .sdr8,
@@ -283,8 +312,12 @@ final class GFNStreamController: NSObject {
             codec: L10n.videoCodecLabel(settings.codec)
         )
         setStatsMode(settings.statsMode)
+        setDiagnosticsEnabled(settings.diagnosticsEnabled)
         stats = StreamStats()
         stats.gpuType = session.gpuType ?? ""
+        stats.serverZone = Self.zoneShortName(from: session.zone)
+        audioStats = AudioStats()
+        streamingStartedAt = nil
         inputSendQueue.sync {
             inputGenerated = 0
             inputSubmitted = 0
@@ -315,7 +348,7 @@ final class GFNStreamController: NSObject {
     /// Stores a reference so the inputHandler can be wired up when InputSender starts.
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
-        view.setDiagnosticsEnabled(statsMode == .diagnostic)
+        view.setDiagnosticsEnabled(diagnosticsEnabled)
         view.onDecodedVideoFormatChanged = { [weak self] format in
             Task { @MainActor [weak self] in
                 self?.applyDecodedVideoFormat(format)
@@ -325,15 +358,18 @@ final class GFNStreamController: NSObject {
         view.menuPressHandler = { [weak self] in self?.handleMenuPress() }
     }
 
+    /// Sets the statistics HUD level. Stats collection runs regardless while streaming;
+    /// the level only controls what is rendered (and the full-report cadence).
     func setStatsMode(_ mode: StreamStatsMode) {
-        guard statsMode != mode else { return }
         statsMode = mode
-        videoView?.setDiagnosticsEnabled(mode == .diagnostic)
-        if mode == .off {
-            stopStatsTimer()
-        } else if state == .streaming {
-            startStatsTimer()
-        }
+    }
+
+    /// Enables developer diagnostics: video-pipeline tracing, AudioSync logging, and the
+    /// debug stats rows. Orthogonal to the statistics HUD level.
+    func setDiagnosticsEnabled(_ enabled: Bool) {
+        guard diagnosticsEnabled != enabled else { return }
+        diagnosticsEnabled = enabled
+        videoView?.setDiagnosticsEnabled(enabled)
     }
 
     @discardableResult
@@ -426,6 +462,7 @@ final class GFNStreamController: NSObject {
         pingHistory = []
         fpsHistory = []
         bitrateHistory = []
+        streamingStartedAt = nil
         signalingComplete = false
         inputReady = false
         previousVideoStats = nil
@@ -633,6 +670,8 @@ final class GFNStreamController: NSObject {
         // so the audio device initializes with the right graph.
         let surroundOffered = sdp.contains("multiopus/")
         GFNAudioDevice.shared.requestedOutputChannels = surroundOffered ? 6 : 2
+        audioStats.codecName = surroundOffered ? "Multiopus" : "Opus"
+        audioStats.codecChannels = surroundOffered ? 6 : 2
         audioSyncLog.info("offer audio: \(surroundOffered ? "multiopus 5.1" : "opus stereo", privacy: .public)")
 
         let microphoneEnabledForConnection = configureAudioSession(microphoneRequested: settings.micEnabled)
@@ -980,8 +1019,20 @@ final class GFNStreamController: NSObject {
 
     // MARK: Private — Stats
 
+    /// "https://np-frk-08.cloudmatchbeta.nvidiagrid.net/" → "FRK-08": first host label
+    /// without the "np-" prefix, uppercased — the form the official client displays.
+    private static func zoneShortName(from zone: String) -> String {
+        guard !zone.isEmpty else { return "" }
+        let host = URLComponents(string: zone)?.host ?? zone
+        var name = host.components(separatedBy: ".").first ?? host
+        if name.lowercased().hasPrefix("np-") {
+            name = String(name.dropFirst(3))
+        }
+        return name.uppercased()
+    }
+
     private func startStatsTimer() {
-        guard statsMode != .off, statsTimer == nil else { return }
+        guard statsTimer == nil else { return }
         collectStats()
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.collectStats() }
@@ -1002,13 +1053,13 @@ final class GFNStreamController: NSObject {
     }
 
     private func collectStats() {
-        guard statsMode != .off, let peerConnection else { return }
+        guard let peerConnection else { return }
         collectInputStats()
-        if statsMode == .diagnostic {
+        if diagnosticsEnabled {
             let generation = statsGeneration
             videoView?.captureDiagnostics { [weak self] snapshot in
                 Task { @MainActor [weak self] in
-                    guard let self, statsGeneration == generation, statsMode == .diagnostic else {
+                    guard let self, statsGeneration == generation, diagnosticsEnabled else {
                         return
                     }
                     videoDiagnostics = snapshot
@@ -1032,16 +1083,18 @@ final class GFNStreamController: NSObject {
             }
         }
 
-        // Diagnostic mode samples the full report every tick so the AudioSync log has
-        // 1 s resolution; otherwise every 5th tick is enough for RTT/path display.
-        let wantFullReport = statsTick == 1 || statsTick.isMultiple(of: 5) || statsMode == .diagnostic
+        // A visible HUD (or diagnostics) samples the full report every tick so audio rows and
+        // the AudioSync log have 1 s resolution; otherwise every 5th tick is enough for the
+        // pause menu's RTT/path display.
+        let wantFullReport = statsTick == 1 || statsTick.isMultiple(of: 5)
+            || statsMode != .off || diagnosticsEnabled
         if wantFullReport, !connectionStatsRequestInFlight {
             connectionStatsRequestInFlight = true
-            let diagnoseAudio = statsMode == .diagnostic
+            let wantAudio = statsMode == .standard || diagnosticsEnabled
             peerConnection.statistics { [weak self] report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseConnectionStats(report)
-                    let audioSample = diagnoseAudio ? Self.parseAudioSyncStats(report) : nil
+                    let audioSample = wantAudio ? Self.parseAudioSyncStats(report) : nil
                     Task { @MainActor [weak self] in
                         guard let self, statsGeneration == generation else { return }
                         connectionStatsRequestInFlight = false
@@ -1049,7 +1102,7 @@ final class GFNStreamController: NSObject {
                             stats.rttMs = snapshot.rttMs
                             stats.selectedNetworkPath = snapshot.selectedNetworkPath
                         }
-                        if let audioSample { logAudioSyncStats(audioSample) }
+                        if let audioSample { applyAudioSyncStats(audioSample) }
                     }
                 }
             }
@@ -1354,7 +1407,7 @@ final class GFNStreamController: NSObject {
     /// - device: playout delay after the jitter buffer (ADM + OS output buffers).
     /// - stretch: NetEQ time-stretching (+slowed/−accelerated) and concealment, ms of audio.
     /// - av-offset: video − audio estimated playout timestamps; positive = audio behind video.
-    private func logAudioSyncStats(_ sample: AudioSyncStatsSnapshot) {
+    private func applyAudioSyncStats(_ sample: AudioSyncStatsSnapshot) {
         defer { previousAudioSyncStats = sample }
         guard let previous = previousAudioSyncStats else { return }
 
@@ -1371,18 +1424,35 @@ final class GFNStreamController: NSObject {
         let acceleratedMs = max(0, sample.removedSamplesForAcceleration - previous.removedSamplesForAcceleration) / 48
         let concealedMs = max(0, sample.concealedSamples - previous.concealedSamples) / 48
 
-        let offset = if let audioTs = sample.audioPlayoutTimestampMs,
-                        let videoTs = sample.videoPlayoutTimestampMs
+        let avOffsetMs: Double? = if let audioTs = sample.audioPlayoutTimestampMs,
+                                     let videoTs = sample.videoPlayoutTimestampMs
         {
-            String(format: "%+.0fms", videoTs - audioTs)
+            videoTs - audioTs
         } else {
-            "n/a (no RTCP SR mapping)"
+            nil
         }
 
         let lost = max(0, sample.packetsLost - previous.packetsLost)
         // Live OS output latency: the media-playout stat can be absent depending on the active
         // audio unit (then device reads 0), so also sample the route's latency directly.
         let osOutputLatencyMs = AVAudioSession.sharedInstance().outputLatency * 1000
+
+        audioStats.jitterBufferCurrentMs = neteqMs
+        audioStats.jitterBufferTargetMs = targetMs
+        audioStats.devicePlayoutMs = deviceMs
+        audioStats.packetsLost = Int(lost)
+        audioStats.jitterMs = sample.jitterSeconds * 1000
+        audioStats.concealedMsPerSecond = concealedMs
+        audioStats.stretchedMsPerSecond = sloweddMs
+        audioStats.acceleratedMsPerSecond = acceleratedMs
+        audioStats.avOffsetMs = avOffsetMs
+        audioStats.outputLatencyMs = osOutputLatencyMs
+        audioStats.outputChannels = GFNAudioDevice.shared.outputNumberOfChannels
+        audioStats.outputSampleRateHz = GFNAudioDevice.shared.deviceOutputSampleRate
+        audioStats.outputRouteName = GFNAudioDevice.shared.outputRouteName
+
+        guard diagnosticsEnabled else { return }
+        let offset = avOffsetMs.map { String(format: "%+.0fms", $0) } ?? "n/a (no RTCP SR mapping)"
         let message = String(
             format: "neteq %.0fms (target %.0f, min %.0f) | device %.0fms out %.0fms | stretch +%.0f/-%.0fms conceal %.0fms | jitter %.1fms lost %.0f | av-offset %@",
             neteqMs, targetMs, minMs, deviceMs, osOutputLatencyMs, sloweddMs, acceleratedMs, concealedMs,
@@ -1531,6 +1601,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                 wasStreaming = true
                 reconnectAttempt = 0
                 state = .streaming
+                if streamingStartedAt == nil { streamingStartedAt = Date() }
                 startStatsTimer()
             case .disconnected:
                 stopStatsTimer()

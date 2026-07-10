@@ -1,4 +1,3 @@
-import Charts
 import Combine
 import os.log
 import SwiftUI
@@ -77,13 +76,16 @@ struct StreamView: View {
         }
         .onDisappear { streamController.disconnect() }
         // During streaming, VideoSurfaceView is first responder and intercepts Menu via UIKit,
-        // signaling us through menuPressCount. .onExitCommand only fires in non-streaming states
-        // (loading, error) when the focus engine is active.
+        // signaling us through menuPressCount. .onExitCommand fires when the focus engine is
+        // active: non-streaming states (loading, error) and while the pause menu holds focus —
+        // there, B/Menu closes the menu just like Resume.
         .onChange(of: streamController.menuPressCount) { _, _ in
             toggleOverlay()
         }
         .onExitCommand {
-            if streamController.state != .streaming {
+            if showOverlay {
+                toggleOverlay()
+            } else if streamController.state != .streaming {
                 disconnect()
             }
         }
@@ -333,6 +335,16 @@ struct StreamView: View {
 
             if showOverlay {
                 pauseMenu
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
+            // Stays visible while the pause menu is open (the menu is a left sidebar)
+            // so cycling the Statistics level takes effect on screen immediately.
+            if streamController.statsMode != .off {
+                StatsHUDView(streamController: streamController)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 60)
+                    .padding(.trailing, 60)
                     .transition(.opacity)
             }
 
@@ -344,6 +356,7 @@ struct StreamView: View {
         }
         .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
         .animation(.easeInOut(duration: 0.2), value: showOverlay)
+        .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
         .onChange(of: showOverlay) { _, showing in
             // Pause game input while overlay is open in gamepad mode so D-pad
             // navigates overlay buttons instead of moving the in-game character.
@@ -359,244 +372,80 @@ struct StreamView: View {
 
     // MARK: Pause Menu
 
+    /// Left sidebar, like the official client's in-game overlay. Stats live in the
+    /// StatsHUDView on the right, which stays visible while this menu is open.
     private var pauseMenu: some View {
-        HStack(alignment: .top, spacing: 40) {
-            // Actions
-            VStack(spacing: 16) {
-                Button {
-                    toggleOverlay()
-                } label: {
-                    Label(L10n.text("resume"), systemImage: "play.fill")
-                        .frame(minWidth: 180)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-
-                Button {
-                    streamController.toggleRemoteMode()
-                } label: {
-                    Label(remoteModeLabel, systemImage: remoteModeIcon)
-                        .frame(minWidth: 180)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-
-                Button {
-                    leave()
-                } label: {
-                    Label(L10n.text("leave_game"), systemImage: "house")
-                        .frame(minWidth: 180)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-
-                Button(role: .destructive) {
-                    showExitConfirmation = true
-                } label: {
-                    Label(L10n.text("end_session"), systemImage: "xmark.circle")
-                        .frame(minWidth: 180)
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
+        VStack(alignment: .leading, spacing: 16) {
+            Button {
+                toggleOverlay()
+            } label: {
+                Label(L10n.text("resume"), systemImage: "play.fill")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
 
-            // Live stats
-            VStack(alignment: .leading, spacing: 10) {
-                if streamController.statsMode == .off {
-                    Label(L10n.text("statistics_disabled"), systemImage: "chart.bar.xaxis")
-                        .foregroundStyle(.secondary)
-                } else {
-                    metricRow(
-                        icon: "network",
-                        label: L10n.text("rtt"),
-                        value: "\(Int(streamController.stats.rttMs)) ms",
-                        history: streamController.pingHistory,
-                        color: pingColor(streamController.stats.rttMs)
-                    )
-                    metricRow(
-                        icon: "speedometer",
-                        label: L10n.text("fps"),
-                        value: "\(Int(streamController.stats.fps))",
-                        history: streamController.fpsHistory,
-                        color: fpsColor(streamController.stats.fps)
-                    )
-                    metricRow(
-                        icon: "wifi",
-                        label: L10n.text("bitrate"),
-                        value: "\(streamController.stats.bitrateKbps / 1000) Mbps",
-                        history: streamController.bitrateHistory,
-                        color: .cyan
-                    )
-                    Divider().overlay(.white.opacity(0.4))
-                    Label(
-                        L10n.format("resolution_fps_status", streamController.stats.resolutionWidth, streamController.stats.resolutionHeight, Int(streamController.stats.fps)),
-                        systemImage: "tv"
-                    )
-                    Label(
-                        L10n.format("loss_status", L10n.text("loss"), String(format: "%.1f", streamController.stats.packetLossPercent)),
-                        systemImage: "arrow.triangle.2.circlepath"
-                    )
-                    Label(L10n.text(streamController.stats.selectedNetworkPath), systemImage: "point.3.connected.trianglepath.dotted")
-                    Label(
-                        L10n.format(
-                            "input_queue_status",
-                            String(format: "%.1f", streamController.stats.inputQueueP95Ms),
-                            String(streamController.stats.inputBufferedBytes)
-                        ),
-                        systemImage: "gamecontroller"
-                    )
-                    if streamController.stats.inputDropped > 0 {
-                        Label(
-                            L10n.format("input_drops_status", streamController.stats.inputDropped),
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .foregroundStyle(.orange)
-                    }
-                    if streamController.stats.inputSuperseded > 0 {
-                        Label(
-                            L10n.format("analog_snapshots_coalesced_status", streamController.stats.inputSuperseded),
-                            systemImage: "arrow.triangle.merge"
-                        )
-                        .foregroundStyle(.secondary)
-                    }
-                    if !streamController.stats.gpuType.isEmpty {
-                        Label(streamController.stats.gpuType, systemImage: "cpu")
-                    }
-                    if let sub = viewModel.subscription, !sub.isUnlimited, let rem = sub.remainingMinutes {
-                        Divider().overlay(.white.opacity(0.4))
-                        Label {
-                            Text(rem >= 60 ? "\(rem / 60)h \(rem % 60)m remaining" : "\(rem)m remaining")
-                        } icon: {
-                            Image(systemName: "clock")
-                                .foregroundStyle(rem < 30 ? .orange : .white.opacity(0.7))
-                        }
-                        .foregroundStyle(rem < 30 ? .orange : .white)
-                    }
-                }
-
-                if streamController.statsMode == .diagnostic {
-                    diagnosticRows
-                }
+            Button {
+                streamController.toggleRemoteMode()
+            } label: {
+                Label(remoteModeLabel, systemImage: remoteModeIcon)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.white)
-        }
-        .padding(32)
-        .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 16))
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .padding(60)
-    }
+            .buttonStyle(.borderedProminent)
+            .tint(.white)
 
-    private var diagnosticRows: some View {
-        let pipeline = streamController.videoDiagnostics
-        return Group {
-            Divider().overlay(.white.opacity(0.4))
-            if !streamController.diagnosticSessionSummary.isEmpty {
+            Button {
+                let next = streamController.statsMode.nextHUDLevel
+                streamController.setStatsMode(next)
+                viewModel.streamSettings.statsMode = next
+                viewModel.saveSettings()
+            } label: {
                 Label(
-                    streamController.diagnosticSessionSummary,
-                    systemImage: "dot.radiowaves.left.and.right"
+                    L10n.format("statistics_level", streamController.statsMode.label),
+                    systemImage: "chart.bar.xaxis"
                 )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Label(
-                L10n.format(
-                    "jitter_buffer_status",
-                    formatMs(streamController.stats.jitterBufferDelayMs),
-                    formatMs(streamController.stats.jitterBufferTargetDelayMs)
-                ),
-                systemImage: "waveform.path"
-            )
-            Label(
-                L10n.format(
-                    "decode_process_status",
-                    formatMs(streamController.stats.decodeTimeMs),
-                    formatMs(streamController.stats.processingDelayMs)
-                ),
-                systemImage: "cpu"
-            )
-            Label(
-                L10n.format(
-                    "app_queue_status",
-                    pipeline.enqueuedFrames,
-                    pipeline.droppedFrames,
-                    pipeline.backpressureEvents
-                ),
-                systemImage: "rectangle.stack"
-            )
-            Label(
-                L10n.format(
-                    "sample_and_convert_status",
-                    formatMs(pipeline.averageSampleCreationMs),
-                    formatMs(pipeline.averageConversionMs)
-                ),
-                systemImage: "timer"
-            )
-            Label(
-                L10n.displayLayerMetrics(
-                    totalFrames: pipeline.avTotalFrames,
-                    droppedFrames: pipeline.avDroppedFrames,
-                    corruptedFrames: pipeline.avCorruptedFrames,
-                    accumulatedFrameDelayMs: pipeline.avAccumulatedFrameDelayMs
-                ),
-                systemImage: "display"
-            )
-            if !streamController.stats.decoderImplementation.isEmpty {
-                Label(
-                    L10n.format(
-                        "decoder_implementation_status",
-                        streamController.stats.decoderImplementation,
-                        streamController.stats.powerEfficientDecoder == true ? L10n.text("hardware") : ""
-                    ),
-                    systemImage: "video"
-                )
+            .buttonStyle(.borderedProminent)
+            .tint(.white)
+
+            Button {
+                leave()
+            } label: {
+                Label(L10n.text("leave_game"), systemImage: "house")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Label(
-                L10n.colorDiagnosticStatus(
-                    preference: streamController.colorState.preference.label,
-                    requested: L10n.streamColorModeLabel(streamController.colorState.requestedMode),
-                    detected: {
-                        if let format = pipeline.decodedVideoFormat {
-                            return L10n.detectedColorModeLabel(format.mode)
-                        }
-                        if let detected = streamController.colorState.detectedMode {
-                            return L10n.detectedColorModeLabel(detected)
-                        }
-                        return L10n.text("unknown")
-                    }(),
-                    display: L10n.hdrSupportLabel(streamController.colorState.displayHDRSupport)
-                ),
-                systemImage: "circle.lefthalf.filled"
-            )
-            if let fallback = streamController.colorState.fallbackReason {
-                Label(
-                    "\(L10n.text("fallback")) \(L10n.colorFallbackReasonLabel(fallback))",
-                    systemImage: "arrow.down.right.circle"
-                )
-                .foregroundStyle(.orange)
+            .buttonStyle(.borderedProminent)
+            .tint(.white)
+
+            Button(role: .destructive) {
+                showExitConfirmation = true
+            } label: {
+                Label(L10n.text("end_session"), systemImage: "xmark.circle")
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let format = pipeline.decodedVideoFormat {
-                Label(
-                    L10n.decodedVideoStatus(
-                        decoderPath: L10n.decoderPathLabel(format.decoderPath),
-                        mode: L10n.detectedColorModeLabel(format.mode),
-                        width: format.width,
-                        height: format.height,
-                        pixelFormatName: format.pixelFormatName,
-                        bitDepth: format.bitDepth.map { "\($0)-bit" } ?? L10n.text("unknown_bit_depth"),
-                        metadataSummary: format.metadataDiagnosticSummary
-                    ),
-                    systemImage: "scope"
-                )
-            }
-            if streamController.rtcEventLogURL != nil {
-                Label(L10n.text("rtc_event_log_active"), systemImage: "doc.text.magnifyingglass")
+            .buttonStyle(.bordered)
+            .tint(.red)
+
+            Spacer()
+
+            if let sub = viewModel.subscription, !sub.isUnlimited, let rem = sub.remainingMinutes {
+                Label {
+                    Text(rem >= 60 ? "\(rem / 60)h \(rem % 60)m remaining" : "\(rem)m remaining")
+                } icon: {
+                    Image(systemName: "clock")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(rem < 30 ? .orange : .white.opacity(0.8))
             }
         }
-        .font(.caption2.monospacedDigit())
-        .foregroundStyle(.white.opacity(0.85))
-    }
-
-    private func formatMs(_ value: Double) -> String {
-        String(format: "%.2f ms", value)
+        .padding(.horizontal, 48)
+        .padding(.vertical, 80)
+        .frame(width: 480)
+        .frame(maxHeight: .infinity)
+        .background(.black.opacity(0.75))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .ignoresSafeArea()
     }
 
     private var remoteModeLabel: String {
@@ -609,41 +458,6 @@ struct StreamView: View {
         case .gamepad: "gamecontroller"
         case .dualsense: "hand.point.up.left"
         }
-    }
-
-    private func metricRow(icon: String, label: String, value: String, history: [Double], color: Color) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(color)
-                .frame(width: 16)
-            Text("\(label): \(value)")
-                .foregroundStyle(color)
-                .frame(width: 130, alignment: .leading)
-            if history.count > 1 {
-                Chart {
-                    ForEach(Array(history.enumerated()), id: \.offset) { idx, val in
-                        LineMark(x: .value("t", idx), y: .value("v", val))
-                            .foregroundStyle(color)
-                    }
-                }
-                .chartXAxis(.hidden)
-                .chartYAxis(.hidden)
-                .frame(width: 80, height: 24)
-            }
-        }
-    }
-
-    private func pingColor(_ ms: Double) -> Color {
-        if ms < 30 { return .green }
-        if ms < 80 { return .yellow }
-        if ms < 150 { return .orange }
-        return .red
-    }
-
-    private func fpsColor(_ fps: Double) -> Color {
-        if fps >= 55 { return .green }
-        if fps >= 30 { return .yellow }
-        return .red
     }
 
     // MARK: Time Warning Banner
