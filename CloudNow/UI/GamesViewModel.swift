@@ -92,6 +92,11 @@ class GamesViewModel {
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
 
+    /// The scene-activation refresh in MainTabView also fires on cold launch,
+    /// which would fetch the library a second time in parallel with load().
+    /// Refreshes are skipped until the initial load has finished.
+    private var hasCompletedInitialLoad = false
+
     init() {
         if let data = UserDefaults.standard.data(forKey: "gfn.favoriteIds"),
            let ids = try? JSONDecoder().decode([String].self, from: data)
@@ -257,6 +262,7 @@ class GamesViewModel {
         }
         isLibraryLoading = false
         isLoading = false
+        hasCompletedInitialLoad = true
     }
 
     /// Returns the vpcId shared by the launch queries. Uses the value from the
@@ -324,7 +330,7 @@ class GamesViewModel {
     }
 
     func refreshLibrary(authManager: AuthManager) async {
-        guard !isLibraryLoading else { return }
+        guard !isLibraryLoading, hasCompletedInitialLoad else { return }
         isLibraryLoading = true
         libraryError = nil
         defer { isLibraryLoading = false }

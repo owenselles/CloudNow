@@ -79,14 +79,20 @@ actor GamesClient {
     // MARK: - Catalog Browse
 
     /// Cursor pagination is inherently serial (each page needs the previous cursor),
-    /// so page count dominates load time. Large pages cut the round trips; if the
-    /// endpoint ever rejects the large size, retry once with the long-proven 200.
+    /// so page count dominates load time. Large pages cut the round trips; the
+    /// long-proven 200-item retry runs only when the oversized page is plausibly
+    /// the cause: a client-error HTTP status (except auth) or an empty result —
+    /// a GraphQL-level rejection arrives as HTTP 200 with no data. Auth, network,
+    /// and server failures propagate immediately instead of doubling the requests.
     private func browseCatalog(token: String, vpcId: String, filters: [String: Any], searchString: String? = nil, maxPages: Int = 3) async throws -> [GameInfo] {
-        if let games = try? await browsePages(
-            token: token, vpcId: vpcId, filters: filters, searchString: searchString,
-            pageSize: 500, maxPages: maxPages
-        ) {
-            return games
+        do {
+            let games = try await browsePages(
+                token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+                pageSize: 500, maxPages: maxPages
+            )
+            if !games.isEmpty { return games }
+        } catch let GamesError.httpStatus(code, _) where (400 ..< 500).contains(code) && code != 403 {
+            // Fall through to the 200-item retry.
         }
         return try await browsePages(
             token: token, vpcId: vpcId, filters: filters, searchString: searchString,
@@ -127,8 +133,10 @@ actor GamesClient {
             request.httpBody = bodyData
 
             let (data, response) = try await urlSession.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard statusCode == 200 else {
+                if statusCode == 401 { throw GamesError.unauthorized }
+                throw GamesError.httpStatus(statusCode, String(data: data, encoding: .utf8) ?? "")
             }
 
             let payload = try JSONDecoder().decode(BrowseResponse.self, from: data)
@@ -771,6 +779,7 @@ private struct AnyCodableGameId: Decodable {
 
 enum GamesError: Error, LocalizedError {
     case fetchFailed(String)
+    case httpStatus(Int, String)
     case graphql(String)
     case pagination(String)
     case unauthorized
@@ -778,6 +787,7 @@ enum GamesError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .fetchFailed(message): "Games fetch failed: \(message)"
+        case let .httpStatus(code, message): "Games fetch failed: HTTP \(code): \(message)"
         case let .graphql(message): "Games GraphQL error: \(message)"
         case let .pagination(message): "Games pagination failed: \(message)"
         case .unauthorized: "Games authentication was rejected."
