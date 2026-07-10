@@ -209,7 +209,11 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
                 "dpi": 100,
             ]],
             "useOps": true,
-            "audioMode": 2,
+            // Channel count, like the official client (audioMode = audioChannelCount).
+            // surroundAudioInfo alone only switches the TRANSPORT to multiopus; audioMode
+            // configures the rig's audio endpoint — leaving it at 2 makes games render
+            // stereo, so the rear channels of a negotiated 5.1 stream stay silent.
+            "audioMode": audioChannels,
             "metaData": [
                 ["key": "SubSessionId", "value": UUID().uuidString],
                 ["key": "wssignaling", "value": "1"],
