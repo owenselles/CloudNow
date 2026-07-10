@@ -262,6 +262,7 @@ enum L10nEN {
         "controller_text_entry_title": "Type with Apple TV Keyboard",
         "controller_text_entry_instructions": "Enter text locally, then send it to GeForce NOW when you're done.",
         "controller_text_entry_placeholder": "Enter text",
+        "controller_text_entry_done_hint": "Press Done to review your text, then choose Send when you're ready.",
         "controller_text_entry_send": "Send",
         "controller_text_entry_unsupported_characters": "This text includes characters CloudNow can't send yet. Edit the text and try again.",
         "capture_text_input_buttons": "Set Text Input Buttons",

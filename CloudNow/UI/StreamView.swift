@@ -11,6 +11,11 @@ private enum LoadingPhase: Equatable {
 }
 
 struct StreamView: View {
+    private enum TextEntryFocusTarget: Hashable {
+        case field
+        case send
+    }
+
     let game: GameInfo
     var settings: StreamSettings = .init()
     var existingSession: ActiveSessionInfo?
@@ -38,7 +43,7 @@ struct StreamView: View {
     @State private var endConfirmationFailed = false
     @State private var textEntryText = ""
     @State private var textEntryValidationMessage: String?
-    @FocusState private var textEntryFocused: Bool
+    @FocusState private var textEntryFocus: TextEntryFocusTarget?
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
@@ -380,7 +385,7 @@ struct StreamView: View {
             .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
             .onChange(of: overlayState) { _, state in
                 streamController.setOverlayInputPaused(state != .none)
-                textEntryFocused = state == .textEntry
+                textEntryFocus = state == .textEntry ? .field : nil
             }
             .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
                 Button(L10n.text("end_session"), role: .destructive) { disconnect() }
@@ -444,29 +449,41 @@ struct StreamView: View {
     }
 
     private var controllerTextEntryOverlay: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(spacing: 24) {
             Text(L10n.text("controller_text_entry_title"))
-                .font(.title2.weight(.semibold))
+                .font(.title.weight(.semibold))
                 .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
 
             Text(L10n.text("controller_text_entry_instructions"))
                 .font(.body)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
-            TextField(L10n.text("controller_text_entry_placeholder"), text: $textEntryText)
-                .focused($textEntryFocused)
-                .onChange(of: textEntryText) { _, _ in
-                    textEntryValidationMessage = nil
-                }
-                .onSubmit {
-                    submitControllerTextEntry()
-                }
+            VStack(spacing: 12) {
+                TextField(L10n.text("controller_text_entry_placeholder"), text: $textEntryText)
+                    .multilineTextAlignment(.center)
+                    .focused($textEntryFocus, equals: .field)
+                    .onChange(of: textEntryText) { _, _ in
+                        textEntryValidationMessage = nil
+                    }
+                    .onSubmit {
+                        textEntryFocus = .send
+                    }
 
-            if let textEntryValidationMessage {
-                Text(textEntryValidationMessage)
+                Text(L10n.text("controller_text_entry_done_hint"))
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                if let textEntryValidationMessage {
+                    Text(textEntryValidationMessage)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
             }
+            .frame(maxWidth: .infinity)
 
             HStack(spacing: 20) {
                 Button(L10n.text("cancel")) {
@@ -477,18 +494,27 @@ struct StreamView: View {
                 Button(L10n.text("controller_text_entry_send")) {
                     submitControllerTextEntry()
                 }
+                .focused($textEntryFocus, equals: .send)
                 .buttonStyle(.borderedProminent)
                 .disabled(textEntryText.isEmpty)
             }
         }
-        .frame(maxWidth: 620)
-        .padding(32)
-        .background(.black.opacity(0.82), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .frame(maxWidth: 680)
+        .padding(.horizontal, 42)
+        .padding(.vertical, 36)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.90), Color(red: 0.10, green: 0.12, blue: 0.16).opacity(0.92)],
+                startPoint: .top,
+                endPoint: .bottom
+            ),
+            in: RoundedRectangle(cornerRadius: 30, style: .continuous)
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(.white.opacity(0.16), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .stroke(.white.opacity(0.18), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.35), radius: 30, y: 12)
+        .shadow(color: .black.opacity(0.4), radius: 32, y: 14)
     }
 
     private var remoteModeLabel: String {
@@ -1306,6 +1332,7 @@ struct StreamView: View {
         if overlayState == .textEntry {
             streamController.cancelControllerTextEntry()
             textEntryText = ""
+            textEntryValidationMessage = nil
             overlayState = .pauseMenu
             return
         }
@@ -1316,6 +1343,7 @@ struct StreamView: View {
         if overlayState == .textEntry {
             streamController.cancelControllerTextEntry()
             textEntryText = ""
+            textEntryValidationMessage = nil
         }
         overlayState = .none
     }
@@ -1325,6 +1353,7 @@ struct StreamView: View {
         textEntryText = ""
         textEntryValidationMessage = nil
         overlayState = .textEntry
+        textEntryFocus = .field
     }
 
     private func cancelControllerTextEntry() {
@@ -1342,8 +1371,10 @@ struct StreamView: View {
                 overlayState = .none
                 textEntryText = ""
                 textEntryValidationMessage = nil
+                textEntryFocus = nil
             case .unsupportedCharacters:
                 textEntryValidationMessage = L10n.text("controller_text_entry_unsupported_characters")
+                textEntryFocus = .field
             }
         }
     }
