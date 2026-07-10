@@ -453,7 +453,6 @@ struct StreamView: View {
                 .foregroundStyle(.secondary)
 
             TextField(L10n.text("controller_text_entry_placeholder"), text: $textEntryText)
-                .textFieldStyle(.roundedBorder)
                 .focused($textEntryFocused)
                 .onSubmit {
                     submitControllerTextEntry()
