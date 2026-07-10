@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 
 // MARK: - Signaling Events
 
@@ -469,6 +470,19 @@ final class GFNSignalingClient {
         print("[Signaling] Trying candidate \(index + 1)/\(totalCount) → \(candidateUrl.absoluteString)")
 
         let connection = NWConnection(to: .url(candidateUrl), using: params)
+        // State callbacks must be serialized AND the continuation resumed at most once:
+        // when the candidate race is decided, the losers' cancel can arrive while (or
+        // right after) their own .ready fires — on a concurrent queue that double-resumed
+        // the continuation and crashed.
+        let hasResumed = OSAllocatedUnfairLock(initialState: false)
+        @Sendable func resumeOnce(_ resume: () -> Void) {
+            let isFirst = hasResumed.withLock { resumed in
+                if resumed { return false }
+                resumed = true
+                return true
+            }
+            if isFirst { resume() }
+        }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 connection.stateUpdateHandler = { state in
@@ -476,26 +490,26 @@ final class GFNSignalingClient {
                     case .ready:
                         connection.stateUpdateHandler = nil
                         print("[Signaling] Connected (WebSocket ready) via \(candidateHost)")
-                        continuation.resume()
+                        resumeOnce { continuation.resume() }
                     case let .failed(error):
                         connection.stateUpdateHandler = nil
                         print("[Signaling] Connection failed (\(candidateHost)): \(error)")
-                        continuation.resume(throwing: error)
+                        resumeOnce { continuation.resume(throwing: error) }
                     case .cancelled:
                         connection.stateUpdateHandler = nil
-                        continuation.resume(throwing: SignalingError.cancelled)
+                        resumeOnce { continuation.resume(throwing: SignalingError.cancelled) }
                     case let .waiting(error):
                         let description = "\(error)"
                         if description.contains("53") || description.contains("ECONNABORTED") {
                             connection.stateUpdateHandler = nil
                             connection.cancel()
-                            continuation.resume(throwing: error)
+                            resumeOnce { continuation.resume(throwing: error) }
                         }
                     default:
                         break
                     }
                 }
-                connection.start(queue: .global(qos: .userInitiated))
+                connection.start(queue: DispatchQueue(label: "com.cloudnow.signaling.connect"))
             }
             return ConnectedCandidate(host: candidateHost, connection: connection)
         } onCancel: {
