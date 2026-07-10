@@ -619,10 +619,9 @@ final nonisolated class InputSender: @unchecked Sendable {
     }
 
     private struct KeyboardShortcutState {
-        var pendingButtons: Set<ControllerSequenceButton>
+        var buttons: Set<ControllerSequenceButton>
         var deadline: UInt64
         var triggered = false
-        var replayTapOnExpiry = false
     }
 
     private struct KeyboardShortcutResolution {
@@ -1039,7 +1038,6 @@ final nonisolated class InputSender: @unchecked Sendable {
 
         let shortcutResolution = applyKeyboardShortcutState(
             buttons: state.buttons,
-            controller: controller,
             slot: slot,
             now: now
         )
@@ -1210,16 +1208,13 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private func applyKeyboardShortcutState(
         buttons: UInt16,
-        controller: GCController,
         slot: Int,
         now: UInt64
     ) -> KeyboardShortcutResolution {
         let shortcutGraceWindow = UInt64(textInputTriggerDelayMs) * 1_000_000
-        let shortcutButtons = physicalKeyboardShortcutButtons(on: controller)
+        let shortcutButtons = physicalKeyboardShortcutButtons(from: buttons)
+        let targetButtons = textInputTriggerSequence.asSet()
         if var state = keyboardShortcutStates[slot] {
-            state.pendingButtons.formUnion(shortcutButtons)
-            let shortcutMask = keyboardShortcutMask(for: state.pendingButtons)
-
             if state.triggered {
                 if shortcutButtons.isEmpty {
                     keyboardShortcutStates[slot] = nil
@@ -1231,42 +1226,14 @@ final nonisolated class InputSender: @unchecked Sendable {
                 }
                 keyboardShortcutStates[slot] = state
                 return KeyboardShortcutResolution(
-                    buttons: buttons & ~shortcutMask,
-                    suppressesOverlayGestures: shouldSuppressOverlayGestures(for: state.pendingButtons),
-                    suppressesSteamGestures: shouldSuppressSteamGestures(for: state.pendingButtons)
+                    buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
+                    suppressesOverlayGestures: true,
+                    suppressesSteamGestures: true
                 )
             }
 
-            if shortcutButtons == textInputTriggerSequence.asSet() {
-                state.triggered = true
-                keyboardShortcutStates[slot] = state
-                notifyControllerKeyboardShortcut()
-                return KeyboardShortcutResolution(
-                    buttons: buttons & ~shortcutMask,
-                    suppressesOverlayGestures: shouldSuppressOverlayGestures(for: state.pendingButtons),
-                    suppressesSteamGestures: shouldSuppressSteamGestures(for: state.pendingButtons)
-                )
-            }
-
-            if shortcutButtons.isEmpty {
-                state.replayTapOnExpiry = true
-            }
-
-            if now >= state.deadline {
+            guard shortcutButtons == state.buttons else {
                 keyboardShortcutStates[slot] = nil
-                if state.replayTapOnExpiry {
-                    let replayButtons = keyboardShortcutReplayButtons(for: state.pendingButtons)
-                    sendKeyboardShortcutTap(
-                        controller: controller,
-                        slot: slot,
-                        shortcutButtons: replayButtons
-                    )
-                    return KeyboardShortcutResolution(
-                        buttons: buttons & ~shortcutMask,
-                        suppressesOverlayGestures: false,
-                        suppressesSteamGestures: false
-                    )
-                }
                 return KeyboardShortcutResolution(
                     buttons: buttons,
                     suppressesOverlayGestures: false,
@@ -1274,15 +1241,26 @@ final nonisolated class InputSender: @unchecked Sendable {
                 )
             }
 
+            if now >= state.deadline {
+                state.triggered = true
+                keyboardShortcutStates[slot] = state
+                notifyControllerKeyboardShortcut()
+                return KeyboardShortcutResolution(
+                    buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
+                    suppressesOverlayGestures: true,
+                    suppressesSteamGestures: true
+                )
+            }
+
             keyboardShortcutStates[slot] = state
             return KeyboardShortcutResolution(
-                buttons: buttons & ~shortcutMask,
-                suppressesOverlayGestures: shouldSuppressOverlayGestures(for: state.pendingButtons),
-                suppressesSteamGestures: shouldSuppressSteamGestures(for: state.pendingButtons)
+                buttons: buttons,
+                suppressesOverlayGestures: true,
+                suppressesSteamGestures: true
             )
         }
 
-        guard !shortcutButtons.isEmpty else {
+        guard !targetButtons.isEmpty, shortcutButtons == targetButtons else {
             return KeyboardShortcutResolution(
                 buttons: buttons,
                 suppressesOverlayGestures: false,
@@ -1290,80 +1268,16 @@ final nonisolated class InputSender: @unchecked Sendable {
             )
         }
 
-        if shortcutButtons == textInputTriggerSequence.asSet() {
-            notifyControllerKeyboardShortcut()
-            keyboardShortcutStates[slot] = KeyboardShortcutState(
-                pendingButtons: shortcutButtons,
-                deadline: now &+ shortcutGraceWindow,
-                triggered: true
-            )
-            return KeyboardShortcutResolution(
-                buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
-                suppressesOverlayGestures: shouldSuppressOverlayGestures(for: shortcutButtons),
-                suppressesSteamGestures: shouldSuppressSteamGestures(for: shortcutButtons)
-            )
-        }
-
+        // Keep game input untouched until the full chord survives the configured hold delay.
         keyboardShortcutStates[slot] = KeyboardShortcutState(
-            pendingButtons: shortcutButtons,
+            buttons: targetButtons,
             deadline: now &+ shortcutGraceWindow
         )
         return KeyboardShortcutResolution(
-            buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
-            suppressesOverlayGestures: shouldSuppressOverlayGestures(for: shortcutButtons),
-            suppressesSteamGestures: shouldSuppressSteamGestures(for: shortcutButtons)
+            buttons: buttons,
+            suppressesOverlayGestures: true,
+            suppressesSteamGestures: true
         )
-    }
-
-    private func sendKeyboardShortcutTap(
-        controller: GCController,
-        slot: Int,
-        shortcutButtons: UInt16
-    ) {
-        guard shortcutButtons != 0 else { return }
-        let state = mapGCControllerToXInput(controller, deadzone: deadzone)
-        let baseButtons = state.buttons & ~shortcutButtons
-        let base = GamepadSnapshot(
-            buttons: baseButtons,
-            leftTrigger: state.leftTrigger,
-            rightTrigger: state.rightTrigger,
-            leftStickX: state.lx,
-            leftStickY: state.ly,
-            rightStickX: state.rx,
-            rightStickY: state.ry,
-            bitmap: gamepadBitmap
-        )
-        let down = GamepadSnapshot(
-            buttons: base.buttons | shortcutButtons,
-            leftTrigger: base.leftTrigger,
-            rightTrigger: base.rightTrigger,
-            leftStickX: base.leftStickX,
-            leftStickY: base.leftStickY,
-            rightStickX: base.rightStickX,
-            rightStickY: base.rightStickY,
-            bitmap: base.bitmap
-        )
-        sendGamepadSnapshot(down, slot: slot, force: true)
-        inputQueue.asyncAfter(deadline: .now() + .milliseconds(17)) { [weak self, weak controller] in
-            guard let self,
-                  let controller,
-                  controllerSlots[ObjectIdentifier(controller)] == slot else { return }
-            let current = mapGCControllerToXInput(controller, deadzone: deadzone)
-            sendGamepadSnapshot(
-                GamepadSnapshot(
-                    buttons: current.buttons & ~shortcutButtons,
-                    leftTrigger: current.leftTrigger,
-                    rightTrigger: current.rightTrigger,
-                    leftStickX: current.lx,
-                    leftStickY: current.ly,
-                    rightStickX: current.rx,
-                    rightStickY: current.ry,
-                    bitmap: gamepadBitmap
-                ),
-                slot: slot,
-                force: true
-            )
-        }
     }
 
     private func sendNeutralGamepads() {
@@ -1398,8 +1312,8 @@ final nonisolated class InputSender: @unchecked Sendable {
         overlayTriggerButton == .start ? GFNInput.back : GFNInput.start
     }
 
-    private func physicalKeyboardShortcutButtons(on controller: GCController) -> Set<ControllerSequenceButton> {
-        let pressedButtons = pressedSequenceButtons(on: controller)
+    private func physicalKeyboardShortcutButtons(from buttons: UInt16) -> Set<ControllerSequenceButton> {
+        let pressedButtons = pressedSequenceButtons(from: buttons)
         return pressedButtons.intersection(textInputTriggerSequence.asSet())
     }
 
@@ -1409,53 +1323,50 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
-    private func keyboardShortcutReplayButtons(for pendingButtons: Set<ControllerSequenceButton>) -> UInt16 {
-        keyboardShortcutMask(for: pendingButtons)
-    }
-
-    private func shouldSuppressOverlayGestures(for buttons: Set<ControllerSequenceButton>) -> Bool {
-        buttons.contains(overlaySequenceButton)
-    }
-
-    private func shouldSuppressSteamGestures(for buttons: Set<ControllerSequenceButton>) -> Bool {
-        steamOverlayGestureEnabled && buttons.contains(steamSequenceButton)
-    }
-
-    private var overlaySequenceButton: ControllerSequenceButton {
-        switch overlayTriggerButton {
-        case .start:
-            .menu
-        case .options:
-            .options
-        }
-    }
-
-    private var steamSequenceButton: ControllerSequenceButton {
-        switch overlayTriggerButton {
-        case .start:
-            .options
-        case .options:
-            .menu
-        }
-    }
-
-    private func pressedSequenceButtons(on controller: GCController) -> Set<ControllerSequenceButton> {
-        guard let pad = controller.extendedGamepad else { return [] }
+    private func pressedSequenceButtons(from buttons: UInt16) -> Set<ControllerSequenceButton> {
         var pressedButtons = Set<ControllerSequenceButton>()
-        if pad.dpad.up.isPressed { pressedButtons.insert(.dpadUp) }
-        if pad.dpad.down.isPressed { pressedButtons.insert(.dpadDown) }
-        if pad.dpad.left.isPressed { pressedButtons.insert(.dpadLeft) }
-        if pad.dpad.right.isPressed { pressedButtons.insert(.dpadRight) }
-        if pad.buttonA.isPressed { pressedButtons.insert(.buttonA) }
-        if pad.buttonB.isPressed { pressedButtons.insert(.buttonB) }
-        if pad.buttonX.isPressed { pressedButtons.insert(.buttonX) }
-        if pad.buttonY.isPressed { pressedButtons.insert(.buttonY) }
-        if pad.buttonMenu.isPressed { pressedButtons.insert(.menu) }
-        if pad.buttonOptions?.isPressed == true { pressedButtons.insert(.options) }
-        if pad.leftShoulder.isPressed { pressedButtons.insert(.leftShoulder) }
-        if pad.rightShoulder.isPressed { pressedButtons.insert(.rightShoulder) }
-        if pad.leftThumbstickButton?.isPressed == true { pressedButtons.insert(.leftThumbstick) }
-        if pad.rightThumbstickButton?.isPressed == true { pressedButtons.insert(.rightThumbstick) }
+        if buttons & GFNInput.dpadUp != 0 {
+            pressedButtons.insert(.dpadUp)
+        }
+        if buttons & GFNInput.dpadDown != 0 {
+            pressedButtons.insert(.dpadDown)
+        }
+        if buttons & GFNInput.dpadLeft != 0 {
+            pressedButtons.insert(.dpadLeft)
+        }
+        if buttons & GFNInput.dpadRight != 0 {
+            pressedButtons.insert(.dpadRight)
+        }
+        if buttons & GFNInput.buttonA != 0 {
+            pressedButtons.insert(.buttonA)
+        }
+        if buttons & GFNInput.buttonB != 0 {
+            pressedButtons.insert(.buttonB)
+        }
+        if buttons & GFNInput.buttonX != 0 {
+            pressedButtons.insert(.buttonX)
+        }
+        if buttons & GFNInput.buttonY != 0 {
+            pressedButtons.insert(.buttonY)
+        }
+        if buttons & GFNInput.start != 0 {
+            pressedButtons.insert(.menu)
+        }
+        if buttons & GFNInput.back != 0 {
+            pressedButtons.insert(.options)
+        }
+        if buttons & GFNInput.lb != 0 {
+            pressedButtons.insert(.leftShoulder)
+        }
+        if buttons & GFNInput.rb != 0 {
+            pressedButtons.insert(.rightShoulder)
+        }
+        if buttons & GFNInput.ls != 0 {
+            pressedButtons.insert(.leftThumbstick)
+        }
+        if buttons & GFNInput.rs != 0 {
+            pressedButtons.insert(.rightThumbstick)
+        }
         return pressedButtons
     }
 
