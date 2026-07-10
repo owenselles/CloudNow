@@ -445,6 +445,9 @@ class GamesViewModel {
     // MARK: Zone Auto-Selection
 
     func measureTopZones() async {
+        // Launch-time zone probing only serves the client-side automatic mode;
+        // server-auto and pinned regions never consult the shortlist.
+        guard streamSettings.serverRoutingMode == .clientAuto else { return }
         guard let zones = try? await ZoneClient.shared.fetchZones() else { return }
         var measured = zones
         await withTaskGroup(of: (String, Int?).self) { group in
@@ -473,6 +476,11 @@ class GamesViewModel {
     }
 
     func bestZoneUrl() async -> String? {
+        // The launch shortlist is skipped unless clientAuto was already active;
+        // build it on demand when the user switched modes mid-run.
+        if topZones.isEmpty {
+            await measureTopZones()
+        }
         guard !topZones.isEmpty else { return nil }
         // Re-ping candidates and refresh queue data for current conditions
         var refreshed = topZones

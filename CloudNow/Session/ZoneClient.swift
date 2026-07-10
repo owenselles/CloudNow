@@ -38,29 +38,16 @@ actor ZoneClient {
         var sessionMeasuredAt: Date?
     }
 
-    private struct AutoRouteRecord: Codable {
-        let zoneUrl: String
-        let selectedAt: Date
-    }
-
     private static let latencyCacheKey = "gfn.zoneLatencyCache"
-    private static let autoRouteCacheKey = "gfn.autoRouteCache"
     private static let headPingMaxAge: TimeInterval = 6 * 60 * 60
     private static let sessionRttMaxAge: TimeInterval = 7 * 24 * 60 * 60
-    private static let autoRouteMaxAge: TimeInterval = 30 * 60
-    private static let prewarmInterval: TimeInterval = 10 * 60
 
     private var latencyCache: [String: LatencyRecord]
-    private var autoRouteCache: [String: AutoRouteRecord]
-    private var isPrewarming = false
-    private var lastPrewarmAt: Date?
 
     private init() {
         let defaults = UserDefaults.standard
         latencyCache = defaults.data(forKey: Self.latencyCacheKey)
             .flatMap { try? JSONDecoder().decode([String: LatencyRecord].self, from: $0) } ?? [:]
-        autoRouteCache = defaults.data(forKey: Self.autoRouteCacheKey)
-            .flatMap { try? JSONDecoder().decode([String: AutoRouteRecord].self, from: $0) } ?? [:]
     }
 
     // MARK: Public
@@ -113,60 +100,6 @@ actor ZoneClient {
         return Int(effectivePing.rounded())
     }
 
-    /// Refreshes zone queue data and stale latency probes without delaying game launch.
-    func prewarmAutomaticRouting() async {
-        let now = Date()
-        guard !isPrewarming,
-              lastPrewarmAt.map({ now.timeIntervalSince($0) >= Self.prewarmInterval }) ?? true
-        else {
-            return
-        }
-
-        isPrewarming = true
-        lastPrewarmAt = now
-        defer { isPrewarming = false }
-
-        do {
-            var zones = try await fetchZones()
-            cacheAutomaticSelections(from: zones)
-
-            let staleZones = zones.filter(\.isMeasuring)
-            let batchSize = 6
-            for start in stride(from: 0, to: staleZones.count, by: batchSize) {
-                let end = min(start + batchSize, staleZones.count)
-                let batch = staleZones[start ..< end]
-                await withTaskGroup(of: (String, Int?).self) { group in
-                    for zone in batch {
-                        group.addTask { [zone] in
-                            await (zone.id, self.measurePing(to: zone.zoneUrl))
-                        }
-                    }
-                    for await (id, ping) in group {
-                        guard let index = zones.firstIndex(where: { $0.id == id }) else { continue }
-                        let record = latencyCache[cacheKey(for: zones[index].zoneUrl)]
-                        let effectivePing = effectivePingMs(from: record, now: Date())
-                        zones[index].pingMs = effectivePing.map { Int($0.rounded()) } ?? ping ?? zones[index].pingMs
-                        zones[index].isMeasuring = false
-                    }
-                }
-                cacheAutomaticSelections(from: zones)
-            }
-        } catch {
-            zoneLog.warning("[Zone] Automatic routing prewarm failed: \(error, privacy: .private)")
-        }
-    }
-
-    /// Returns immediately from the last background refresh; nil preserves NVIDIA routing.
-    func cachedAutomaticZoneUrl(isUnlimited: Bool) -> String? {
-        let key = isUnlimited ? "unlimited" : "standard"
-        guard let record = autoRouteCache[key],
-              Date().timeIntervalSince(record.selectedAt) <= Self.autoRouteMaxAge
-        else {
-            return nil
-        }
-        return record.zoneUrl
-    }
-
     /// Feeds the actual selected WebRTC path RTT back into future zone ranking.
     func recordSessionRtt(zoneUrl: String, rttMs: Double) {
         guard rttMs > 0, rttMs.isFinite, isZoneUrl(zoneUrl) else { return }
@@ -176,19 +109,6 @@ actor ZoneClient {
         record.sessionMeasuredAt = Date()
         latencyCache[key] = record
         persistLatencyCache()
-    }
-
-    func cacheAutomaticSelections(from zones: [GFNZone]) {
-        let now = Date()
-        if let zone = zones.autoZone(isUnlimited: false), zone.pingMs != nil {
-            autoRouteCache["standard"] = AutoRouteRecord(zoneUrl: zone.zoneUrl, selectedAt: now)
-        }
-        if let zone = zones.autoZone(isUnlimited: true), zone.pingMs != nil {
-            autoRouteCache["unlimited"] = AutoRouteRecord(zoneUrl: zone.zoneUrl, selectedAt: now)
-        }
-        if let data = try? JSONEncoder().encode(autoRouteCache) {
-            UserDefaults.standard.set(data, forKey: Self.autoRouteCacheKey)
-        }
     }
 
     // MARK: Private

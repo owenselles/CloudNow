@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(GamesViewModel.self) var viewModel
 
     @State private var showZonePicker = false
+    @State private var showNetworkTest = false
 
     var body: some View {
         @Bindable var vm = viewModel
@@ -165,31 +166,37 @@ struct SettingsView: View {
                     }
                 }
 
-                Section(L10n.text("server_region")) {
+                Section(L10n.text("server_location")) {
                     Button {
                         showZonePicker = true
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(L10n.text("preferred_zone"))
-                                Text(L10n.text("preferred_zone_description"))
+                                Text(L10n.text("server_location"))
+                                Text(serverLocationDescription)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 8)
                             Spacer()
-                            Text(zoneLabel(vm.streamSettings.preferredZoneUrl))
+                            Text(serverLocationValue)
                                 .foregroundStyle(.secondary)
                         }
                     }
                     .foregroundStyle(.primary)
 
-                    if vm.streamSettings.preferredZoneUrl != nil {
-                        Button(L10n.text("clear_use_automatic_routing")) {
-                            vm.streamSettings.preferredZoneUrl = nil
+                    Button {
+                        showNetworkTest = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("test_network"))
+                            Text(L10n.text("test_network_description"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
                     }
+                    .foregroundStyle(.primary)
                 }
 
                 Section(L10n.text("microphone")) {
@@ -387,16 +394,27 @@ struct SettingsView: View {
             }
             .navigationTitle("")
             .sheet(isPresented: $showZonePicker) {
-                ZonePickerView(selectedZoneUrl: $vm.streamSettings.preferredZoneUrl)
+                ServerLocationPickerView()
+            }
+            .sheet(isPresented: $showNetworkTest) {
+                NetworkTestView()
             }
         }
     }
 
-    private func zoneLabel(_ url: String?) -> String {
-        guard let url else { return L10n.text("automatic") }
-        // Extract zone ID from URL like "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
-        let host = URL(string: url)?.host ?? url
-        return host.components(separatedBy: ".").first?.uppercased() ?? url
+    private var serverLocationValue: String {
+        switch viewModel.streamSettings.serverRoutingMode {
+        case .region: viewModel.streamSettings.preferredRegionName ?? L10n.text("automatic")
+        case .serverAuto, .clientAuto: viewModel.streamSettings.serverRoutingMode.label
+        }
+    }
+
+    private var serverLocationDescription: String {
+        switch viewModel.streamSettings.serverRoutingMode {
+        case .serverAuto: L10n.text("automatic_server_decides_description")
+        case .clientAuto: L10n.text("automatic_client_decides_description")
+        case .region: L10n.text("server_selection_warning")
+        }
     }
 
     private struct ResolutionEntry { let res: String; let badge: String; let symbol: String }
@@ -408,172 +426,345 @@ struct SettingsView: View {
     ]
 }
 
-// MARK: - Zone Picker
+// MARK: - Server Location Picker
 
-private struct ZonePickerView: View {
-    @Binding var selectedZoneUrl: String?
+/// Full-screen selection list mirroring tvOS Settings' own pickers (e.g. Sleep
+/// After): two Automatic entries then one row per region from /v2/serverInfo,
+/// opening focused on and scrolled to the active entry, which carries a
+/// checkmark. SwiftUI's native Picker can't reproduce this on tvOS (it opens at
+/// the top with no selection mark), so the list is built by hand.
+private struct ServerLocationPickerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(GamesViewModel.self) private var viewModel
+    @Environment(AuthManager.self) private var authManager
 
-    @State private var zones: [GFNZone] = []
+    @State private var serverInfo: GFNServerInfo?
     @State private var isLoading = true
     @State private var error: String?
+    @FocusState private var focusedRow: String?
 
-    private var groupedZones: [(region: String, label: String, flag: String, zones: [GFNZone])] {
-        let grouped = Dictionary(grouping: zones) { $0.region }
-        let order = ["US", "CA", "EU", "JP", "KR", "THAI", "MY"]
-        let sortedRegions = order.filter { grouped[$0] != nil }
-            + grouped.keys.filter { !order.contains($0) }.sorted()
-        return sortedRegions.map { region in
-            let meta = GFNZone.regionMeta[region] ?? (label: region, flag: "🌐")
-            let sorted = grouped[region, default: []].sorted {
-                ($0.pingMs ?? .max) < ($1.pingMs ?? .max)
-            }
-            return (region, meta.label, meta.flag, sorted)
-        }
-    }
-
-    private var autoZone: GFNZone? {
-        zones.autoZone(isUnlimited: viewModel.subscription?.isUnlimited ?? false)
+    init() {
+        // Seed from the app-run cache so a previously-picked region row can exist
+        // at first layout.
+        let cached = ServerInfoClient.shared.cached
+        _serverInfo = State(initialValue: cached)
+        _isLoading = State(initialValue: cached == nil)
     }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if isLoading {
-                    ProgressView {
-                        Text(L10n.text("loading_servers"))
+            ScrollViewReader { proxy in
+                List {
+                    Section {
+                        autoRow(.serverAuto, subtitle: serverAutoSubtitle)
+                        autoRow(.clientAuto, subtitle: L10n.text("automatic_client_decides_description"))
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error {
-                    ContentUnavailableView(L10n.text("cant_load_servers"), systemImage: "wifi.exclamationmark",
-                                           description: Text(error))
-                } else {
-                    List {
-                        // Auto option
+
+                    if let regions = serverInfo?.regions, !regions.isEmpty {
                         Section {
-                            Button {
-                                select(nil)
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(L10n.text("automatic"))
-                                            .font(.body.weight(.semibold))
-                                        if let best = autoZone {
-                                            Text("\(L10n.text("best_prefix")) \(best.id) · Q\(best.queuePosition)\(best.pingMs.map { " · \($0) ms" } ?? "")")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Spacer()
-                                    if selectedZoneUrl == nil {
-                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                                    }
-                                }
+                            ForEach(regions) { region in
+                                regionRow(region)
                             }
-                            .foregroundStyle(.primary)
+                        } footer: {
+                            if viewModel.streamSettings.serverRoutingMode == .region {
+                                Text(L10n.text("server_selection_warning"))
+                            }
                         }
-
-                        // Zones by region
-                        ForEach(groupedZones, id: \.region) { group in
-                            Section("\(group.flag) \(group.label)") {
-                                ForEach(group.zones) { zone in
-                                    Button {
-                                        select(zone.zoneUrl)
-                                    } label: {
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(zone.id)
-                                                    .font(.body)
-                                                HStack(spacing: 8) {
-                                                    Label("Q \(zone.queuePosition)", systemImage: "person.3.fill")
-                                                        .foregroundStyle(queueColor(zone.queuePosition))
-                                                    if let ping = zone.pingMs {
-                                                        Label("\(ping) ms", systemImage: "wifi")
-                                                            .foregroundStyle(pingColor(ping))
-                                                    } else if zone.isMeasuring {
-                                                        Label("…", systemImage: "wifi")
-                                                            .foregroundStyle(.secondary)
-                                                    }
-                                                }
-                                                .font(.caption)
-                                            }
-                                            Spacer()
-                                            if selectedZoneUrl == zone.zoneUrl {
-                                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                                            } else if autoZone?.id == zone.id {
-                                                Text(L10n.text("best"))
-                                                    .font(.caption.bold())
-                                                    .foregroundStyle(.green)
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 2)
-                                                    .background(Color.green.opacity(0.15), in: Capsule())
-                                            }
-                                        }
-                                    }
-                                    .foregroundStyle(.primary)
-                                }
-                            }
+                    } else if isLoading {
+                        Section {
+                            ProgressView { Text(L10n.text("loading_servers")) }
+                                .frame(maxWidth: .infinity)
+                        }
+                    } else if let error {
+                        Section {
+                            ContentUnavailableView(
+                                L10n.text("cant_load_servers"),
+                                systemImage: "wifi.exclamationmark",
+                                description: Text(error)
+                            )
                         }
                     }
                 }
-            }
-            .navigationTitle(L10n.text("server_region"))
-            .task {
-                await loadZones()
+                .navigationTitle(L10n.text("server_location"))
+                .task { await load() }
+                .task { await focusActiveRow(proxy: proxy) }
             }
         }
     }
 
-    private func select(_ url: String?) {
-        selectedZoneUrl = url
-        Task { @MainActor in
+    /// Opens on the current selection: waits until its row exists (region rows
+    /// arrive asynchronously), then scrolls it into view and focuses it — retrying
+    /// until focus actually settles there, since the sheet's initial auto-focus
+    /// (and the re-layout when regions finish loading) can steal it back to the
+    /// first row.
+    private func focusActiveRow(proxy: ScrollViewProxy) async {
+        for _ in 0 ..< 60 {
+            if selectedRowExists { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        guard selectedRowExists else { return }
+
+        let key = selectedRowKey
+        for _ in 0 ..< 8 {
+            proxy.scrollTo(key, anchor: .center)
+            focusedRow = key
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if focusedRow == key { return }
+        }
+    }
+
+    private var selectedRowKey: String {
+        let settings = viewModel.streamSettings
+        if settings.serverRoutingMode == .region, let name = settings.preferredRegionName {
+            return "region:\(name)"
+        }
+        return settings.serverRoutingMode.rawValue
+    }
+
+    private var selectedRowExists: Bool {
+        switch viewModel.streamSettings.serverRoutingMode {
+        case .serverAuto, .clientAuto:
+            return true
+        case .region:
+            guard let name = viewModel.streamSettings.preferredRegionName else { return false }
+            return serverInfo?.regions.contains { $0.name == name } ?? false
+        }
+    }
+
+    private var serverAutoSubtitle: String {
+        if let local = serverInfo?.localRegionName, !local.isEmpty {
+            return L10n.format("detected_region", local)
+        }
+        return L10n.text("automatic_server_decides_description")
+    }
+
+    private func autoRow(_ mode: ServerRoutingMode, subtitle: String) -> some View {
+        Button {
+            viewModel.streamSettings.serverRoutingMode = mode
+            viewModel.streamSettings.preferredRegionName = nil
+            viewModel.streamSettings.preferredRegionAddress = nil
             dismiss()
-        }
-    }
-
-    private func loadZones() async {
-        isLoading = true
-        error = nil
-        do {
-            zones = try await ZoneClient.shared.fetchZones()
-            isLoading = false
-            let batchSize = 6
-            for start in stride(from: 0, to: zones.count, by: batchSize) {
-                if Task.isCancelled { return }
-                let end = min(start + batchSize, zones.count)
-                let batch = zones[start ..< end]
-                await withTaskGroup(of: (String, Int?).self) { group in
-                    for zone in batch {
-                        group.addTask {
-                            let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
-                            return (zone.id, ping)
-                        }
-                    }
-                    for await (id, ping) in group {
-                        if Task.isCancelled { return }
-                        if let idx = zones.firstIndex(where: { $0.id == id }) {
-                            zones[idx].pingMs = ping
-                            zones[idx].isMeasuring = false
-                        }
-                    }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mode.label).font(.body.weight(.semibold))
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if viewModel.streamSettings.serverRoutingMode == mode {
+                    Image(systemName: "checkmark")
                 }
             }
-            await ZoneClient.shared.cacheAutomaticSelections(from: zones)
+        }
+        .buttonStyle(ServerRowButtonStyle())
+        .focused($focusedRow, equals: mode.rawValue)
+        .id(mode.rawValue)
+    }
+
+    private func regionRow(_ region: GFNRegion) -> some View {
+        let selected = viewModel.streamSettings.serverRoutingMode == .region
+            && viewModel.streamSettings.preferredRegionName == region.name
+        return Button {
+            viewModel.streamSettings.serverRoutingMode = .region
+            viewModel.streamSettings.preferredRegionName = region.name
+            viewModel.streamSettings.preferredRegionAddress = region.address
+            dismiss()
+        } label: {
+            HStack {
+                Text(region.name)
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                }
+            }
+        }
+        .buttonStyle(ServerRowButtonStyle())
+        .focused($focusedRow, equals: "region:\(region.name)")
+        .id("region:\(region.name)")
+    }
+
+    private func load() async {
+        if let cached = ServerInfoClient.shared.cached {
+            serverInfo = cached
+            isLoading = false
+        }
+        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+        guard let token = try? await authManager.resolveToken() else {
+            isLoading = false
+            if serverInfo == nil { error = "Sign-in required" }
+            return
+        }
+        do {
+            serverInfo = try await ServerInfoClient.shared.fetch(baseUrl: base, token: token)
+            isLoading = false
         } catch {
             isLoading = false
-            self.error = error.localizedDescription
+            if serverInfo == nil { self.error = error.localizedDescription }
+        }
+    }
+}
+
+/// Row button style for the Server Location list and the Network Test Close
+/// button. It draws its own focus platter and text colour instead of relying on
+/// the system button platter: inside a presented sheet, tvOS does not auto-invert
+/// custom label content to dark-on-white on focus, so a focused row would
+/// otherwise read as a blank white bar.
+private struct ServerRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        RowBody(configuration: configuration)
+    }
+
+    private struct RowBody: View {
+        let configuration: ButtonStyle.Configuration
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(isFocused ? AnyShapeStyle(.black) : AnyShapeStyle(.primary))
+                .padding(.vertical, 14)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isFocused ? AnyShapeStyle(.white) : AnyShapeStyle(.white.opacity(0.06)))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .scaleEffect(isFocused ? 1.03 : 1.0)
+                .animation(.easeOut(duration: 0.15), value: isFocused)
+        }
+    }
+}
+
+// MARK: - Network Test
+
+/// Official-client-style network test: probes the region you would stream from
+/// and reports ping, jitter, and loss (HTTP HEAD samples against the region
+/// endpoint — no streaming session required).
+private struct NetworkTestView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(GamesViewModel.self) private var viewModel
+    @Environment(AuthManager.self) private var authManager
+
+    @State private var isRunning = true
+    @State private var routedTo: String?
+    @State private var pingMs: Double?
+    @State private var jitterMs: Double?
+    @State private var lossPercent: Double?
+
+    private static let sampleCount = 10
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if let routedTo {
+                        LabeledContent(L10n.text("routed_to"), value: routedTo)
+                    }
+                    LabeledContent(L10n.text("rtt")) {
+                        resultText(pingMs.map { String(format: "%.0f ms", $0) }, color: pingMs.map(pingColor))
+                    }
+                    LabeledContent(L10n.text("jitter")) {
+                        resultText(jitterMs.map { String(format: "%.1f ms", $0) }, color: nil)
+                    }
+                    LabeledContent(L10n.text("loss")) {
+                        resultText(lossPercent.map { String(format: "%.0f %%", $0) },
+                                   color: lossPercent.map { $0 > 0 ? .orange : .green })
+                    }
+                } footer: {
+                    if isRunning {
+                        Label(L10n.text("test_running"), systemImage: "wifi")
+                    }
+                }
+
+                Section {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text(L10n.text("close"))
+                    }
+                    .buttonStyle(ServerRowButtonStyle())
+                }
+            }
+            .navigationTitle(L10n.text("test_network"))
+            .task { await run() }
         }
     }
 
-    private func queueColor(_ q: Int) -> Color {
-        if q <= 5 { return .green }
-        if q <= 15 { return .yellow }
-        if q <= 30 { return .orange }
-        return .red
+    @ViewBuilder
+    private func resultText(_ value: String?, color: Color?) -> some View {
+        if let value {
+            Text(value)
+                .monospacedDigit()
+                .foregroundStyle(color ?? .primary)
+        } else {
+            Text("…").foregroundStyle(.secondary)
+        }
     }
 
-    private func pingColor(_ ms: Int) -> Color {
+    private func run() async {
+        let (targetAddress, targetName) = await resolveTarget()
+        routedTo = targetName
+
+        _ = await probe(targetAddress) // connection warm-up, not counted
+
+        var samples: [Double] = []
+        var failures = 0
+        for _ in 0 ..< Self.sampleCount {
+            if let ms = await probe(targetAddress) {
+                samples.append(ms)
+                pingMs = samples.reduce(0, +) / Double(samples.count)
+            } else {
+                failures += 1
+            }
+            lossPercent = Double(failures) / Double(Self.sampleCount) * 100
+        }
+        if samples.count > 1 {
+            let diffs = zip(samples.dropFirst(), samples).map { abs($0 - $1) }
+            jitterMs = diffs.reduce(0, +) / Double(diffs.count)
+        } else if !samples.isEmpty {
+            jitterMs = 0
+        }
+        isRunning = false
+    }
+
+    /// Pinned region when set; otherwise the server-detected local region from
+    /// /v2/serverInfo (what Automatic would route to), falling back to the
+    /// account's default endpoint.
+    private func resolveTarget() async -> (address: String, name: String?) {
+        let settings = viewModel.streamSettings
+        if settings.serverRoutingMode == .region,
+           let address = settings.preferredRegionAddress
+        {
+            return (address, settings.preferredRegionName)
+        }
+        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+        let info: GFNServerInfo? = if let cached = ServerInfoClient.shared.cached {
+            cached
+        } else if let token = try? await authManager.resolveToken() {
+            try? await ServerInfoClient.shared.fetch(baseUrl: base, token: token)
+        } else {
+            nil
+        }
+        if let local = info?.localRegionName,
+           let region = info?.regions.first(where: { $0.name == local })
+        {
+            return (region.address, local)
+        }
+        return (base, info?.localRegionName)
+    }
+
+    private func probe(_ urlString: String) async -> Double? {
+        guard let url = URL(string: urlString) else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 5
+        let start = Date()
+        do {
+            _ = try await URLSession.shared.data(for: request)
+            return Date().timeIntervalSince(start) * 1000
+        } catch {
+            return nil
+        }
+    }
+
+    private func pingColor(_ ms: Double) -> Color {
         if ms < 30 { return .green }
         if ms < 80 { return .yellow }
         if ms < 150 { return .orange }

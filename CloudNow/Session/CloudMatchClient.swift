@@ -8,7 +8,8 @@ private let cloudMatchOSLog = OSLog(subsystem: "com.owenselles.CloudNow2", categ
 
 // MARK: - CloudMatch Headers
 
-private func gfnHeaders(token: String, clientId: String, deviceId: String, includeOrigin: Bool = true) -> [String: String] {
+/// Shared GFN request headers, also used by ServerInfoClient for /v2/serverInfo.
+func gfnHeaders(token: String, clientId: String, deviceId: String, includeOrigin: Bool = true) -> [String: String] {
     var h: [String: String] = [
         "User-Agent": NVIDIAAuth.userAgent,
         "Authorization": "GFNJWT \(token)",
@@ -787,6 +788,9 @@ actor CloudMatchClient {
         )
     }
 
+    /// Accepts dedicated zone hosts (np-*) and the region addresses served by
+    /// /v2/serverInfo, but never the account default endpoint — sessions created
+    /// there are server-routed and must not be pinned to it on resume.
     private func normalizedRoutingZoneUrl(_ url: String?) -> String? {
         guard let raw = url?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty,
@@ -794,8 +798,8 @@ actor CloudMatchClient {
               let scheme = components.scheme?.lowercased(),
               scheme == "https",
               let host = components.host?.lowercased(),
-              host.hasPrefix("np-"),
-              host.hasSuffix(".nvidiagrid.net")
+              host.hasSuffix(".nvidiagrid.net"),
+              Self.defaultBase != "https://\(host)"
         else {
             return nil
         }
