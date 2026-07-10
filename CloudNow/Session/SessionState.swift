@@ -1,3 +1,4 @@
+import AVFAudio
 import Foundation
 
 // MARK: - Stream Settings
@@ -56,6 +57,9 @@ struct StreamSettings: Codable, Equatable {
     /// Persist in-game graphics settings across sessions on the cloud rig. A premium-tier
     /// (Performance/Ultimate) feature; the server ignores the flag for non-entitled accounts.
     var persistInGameSettings: Bool = true
+    /// Requested audio channel layout. Automatic follows the connected audio system's
+    /// capability (5.1 only when the route reports ≥6 output channels).
+    var audioFormat: AudioFormatPreference = .automatic
 
     var normalizedForClient: StreamSettings {
         var normalized = self
@@ -85,6 +89,7 @@ extension StreamSettings {
         case statsMode, enableRtcEventLog
         case appLaunchMode
         case persistInGameSettings
+        case audioFormat
         case colorQuality
     }
 
@@ -114,6 +119,7 @@ extension StreamSettings {
         enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
         appLaunchMode = try c.decodeIfPresent(AppLaunchMode.self, forKey: .appLaunchMode) ?? d.appLaunchMode
         persistInGameSettings = try c.decodeIfPresent(Bool.self, forKey: .persistInGameSettings) ?? d.persistInGameSettings
+        audioFormat = try c.decodeIfPresent(AudioFormatPreference.self, forKey: .audioFormat) ?? d.audioFormat
     }
 
     func encode(to encoder: Encoder) throws {
@@ -138,6 +144,7 @@ extension StreamSettings {
         try c.encode(enableRtcEventLog, forKey: .enableRtcEventLog)
         try c.encode(appLaunchMode, forKey: .appLaunchMode)
         try c.encode(persistInGameSettings, forKey: .persistInGameSettings)
+        try c.encode(audioFormat, forKey: .audioFormat)
     }
 }
 
@@ -175,6 +182,38 @@ enum AppLaunchMode: String, Codable, CaseIterable {
 
     var label: String {
         L10n.appLaunchModeLabel(self)
+    }
+}
+
+enum AudioFormatPreference: String, Codable, CaseIterable {
+    case automatic
+    case stereo
+    case surround51
+
+    var label: String {
+        switch self {
+        case .automatic: L10n.text("automatic")
+        case .stereo: L10n.text("stereo")
+        case .surround51: L10n.text("surround_5_1")
+        }
+    }
+
+    /// Output channels to request from GFN (2 or 6). tvOS exposes no reliable sink-capability
+    /// API (device-verified: the port's channel count reports the currently active format —
+    /// always 2 before anything requests more — and maximumOutputNumberOfChannels reports the
+    /// OS mixer's 32 on one setup but the sink chain's 8 on another). Automatic therefore
+    /// requests 5.1 on any surround-capable route and lets tvOS downmix to the actual
+    /// speakers — the benign failure mode: real 5.1 rooms get discrete surround, stereo
+    /// rooms get the same graceful 6→2 downmix every video app uses for 5.1 content.
+    var resolvedChannelCount: Int {
+        switch self {
+        case .stereo:
+            2
+        case .surround51:
+            6
+        case .automatic:
+            AVAudioSession.sharedInstance().maximumOutputNumberOfChannels >= 6 ? 6 : 2
+        }
     }
 }
 

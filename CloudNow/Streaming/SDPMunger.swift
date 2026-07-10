@@ -86,7 +86,7 @@ enum SDPMunger {
             if line.hasPrefix("m=") { inVideo = false }
 
             // Drop attribute lines for non-allowed PTs in the video section
-            if inVideo, let pt = videoLinePT(line), !allowedPTs.contains(pt) {
+            if inVideo, let pt = attributeLinePT(line), !allowedPTs.contains(pt) {
                 continue
             }
             result.append(line)
@@ -117,6 +117,165 @@ enum SDPMunger {
             } else if line.hasPrefix("m=audio"), !next.hasPrefix("b=") {
                 result.append("b=AS:\(audioKbps)")
             }
+        }
+        return result.joined(separator: sep)
+    }
+
+    // MARK: - Audio Answer Munging
+
+    /// Rewrites the first audio section (the GFN game-audio m-line, mid 0) of the answer.
+    ///
+    /// Stereo offers: strips RED (redundant audio) from the accepted payloads. RED makes
+    /// NetEQ hold extra jitter-buffer delay to exploit the redundancy — measurable latency
+    /// for no benefit on a healthy network.
+    ///
+    /// Surround offers: WebRTC does not advertise `multiopus` as a receive codec, so
+    /// createAnswer rejects the whole m-line (port 0, mid dropped from BUNDLE), which then
+    /// breaks the bundle transport. Rebuilds the section to accept multiopus with the
+    /// offer's exact fmtp — the same SDP-munging path the official GFN web client uses
+    /// (libwebrtc explicitly supports it and ships the multiopus decoder).
+    static func mungeAudioAnswer(_ answer: String, offer: String) -> String {
+        let sep = answer.contains("\r\n") ? "\r\n" : "\n"
+        if let multiopus = multiopusParameters(in: offer) {
+            return rebuildSurroundAudioSection(answer, multiopus: multiopus, offer: offer, sep: sep)
+        }
+        return stripRedFromAudioAnswer(answer, sep: sep)
+    }
+
+    /// Payload number, rtpmap suffix (e.g. "multiopus/48000/6") and fmtp params of the
+    /// offer's multiopus codec, or nil for stereo offers.
+    private static func multiopusParameters(in offer: String) -> (pt: String, rtpmap: String, fmtp: String)? {
+        let offerSep = offer.contains("\r\n") ? "\r\n" : "\n"
+        let lines = offer.components(separatedBy: offerSep)
+        guard let rtpmapLine = lines.first(where: { $0.hasPrefix("a=rtpmap:") && $0.contains("multiopus/") }) else {
+            return nil
+        }
+        let rest = String(rtpmapLine.dropFirst("a=rtpmap:".count))
+        let parts = rest.components(separatedBy: " ")
+        guard parts.count >= 2 else { return nil }
+        let pt = parts[0]
+        let rtpmap = parts[1]
+        let fmtp = lines.first(where: { $0.hasPrefix("a=fmtp:\(pt) ") })
+            .map { String($0.dropFirst("a=fmtp:\(pt) ".count)) } ?? ""
+        return (pt: pt, rtpmap: rtpmap, fmtp: fmtp)
+    }
+
+    /// Removes the RED payload from the answer's first audio section so the server sends
+    /// plain Opus. Only the game-audio section is touched; the mic section has no RED.
+    private static func stripRedFromAudioAnswer(_ answer: String, sep: String) -> String {
+        let lines = answer.components(separatedBy: sep)
+
+        // RED payload numbers declared in the first audio section
+        var redPTs = Set<String>()
+        var audioSectionIndex = -1
+        for line in lines {
+            if line.hasPrefix("m=") { audioSectionIndex += line.hasPrefix("m=audio") ? 1 : 0 }
+            guard audioSectionIndex == 0, line.hasPrefix("a=rtpmap:"), line.contains(" red/") else { continue }
+            if let pt = line.dropFirst("a=rtpmap:".count).components(separatedBy: " ").first {
+                redPTs.insert(String(pt))
+            }
+        }
+        guard !redPTs.isEmpty else { return answer }
+
+        var result: [String] = []
+        var inFirstAudio = false
+        var seenAudio = false
+        for line in lines {
+            if line.hasPrefix("m=audio"), !seenAudio {
+                seenAudio = true
+                inFirstAudio = true
+                let parts = line.components(separatedBy: " ")
+                let header = Array(parts.prefix(3))
+                let pts = parts.dropFirst(3).filter { !redPTs.contains($0) }
+                result.append((header + pts).joined(separator: " "))
+                continue
+            }
+            if line.hasPrefix("m=") { inFirstAudio = false }
+            if inFirstAudio, let pt = attributeLinePT(line), redPTs.contains(pt) { continue }
+            result.append(line)
+        }
+        return result.joined(separator: sep)
+    }
+
+    /// Replaces the answer's (rejected) first audio section with one accepting the offer's
+    /// multiopus codec, reusing the bundle's transport attributes and restoring the mid in
+    /// the BUNDLE group. RED is intentionally not re-added (see stripRedFromAudioAnswer).
+    private static func rebuildSurroundAudioSection(
+        _ answer: String,
+        multiopus: (pt: String, rtpmap: String, fmtp: String),
+        offer: String,
+        sep: String
+    ) -> String {
+        let lines = answer.components(separatedBy: sep)
+
+        // Transport attributes shared by the bundle — copy from the video section, which
+        // always negotiates successfully.
+        var transport: [String] = []
+        var inVideo = false
+        for line in lines {
+            if line.hasPrefix("m=video") { inVideo = true; continue }
+            if line.hasPrefix("m=") { inVideo = false }
+            guard inVideo else { continue }
+            if line.hasPrefix("a=ice-ufrag:") || line.hasPrefix("a=ice-pwd:")
+                || line.hasPrefix("a=ice-options:") || line.hasPrefix("a=fingerprint:")
+                || line.hasPrefix("a=setup:")
+            {
+                transport.append(line)
+            }
+        }
+        guard !transport.isEmpty else { return answer }
+
+        // The mid of the offer's first audio section (GFN uses 0, but read it to be safe)
+        let offerSep = offer.contains("\r\n") ? "\r\n" : "\n"
+        var audioMid = "0"
+        var inOfferAudio = false
+        for line in offer.components(separatedBy: offerSep) {
+            if line.hasPrefix("m=audio") { inOfferAudio = true; continue }
+            if line.hasPrefix("m=") { inOfferAudio = false }
+            if inOfferAudio, line.hasPrefix("a=mid:") {
+                audioMid = String(line.dropFirst("a=mid:".count))
+                break
+            }
+        }
+
+        var section = ["m=audio 9 UDP/TLS/RTP/SAVPF \(multiopus.pt)"]
+        section.append("b=AS:256")
+        section.append("c=IN IP4 0.0.0.0")
+        section.append("a=rtcp:9 IN IP4 0.0.0.0")
+        section += transport
+        section.append("a=mid:\(audioMid)")
+        section.append("a=extmap:3 http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01")
+        section.append("a=recvonly")
+        section.append("a=rtcp-mux")
+        section.append("a=rtcp-rsize")
+        section.append("a=rtpmap:\(multiopus.pt) \(multiopus.rtpmap)")
+        section.append("a=rtcp-fb:\(multiopus.pt) transport-cc")
+        if !multiopus.fmtp.isEmpty {
+            section.append("a=fmtp:\(multiopus.pt) \(multiopus.fmtp)")
+        }
+
+        // Swap the rejected section for the rebuilt one and restore the mid in BUNDLE
+        var result: [String] = []
+        var skippingRejected = false
+        var replaced = false
+        for line in lines {
+            if line.hasPrefix("a=group:BUNDLE") {
+                var mids = line.dropFirst("a=group:BUNDLE".count)
+                    .components(separatedBy: " ").filter { !$0.isEmpty }
+                if !mids.contains(audioMid) { mids.insert(audioMid, at: 0) }
+                result.append("a=group:BUNDLE " + mids.joined(separator: " "))
+                continue
+            }
+            if line.hasPrefix("m=audio"), !replaced {
+                replaced = true
+                skippingRejected = true
+                result += section
+                continue
+            }
+            if skippingRejected {
+                if line.hasPrefix("m=") { skippingRejected = false } else { continue }
+            }
+            result.append(line)
         }
         return result.joined(separator: sep)
     }
@@ -208,7 +367,7 @@ enum SDPMunger {
     }
 
     /// Extracts the payload type number from an rtpmap/fmtp/rtcp-fb attribute line.
-    private static func videoLinePT(_ line: String) -> String? {
+    private static func attributeLinePT(_ line: String) -> String? {
         for prefix in ["a=rtpmap:", "a=fmtp:", "a=rtcp-fb:"] {
             if line.hasPrefix(prefix) {
                 return line.dropFirst(prefix.count)

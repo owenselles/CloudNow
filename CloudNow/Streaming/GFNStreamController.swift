@@ -235,15 +235,14 @@ final class GFNStreamController: NSObject {
         LKRTCInitializeSSL()
         let encoderFactory = LKRTCDefaultVideoEncoderFactory()
         let decoderFactory = GFNVideoDecoderFactory()
-        // Bypass Apple's Voice-Processing I/O unit: it is built for calls (AEC/AGC/NS) and adds
-        // output latency plus voice-band filtering to what is here full-range game audio.
-        // Trade-off: no echo cancellation for the (rarely used) microphone path.
+        // Inject our own audio device (GFNAudioDevice): the built-in audio device module
+        // plays MONO on Apple platforms and routes through the call-oriented voice
+        // processing unit. The custom device renders true stereo — or 5.1 for multiopus
+        // streams — through AVAudioEngine and owns the output render quantum (latency).
         return LKRTCPeerConnectionFactory(
-            audioDeviceModuleType: .platformDefault,
-            bypassVoiceProcessing: true,
             encoderFactory: encoderFactory,
             decoderFactory: decoderFactory,
-            audioProcessingModule: nil
+            audioDevice: GFNAudioDevice.shared
         )
     }()
 
@@ -628,6 +627,14 @@ final class GFNStreamController: NSObject {
             sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
         #endif
 
+        // The server offers multiopus/48000/6 when the session requested 5.1 (see
+        // CloudMatchClient surroundAudioInfo); the offer is the single source of truth
+        // for the playout channel count. Must be set before the peer connection exists
+        // so the audio device initializes with the right graph.
+        let surroundOffered = sdp.contains("multiopus/")
+        GFNAudioDevice.shared.requestedOutputChannels = surroundOffered ? 6 : 2
+        audioSyncLog.info("offer audio: \(surroundOffered ? "multiopus 5.1" : "opus stereo", privacy: .public)")
+
         let microphoneEnabledForConnection = configureAudioSession(microphoneRequested: settings.micEnabled)
 
         // The lifetime is immutable after channel creation, so resolve the server's value first.
@@ -753,7 +760,14 @@ final class GFNStreamController: NSObject {
             let h265SafeSdp = settings.codec == .h265
                 ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(codecFilteredSdp))
                 : codecFilteredSdp
-            let mangledAnswerSdp = SDPMunger.injectBandwidth(h265SafeSdp, videoKbps: settings.maxBitrateKbps)
+            // Audio: strip RED (jitter-buffer latency) or, for surround offers, rebuild the
+            // audio section to accept multiopus — createAnswer rejects codecs it does not
+            // advertise, which would otherwise break the whole bundle.
+            let audioMungedSdp = SDPMunger.mungeAudioAnswer(
+                SDPMunger.injectBandwidth(h265SafeSdp, videoKbps: settings.maxBitrateKbps),
+                offer: fixedSdp
+            )
+            let mangledAnswerSdp = audioMungedSdp
             let answerH265Params = mangledAnswerSdp.components(separatedBy: "\r\n")
                 .filter { ($0.hasPrefix("a=rtpmap:") && $0.contains("H265")) || ($0.hasPrefix("a=fmtp:") && $0.contains("profile-id")) }
                 .joined(separator: " ")

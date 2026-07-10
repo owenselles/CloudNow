@@ -64,6 +64,20 @@ struct SettingsView: View {
                         .padding(.vertical, 8)
                     }
 
+                    Picker(selection: $vm.streamSettings.audioFormat) {
+                        ForEach(AudioFormatPreference.allCases, id: \.self) { format in
+                            Text(format.label).tag(format)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("audio_format"))
+                            Text(L10n.text("audio_format_description"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+
                     Picker(L10n.text("keyboard_layout"), selection: $vm.streamSettings.keyboardLayout) {
                         ForEach(L10n.supportedLanguageCodes, id: \.self) { code in
                             Text(L10n.localizedLanguageName(for: code)).tag(code)
