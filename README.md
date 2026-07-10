@@ -28,6 +28,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Tab bar navigation** — Home, Library, Store, and Settings; fully focus-engine compatible
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
 - **Library & Store** — browse your linked games separately from the full public catalog; Library and Store both have search; Library supports A→Z, Z→A, and Recently Played sort orders; long-press any card to add/remove from Favorites
+- **Instant startup** — catalog, library, and subscription data are cached on device and shown immediately on launch while fresh data loads in the background
 - **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), color mode, keyboard layout, game language, and Low Latency Mode (L4S) from the Settings tab
 - **Color mode preferences** — Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR. CloudNow separates user preference, requested stream mode, negotiated server mode, and actual detected decoded format instead of assuming HDR from bit depth or Apple TV output mode
 - **Decoded video format detection** — inspects the actual decoded pixel buffer for bit depth, transfer function, color primaries, matrix, and range. HDR is only treated as active when the decoded stream metadata supports it
