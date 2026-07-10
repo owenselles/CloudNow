@@ -274,5 +274,17 @@ enum L10nKO {
         "session_negotiation_failed": "세션 협상 실패",
         "start_(≡)": "시작 (≡)",
         "options/back_(⊟)": "옵션/뒤로 (⊟)",
+        "close": "닫기",
+        "automatic_server_decides": "자동 (서버가 결정)",
+        "automatic_client_decides": "자동 (클라이언트가 결정)",
+        "automatic_server_decides_description": "NVIDIA가 각 세션을 네트워크에 가장 적합한 서버로 라우팅합니다.",
+        "automatic_client_decides_description": "핑과 대기열 조합이 가장 좋은 서버를 선택합니다.",
+        "detected_region": "감지됨: %@",
+        "server_selection_warning": "먼 지역의 세션은 지연이 커지고 대기열이 길어질 수 있습니다.",
+        "test_network": "네트워크 테스트",
+        "test_network_description": "스트리밍 서버까지의 핑, 지터, 패킷 손실을 측정합니다.",
+        "routed_to": "라우팅 대상",
+        "test_running": "테스트 중…",
+        "jitter": "지터",
     ]
 }

@@ -274,5 +274,17 @@ enum L10nES {
         "session_negotiation_failed": "Falló la negociación de la sesión",
         "start_(≡)": "Iniciar (≡)",
         "options/back_(⊟)": "Opciones/Volver (⊟)",
+        "close": "Cerrar",
+        "automatic_server_decides": "Automático (decide el servidor)",
+        "automatic_client_decides": "Automático (decide el cliente)",
+        "automatic_server_decides_description": "NVIDIA dirige cada sesión al mejor servidor para tu red.",
+        "automatic_client_decides_description": "Elige el servidor con la mejor combinación de ping y cola.",
+        "detected_region": "Detectado: %@",
+        "server_selection_warning": "Las sesiones en una región lejana pueden tener mayor latencia y colas más largas.",
+        "test_network": "Probar red",
+        "test_network_description": "Mide el ping, el jitter y la pérdida de paquetes hasta tu servidor de streaming.",
+        "routed_to": "Enrutado a",
+        "test_running": "Probando…",
+        "jitter": "Jitter",
     ]
 }

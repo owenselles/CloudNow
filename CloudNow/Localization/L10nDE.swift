@@ -274,5 +274,17 @@ enum L10nDE {
         "session_negotiation_failed": "Sitzungsverhandlung fehlgeschlagen",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Optionen/Zurück (⊟)",
+        "close": "Schließen",
+        "automatic_server_decides": "Automatisch (Server entscheidet)",
+        "automatic_client_decides": "Automatisch (Client entscheidet)",
+        "automatic_server_decides_description": "NVIDIA leitet jede Sitzung zum besten Server für dein Netzwerk.",
+        "automatic_client_decides_description": "Wählt den Server mit der besten Kombination aus Ping und Warteschlange.",
+        "detected_region": "Erkannt: %@",
+        "server_selection_warning": "Sitzungen in einer entfernten Region können höhere Latenz und längere Warteschlangen haben.",
+        "test_network": "Netzwerktest",
+        "test_network_description": "Misst Ping, Jitter und Paketverlust zu deinem Streaming-Server.",
+        "routed_to": "Weitergeleitet an",
+        "test_running": "Wird getestet…",
+        "jitter": "Jitter",
     ]
 }

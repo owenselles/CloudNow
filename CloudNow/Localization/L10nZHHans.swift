@@ -274,5 +274,17 @@ enum L10nZHHans {
         "session_negotiation_failed": "会话协商失败",
         "start_(≡)": "开始 (≡)",
         "options/back_(⊟)": "选项/返回 (⊟)",
+        "close": "关闭",
+        "automatic_server_decides": "自动（服务器决定）",
+        "automatic_client_decides": "自动（客户端决定）",
+        "automatic_server_decides_description": "NVIDIA 会将每个会话路由到最适合你网络的服务器。",
+        "automatic_client_decides_description": "选择延迟和排队情况综合最佳的服务器。",
+        "detected_region": "检测到：%@",
+        "server_selection_warning": "在较远区域开始的会话可能延迟更高、排队更长。",
+        "test_network": "网络测试",
+        "test_network_description": "测量到流媒体服务器的延迟、抖动和丢包。",
+        "routed_to": "路由至",
+        "test_running": "测试中…",
+        "jitter": "抖动",
     ]
 }

@@ -274,5 +274,17 @@ enum L10nCS {
         "session_negotiation_failed": "Vyjednávání relace selhalo",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Možnosti/Zpět (⊟)",
+        "close": "Zavřít",
+        "automatic_server_decides": "Automaticky (rozhoduje server)",
+        "automatic_client_decides": "Automaticky (rozhoduje klient)",
+        "automatic_server_decides_description": "NVIDIA směruje každou relaci na nejlepší server pro vaši síť.",
+        "automatic_client_decides_description": "Vybírá server s nejlepší kombinací pingu a fronty.",
+        "detected_region": "Zjištěno: %@",
+        "server_selection_warning": "Relace ve vzdáleném regionu mohou mít vyšší latenci a delší fronty.",
+        "test_network": "Test sítě",
+        "test_network_description": "Měří ping, jitter a ztrátu paketů k vašemu streamovacímu serveru.",
+        "routed_to": "Směrováno na",
+        "test_running": "Testování…",
+        "jitter": "Jitter",
     ]
 }

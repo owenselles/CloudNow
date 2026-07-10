@@ -274,5 +274,17 @@ enum L10nTH {
         "session_negotiation_failed": "การเจรจาเซสชันล้มเหลว",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "ปิด",
+        "automatic_server_decides": "อัตโนมัติ (เซิร์ฟเวอร์ตัดสินใจ)",
+        "automatic_client_decides": "อัตโนมัติ (ไคลเอนต์ตัดสินใจ)",
+        "automatic_server_decides_description": "NVIDIA จะกำหนดเส้นทางแต่ละเซสชันไปยังเซิร์ฟเวอร์ที่ดีที่สุดสำหรับเครือข่ายของคุณ",
+        "automatic_client_decides_description": "เลือกเซิร์ฟเวอร์ที่มีค่าปิงและคิวที่ดีที่สุด",
+        "detected_region": "ตรวจพบ: %@",
+        "server_selection_warning": "เซสชันในภูมิภาคที่ห่างไกลอาจมีความหน่วงสูงและคิวที่ยาวขึ้น",
+        "test_network": "ทดสอบเครือข่าย",
+        "test_network_description": "วัดค่าปิง จิตเตอร์ และการสูญหายของแพ็กเก็ตไปยังเซิร์ฟเวอร์สตรีมมิ่ง",
+        "routed_to": "กำหนดเส้นทางไปยัง",
+        "test_running": "กำลังทดสอบ…",
+        "jitter": "จิตเตอร์",
     ]
 }

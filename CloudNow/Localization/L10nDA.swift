@@ -274,5 +274,17 @@ enum L10nDA {
         "session_negotiation_failed": "Sessionforhandling mislykkedes",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Indstillinger/Tilbage (⊟)",
+        "close": "Luk",
+        "automatic_server_decides": "Automatisk (serveren bestemmer)",
+        "automatic_client_decides": "Automatisk (klienten bestemmer)",
+        "automatic_server_decides_description": "NVIDIA dirigerer hver session til den bedste server for dit netværk.",
+        "automatic_client_decides_description": "Vælger serveren med den bedste kombination af ping og kø.",
+        "detected_region": "Registreret: %@",
+        "server_selection_warning": "Sessioner i en fjern region kan have højere latens og længere køer.",
+        "test_network": "Netværkstest",
+        "test_network_description": "Måler ping, jitter og pakketab til din streamingserver.",
+        "routed_to": "Dirigeret til",
+        "test_running": "Tester…",
+        "jitter": "Jitter",
     ]
 }

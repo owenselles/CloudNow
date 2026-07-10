@@ -274,5 +274,17 @@ enum L10nRO {
         "session_negotiation_failed": "Negocierea sesiunii a eșuat",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Opțiuni/Înapoi (⊟)",
+        "close": "Închide",
+        "automatic_server_decides": "Automat (decide serverul)",
+        "automatic_client_decides": "Automat (decide clientul)",
+        "automatic_server_decides_description": "NVIDIA direcționează fiecare sesiune către cel mai bun server pentru rețeaua ta.",
+        "automatic_client_decides_description": "Alege serverul cu cea mai bună combinație de ping și coadă.",
+        "detected_region": "Detectat: %@",
+        "server_selection_warning": "Sesiunile într-o regiune îndepărtată pot avea latență mai mare și cozi mai lungi.",
+        "test_network": "Test de rețea",
+        "test_network_description": "Măsoară ping-ul, jitter-ul și pierderea de pachete către serverul de streaming.",
+        "routed_to": "Direcționat către",
+        "test_running": "Se testează…",
+        "jitter": "Jitter",
     ]
 }

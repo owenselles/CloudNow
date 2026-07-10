@@ -274,5 +274,17 @@ enum L10nSV {
         "session_negotiation_failed": "Sessionsförhandling misslyckades",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Alternativ/Tillbaka (⊟)",
+        "close": "Stäng",
+        "automatic_server_decides": "Automatiskt (servern bestämmer)",
+        "automatic_client_decides": "Automatiskt (klienten bestämmer)",
+        "automatic_server_decides_description": "NVIDIA dirigerar varje session till den bästa servern för ditt nätverk.",
+        "automatic_client_decides_description": "Väljer servern med den bästa kombinationen av ping och kö.",
+        "detected_region": "Identifierad: %@",
+        "server_selection_warning": "Sessioner i en avlägsen region kan ha högre latens och längre köer.",
+        "test_network": "Nätverkstest",
+        "test_network_description": "Mäter ping, jitter och paketförlust till din streamingserver.",
+        "routed_to": "Dirigerad till",
+        "test_running": "Testar…",
+        "jitter": "Jitter",
     ]
 }

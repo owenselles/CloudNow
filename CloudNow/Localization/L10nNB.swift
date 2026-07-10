@@ -274,5 +274,17 @@ enum L10nNB {
         "session_negotiation_failed": "Sesjonsforhandling mislyktes",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Alternativer/Tilbake (⊟)",
+        "close": "Lukk",
+        "automatic_server_decides": "Automatisk (serveren bestemmer)",
+        "automatic_client_decides": "Automatisk (klienten bestemmer)",
+        "automatic_server_decides_description": "NVIDIA ruter hver økt til den beste serveren for nettverket ditt.",
+        "automatic_client_decides_description": "Velger serveren med den beste kombinasjonen av ping og kø.",
+        "detected_region": "Oppdaget: %@",
+        "server_selection_warning": "Økter i en fjern region kan ha høyere latens og lengre køer.",
+        "test_network": "Nettverkstest",
+        "test_network_description": "Måler ping, jitter og pakketap til streamingserveren din.",
+        "routed_to": "Rutet til",
+        "test_running": "Tester…",
+        "jitter": "Jitter",
     ]
 }

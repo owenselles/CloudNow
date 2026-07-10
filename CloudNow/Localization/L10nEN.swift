@@ -274,5 +274,17 @@ enum L10nEN {
         "session_negotiation_failed": "Session negotiation failed",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "Close",
+        "automatic_server_decides": "Automatic (server decides)",
+        "automatic_client_decides": "Automatic (client decides)",
+        "automatic_server_decides_description": "NVIDIA routes each session to the best server for your network.",
+        "automatic_client_decides_description": "Picks the server with the best combination of ping and queue length.",
+        "detected_region": "Detected: %@",
+        "server_selection_warning": "Sessions in a distant region can have higher latency and longer queues.",
+        "test_network": "Test Network",
+        "test_network_description": "Measures ping, jitter, and packet loss to your streaming server.",
+        "routed_to": "Routed to",
+        "test_running": "Testing…",
+        "jitter": "Jitter",
     ]
 }

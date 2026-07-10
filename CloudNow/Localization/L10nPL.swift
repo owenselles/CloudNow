@@ -274,5 +274,17 @@ enum L10nPL {
         "session_negotiation_failed": "Negocjacja sesji nie powiodła się",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Opcje/Wstecz (⊟)",
+        "close": "Zamknij",
+        "automatic_server_decides": "Automatycznie (decyduje serwer)",
+        "automatic_client_decides": "Automatycznie (decyduje klient)",
+        "automatic_server_decides_description": "NVIDIA kieruje każdą sesję do najlepszego serwera dla Twojej sieci.",
+        "automatic_client_decides_description": "Wybiera serwer o najlepszym połączeniu pingu i kolejki.",
+        "detected_region": "Wykryto: %@",
+        "server_selection_warning": "Sesje w odległym regionie mogą mieć wyższe opóźnienia i dłuższe kolejki.",
+        "test_network": "Test sieci",
+        "test_network_description": "Mierzy ping, jitter i utratę pakietów do serwera streamingu.",
+        "routed_to": "Kierowano do",
+        "test_running": "Testowanie…",
+        "jitter": "Jitter",
     ]
 }

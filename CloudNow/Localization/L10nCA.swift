@@ -274,5 +274,17 @@ enum L10nCA {
         "session_negotiation_failed": "Ha fallat la negociació de la sessió",
         "start_(≡)": "Inici (≡)",
         "options/back_(⊟)": "Opcions/Enrere (⊟)",
+        "close": "Tanca",
+        "automatic_server_decides": "Automàtic (decideix el servidor)",
+        "automatic_client_decides": "Automàtic (decideix el client)",
+        "automatic_server_decides_description": "NVIDIA dirigeix cada sessió al millor servidor per a la teva xarxa.",
+        "automatic_client_decides_description": "Tria el servidor amb la millor combinació de ping i cua.",
+        "detected_region": "Detectat: %@",
+        "server_selection_warning": "Les sessions en una regió llunyana poden tenir més latència i cues més llargues.",
+        "test_network": "Prova de xarxa",
+        "test_network_description": "Mesura el ping, el jitter i la pèrdua de paquets fins al teu servidor de streaming.",
+        "routed_to": "Encaminat a",
+        "test_running": "S'està provant…",
+        "jitter": "Jitter",
     ]
 }

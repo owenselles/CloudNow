@@ -274,5 +274,17 @@ enum L10nVI {
         "session_negotiation_failed": "Đàm phán phiên thất bại",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Tùy chọn/Quay lại (⊟)",
+        "close": "Đóng",
+        "automatic_server_decides": "Tự động (máy chủ quyết định)",
+        "automatic_client_decides": "Tự động (ứng dụng quyết định)",
+        "automatic_server_decides_description": "NVIDIA định tuyến mỗi phiên đến máy chủ tốt nhất cho mạng của bạn.",
+        "automatic_client_decides_description": "Chọn máy chủ có kết hợp ping và hàng đợi tốt nhất.",
+        "detected_region": "Đã phát hiện: %@",
+        "server_selection_warning": "Phiên ở khu vực xa có thể có độ trễ cao hơn và hàng đợi dài hơn.",
+        "test_network": "Kiểm tra mạng",
+        "test_network_description": "Đo ping, jitter và mất gói đến máy chủ phát trực tuyến.",
+        "routed_to": "Định tuyến đến",
+        "test_running": "Đang kiểm tra…",
+        "jitter": "Jitter",
     ]
 }

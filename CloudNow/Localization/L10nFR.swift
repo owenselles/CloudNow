@@ -274,5 +274,17 @@ enum L10nFR {
         "session_negotiation_failed": "Échec de la négociation de session",
         "start_(≡)": "Démarrer (≡)",
         "options/back_(⊟)": "Options/Retour (⊟)",
+        "close": "Fermer",
+        "automatic_server_decides": "Automatique (le serveur décide)",
+        "automatic_client_decides": "Automatique (le client décide)",
+        "automatic_server_decides_description": "NVIDIA dirige chaque session vers le meilleur serveur pour votre réseau.",
+        "automatic_client_decides_description": "Choisit le serveur offrant le meilleur compromis entre ping et file d'attente.",
+        "detected_region": "Détecté : %@",
+        "server_selection_warning": "Les sessions dans une région éloignée peuvent avoir une latence plus élevée et des files plus longues.",
+        "test_network": "Test du réseau",
+        "test_network_description": "Mesure le ping, la gigue et la perte de paquets vers votre serveur de streaming.",
+        "routed_to": "Acheminé vers",
+        "test_running": "Test en cours…",
+        "jitter": "Gigue",
     ]
 }

@@ -274,5 +274,17 @@ enum L10nRU {
         "session_negotiation_failed": "Согласование сессии не удалось",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "Закрыть",
+        "automatic_server_decides": "Автоматически (решает сервер)",
+        "automatic_client_decides": "Автоматически (решает клиент)",
+        "automatic_server_decides_description": "NVIDIA направляет каждый сеанс на лучший сервер для вашей сети.",
+        "automatic_client_decides_description": "Выбирает сервер с лучшим сочетанием пинга и очереди.",
+        "detected_region": "Обнаружено: %@",
+        "server_selection_warning": "Сеансы в удалённом регионе могут иметь более высокую задержку и длинные очереди.",
+        "test_network": "Тест сети",
+        "test_network_description": "Измеряет пинг, джиттер и потерю пакетов до сервера стриминга.",
+        "routed_to": "Маршрут на",
+        "test_running": "Тестирование…",
+        "jitter": "Джиттер",
     ]
 }

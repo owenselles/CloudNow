@@ -274,5 +274,17 @@ enum L10nZHHant {
         "session_negotiation_failed": "工作階段協商失敗",
         "start_(≡)": "開始 (≡)",
         "options/back_(⊟)": "選項/返回 (⊟)",
+        "close": "關閉",
+        "automatic_server_decides": "自動（伺服器決定）",
+        "automatic_client_decides": "自動（用戶端決定）",
+        "automatic_server_decides_description": "NVIDIA 會將每個工作階段路由到最適合你網路的伺服器。",
+        "automatic_client_decides_description": "選擇延遲與排隊狀況綜合最佳的伺服器。",
+        "detected_region": "偵測到：%@",
+        "server_selection_warning": "在較遠區域開始的工作階段可能延遲較高、排隊較長。",
+        "test_network": "網路測試",
+        "test_network_description": "測量到串流伺服器的延遲、抖動與封包遺失。",
+        "routed_to": "路由至",
+        "test_running": "測試中…",
+        "jitter": "抖動",
     ]
 }

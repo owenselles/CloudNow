@@ -274,5 +274,17 @@ enum L10nHR {
         "session_negotiation_failed": "Pregovaranje sesije nije uspjelo",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Opcije/Natrag (⊟)",
+        "close": "Zatvori",
+        "automatic_server_decides": "Automatski (poslužitelj odlučuje)",
+        "automatic_client_decides": "Automatski (klijent odlučuje)",
+        "automatic_server_decides_description": "NVIDIA usmjerava svaku sesiju na najbolji poslužitelj za vašu mrežu.",
+        "automatic_client_decides_description": "Bira poslužitelj s najboljom kombinacijom pinga i reda čekanja.",
+        "detected_region": "Otkriveno: %@",
+        "server_selection_warning": "Sesije u udaljenoj regiji mogu imati veću latenciju i dulje redove.",
+        "test_network": "Test mreže",
+        "test_network_description": "Mjeri ping, jitter i gubitak paketa do vašeg poslužitelja za streaming.",
+        "routed_to": "Usmjereno na",
+        "test_running": "Testiranje…",
+        "jitter": "Jitter",
     ]
 }

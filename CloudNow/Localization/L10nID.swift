@@ -274,5 +274,17 @@ enum L10nID {
         "session_negotiation_failed": "Negosiasi sesi gagal",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "Tutup",
+        "automatic_server_decides": "Otomatis (server memutuskan)",
+        "automatic_client_decides": "Otomatis (klien memutuskan)",
+        "automatic_server_decides_description": "NVIDIA merutekan setiap sesi ke server terbaik untuk jaringan Anda.",
+        "automatic_client_decides_description": "Memilih server dengan kombinasi ping dan antrean terbaik.",
+        "detected_region": "Terdeteksi: %@",
+        "server_selection_warning": "Sesi di wilayah yang jauh dapat memiliki latensi lebih tinggi dan antrean lebih panjang.",
+        "test_network": "Uji jaringan",
+        "test_network_description": "Mengukur ping, jitter, dan kehilangan paket ke server streaming Anda.",
+        "routed_to": "Dirutekan ke",
+        "test_running": "Menguji…",
+        "jitter": "Jitter",
     ]
 }

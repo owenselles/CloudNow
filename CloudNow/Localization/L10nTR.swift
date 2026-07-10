@@ -274,5 +274,17 @@ enum L10nTR {
         "session_negotiation_failed": "Oturum pazarlığı başarısız oldu",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "Kapat",
+        "automatic_server_decides": "Otomatik (sunucu karar verir)",
+        "automatic_client_decides": "Otomatik (istemci karar verir)",
+        "automatic_server_decides_description": "NVIDIA her oturumu ağınız için en iyi sunucuya yönlendirir.",
+        "automatic_client_decides_description": "En iyi ping ve kuyruk kombinasyonuna sahip sunucuyu seçer.",
+        "detected_region": "Algılanan: %@",
+        "server_selection_warning": "Uzak bir bölgedeki oturumlarda gecikme ve kuyruklar daha uzun olabilir.",
+        "test_network": "Ağ testi",
+        "test_network_description": "Akış sunucunuza olan ping, jitter ve paket kaybını ölçer.",
+        "routed_to": "Yönlendirildi",
+        "test_running": "Test ediliyor…",
+        "jitter": "Jitter",
     ]
 }

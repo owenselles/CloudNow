@@ -274,5 +274,17 @@ enum L10nAR {
         "session_negotiation_failed": "فشلت مفاوضة الجلسة",
         "start_(≡)": "بدء (≡)",
         "options/back_(⊟)": "الخيارات/رجوع (⊟)",
+        "close": "إغلاق",
+        "automatic_server_decides": "تلقائي (يقرر الخادم)",
+        "automatic_client_decides": "تلقائي (يقرر العميل)",
+        "automatic_server_decides_description": "توجّه NVIDIA كل جلسة إلى أفضل خادم لشبكتك.",
+        "automatic_client_decides_description": "يختار الخادم صاحب أفضل مزيج من البينغ وطول قائمة الانتظار.",
+        "detected_region": "تم الاكتشاف: %@",
+        "server_selection_warning": "قد تعاني الجلسات في منطقة بعيدة من زمن استجابة أعلى وقوائم انتظار أطول.",
+        "test_network": "اختبار الشبكة",
+        "test_network_description": "يقيس البينغ والارتجاج وفقدان الحزم إلى خادم البث.",
+        "routed_to": "تم التوجيه إلى",
+        "test_running": "جارٍ الاختبار…",
+        "jitter": "الارتجاج",
     ]
 }

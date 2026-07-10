@@ -40,9 +40,15 @@ nonisolated struct StreamSettings: Codable, Equatable {
     var overlayTriggerButton: OverlayTriggerButton = .start
     /// Default remote/controller input mode when a stream session starts.
     var defaultRemoteInputMode: RemoteInputMode = .gamepad
-    /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
-    /// nil = choose an automatic zone when available, otherwise let the GFN default VPC route.
+    /// How the streaming server is chosen. Server automatic delegates routing to
+    /// NVIDIA; client selection pins a dedicated zone; region pins an official region.
+    var serverRoutingMode: ServerRoutingMode = .serverAuto
+    /// Dedicated zone selected by the user when `serverRoutingMode == .clientAuto`.
     var preferredZoneUrl: String? = nil
+    /// Region display name from `/v2/serverInfo`, used verbatim in the UI.
+    var preferredRegionName: String? = nil
+    /// Region address from `/v2/serverInfo`, used as the CloudMatch base URL.
+    var preferredRegionAddress: String? = nil
     /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
     /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
     var enableSteamOverlayGesture: Bool = true
@@ -94,6 +100,7 @@ extension StreamSettings {
         case resolution, fps, maxBitrateKbps, codec, colorPreference, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, rumbleEnabled, rumbleIntensity, controllerDeadzone, overlayTriggerButton
         case defaultRemoteInputMode, preferredZoneUrl
+        case serverRoutingMode, preferredRegionName, preferredRegionAddress
         case enableSteamOverlayGesture
         case statsMode, diagnosticsEnabled, enableRtcEventLog
         case appLaunchMode
@@ -123,6 +130,13 @@ extension StreamSettings {
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
         preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)
+        serverRoutingMode = try c.decodeIfPresent(ServerRoutingMode.self, forKey: .serverRoutingMode)
+            ?? (preferredZoneUrl == nil ? d.serverRoutingMode : .clientAuto)
+        preferredRegionName = try c.decodeIfPresent(String.self, forKey: .preferredRegionName)
+        preferredRegionAddress = try c.decodeIfPresent(String.self, forKey: .preferredRegionAddress)
+        if serverRoutingMode == .region, preferredRegionAddress == nil {
+            serverRoutingMode = d.serverRoutingMode
+        }
         enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self, forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
         // statsMode is decoded as a raw string: older builds persisted "hud" (pause-menu-only
         // stats, now unconditional → .off) and "diagnostic" (now the separate diagnosticsEnabled
@@ -159,6 +173,9 @@ extension StreamSettings {
         try c.encode(overlayTriggerButton, forKey: .overlayTriggerButton)
         try c.encode(defaultRemoteInputMode, forKey: .defaultRemoteInputMode)
         try c.encodeIfPresent(preferredZoneUrl, forKey: .preferredZoneUrl)
+        try c.encode(serverRoutingMode, forKey: .serverRoutingMode)
+        try c.encodeIfPresent(preferredRegionName, forKey: .preferredRegionName)
+        try c.encodeIfPresent(preferredRegionAddress, forKey: .preferredRegionAddress)
         try c.encode(enableSteamOverlayGesture, forKey: .enableSteamOverlayGesture)
         try c.encode(statsMode, forKey: .statsMode)
         try c.encode(diagnosticsEnabled, forKey: .diagnosticsEnabled)
@@ -166,6 +183,29 @@ extension StreamSettings {
         try c.encode(appLaunchMode, forKey: .appLaunchMode)
         try c.encode(persistInGameSettings, forKey: .persistInGameSettings)
         try c.encode(audioFormat, forKey: .audioFormat)
+    }
+}
+
+/// Server Location behavior. The raw values remain stable for settings persisted
+/// by PR #67 while the UI decides whether the client choice is automatic or pinned.
+nonisolated enum ServerRoutingMode: String, Codable, CaseIterable {
+    case serverAuto
+    case clientAuto
+    case region
+
+    /// Unknown future values safely return to NVIDIA-managed routing instead of
+    /// making the complete `StreamSettings` payload fail to decode.
+    nonisolated init(from decoder: Decoder) throws {
+        let raw = (try? decoder.singleValueContainer().decode(String.self)) ?? ""
+        self = ServerRoutingMode(rawValue: raw) ?? .serverAuto
+    }
+
+    @MainActor var label: String {
+        switch self {
+        case .serverAuto: L10n.text("automatic_server_decides")
+        case .clientAuto: L10n.text("automatic_client_decides")
+        case .region: L10n.text("server_region")
+        }
     }
 }
 

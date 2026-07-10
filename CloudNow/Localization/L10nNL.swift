@@ -274,5 +274,17 @@ enum L10nNL {
         "session_negotiation_failed": "Sessieonderhandeling mislukt",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Opties/Terug (⊟)",
+        "close": "Sluiten",
+        "automatic_server_decides": "Automatisch (server beslist)",
+        "automatic_client_decides": "Automatisch (client beslist)",
+        "automatic_server_decides_description": "NVIDIA routeert elke sessie naar de beste server voor jouw netwerk.",
+        "automatic_client_decides_description": "Kiest de server met de beste combinatie van ping en wachtrij.",
+        "detected_region": "Gedetecteerd: %@",
+        "server_selection_warning": "Sessies in een verre regio kunnen hogere latentie en langere wachtrijen hebben.",
+        "test_network": "Netwerktest",
+        "test_network_description": "Meet ping, jitter en pakketverlies naar je streamingserver.",
+        "routed_to": "Gerouteerd naar",
+        "test_running": "Testen…",
+        "jitter": "Jitter",
     ]
 }

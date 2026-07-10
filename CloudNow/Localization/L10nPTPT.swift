@@ -274,5 +274,17 @@ enum L10nPTPT {
         "session_negotiation_failed": "Falha na negociação da sessão",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Opções/Voltar (⊟)",
+        "close": "Fechar",
+        "automatic_server_decides": "Automático (o servidor decide)",
+        "automatic_client_decides": "Automático (o cliente decide)",
+        "automatic_server_decides_description": "A NVIDIA encaminha cada sessão para o melhor servidor para a sua rede.",
+        "automatic_client_decides_description": "Escolhe o servidor com a melhor combinação de ping e fila.",
+        "detected_region": "Detetado: %@",
+        "server_selection_warning": "Sessões numa região distante podem ter maior latência e filas mais longas.",
+        "test_network": "Testar rede",
+        "test_network_description": "Mede o ping, o jitter e a perda de pacotes até ao seu servidor de streaming.",
+        "routed_to": "Encaminhado para",
+        "test_running": "A testar…",
+        "jitter": "Jitter",
     ]
 }

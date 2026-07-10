@@ -274,5 +274,17 @@ enum L10nPTBR {
         "session_negotiation_failed": "Falha na negociação da sessão",
         "start_(≡)": "Iniciar (≡)",
         "options/back_(⊟)": "Opções/Voltar (⊟)",
+        "close": "Fechar",
+        "automatic_server_decides": "Automático (o servidor decide)",
+        "automatic_client_decides": "Automático (o cliente decide)",
+        "automatic_server_decides_description": "A NVIDIA direciona cada sessão ao melhor servidor para a sua rede.",
+        "automatic_client_decides_description": "Escolhe o servidor com a melhor combinação de ping e fila.",
+        "detected_region": "Detectado: %@",
+        "server_selection_warning": "Sessões em uma região distante podem ter maior latência e filas mais longas.",
+        "test_network": "Testar rede",
+        "test_network_description": "Mede ping, jitter e perda de pacotes até o seu servidor de streaming.",
+        "routed_to": "Roteado para",
+        "test_running": "Testando…",
+        "jitter": "Jitter",
     ]
 }

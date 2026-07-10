@@ -274,5 +274,17 @@ enum L10nIT {
         "session_negotiation_failed": "Negoziazione sessione non riuscita",
         "start_(≡)": "Avvio (≡)",
         "options/back_(⊟)": "Opzioni/Indietro (⊟)",
+        "close": "Chiudi",
+        "automatic_server_decides": "Automatico (decide il server)",
+        "automatic_client_decides": "Automatico (decide il client)",
+        "automatic_server_decides_description": "NVIDIA instrada ogni sessione verso il server migliore per la tua rete.",
+        "automatic_client_decides_description": "Sceglie il server con la migliore combinazione di ping e coda.",
+        "detected_region": "Rilevato: %@",
+        "server_selection_warning": "Le sessioni in una regione lontana possono avere latenza più alta e code più lunghe.",
+        "test_network": "Test di rete",
+        "test_network_description": "Misura ping, jitter e perdita di pacchetti verso il tuo server di streaming.",
+        "routed_to": "Instradato verso",
+        "test_running": "Test in corso…",
+        "jitter": "Jitter",
     ]
 }

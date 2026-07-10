@@ -274,5 +274,17 @@ enum L10nUK {
         "session_negotiation_failed": "Узгодження сесії не вдалося",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "Закрити",
+        "automatic_server_decides": "Автоматично (вирішує сервер)",
+        "automatic_client_decides": "Автоматично (вирішує клієнт)",
+        "automatic_server_decides_description": "NVIDIA спрямовує кожен сеанс на найкращий сервер для вашої мережі.",
+        "automatic_client_decides_description": "Обирає сервер із найкращим поєднанням пінгу та черги.",
+        "detected_region": "Виявлено: %@",
+        "server_selection_warning": "Сеанси у віддаленому регіоні можуть мати вищу затримку та довші черги.",
+        "test_network": "Тест мережі",
+        "test_network_description": "Вимірює пінг, джитер і втрату пакетів до сервера стримінгу.",
+        "routed_to": "Спрямовано до",
+        "test_running": "Тестування…",
+        "jitter": "Джитер",
     ]
 }

@@ -274,5 +274,17 @@ enum L10nJA {
         "session_negotiation_failed": "セッション交渉に失敗しました",
         "start_(≡)": "開始 (≡)",
         "options/back_(⊟)": "オプション/戻る (⊟)",
+        "close": "閉じる",
+        "automatic_server_decides": "自動(サーバーが決定)",
+        "automatic_client_decides": "自動(クライアントが決定)",
+        "automatic_server_decides_description": "NVIDIAが各セッションをネットワークに最適なサーバーへルーティングします。",
+        "automatic_client_decides_description": "ピンと待ち行列のバランスが最も良いサーバーを選びます。",
+        "detected_region": "検出: %@",
+        "server_selection_warning": "遠いリージョンのセッションは遅延が大きく、待ち時間が長くなることがあります。",
+        "test_network": "ネットワークテスト",
+        "test_network_description": "ストリーミングサーバーへのピン、ジッター、パケットロスを測定します。",
+        "routed_to": "ルーティング先",
+        "test_running": "テスト中…",
+        "jitter": "ジッター",
     ]
 }

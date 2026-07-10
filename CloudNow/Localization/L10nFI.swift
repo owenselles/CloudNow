@@ -274,5 +274,17 @@ enum L10nFI {
         "session_negotiation_failed": "Istunnon neuvottelu epäonnistui",
         "start_(≡)": "Käynnistä (≡)",
         "options/back_(⊟)": "Valinnat/Takaisin (⊟)",
+        "close": "Sulje",
+        "automatic_server_decides": "Automaattinen (palvelin päättää)",
+        "automatic_client_decides": "Automaattinen (sovellus päättää)",
+        "automatic_server_decides_description": "NVIDIA ohjaa jokaisen istunnon verkkoosi parhaiten sopivalle palvelimelle.",
+        "automatic_client_decides_description": "Valitsee palvelimen, jolla on paras pingin ja jonon yhdistelmä.",
+        "detected_region": "Havaittu: %@",
+        "server_selection_warning": "Kaukaisen alueen istunnoissa voi olla suurempi viive ja pidemmät jonot.",
+        "test_network": "Verkkotesti",
+        "test_network_description": "Mittaa pingin, jitterin ja pakettihäviön suoratoistopalvelimellesi.",
+        "routed_to": "Reititetty kohteeseen",
+        "test_running": "Testataan…",
+        "jitter": "Jitter",
     ]
 }

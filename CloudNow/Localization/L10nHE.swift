@@ -274,5 +274,17 @@ enum L10nHE {
         "session_negotiation_failed": "משא ומתן על הסשן נכשל",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "סגירה",
+        "automatic_server_decides": "אוטומטי (השרת מחליט)",
+        "automatic_client_decides": "אוטומטי (הלקוח מחליט)",
+        "automatic_server_decides_description": "‏NVIDIA מנתבת כל סשן לשרת הטוב ביותר עבור הרשת שלך.",
+        "automatic_client_decides_description": "בוחר את השרת עם השילוב הטוב ביותר של פינג ותור.",
+        "detected_region": "זוהה: %@",
+        "server_selection_warning": "סשנים באזור מרוחק עלולים לסבול מהשהיה גבוהה יותר ותורים ארוכים יותר.",
+        "test_network": "בדיקת רשת",
+        "test_network_description": "מודד פינג, ג'יטר ואובדן חבילות אל שרת הסטרימינג.",
+        "routed_to": "נותב אל",
+        "test_running": "בודק…",
+        "jitter": "ג'יטר",
     ]
 }

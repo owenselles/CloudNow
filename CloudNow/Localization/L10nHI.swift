@@ -274,5 +274,17 @@ enum L10nHI {
         "session_negotiation_failed": "Session negotiation failed",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Options/Back (⊟)",
+        "close": "बंद करें",
+        "automatic_server_decides": "स्वचालित (सर्वर तय करे)",
+        "automatic_client_decides": "स्वचालित (क्लाइंट तय करे)",
+        "automatic_server_decides_description": "NVIDIA हर सत्र को आपके नेटवर्क के लिए सबसे अच्छे सर्वर पर भेजता है।",
+        "automatic_client_decides_description": "पिंग और कतार के सबसे अच्छे संयोजन वाला सर्वर चुनता है।",
+        "detected_region": "पता चला: %@",
+        "server_selection_warning": "दूर के क्षेत्र में सत्रों में अधिक विलंबता और लंबी कतारें हो सकती हैं।",
+        "test_network": "नेटवर्क परीक्षण",
+        "test_network_description": "आपके स्ट्रीमिंग सर्वर तक पिंग, जिटर और पैकेट हानि मापता है।",
+        "routed_to": "यहाँ भेजा गया",
+        "test_running": "परीक्षण जारी…",
+        "jitter": "जिटर",
     ]
 }

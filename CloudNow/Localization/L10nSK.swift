@@ -274,5 +274,17 @@ enum L10nSK {
         "session_negotiation_failed": "Vyjednávanie relácie zlyhalo",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Možnosti/Naspäť (⊟)",
+        "close": "Zavrieť",
+        "automatic_server_decides": "Automaticky (rozhoduje server)",
+        "automatic_client_decides": "Automaticky (rozhoduje klient)",
+        "automatic_server_decides_description": "NVIDIA smeruje každú reláciu na najlepší server pre vašu sieť.",
+        "automatic_client_decides_description": "Vyberá server s najlepšou kombináciou pingu a frontu.",
+        "detected_region": "Zistené: %@",
+        "server_selection_warning": "Relácie vo vzdialenom regióne môžu mať vyššiu latenciu a dlhšie fronty.",
+        "test_network": "Test siete",
+        "test_network_description": "Meria ping, jitter a stratu paketov k vášmu streamovaciemu serveru.",
+        "routed_to": "Smerované na",
+        "test_running": "Testuje sa…",
+        "jitter": "Jitter",
     ]
 }

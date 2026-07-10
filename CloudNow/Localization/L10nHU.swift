@@ -274,5 +274,17 @@ enum L10nHU {
         "session_negotiation_failed": "A munkamenet egyeztetése sikertelen",
         "start_(≡)": "Start (≡)",
         "options/back_(⊟)": "Opciók/Vissza (⊟)",
+        "close": "Bezárás",
+        "automatic_server_decides": "Automatikus (a szerver dönt)",
+        "automatic_client_decides": "Automatikus (a kliens dönt)",
+        "automatic_server_decides_description": "Az NVIDIA minden munkamenetet a hálózatodhoz legjobb szerverre irányít.",
+        "automatic_client_decides_description": "A legjobb ping és várólista kombinációjú szervert választja.",
+        "detected_region": "Észlelve: %@",
+        "server_selection_warning": "A távoli régióban indított munkameneteknél nagyobb késleltetés és hosszabb sor fordulhat elő.",
+        "test_network": "Hálózati teszt",
+        "test_network_description": "Méri a pinget, a jittert és a csomagvesztést a streamingszerverig.",
+        "routed_to": "Irányítva ide",
+        "test_running": "Tesztelés…",
+        "jitter": "Jitter",
     ]
 }

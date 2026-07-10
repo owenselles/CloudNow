@@ -274,5 +274,17 @@ enum L10nMS {
         "session_negotiation_failed": "Rundingan sesi gagal",
         "start_(≡)": "Mula (≡)",
         "options/back_(⊟)": "Pilihan/Back (⊟)",
+        "close": "Tutup",
+        "automatic_server_decides": "Automatik (pelayan tentukan)",
+        "automatic_client_decides": "Automatik (klien tentukan)",
+        "automatic_server_decides_description": "NVIDIA menghalakan setiap sesi ke pelayan terbaik untuk rangkaian anda.",
+        "automatic_client_decides_description": "Memilih pelayan dengan gabungan ping dan giliran terbaik.",
+        "detected_region": "Dikesan: %@",
+        "server_selection_warning": "Sesi di rantau yang jauh mungkin mempunyai kependaman lebih tinggi dan giliran lebih panjang.",
+        "test_network": "Uji rangkaian",
+        "test_network_description": "Mengukur ping, jitter dan kehilangan paket ke pelayan penstriman anda.",
+        "routed_to": "Dihalakan ke",
+        "test_running": "Menguji…",
+        "jitter": "Jitter",
     ]
 }

@@ -274,5 +274,17 @@ enum L10nEL {
         "session_negotiation_failed": "Η διαπραγμάτευση συνεδρίας απέτυχε",
         "start_(≡)": "Έναρξη (≡)",
         "options/back_(⊟)": "Επιλογές/Πίσω (⊟)",
+        "close": "Κλείσιμο",
+        "automatic_server_decides": "Αυτόματα (αποφασίζει ο διακομιστής)",
+        "automatic_client_decides": "Αυτόματα (αποφασίζει ο πελάτης)",
+        "automatic_server_decides_description": "Η NVIDIA δρομολογεί κάθε συνεδρία στον καλύτερο διακομιστή για το δίκτυό σας.",
+        "automatic_client_decides_description": "Επιλέγει τον διακομιστή με τον καλύτερο συνδυασμό ping και ουράς.",
+        "detected_region": "Εντοπίστηκε: %@",
+        "server_selection_warning": "Οι συνεδρίες σε μακρινή περιοχή μπορεί να έχουν μεγαλύτερη καθυστέρηση και μεγαλύτερες ουρές.",
+        "test_network": "Δοκιμή δικτύου",
+        "test_network_description": "Μετρά το ping, το jitter και την απώλεια πακέτων προς τον διακομιστή streaming.",
+        "routed_to": "Δρομολογήθηκε προς",
+        "test_running": "Δοκιμή…",
+        "jitter": "Jitter",
     ]
 }
