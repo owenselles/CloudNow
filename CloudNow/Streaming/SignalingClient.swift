@@ -2,6 +2,8 @@ import Foundation
 import Network
 import os
 
+private let signalingLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Signaling")
+
 // MARK: - Signaling Events
 
 enum SignalingEvent {
@@ -89,7 +91,7 @@ final class GFNSignalingClient {
         self.resolvedIPs = resolvedIPs // expose for ICE injection
         // Append the hostname itself as a final fallback in case direct IP connections fail.
         let candidates: [String] = resolvedIPs.isEmpty ? [host] : (resolvedIPs + [host])
-        print("[Signaling] Resolved \(resolvedIPs.count) IPs for '\(host)': \(resolvedIPs.joined(separator: ", "))")
+        signalingLog.debug("[Signaling] Resolved \(resolvedIPs.count, privacy: .public) IPs for '\(host, privacy: .public)': \(resolvedIPs.joined(separator: ", "), privacy: .public)")
 
         let boundedCandidates = Array(candidates.prefix(8))
         var winner: ConnectedCandidate?
@@ -168,7 +170,7 @@ final class GFNSignalingClient {
 
     func sendICECandidate(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
         guard !isTCPIceCandidate(candidate) else {
-            print("[Signaling] Dropping local TCP ICE candidate")
+            signalingLog.debug("[Signaling] Dropping local TCP ICE candidate")
             return
         }
         var payload: [String: Any] = ["candidate": candidate]
@@ -243,7 +245,7 @@ final class GFNSignalingClient {
                     }
                 } catch {
                     if !Task.isCancelled {
-                        print("[Signaling] Receive error: \(error)")
+                        signalingLog.error("[Signaling] Receive error: \(error, privacy: .public)")
                         onEvent?(.disconnected(reason: error.localizedDescription))
                     }
                     return
@@ -285,9 +287,9 @@ final class GFNSignalingClient {
                     let reason = buffer.count > 2
                         ? String(data: buffer.subdata(in: 2 ..< buffer.count), encoding: .utf8) ?? "<non-UTF8>"
                         : ""
-                    print("[Signaling] Server closed: code=\(code) reason=\(reason.isEmpty ? "(none)" : reason)")
+                    signalingLog.warning("[Signaling] Server closed: code=\(code, privacy: .public) reason=\(reason.isEmpty ? "(none)" : reason, privacy: .public)")
                 } else {
-                    print("[Signaling] Server closed: no close-frame data")
+                    signalingLog.warning("[Signaling] Server closed: no close-frame data")
                 }
                 throw SignalingError.remoteClosed
             case nil:
@@ -305,19 +307,19 @@ final class GFNSignalingClient {
     private func sendJson(_ obj: [String: Any]) {
         guard let conn = connection,
               let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
-        if let str = String(data: data, encoding: .utf8) { print("[Signaling] → \(str.prefix(300))") }
+        if let str = String(data: data, encoding: .utf8) { signalingLog.debug("[Signaling] → \(str.prefix(300), privacy: .public)") }
         let meta = NWProtocolWebSocket.Metadata(opcode: .text)
         let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
         conn.send(content: data, contentContext: ctx, isComplete: true,
                   completion: .contentProcessed { err in
-                      if let err { print("[Signaling] Send error: \(err)") }
+                      if let err { signalingLog.warning("[Signaling] Send error: \(err, privacy: .public)") }
                   })
     }
 
     // MARK: Private — Message Handling
 
     private func handleMessage(_ text: String) {
-        print("[Signaling] ← \(text.prefix(300))")
+        signalingLog.debug("[Signaling] ← \(text.prefix(300), privacy: .public)")
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
@@ -467,7 +469,7 @@ final class GFNSignalingClient {
         guard let candidateUrl = endpointComponents.url else {
             throw SignalingError.invalidUrl(signalingUrl)
         }
-        print("[Signaling] Trying candidate \(index + 1)/\(totalCount) → \(candidateUrl.absoluteString)")
+        signalingLog.debug("[Signaling] Trying candidate \(index + 1, privacy: .public)/\(totalCount, privacy: .public) → \(candidateUrl.absoluteString, privacy: .public)")
 
         let connection = NWConnection(to: .url(candidateUrl), using: params)
         // State callbacks must be serialized AND the continuation resumed at most once:
@@ -489,11 +491,11 @@ final class GFNSignalingClient {
                     switch state {
                     case .ready:
                         connection.stateUpdateHandler = nil
-                        print("[Signaling] Connected (WebSocket ready) via \(candidateHost)")
+                        signalingLog.info("[Signaling] Connected (WebSocket ready) via \(candidateHost, privacy: .public)")
                         resumeOnce { continuation.resume() }
                     case let .failed(error):
                         connection.stateUpdateHandler = nil
-                        print("[Signaling] Connection failed (\(candidateHost)): \(error)")
+                        signalingLog.warning("[Signaling] Connection failed (\(candidateHost, privacy: .public)): \(error, privacy: .public)")
                         resumeOnce { continuation.resume(throwing: error) }
                     case .cancelled:
                         connection.stateUpdateHandler = nil

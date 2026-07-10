@@ -1,6 +1,9 @@
 import CoreHaptics
 import Foundation
 import GameController
+import os.log
+
+private let hapticsLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Haptics")
 
 final nonisolated class ControllerHaptics {
     private final class Motor: @unchecked Sendable {
@@ -19,7 +22,8 @@ final nonisolated class ControllerHaptics {
         func log(_ error: Error) {
             guard !loggedError else { return }
 
-            print("[ControllerHaptics] \(locality.rawValue) error: \(error)")
+            let localityName = locality.rawValue
+            hapticsLog.warning("[ControllerHaptics] \(localityName, privacy: .public) error: \(error, privacy: .public)")
             loggedError = true
         }
     }
@@ -36,10 +40,10 @@ final nonisolated class ControllerHaptics {
 
     init?(controller: GCController, queue: DispatchQueue) {
         guard let haptics = controller.haptics else {
-            print("[Rumble] controller has NO haptics")
+            hapticsLog.warning("[Rumble] controller has NO haptics")
             return nil
         }
-        print("[Rumble] haptics localities=\(haptics.supportedLocalities.map(\.rawValue))")
+        hapticsLog.debug("[Rumble] haptics localities=\(String(describing: haptics.supportedLocalities.map(\.rawValue)), privacy: .public)")
 
         self.queue = queue
         strongMotor = Self.makeMotor(
@@ -97,9 +101,9 @@ final nonisolated class ControllerHaptics {
 
         do {
             try engine.start()
-            print("[Rumble] engine \(locality.rawValue) started")
+            hapticsLog.info("[Rumble] engine \(locality.rawValue, privacy: .public) started")
         } catch {
-            print("[ControllerHaptics] \(locality.rawValue) error: \(error)")
+            hapticsLog.warning("[ControllerHaptics] \(locality.rawValue, privacy: .public) error: \(error, privacy: .public)")
             return nil
         }
 

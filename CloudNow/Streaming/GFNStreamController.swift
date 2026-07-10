@@ -391,7 +391,7 @@ final class GFNStreamController: NSObject {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             try pruneRtcEventLogs(in: directory, keeping: 2)
         } catch {
-            print("[Stats] Unable to prepare RTC event log directory: \(error)")
+            gfnLog.warning("[Stats] Unable to prepare RTC event log directory: \(error, privacy: .public)")
             return nil
         }
 
@@ -587,7 +587,7 @@ final class GFNStreamController: NSObject {
             if signalingComplete {
                 // Server closes the WebSocket after answer + ICE exchange — expected GFN behavior.
                 // The media runs over WebRTC ICE/DTLS/SRTP; let ICE state drive the outcome.
-                print("[Stream] Signaling closed after setup (expected): \(reason)")
+                gfnLog.info("[Stream] Signaling closed after setup (expected): \(reason, privacy: .public)")
             } else {
                 state = .disconnected(reason: reason)
             }
@@ -612,17 +612,17 @@ final class GFNStreamController: NSObject {
                 try audioSession.setPreferredIOBufferDuration(0.01)
                 try audioSession.setActive(true)
                 guard audioSession.isInputAvailable else {
-                    print("[Stream] AVAudioSession has no input route, falling back to playback")
+                    gfnLog.warning("[Stream] AVAudioSession has no input route, falling back to playback")
                     return configurePlaybackAudioSession(audioSession)
                 }
-                print("[Stream] AVAudioSession configured for playback + microphone")
+                gfnLog.info("[Stream] AVAudioSession configured for playback + microphone")
                 logAudioSessionConfiguration(audioSession)
                 return true
             } catch {
-                print("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error)")
+                gfnLog.warning("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error, privacy: .public)")
             }
         } else if microphoneRequested {
-            print("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
+            gfnLog.warning("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
         }
 
         return configurePlaybackAudioSession(audioSession)
@@ -637,10 +637,10 @@ final class GFNStreamController: NSObject {
             try audioSession.setCategory(.playback, mode: .default, options: [])
             try audioSession.setPreferredIOBufferDuration(0.01)
             try audioSession.setActive(true)
-            print("[Stream] AVAudioSession configured for playback")
+            gfnLog.info("[Stream] AVAudioSession configured for playback")
             logAudioSessionConfiguration(audioSession)
         } catch {
-            print("[Stream] AVAudioSession playback configuration failed: \(error)")
+            gfnLog.error("[Stream] AVAudioSession playback configuration failed: \(error, privacy: .public)")
         }
         return false
     }
@@ -667,8 +667,7 @@ final class GFNStreamController: NSObject {
     private func handleOffer(sdp: String) async {
         guard let session = sessionInfo else { return }
         #if DEBUG
-            print("[Stream] Offer SDP (\(sdp.count) chars):")
-            sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+            gfnLog.debug("[Stream] Offer SDP (\(sdp.count, privacy: .public) chars):\n\(sdp.replacingOccurrences(of: "\r\n", with: "\n"), privacy: .public)")
         #endif
 
         // The server offers multiopus/48000/6 when the session requested 5.1 (see
@@ -716,12 +715,12 @@ final class GFNStreamController: NSObject {
         peerConnection = pc
         if settings.enableRtcEventLog {
             if let url = startRtcEventLog() {
-                print("[Stats] RTC event log: \(url.path)")
+                gfnLog.debug("[Stats] RTC event log: \(url.path, privacy: .public)")
             } else {
-                print("[Stats] Unable to start RTC event log")
+                gfnLog.warning("[Stats] Unable to start RTC event log")
             }
         }
-        print("[Stream] Peer connection created, starting offer handling")
+        gfnLog.info("[Stream] Peer connection created, starting offer handling")
 
         // Reliable ordered input channel — label must match the GFN server's expected "input_channel_v1"
         let dcConfig = LKRTCDataChannelConfiguration()
@@ -774,9 +773,9 @@ final class GFNStreamController: NSObject {
             Self.rewriteOfferConnectionAddresses(sdp, serverIp: ip)
         } ?? sdp
         if let ip = serverMediaIp {
-            print("[Stream] Fixed placeholder IPs in offer SDP: 0.0.0.0/127.0.0.1 -> \(ip)")
+            gfnLog.debug("[Stream] Fixed placeholder IPs in offer SDP: 0.0.0.0/127.0.0.1 -> \(ip, privacy: .public)")
         } else {
-            print("[Stream] Warning: no server IP available — offer placeholder IPs left unchanged")
+            gfnLog.warning("[Stream] Warning: no server IP available — offer placeholder IPs left unchanged")
         }
         // Normalize H.265 fmtp in the offer before setRemoteDescription so WebRTC
         // keeps H.265 in the generated answer (tier-flag and level-id must be valid).
@@ -789,7 +788,7 @@ final class GFNStreamController: NSObject {
                 }
             }
         } catch {
-            print("[Stream] setRemoteDescription failed: \(error)")
+            gfnLog.error("[Stream] setRemoteDescription failed: \(error, privacy: .public)")
         }
 
         // Create answer
@@ -830,8 +829,7 @@ final class GFNStreamController: NSObject {
                 .joined(separator: " ")
             videoColorLog.info("answer H265: \(answerH265Params.isEmpty ? "none" : answerH265Params)")
             #if DEBUG
-                print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
-                mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+                gfnLog.debug("[Stream] Answer SDP (\(mangledAnswerSdp.count, privacy: .public) chars):\n\(mangledAnswerSdp.replacingOccurrences(of: "\r\n", with: "\n"), privacy: .public)")
             #endif
 
             // Set local description
@@ -843,7 +841,7 @@ final class GFNStreamController: NSObject {
                     }
                 }
             } catch {
-                print("[Stream] setLocalDescription failed: \(error)")
+                gfnLog.error("[Stream] setLocalDescription failed: \(error, privacy: .public)")
             }
             let (iceUfrag, icePwd, dtlsFingerprint) = Self.extractIceCredentials(from: mangledAnswerSdp)
             signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp(iceUfrag: iceUfrag, icePwd: icePwd, dtlsFingerprint: dtlsFingerprint))
@@ -880,16 +878,16 @@ final class GFNStreamController: NSObject {
             let pairs = allIps.flatMap { ip in allPorts.map { (ip, $0) } }
 
             if pairs.isEmpty {
-                print("[ICE] No server IPs or ports available — ICE candidate injection skipped")
+                gfnLog.warning("[ICE] No server IPs or ports available — ICE candidate injection skipped")
             } else {
-                print("[ICE] Injecting \(pairs.count) candidate(s) (mciIp=\(mciIp ?? "nil") mciPort=\(mciPort) sdpPort=\(sdpPort))")
+                gfnLog.debug("[ICE] Injecting \(pairs.count, privacy: .public) candidate(s) (mciIp=\(mciIp ?? "nil", privacy: .public) mciPort=\(mciPort, privacy: .public) sdpPort=\(sdpPort, privacy: .public))")
                 for (i, (ip, port)) in pairs.enumerated() {
                     let cand = LKRTCIceCandidate(
                         sdp: "candidate:\(i + 1) 1 UDP 2130706431 \(ip) \(port) typ host",
                         sdpMLineIndex: 0, sdpMid: "0"
                     )
                     try? await pc.add(cand)
-                    print("[ICE]   → \(ip):\(port)")
+                    gfnLog.debug("[ICE]   → \(ip, privacy: .public):\(port, privacy: .public)")
                 }
             }
         } catch {
@@ -1026,7 +1024,7 @@ final class GFNStreamController: NSObject {
     }
 
     private func addRemoteICE(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
-        print("[ICE] Adding remote candidate: \(candidate) mid=\(sdpMid ?? "nil") mLineIndex=\(sdpMLineIndex ?? -1)")
+        gfnLog.debug("[ICE] Adding remote candidate: \(candidate, privacy: .public) mid=\(sdpMid ?? "nil", privacy: .public) mLineIndex=\(sdpMLineIndex ?? -1, privacy: .public)")
         let ice = LKRTCIceCandidate(
             sdp: candidate,
             sdpMLineIndex: Int32(sdpMLineIndex ?? 0),
@@ -1552,7 +1550,8 @@ final class GFNStreamController: NSObject {
 
         if !previousSelectedCandidatePairId.isEmpty, previousSelectedCandidatePairId != pairId {
             stats.candidatePairChanges += 1
-            print("[ICE] Selected pair changed: \(previousSelectedCandidatePairId) -> \(pairId)")
+            let previousPairId = previousSelectedCandidatePairId
+            gfnLog.debug("[ICE] Selected pair changed: \(previousPairId, privacy: .public) -> \(pairId, privacy: .public)")
         }
         previousSelectedCandidatePairId = pairId
 
@@ -1613,7 +1612,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
     nonisolated func peerConnectionShouldNegotiate(_: LKRTCPeerConnection) {}
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didChange stateChanged: LKRTCSignalingState) {
-        print("[Stream] Signaling state → \(stateChanged.rawValue)")
+        gfnLog.debug("[Stream] Signaling state → \(stateChanged.rawValue, privacy: .public)")
     }
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didAdd _: LKRTCMediaStream) {}
@@ -1632,7 +1631,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         case .count: "count"
         @unknown default: "unknown(\(newState.rawValue))"
         }
-        print("[ICE] State → \(name)")
+        gfnLog.debug("[ICE] State → \(name, privacy: .public)")
         Task { @MainActor [weak self] in
             guard let self else { return }
             switch newState {
@@ -1673,7 +1672,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         case .complete: "complete"
         @unknown default: "unknown(\(newState.rawValue))"
         }
-        print("[ICE] Gathering → \(name)")
+        gfnLog.debug("[ICE] Gathering → \(name, privacy: .public)")
     }
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {
@@ -1689,7 +1688,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
     nonisolated func peerConnection(_: LKRTCPeerConnection, didRemove _: [LKRTCIceCandidate]) {}
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {
-        print("[DataChannel] Server opened channel: label=\(dataChannel.label)")
+        gfnLog.debug("[DataChannel] Server opened channel: label=\(dataChannel.label, privacy: .public)")
         if dataChannel.label == "control_channel" {
             dataChannel.delegate = self
             Task { @MainActor [weak self] in
@@ -1702,9 +1701,9 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                                     didAdd rtpReceiver: LKRTCRtpReceiver,
                                     streams _: [LKRTCMediaStream])
     {
-        print("[Stream] Received RTP receiver: kind=\(rtpReceiver.track?.kind ?? "nil")")
+        gfnLog.debug("[Stream] Received RTP receiver: kind=\(rtpReceiver.track?.kind ?? "nil", privacy: .public)")
         guard let track = rtpReceiver.track as? LKRTCVideoTrack else { return }
-        print("[Stream] Got video track")
+        gfnLog.info("[Stream] Got video track")
         Task { @MainActor [weak self] in
             self?.videoReceiver = rtpReceiver
             self?.videoTrack = track
@@ -1716,7 +1715,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 
 extension GFNStreamController: LKRTCDataChannelDelegate {
     nonisolated func dataChannelDidChangeState(_ dataChannel: LKRTCDataChannel) {
-        print("[DataChannel] State → \(dataChannel.readyState.rawValue) label=\(dataChannel.label)")
+        gfnLog.debug("[DataChannel] State → \(dataChannel.readyState.rawValue, privacy: .public) label=\(dataChannel.label, privacy: .public)")
         if dataChannel.label == "input_channel_v1" {
             let state = switch dataChannel.readyState {
             case .connecting: "connecting"
@@ -1761,7 +1760,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
         // Handle control channel messages (timerNotification etc.)
         if dataChannel.label == "control_channel" {
             let text = String(data: buffer.data, encoding: .utf8) ?? "<binary \(buffer.data.count)B>"
-            print("[ControlChannel] Message: \(text)")
+            gfnLog.debug("[ControlChannel] Message: \(text, privacy: .public)")
 
             // Parse timerNotification — maps server codes to severity levels (matches OpenNOW)
             if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
@@ -1817,19 +1816,19 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 
         if firstWord == 526 {
             version = bytes.count >= 4 ? Int(UInt16(bytes[2]) | (UInt16(bytes[3]) << 8)) : 2
-            print("[DataChannel] Handshake: firstWord=526 (0x020e), version=\(version)")
+            gfnLog.debug("[DataChannel] Handshake: firstWord=526 (0x020e), version=\(version, privacy: .public)")
         } else if bytes[0] == 0x0E {
             version = Int(firstWord)
-            print("[DataChannel] Handshake: byte[0]=0x0e, version=\(version)")
+            gfnLog.debug("[DataChannel] Handshake: byte[0]=0x0e, version=\(version, privacy: .public)")
         } else {
             if let cmd = GFNHapticsDecoder.decode(buffer.data) {
-                print("[Rumble] inbound controller=\(cmd.controllerId) weak=\(cmd.weak) strong=\(cmd.strong)")
+                gfnLog.debug("[Rumble] inbound controller=\(cmd.controllerId, privacy: .public) weak=\(cmd.weak, privacy: .public) strong=\(cmd.strong, privacy: .public)")
                 inputSendQueue.async { [weak self] in
                     self?.rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
                 }
                 return
             }
-            print("[DataChannel] Non-handshake message on \(dataChannel.label): firstWord=\(firstWord) (0x\(String(firstWord, radix: 16)))")
+            gfnLog.debug("[DataChannel] Non-handshake message on \(dataChannel.label, privacy: .public): firstWord=\(firstWord, privacy: .public) (0x\(String(firstWord, radix: 16), privacy: .public))")
             return
         }
 
@@ -1838,7 +1837,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             guard let self, !self.inputReady else { return }
             inputReady = true
             protocolVersion = negotiatedVersion
-            print("[DataChannel] Input ready — starting InputSender (protocol v\(negotiatedVersion))")
+            gfnLog.info("[DataChannel] Input ready — starting InputSender (protocol v\(negotiatedVersion, privacy: .public))")
             let sender = InputSender(channel: self)
             sender.configure(
                 protocolVersion: negotiatedVersion,

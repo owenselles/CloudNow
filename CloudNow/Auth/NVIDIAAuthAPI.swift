@@ -1,6 +1,9 @@
 import CryptoKit
 import Foundation
+import os.log
 import Security
+
+private let authLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Auth")
 
 // MARK: - Constants
 
@@ -230,7 +233,7 @@ actor NVIDIAAuthAPI {
             request.httpBody = "grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(clientID)".data(using: .utf8)
             let (data, response) = try await session.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            print("[Auth] refreshTokens with clientID=\(clientID.prefix(8))… → HTTP \(statusCode)")
+            authLog.debug("[Auth] refreshTokens with clientID=\(clientID.prefix(8), privacy: .public)… → HTTP \(statusCode, privacy: .public)")
             if statusCode == 200 {
                 return try parseTokenResponse(data)
             }

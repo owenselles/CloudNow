@@ -1,6 +1,9 @@
 import Foundation
 import GameController
+import os.log
 import UIKit
+
+private let inputLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Input")
 
 // MARK: - GFN Input Protocol Constants
 
@@ -591,7 +594,7 @@ final class InputSender {
     func applyRumble(controllerId: Int, weak: UInt16, strong: UInt16) {
         inputQueue.async { [weak self] in
             guard let self, rumbleEnabled, !self.isPaused else { return }
-            print("[Rumble] applyRumble slot=\(controllerId) weak=\(weak) strong=\(strong) hasEngine=\(haptics[controllerId] != nil)")
+            inputLog.debug("[Rumble] applyRumble slot=\(controllerId, privacy: .public) weak=\(weak, privacy: .public) strong=\(strong, privacy: .public) hasEngine=\(haptics[controllerId] != nil, privacy: .public)")
             haptics[controllerId]?.setMotors(strong: strong, weak: weak)
         }
     }
@@ -667,7 +670,7 @@ final class InputSender {
     private func advertiseHaptics(_ enabled: Bool) {
         guard hapticsAdvertised != enabled else { return }
         hapticsAdvertised = enabled
-        print("[Rumble] advertised haptics=\(enabled)")
+        inputLog.debug("[Rumble] advertised haptics=\(enabled, privacy: .public)")
         sendEncoded(category: .hapticsEnabled) { [encoder] packet in
             encoder.encodeHapticsEnabled(enabled, into: packet)
         }

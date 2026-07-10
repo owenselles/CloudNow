@@ -1,6 +1,9 @@
 import Foundation
 import Observation
+import os.log
 import UIKit
+
+private let gamesLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Games")
 
 struct ResumableSession {
     let game: GameInfo
@@ -130,9 +133,8 @@ class GamesViewModel {
             streamSettings.fps = screenMax
         }
         streamSettings = streamSettings.normalizedForClient
-        print(
-            "[Localization] preferred=\(Locale.preferredLanguages.first ?? "nil") ui=\(L10n.localeCode) keyboard=\(streamSettings.keyboardLayout) gameLanguage=\(streamSettings.gameLanguage) effectiveGameLanguage=\(streamSettings.effectiveGameLanguage)"
-        )
+        let settings = streamSettings
+        gamesLog.debug("[Localization] preferred=\(Locale.preferredLanguages.first ?? "nil", privacy: .public) ui=\(L10n.localeCode, privacy: .public) keyboard=\(settings.keyboardLayout, privacy: .public) gameLanguage=\(settings.gameLanguage, privacy: .public) effectiveGameLanguage=\(settings.effectiveGameLanguage, privacy: .public)")
     }
 
     // MARK: Computed — Entitled Resolutions & FPS
@@ -240,7 +242,7 @@ class GamesViewModel {
             activeSessions = await sessionsTask
             let sub = await subTask
             if let sub {
-                print("[MES] tier=\(sub.membershipTier) resolutions=\(sub.entitledResolutions.map(\.resolutionLabel))")
+                gamesLog.info("[MES] tier=\(sub.membershipTier, privacy: .public) resolutions=\(String(describing: sub.entitledResolutions.map(\.resolutionLabel)), privacy: .public)")
                 subscription = sub
                 normalizeStreamSettingsForCurrentEntitlements()
                 saveCache(Self.subscriptionCacheKey, data: sub)
@@ -466,7 +468,8 @@ class GamesViewModel {
                 autoZoneScore($1, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited)
             }
             .prefix(5))
-        print("[Zones] top 5: \(topZones.map { "\($0.id) ping=\($0.pingMs!)ms queue=\($0.queuePosition)" }.joined(separator: ", "))")
+        let measuredTop = topZones
+        gamesLog.info("[Zones] top 5: \(measuredTop.map { "\($0.id) ping=\($0.pingMs!)ms queue=\($0.queuePosition)" }.joined(separator: ", "), privacy: .public)")
     }
 
     func bestZoneUrl() async -> String? {
@@ -498,7 +501,7 @@ class GamesViewModel {
         let isUnlimited = subscription?.isUnlimited ?? false
         let best = reachable.autoZone(isUnlimited: isUnlimited)
         if let best {
-            print("[Zones] best at launch: \(best.zoneUrl) (ping=\(best.pingMs!)ms queue=\(best.queuePosition), unlimited=\(isUnlimited))")
+            gamesLog.info("[Zones] best at launch: \(best.zoneUrl, privacy: .public) (ping=\(best.pingMs!, privacy: .public)ms queue=\(best.queuePosition, privacy: .public), unlimited=\(isUnlimited, privacy: .public))")
         }
         return best?.zoneUrl
     }

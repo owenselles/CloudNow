@@ -728,7 +728,7 @@ struct StreamView: View {
 
                 // Check for a locally saved session for this game — resume instead of creating new.
                 if let last = viewModel.lastSession, last.appId == appId {
-                    print("[Resume] found saved session \(last.sessionId) for appId=\(appId), trying resume")
+                    streamLog.info("[Resume] found saved session \(last.sessionId, privacy: .public) for appId=\(appId, privacy: .public), trying resume")
                     do {
                         sessionInfo = try await cloudMatchClient.claimSession(
                             sessionId: last.sessionId,
@@ -742,10 +742,10 @@ struct StreamView: View {
                             settings: settings,
                             accountAllowsHDR: viewModel.subscription?.allowsHDR
                         )
-                        print("[Resume] claimed session, status=\(sessionInfo.status)")
+                        streamLog.info("[Resume] claimed session, status=\(sessionInfo.status, privacy: .public)")
                         createdSession = sessionInfo
                     } catch {
-                        print("[Resume] claim failed: \(error), stopping old session and creating new")
+                        streamLog.warning("[Resume] claim failed: \(error, privacy: .public), stopping old session and creating new")
                         try? await cloudMatchClient.stopSession(
                             sessionId: last.sessionId,
                             token: token,
@@ -760,7 +760,7 @@ struct StreamView: View {
                     }
                 } else {
                     if let last = viewModel.lastSession {
-                        print("[Resume] saved session appId=\(last.appId) != game appId=\(appId), stopping it")
+                        streamLog.info("[Resume] saved session appId=\(last.appId, privacy: .public) != game appId=\(appId, privacy: .public), stopping it")
                         try? await cloudMatchClient.stopSession(
                             sessionId: last.sessionId,
                             token: token,
@@ -906,7 +906,7 @@ struct StreamView: View {
         } else {
             (base, nil)
         }
-        print("[Session] creating new session, appId=\(appId), sessionBase=\(routeSelection.base), routingZoneUrl=\(routeSelection.routingZoneUrl ?? "nil")")
+        streamLog.info("[Session] creating new session, appId=\(appId, privacy: .public), sessionBase=\(routeSelection.base, privacy: .public), routingZoneUrl=\(routeSelection.routingZoneUrl ?? "nil", privacy: .public)")
 
         let request = SessionCreateRequest(
             appId: appId,
@@ -921,16 +921,16 @@ struct StreamView: View {
 
         do {
             let sessionInfo = try await cloudMatchClient.createSession(request)
-            print("[Session] created, sessionId=\(sessionInfo.sessionId), status=\(sessionInfo.status)")
+            streamLog.info("[Session] created, sessionId=\(sessionInfo.sessionId, privacy: .public), status=\(sessionInfo.status, privacy: .public)")
             return sessionInfo
         } catch {
             guard shouldForceStopExistingSession(error) else { throw error }
 
-            print("[Session] active session conflict detected for appId=\(appId), stopping matches and retrying once")
+            streamLog.warning("[Session] active session conflict detected for appId=\(appId, privacy: .public), stopping matches and retrying once")
             await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
 
             let sessionInfo = try await cloudMatchClient.createSession(request)
-            print("[Session] created after conflict cleanup, sessionId=\(sessionInfo.sessionId), status=\(sessionInfo.status)")
+            streamLog.info("[Session] created after conflict cleanup, sessionId=\(sessionInfo.sessionId, privacy: .public), status=\(sessionInfo.status, privacy: .public)")
             return sessionInfo
         }
     }

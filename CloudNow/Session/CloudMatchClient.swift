@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let cloudMatchLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "CloudMatch")
 
 // MARK: - CloudMatch Headers
 
@@ -437,8 +440,8 @@ actor CloudMatchClient {
 
         let body = buildSessionRequestBody(input, deviceId: deviceId)
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        print("[CloudMatch] bodySize: \(bodyData.count) bytes")
-        print("[CloudMatch] createSession languageCode=\(input.settings.effectiveGameLanguage) keyboardLayout=\(input.settings.keyboardLayout)")
+        cloudMatchLog.debug("[CloudMatch] bodySize: \(bodyData.count, privacy: .public) bytes")
+        cloudMatchLog.debug("[CloudMatch] createSession languageCode=\(input.settings.effectiveGameLanguage, privacy: .public) keyboardLayout=\(input.settings.keyboardLayout, privacy: .public)")
         let headers = gfnHeaders(token: input.token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
         let queryItems = [
             URLQueryItem(name: "keyboardLayout", value: input.settings.keyboardLayout),
@@ -458,11 +461,11 @@ actor CloudMatchClient {
             }
             request.setValue("\(bodyData.count)", forHTTPHeaderField: "Content-Length")
             request.httpBody = bodyData
-            print("[CloudMatch] createSession POST \(params), appId=\(input.appId)")
+            cloudMatchLog.debug("[CloudMatch] createSession POST \(params, privacy: .public), appId=\(input.appId, privacy: .public)")
 
             let (data, resp) = try await urlSession.data(for: request)
             let statusCode = (resp as? HTTPURLResponse)?.statusCode ?? -1
-            print("[CloudMatch] createSession response: HTTP \(statusCode)")
+            cloudMatchLog.debug("[CloudMatch] createSession response: HTTP \(statusCode, privacy: .public)")
             if statusCode == 200 {
                 let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
                 try validateAPIStatus(payload, context: "createSession")
@@ -481,14 +484,14 @@ actor CloudMatchClient {
                 )
             }
             let raw = String(data: data, encoding: .utf8) ?? ""
-            print("[CloudMatch] createSession failed: HTTP \(statusCode) body: \(raw.prefix(500))")
+            cloudMatchLog.warning("[CloudMatch] createSession failed: HTTP \(statusCode, privacy: .public) body: \(raw.prefix(500), privacy: .public)")
             // Clean up phantom session the server allocated despite the error
             if let errPayload = try? JSONDecoder().decode(CloudMatchResponse.self, from: data),
                let session = errPayload.session,
                !session.sessionId.isEmpty
             {
                 let sid = session.sessionId
-                print("[CloudMatch] cleaning phantom session \(sid)")
+                cloudMatchLog.debug("[CloudMatch] cleaning phantom session \(sid, privacy: .public)")
                 try? await stopSession(
                     sessionId: sid,
                     token: input.token,
@@ -588,8 +591,8 @@ actor CloudMatchClient {
         }
         let (data, resp) = try await urlSession.data(for: request)
         let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1
-        print("[CloudMatch] getActiveSessions HTTP \(httpStatus), \(data.count) bytes")
-        if let raw = String(data: data, encoding: .utf8) { print("[CloudMatch] getActiveSessions raw: \(raw.prefix(500))") }
+        cloudMatchLog.debug("[CloudMatch] getActiveSessions HTTP \(httpStatus, privacy: .public), \(data.count, privacy: .public) bytes")
+        if let raw = String(data: data, encoding: .utf8) { cloudMatchLog.debug("[CloudMatch] getActiveSessions raw: \(raw.prefix(500), privacy: .public)") }
         try validateHTTPStatus(resp, data: data, context: "getActiveSessions")
         let decoded = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
         try validateAPIStatus(decoded, context: "getActiveSessions")
@@ -615,7 +618,7 @@ actor CloudMatchClient {
             let matches = activeSessions.filter { $0.appId == appId }
             guard !matches.isEmpty else { return }
 
-            print("[CloudMatch] stopping \(matches.count) active session(s) for appId=\(appId)")
+            cloudMatchLog.info("[CloudMatch] stopping \(matches.count, privacy: .public) active session(s) for appId=\(appId, privacy: .public)")
             for session in matches {
                 try? await stopSession(
                     sessionId: session.sessionId,
@@ -625,7 +628,7 @@ actor CloudMatchClient {
                 )
             }
         } catch {
-            print("[CloudMatch] stopActiveSessions failed: \(error)")
+            cloudMatchLog.warning("[CloudMatch] stopActiveSessions failed: \(error, privacy: .public)")
         }
     }
 
@@ -672,7 +675,7 @@ actor CloudMatchClient {
             URLQueryItem(name: "keyboardLayout", value: settings.keyboardLayout),
             URLQueryItem(name: "languageCode", value: settings.effectiveGameLanguage),
         ]
-        print("[CloudMatch] claimSession languageCode=\(settings.effectiveGameLanguage) keyboardLayout=\(settings.keyboardLayout)")
+        cloudMatchLog.debug("[CloudMatch] claimSession languageCode=\(settings.effectiveGameLanguage, privacy: .public) keyboardLayout=\(settings.keyboardLayout, privacy: .public)")
         guard let url = comps.url else { throw CloudMatchError.sessionCreateFailed("Invalid resume URL") }
         let body: [String: Any] = [
             "action": 2,
@@ -717,7 +720,7 @@ actor CloudMatchClient {
             let ipStr = c.ip.map { $0.value ?? "value_nil" } ?? "field_nil"
             return "usage=\(c.usage) ip=\(ipStr) port=\(c.port) path=\(c.resourcePath ?? "nil")"
         }.joined(separator: " | ")
-        print("[CloudMatch] connectionInfo: \(connInfoLog)")
+        cloudMatchLog.debug("[CloudMatch] connectionInfo: \(connInfoLog, privacy: .public)")
 
         // Diagnostic raw JSON dump (once per active session — status==2 or 3)
         if s.status == 2 || s.status == 3,
@@ -728,15 +731,15 @@ actor CloudMatchClient {
                 if let iceData = try? JSONSerialization.data(withJSONObject: iceConfig, options: .prettyPrinted),
                    let iceStr = String(data: iceData, encoding: .utf8)
                 {
-                    print("[CloudMatch] iceServerConfiguration:\n\(iceStr)")
+                    cloudMatchLog.debug("[CloudMatch] iceServerConfiguration:\n\(iceStr, privacy: .public)")
                 } else {
-                    print("[CloudMatch] iceServerConfiguration: \(iceConfig)")
+                    cloudMatchLog.debug("[CloudMatch] iceServerConfiguration: \(String(describing: iceConfig), privacy: .public)")
                 }
             } else {
-                print("[CloudMatch] iceServerConfiguration: absent")
+                cloudMatchLog.debug("[CloudMatch] iceServerConfiguration: absent")
             }
             if let sci = sess["sessionControlInfo"] {
-                print("[CloudMatch] sessionControlInfo: \(sci)")
+                cloudMatchLog.debug("[CloudMatch] sessionControlInfo: \(String(describing: sci), privacy: .public)")
             }
         }
 
@@ -755,7 +758,7 @@ actor CloudMatchClient {
             : rawIceServers.map { IceServer(urls: $0.urls.values, username: $0.username, credential: $0.credential) }
 
         let media = mediaConnectionInfo(from: connections, fallbackServerIp: serverIp)
-        print("[CloudMatch] mediaConnectionInfo: \(media.map { "\($0.ip):\($0.port)" } ?? "nil")")
+        cloudMatchLog.debug("[CloudMatch] mediaConnectionInfo: \(media.map { "\($0.ip):\($0.port)" } ?? "nil", privacy: .public)")
 
         // Ad state — parse raw JSON for flexibility since ad schema varies
         let adState = extractAdState(from: rawData)

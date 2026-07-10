@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let gamesLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Games")
 
 struct LibraryFetchResult {
     let games: [GameInfo]
@@ -153,7 +156,7 @@ actor GamesClient {
             cursor = next
         }
 
-        print("[GamesClient] browseCatalog: \(allGames.count) games fetched")
+        gamesLog.debug("[GamesClient] browseCatalog: \(allGames.count, privacy: .public) games fetched")
         return allGames
     }
 
@@ -399,7 +402,7 @@ actor GamesClient {
                 throw GamesError.unauthorized
             } catch {
                 failedChunkCount += 1
-                print("[Games] metadata chunk failed for \(chunk.count) apps: \(error)")
+                gamesLog.warning("[Games] metadata chunk failed for \(chunk.count, privacy: .public) apps: \(error, privacy: .public)")
             }
         }
         return MetadataFetchResult(failedChunkCount: failedChunkCount)

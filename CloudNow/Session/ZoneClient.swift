@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let zoneLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Zones")
 
 // MARK: - Zone Model
 
@@ -149,7 +152,7 @@ actor ZoneClient {
                 cacheAutomaticSelections(from: zones)
             }
         } catch {
-            print("[Zone] Automatic routing prewarm failed: \(error)")
+            zoneLog.warning("[Zone] Automatic routing prewarm failed: \(error, privacy: .public)")
         }
     }
 

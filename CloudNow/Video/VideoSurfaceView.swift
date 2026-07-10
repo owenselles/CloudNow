@@ -5,6 +5,8 @@ import LiveKitWebRTC
 import os
 import UIKit
 
+private let videoLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Video")
+
 // MARK: - VideoSurfaceView
 
 /// Full-screen video renderer.
@@ -73,7 +75,7 @@ final class VideoSurfaceView: UIView {
             currentTrack = videoTrack
             if let track = videoTrack {
                 track.add(renderer)
-                print("[VideoSurfaceView] Track attached")
+                videoLog.info("[VideoSurfaceView] Track attached")
             }
         }
     }
@@ -365,7 +367,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             cvBuf = converted
             decoderPath = .softwareI420
         } else {
-            print("[WebRTCFrameRenderer] Unhandled frame type: \(type(of: frame.buffer))")
+            videoLog.warning("[WebRTCFrameRenderer] Unhandled frame type: \(String(describing: type(of: frame.buffer)), privacy: .public)")
             diagnostics.recordDrop(trace)
             return
         }
