@@ -263,6 +263,7 @@ enum L10nEN {
         "controller_text_entry_instructions": "Enter text locally, then send it to GeForce NOW when you're done.",
         "controller_text_entry_placeholder": "Enter text",
         "controller_text_entry_send": "Send",
+        "controller_text_entry_unsupported_characters": "This text includes characters CloudNow can't send yet. Edit the text and try again.",
         "capture_text_input_buttons": "Set Text Input Buttons",
         "capture_text_input_buttons_instructions": "Press the controller buttons you want to use together. The sequence is saved after you release them all.",
         "current_sequence": "Current Sequence",

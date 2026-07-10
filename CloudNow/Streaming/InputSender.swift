@@ -244,6 +244,11 @@ nonisolated enum InputSendDisposition: Sendable {
     case superseded
 }
 
+nonisolated enum SubmittedTextValidationResult {
+    case supported
+    case unsupportedCharacters
+}
+
 /// Reusable fixed-capacity storage handed exclusively from InputSender to the WebRTC send queue.
 /// The sender does not mutate a packet again until the completion returns it to the pool.
 final nonisolated class EncodedInputPacket: @unchecked Sendable {
@@ -1546,18 +1551,17 @@ final nonisolated class InputSender: @unchecked Sendable {
             releaseHeldDiscreteInputs()
             sendNeutralGamepads()
 
-            var events = keyboardReplayEvents(for: text)
-            if appendEnter,
-               let enter = keyboardEvents(
-                   for: .keyboardReturnOrEnter,
-                   requiresShift: false
-               )
-            {
-                events.append(contentsOf: enter)
+            guard let events = keyboardReplayPlan(for: text, appendEnter: appendEnter) else {
+                DispatchQueue.main.async(execute: completion)
+                return
             }
 
             replayKeyboardEvents(events, index: 0, completion: completion)
         }
+    }
+
+    func validateSubmittedText(_ text: String, appendEnter: Bool = true) -> SubmittedTextValidationResult {
+        keyboardReplayPlan(for: text, appendEnter: appendEnter) == nil ? .unsupportedCharacters : .supported
     }
 
     private func replayKeyboardEvents(
@@ -1587,19 +1591,30 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
-    private func keyboardReplayEvents(for text: String) -> [KeyboardReplayEvent] {
+    private func keyboardReplayPlan(
+        for text: String,
+        appendEnter: Bool
+    ) -> [KeyboardReplayEvent]? {
         var events: [KeyboardReplayEvent] = []
         for character in text {
-            guard let (usage, requiresShift) = Self.usageForCharacter(character) else {
-                inputLog.info("Skipping unsupported replay character: \(String(character), privacy: .public)")
-                continue
-            }
-            guard let keyEvents = keyboardEvents(for: usage, requiresShift: requiresShift) else {
-                inputLog.info("Skipping unsupported replay key usage: \(usage.rawValue)")
-                continue
+            guard let (usage, requiresShift) = Self.usageForCharacter(character),
+                  let keyEvents = keyboardEvents(for: usage, requiresShift: requiresShift)
+            else {
+                return nil
             }
             events.append(contentsOf: keyEvents)
         }
+
+        if appendEnter {
+            guard let enter = keyboardEvents(
+                for: .keyboardReturnOrEnter,
+                requiresShift: false
+            ) else {
+                return nil
+            }
+            events.append(contentsOf: enter)
+        }
+
         return events
     }
 

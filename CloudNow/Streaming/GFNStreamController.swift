@@ -41,6 +41,11 @@ enum StreamOverlayState: Equatable {
     case textEntry
 }
 
+enum ControllerTextEntrySubmissionResult {
+    case accepted
+    case unsupportedCharacters
+}
+
 // MARK: - Stream Statistics
 
 nonisolated struct StreamStats: Equatable {
@@ -563,17 +568,27 @@ final class GFNStreamController: NSObject {
         syncInputPauseState()
     }
 
-    func submitControllerTextEntry(_ text: String) {
+    func submitControllerTextEntry(
+        _ text: String,
+        completion: @escaping (ControllerTextEntrySubmissionResult) -> Void
+    ) {
         guard let inputSender else {
             controllerTextEntryActive = false
             replayInputPaused = false
             syncInputPauseState()
+            completion(.accepted)
+            return
+        }
+
+        guard inputSender.validateSubmittedText(text) == .supported else {
+            completion(.unsupportedCharacters)
             return
         }
 
         controllerTextEntryActive = false
         replayInputPaused = true
         syncInputPauseState()
+        completion(.accepted)
 
         inputSender.replaySubmittedText(text) { [weak self] in
             Task { @MainActor [weak self] in

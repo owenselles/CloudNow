@@ -37,6 +37,7 @@ struct StreamView: View {
     @State private var isEndingSession = false
     @State private var endConfirmationFailed = false
     @State private var textEntryText = ""
+    @State private var textEntryValidationMessage: String?
     @FocusState private var textEntryFocused: Bool
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
@@ -454,9 +455,18 @@ struct StreamView: View {
 
             TextField(L10n.text("controller_text_entry_placeholder"), text: $textEntryText)
                 .focused($textEntryFocused)
+                .onChange(of: textEntryText) { _, _ in
+                    textEntryValidationMessage = nil
+                }
                 .onSubmit {
                     submitControllerTextEntry()
                 }
+
+            if let textEntryValidationMessage {
+                Text(textEntryValidationMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
 
             HStack(spacing: 20) {
                 Button(L10n.text("cancel")) {
@@ -1313,20 +1323,29 @@ struct StreamView: View {
     private func presentControllerTextEntry() {
         guard streamController.state == .streaming, overlayState == .none else { return }
         textEntryText = ""
+        textEntryValidationMessage = nil
         overlayState = .textEntry
     }
 
     private func cancelControllerTextEntry() {
         overlayState = .none
         textEntryText = ""
+        textEntryValidationMessage = nil
         streamController.cancelControllerTextEntry()
     }
 
     private func submitControllerTextEntry() {
         let text = textEntryText
-        overlayState = .none
-        textEntryText = ""
-        streamController.submitControllerTextEntry(text)
+        streamController.submitControllerTextEntry(text) { result in
+            switch result {
+            case .accepted:
+                overlayState = .none
+                textEntryText = ""
+                textEntryValidationMessage = nil
+            case .unsupportedCharacters:
+                textEntryValidationMessage = L10n.text("controller_text_entry_unsupported_characters")
+            }
+        }
     }
 }
 
