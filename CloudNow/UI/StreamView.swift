@@ -194,8 +194,9 @@ struct StreamView: View {
 
     /// A badge shows only when the game supports the feature AND it's actually usable here:
     /// HDR requires the client's 10-bit/HDR pipeline, display, and an HDR-entitled tier; RTX
-    /// requires a premium tier; Reflex is shown whenever the game supports it. Mirrors the
-    /// official client's supportedOnGame + systemSupported + subscription gating.
+    /// requires a premium tier. Reflex is never shown: the session request only enables it
+    /// at >= 120 fps, which tvOS's 60 Hz cap rules out. Mirrors the official client's
+    /// supportedOnGame + systemSupported + subscription gating.
     private func computeLoadingBadges() {
         let supported = Set(game.supportedFeatures ?? [])
         guard !supported.isEmpty else { loadingBadges = []; return }
@@ -206,7 +207,6 @@ struct StreamView: View {
         var badges: [GameFeature] = []
         if supported.contains(.rtx), tierPremium { badges.append(.rtx) }
         if supported.contains(.hdr), hdrUsable { badges.append(.hdr) }
-        if supported.contains(.reflex) { badges.append(.reflex) }
         loadingBadges = badges
     }
 
