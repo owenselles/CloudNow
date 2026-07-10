@@ -15,11 +15,16 @@ import UIKit
 /// input, forwarding events to `inputHandler` as GFN protocol packets.
 final class VideoSurfaceView: UIView {
     #if os(tvOS)
-    // swiftlint:disable:next force_cast - reason: layerClass guarantees AVSampleBufferDisplayLayer backing
-    override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
-    private var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
+        // swiftlint:disable:next force_cast - reason: layerClass guarantees AVSampleBufferDisplayLayer backing
+        override class var layerClass: AnyClass {
+            AVSampleBufferDisplayLayer.self
+        }
+
+        private var displayLayer: AVSampleBufferDisplayLayer {
+            layer as! AVSampleBufferDisplayLayer
+        }
     #else
-    private let displayLayer = AVSampleBufferDisplayLayer()
+        private let displayLayer = AVSampleBufferDisplayLayer()
     #endif
 
     private let pipelineDiagnostics = VideoPipelineDiagnostics()
@@ -81,16 +86,16 @@ final class VideoSurfaceView: UIView {
 
     // On visionOS the displayLayer is a sublayer, so its frame must track the view bounds.
     #if !os(tvOS)
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        displayLayer.frame = bounds
-    }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            displayLayer.frame = bounds
+        }
     #endif
 
     private func setup() {
         backgroundColor = .black
         #if !os(tvOS)
-        layer.addSublayer(displayLayer)
+            layer.addSublayer(displayLayer)
         #endif
         displayLayer.videoGravity = .resizeAspectFill
         displayLayer.controlTimebase = nil

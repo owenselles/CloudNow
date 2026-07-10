@@ -294,7 +294,7 @@ private struct HeroBannerView: View {
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .padding(.horizontal, 60)
         #if os(tvOS)
-        .focusSection()
+            .focusSection()
         #endif
     }
 }

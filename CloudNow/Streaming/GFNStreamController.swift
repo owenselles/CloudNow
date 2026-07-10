@@ -164,7 +164,7 @@ final class GFNStreamController: NSObject {
     private var inputSender: InputSender?
     private(set) var videoView: VideoSurfaceView?
     #if os(tvOS)
-    private(set) var remoteMode: RemoteInputMode = .mouse
+        private(set) var remoteMode: RemoteInputMode = .mouse
     #endif
     private var statsTimer: Timer?
     private var videoReceiver: LKRTCRtpReceiver?
@@ -308,9 +308,9 @@ final class GFNStreamController: NSObject {
     // MARK: Input Control
 
     #if os(tvOS)
-    func toggleRemoteMode() {
-        inputSender?.toggleRemoteMode()
-    }
+        func toggleRemoteMode() {
+            inputSender?.toggleRemoteMode()
+        }
     #endif
 
     func setInputPaused(_ paused: Bool) {
@@ -362,7 +362,7 @@ final class GFNStreamController: NSObject {
         videoView?.menuPressHandler = nil
         videoView = nil
         #if os(tvOS)
-        remoteMode = .mouse
+            remoteMode = .mouse
         #endif
         menuPressCount = 0
         timeWarning = nil
@@ -486,13 +486,13 @@ final class GFNStreamController: NSObject {
         // On visionOS, spatial audio routing is OS-managed — only setActive is needed.
         do {
             #if os(tvOS)
-            try AVAudioSession.sharedInstance().setCategory(
-                .playback,
-                mode: .moviePlayback,
-                options: [.allowBluetooth, .allowBluetoothA2DP]
-            )
+                try AVAudioSession.sharedInstance().setCategory(
+                    .playback,
+                    mode: .moviePlayback,
+                    options: [.allowBluetooth, .allowBluetoothA2DP]
+                )
             #else
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             #endif
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
@@ -762,9 +762,9 @@ final class GFNStreamController: NSObject {
 
     private func attachMicrophone(to pc: LKRTCPeerConnection) async {
         #if os(tvOS)
-        let granted = true
+            let granted = true
         #elseif os(visionOS)
-        let granted = await AVAudioApplication.requestRecordPermission()
+            let granted = await AVAudioApplication.requestRecordPermission()
         #else
             let granted = await withCheckedContinuation { cont in
                 AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
@@ -1404,19 +1404,19 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             print("[DataChannel] Input ready — starting InputSender (protocol v\(negotiatedVersion))")
             let sender = InputSender(channel: self)
             sender.setProtocolVersion(negotiatedVersion)
-            sender.deadzone = Float(self.settings.controllerDeadzone)
-            sender.overlayTriggerButton = self.settings.overlayTriggerButton
+            sender.deadzone = Float(settings.controllerDeadzone)
+            sender.overlayTriggerButton = settings.overlayTriggerButton
             #if os(tvOS)
-            sender.remoteMode = self.settings.defaultRemoteInputMode
-            self.remoteMode = sender.remoteMode
-            self.videoView?.gamepadModeActive = (self.remoteMode == .gamepad || self.remoteMode == .dualsense)
+                sender.remoteMode = settings.defaultRemoteInputMode
+                remoteMode = sender.remoteMode
+                videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
             #endif
             sender.menuToggleHandler = { [weak self] in self?.handleMenuPress() }
             #if os(tvOS)
-            sender.onRemoteModeChanged = { [weak self] mode in
-                self?.remoteMode = mode
-                self?.videoView?.gamepadModeActive = (mode == .gamepad || mode == .dualsense)
-            }
+                sender.onRemoteModeChanged = { [weak self] mode in
+                    self?.remoteMode = mode
+                    self?.videoView?.gamepadModeActive = (mode == .gamepad || mode == .dualsense)
+                }
             #endif
             sender.start()
             inputSender = sender

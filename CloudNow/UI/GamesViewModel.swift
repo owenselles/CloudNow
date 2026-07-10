@@ -51,9 +51,9 @@ class GamesViewModel {
     var topZones: [GFNZone] = []
 
     #if os(visionOS)
-    /// Set before opening the ImmersiveSpace so the content view can read the pending game.
-    var pendingGame: GameInfo? = nil
-    var pendingSession: ActiveSessionInfo? = nil
+        /// Set before opening the ImmersiveSpace so the content view can read the pending game.
+        var pendingGame: GameInfo?
+        var pendingSession: ActiveSessionInfo?
     #endif
 
     private let gamesClient = GamesClient()
@@ -86,12 +86,12 @@ class GamesViewModel {
             lastSession = session
         }
         #if os(tvOS)
-        // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
-        // If Apple raises the cap in a future tvOS release this will automatically unlock.
-        let screenMax = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
-        if streamSettings.fps > screenMax {
-            streamSettings.fps = screenMax
-        }
+            // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
+            // If Apple raises the cap in a future tvOS release this will automatically unlock.
+            let screenMax = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
+            if streamSettings.fps > screenMax {
+                streamSettings.fps = screenMax
+            }
         #endif
         streamSettings = streamSettings.normalizedForClient
     }
@@ -117,9 +117,9 @@ class GamesViewModel {
     /// in a future update this will automatically expose the higher option.
     var availableFps: [Int] {
         #if os(tvOS)
-        let maxFps = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
+            let maxFps = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
         #else
-        let maxFps = 120
+            let maxFps = 120
         #endif
         guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
             return [30, 60].filter { $0 <= maxFps }

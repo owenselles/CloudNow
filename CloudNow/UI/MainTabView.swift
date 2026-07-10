@@ -7,8 +7,8 @@ struct MainTabView: View {
     @State private var sessionToResume: ActiveSessionInfo? = nil
     @State private var directSessionToResume: SessionInfo? = nil
     #if os(visionOS)
-    @Environment(\.openImmersiveSpace) var openImmersiveSpace
-    @Environment(\.dismissImmersiveSpace) var dismissImmersiveSpace
+        @Environment(\.openImmersiveSpace) var openImmersiveSpace
+        @Environment(\.dismissImmersiveSpace) var dismissImmersiveSpace
     #endif
 
     var body: some View {
@@ -65,26 +65,26 @@ struct MainTabView: View {
         }
         #else
         .fullScreenCover(item: $gameToPlay) { game in
-            StreamView(
-                game: game,
-                settings: viewModel.streamSettings,
-                existingSession: sessionToResume,
-                directSession: directSessionToResume,
-                onDismiss: {
-                    gameToPlay = nil
-                    sessionToResume = nil
-                },
-                onLeave: { leftGame, session in
-                    viewModel.resumableSession = ResumableSession(
-                        game: leftGame,
-                        session: session,
-                        leftAt: Date()
+                    StreamView(
+                        game: game,
+                        settings: viewModel.streamSettings,
+                        existingSession: sessionToResume,
+                        directSession: directSessionToResume,
+                        onDismiss: {
+                            gameToPlay = nil
+                            sessionToResume = nil
+                        },
+                        onLeave: { leftGame, session in
+                            viewModel.resumableSession = ResumableSession(
+                                game: leftGame,
+                                session: session,
+                                leftAt: Date()
+                            )
+                        }
                     )
+                    .environment(authManager)
+                    .environment(viewModel)
                 }
-            )
-            .environment(authManager)
-            .environment(viewModel)
-        }
         #endif
     }
 

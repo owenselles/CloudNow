@@ -6,7 +6,7 @@ struct SettingsView: View {
 
     @State private var showZonePicker = false
     #if os(visionOS)
-    @AppStorage("gfn.immersionStyle") private var immersionStyleRaw: String = "full"
+        @AppStorage("gfn.immersionStyle") private var immersionStyleRaw: String = "full"
     #endif
 
     var body: some View {
@@ -179,27 +179,15 @@ struct SettingsView: View {
                 }
 
                 #if os(visionOS)
-                Section("Display") {
-                    Picker("Immersion Style", selection: $immersionStyleRaw) {
-                        Text("Full (Cinema)").tag("full")
-                        Text("Mixed (Floating)").tag("mixed")
+                    Section("Display") {
+                        Picker("Immersion Style", selection: $immersionStyleRaw) {
+                            Text("Full (Cinema)").tag("full")
+                            Text("Mixed (Floating)").tag("mixed")
+                        }
+                        Text("Full replaces your surroundings with a cinema-black background. Mixed keeps the game floating in your real environment. You can also switch between them with the Digital Crown while streaming.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    Text("Full replaces your surroundings with a cinema-black background. Mixed keeps the game floating in your real environment. You can also switch between them with the Digital Crown while streaming.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                #endif
-
-                #if os(visionOS)
-                Section("Display") {
-                    Picker("Immersion Style", selection: $immersionStyleRaw) {
-                        Text("Full (Cinema)").tag("full")
-                        Text("Mixed (Floating)").tag("mixed")
-                    }
-                    Text("Full replaces your surroundings with a cinema-black background. Mixed keeps the game floating in your real environment. You can also switch between them with the Digital Crown while streaming.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
                 #endif
 
                 Section("Controller") {

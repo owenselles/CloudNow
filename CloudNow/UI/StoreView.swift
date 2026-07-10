@@ -12,7 +12,7 @@ struct StoreView: View {
     @State private var selectedStore: String? = nil
 
     private var availableStores: [String] {
-        let stores = Set(games.flatMap { $0.variants.map { $0.appStore } }
+        let stores = Set(games.flatMap { $0.variants.map(\.appStore) }
             .filter { $0 != "unknown" })
         return stores.sorted()
     }
@@ -29,16 +29,16 @@ struct StoreView: View {
     }
 
     private let columns = [
-        GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40)
+        GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40),
     ]
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if games.isEmpty && viewModel.isLoading {
+            if games.isEmpty, viewModel.isLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
-                        ForEach(0..<12, id: \.self) { _ in
+                        ForEach(0 ..< 12, id: \.self) { _ in
                             GameCardSkeleton()
                         }
                     }
@@ -53,7 +53,7 @@ struct StoreView: View {
         }
         .searchable(text: $searchText, prompt: "Search games")
         .alert("Not in Your Library", isPresented: $showNotOwned, presenting: notOwnedGame) { _ in
-            Button("OK") { }
+            Button("OK") {}
         } message: { game in
             Text("\(game.title) is not in your GeForce NOW library. Add it via the GeForce NOW store on another device.")
         }
@@ -89,41 +89,41 @@ struct StoreView: View {
                         } label: {
                             StoreCardLabel(game: game)
                         }
-                        .aspectRatio(2/3, contentMode: .fit)
+                        .aspectRatio(2 / 3, contentMode: .fit)
                         #if os(tvOS)
-                        .buttonStyle(.card)
+                            .buttonStyle(.card)
                         #else
-                        .buttonStyle(.plain)
+                            .buttonStyle(.plain)
                         #endif
-                        .contextMenu {
-                            if game.isInLibrary {
-                                Button {
-                                    viewModel.toggleFavorite(game.id)
-                                } label: {
-                                    let isFav = viewModel.favoriteIds.contains(game.id)
-                                    Label(
-                                        isFav ? "Remove from Favorites" : "Add to Favorites",
-                                        systemImage: isFav ? "star.slash.fill" : "star"
-                                    )
-                                }
-                                if game.variants.count > 1 {
-                                    Menu("Launch via...") {
-                                        ForEach(game.variants, id: \.id) { variant in
-                                            Button {
-                                                viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
-                                            } label: {
-                                                let isSelected = viewModel.preferredVariantId(for: game) == variant.id
-                                                if isSelected {
-                                                    Label(variant.storeName, systemImage: "checkmark")
-                                                } else {
-                                                    Text(variant.storeName)
+                            .contextMenu {
+                                if game.isInLibrary {
+                                    Button {
+                                        viewModel.toggleFavorite(game.id)
+                                    } label: {
+                                        let isFav = viewModel.favoriteIds.contains(game.id)
+                                        Label(
+                                            isFav ? "Remove from Favorites" : "Add to Favorites",
+                                            systemImage: isFav ? "star.slash.fill" : "star"
+                                        )
+                                    }
+                                    if game.variants.count > 1 {
+                                        Menu("Launch via...") {
+                                            ForEach(game.variants, id: \.id) { variant in
+                                                Button {
+                                                    viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
+                                                } label: {
+                                                    let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+                                                    if isSelected {
+                                                        Label(variant.storeName, systemImage: "checkmark")
+                                                    } else {
+                                                        Text(variant.storeName)
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
                     }
                 }
                 .padding(60)

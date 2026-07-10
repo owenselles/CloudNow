@@ -6,7 +6,7 @@
 //
 
 #if os(tvOS)
-import BackgroundTasks
+    import BackgroundTasks
 #endif
 import SwiftUI
 
@@ -17,10 +17,10 @@ struct CloudNowApp: App {
     /// sharing the same instance (pendingGame visibility). On tvOS this is the single owner too.
     @State private var viewModel = GamesViewModel()
     #if os(visionOS)
-    /// Drives the ImmersiveSpace immersion level. Seeded from AppStorage on launch;
-    /// the user can also toggle between .full and .mixed with the Digital Crown at runtime.
-    @AppStorage("gfn.immersionStyle") private var immersionStyleRaw: String = "full"
-    @State private var immersionStyle: ImmersionStyle = .full
+        /// Drives the ImmersiveSpace immersion level. Seeded from AppStorage on launch;
+        /// the user can also toggle between .full and .mixed with the Digital Crown at runtime.
+        @AppStorage("gfn.immersionStyle") private var immersionStyleRaw: String = "full"
+        @State private var immersionStyle: ImmersionStyle = .full
     #endif
 
     init() {
@@ -42,41 +42,41 @@ struct CloudNowApp: App {
             .environment(authManager)
             .environment(viewModel)
             #if os(tvOS)
-            .onAppear { registerBGTasks() }
+                .onAppear { registerBGTasks() }
             #endif
-            .task { await authManager.initialize() }
+                .task { await authManager.initialize() }
             #if os(visionOS)
-            .task {
-                immersionStyle = immersionStyleRaw == "mixed" ? .mixed : .full
-            }
-            .onChange(of: immersionStyleRaw) { _, raw in
-                immersionStyle = raw == "mixed" ? .mixed : .full
-            }
+                .task {
+                    immersionStyle = immersionStyleRaw == "mixed" ? .mixed : .full
+                }
+                .onChange(of: immersionStyleRaw) { _, raw in
+                    immersionStyle = raw == "mixed" ? .mixed : .full
+                }
             #endif
         }
 
         #if os(visionOS)
-        ImmersiveSpace(id: "stream") {
-            ImmersiveStreamView()
-                .environment(authManager)
-                .environment(viewModel)
-        }
-        .immersionStyle(selection: $immersionStyle, in: .full, .mixed)
+            ImmersiveSpace(id: "stream") {
+                ImmersiveStreamView()
+                    .environment(authManager)
+                    .environment(viewModel)
+            }
+            .immersionStyle(selection: $immersionStyle, in: .full, .mixed)
         #endif
     }
 
     #if os(tvOS)
-    private func registerBGTasks() {
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: "com.owenselles.CloudNow.tokenRefresh",
-            using: nil
-        ) { task in
-            Task { @MainActor in
-                await authManager.refreshIfNeeded()
-                authManager.scheduleBackgroundRefresh()
-                task.setTaskCompleted(success: true)
+        private func registerBGTasks() {
+            BGTaskScheduler.shared.register(
+                forTaskWithIdentifier: "com.owenselles.CloudNow.tokenRefresh",
+                using: nil
+            ) { task in
+                Task { @MainActor in
+                    await authManager.refreshIfNeeded()
+                    authManager.scheduleBackgroundRefresh()
+                    task.setTaskCompleted(success: true)
+                }
             }
         }
-    }
     #endif
 }
