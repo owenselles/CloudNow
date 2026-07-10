@@ -2,6 +2,8 @@
 
 A native GeForce NOW client for Apple TV. Stream your entire PC game library directly on tvOS with full controller support, no browser, no workarounds.
 
+![CloudNow Home screen on Apple TV](CloudNow/App%20Store%20Media/Screenshot%201.png)
+
 > **Personal use / sideload only.** This project is not affiliated with, endorsed by, or sponsored by NVIDIA. NVIDIA and GeForce NOW are trademarks of NVIDIA Corporation.
 
 > [!WARNING]
@@ -26,17 +28,23 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Tab bar navigation** — Home, Library, Store, and Settings; fully focus-engine compatible
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
 - **Library & Store** — browse your linked games separately from the full public catalog; Library and Store both have search; Library supports A→Z, Z→A, and Recently Played sort orders; long-press any card to add/remove from Favorites
-- **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), color quality (SDR/HDR), keyboard layout, game language, and Low Latency Mode (L4S) from the Settings tab
+- **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), color mode, keyboard layout, game language, and Low Latency Mode (L4S) from the Settings tab
+- **Color mode preferences** — Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR. CloudNow separates user preference, requested stream mode, negotiated server mode, and actual detected decoded format instead of assuming HDR from bit depth or Apple TV output mode
+- **Decoded video format detection** — inspects the actual decoded pixel buffer for bit depth, transfer function, color primaries, matrix, and range. HDR is only treated as active when the decoded stream metadata supports it
+- **Conservative HDR behavior** — requests HDR only when the local pipeline qualifies; accepts safe server-side fallback to SDR10 or SDR8 without treating every 10-bit stream as HDR
 - **Codec-aware SDP negotiation** — offer is filtered to your chosen codec before WebRTC negotiation; H.265 prefers Main profile; bandwidth hints sent to prevent server overshoot
+- **Renderer metadata preservation** — decoded color metadata is tracked through the render path and the format description cache is refreshed when color characteristics change, not just when resolution changes
+- **Session diagnostics** — diagnostic HUD can show color preference, requested mode, detected mode, display HDR support, fallback reason, decoder path, pixel format, transfer function, and bit depth
 - **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"); waits indefinitely in queue with position updates; 180-second setup timeout after queue clears; requires two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
 - **Zone/region selection** — Settings → Server Region shows live queue depths and ping per zone; Automatic mode picks the best zone by weighted score (40% ping + 60% queue depth); powered by the PrintedWaste community API
-- **Microphone support** — voice chat via AirPods or any Bluetooth headset; toggle in Settings; permission requested on first use
+- **Microphone support** — voice chat via AirPods or any Bluetooth headset; toggle in Settings; permission requested on first use; if no valid input route exists, CloudNow falls back to playback-only audio instead of breaking session audio
 - **Favorites** — long-press any game card in Library or Store to add/remove from Favorites; persisted locally
 - **Full GFN streaming** — WebRTC-based, up to 4K@60fps depending on your GFN plan (tvOS caps at 60 Hz; 120fps ready for when Apple raises the limit)
-- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (5–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start)
+- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (5–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
 - **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
-- **Live stats overlay** — bitrate, resolution, FPS, RTT, real packet loss %, and remaining session time (Free/Priority tier) — toggle with Play/Pause (Siri Remote) or long-press the overlay button (controller, default: Start/≡, configurable in Settings)
+- **Live stats overlay** — bitrate, resolution, FPS, RTT, real packet loss %, decoder info, and remaining session time (Free/Priority tier) — toggle with Play/Pause (Siri Remote) or long-press the overlay button (controller, default: Start/≡, configurable in Settings)
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
+- **tvOS localization** — UI text follows the device language automatically using `Bundle.main.preferredLocalizations` with English fallback; translations live in one file per locale under `CloudNow/Localization`
 
 ## Requirements
 
@@ -81,6 +89,88 @@ Then attach it to the project in Xcode:
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
 On first launch the app prompts you to sign in. A QR code and PIN are displayed — scan the QR code or visit the URL on any device and enter the PIN to complete sign-in, then return to the TV.
+
+CloudNow automatically localizes the entire UI to the active tvOS language. No app-side language picker is required for the interface. If a supported locale is unavailable, the app falls back to English.
+
+The game language setting is separate from the app UI language. In Settings, choose `Automatic` if you want CloudNow to send the tvOS language to GeForce NOW, or pick a specific game language manually.
+
+In the main app menu, LB/RB on a connected controller switches between Home, Library, Store, and Settings. Once a stream is open, those shoulder buttons stay with the streaming controller path instead of the menu.
+
+### Supported tvOS languages
+
+CloudNow includes per-locale translation files for the tvOS language set below.
+
+- Arabic (`ar`)
+- Catalan (`ca`)
+- Chinese Simplified (`zh-Hans`)
+- Chinese Traditional Hong Kong (`zh-Hant-HK`)
+- Chinese Traditional Macao (`zh-Hant-MO`)
+- Chinese Traditional Taiwan (`zh-Hant-TW`)
+- Croatian (`hr`)
+- Czech (`cs`)
+- Danish (`da`)
+- Dutch Belgium (`nl-BE`)
+- Dutch Netherlands (`nl-NL`)
+- English Australia (`en-AU`)
+- English Canada (`en-CA`)
+- English India (`en-IN`)
+- English Ireland (`en-IE`)
+- English New Zealand (`en-NZ`)
+- English Singapore (`en-SG`)
+- English South Africa (`en-ZA`)
+- English United Kingdom (`en-GB`)
+- English United States (`en-US`)
+- Finnish (`fi`)
+- French Belgium (`fr-BE`)
+- French Canada (`fr-CA`)
+- French France (`fr-FR`)
+- French Switzerland (`fr-CH`)
+- German Austria (`de-AT`)
+- German Germany (`de-DE`)
+- German Switzerland (`de-CH`)
+- Greek (`el`)
+- Hebrew (`he`)
+- Hindi (`hi`)
+- Hungarian (`hu`)
+- Indonesian (`id`)
+- Italian Italy (`it-IT`)
+- Italian Switzerland (`it-CH`)
+- Japanese (`ja`)
+- Korean (`ko`)
+- Malay (`ms`)
+- Norwegian Bokmål (`nb`)
+- Polish (`pl`)
+- Portuguese Brazil (`pt-BR`)
+- Portuguese Portugal (`pt-PT`)
+- Romanian (`ro`)
+- Russian (`ru`)
+- Slovak (`sk`)
+- Spanish Argentina (`es-AR`)
+- Spanish Bolivia (`es-BO`)
+- Spanish Chile (`es-CL`)
+- Spanish Colombia (`es-CO`)
+- Spanish Costa Rica (`es-CR`)
+- Spanish Dominican Republic (`es-DO`)
+- Spanish Ecuador (`es-EC`)
+- Spanish El Salvador (`es-SV`)
+- Spanish Guatemala (`es-GT`)
+- Spanish Honduras (`es-HN`)
+- Spanish Latin America (`es-419`)
+- Spanish Mexico (`es-MX`)
+- Spanish Nicaragua (`es-NI`)
+- Spanish Panama (`es-PA`)
+- Spanish Paraguay (`es-PY`)
+- Spanish Peru (`es-PE`)
+- Spanish Puerto Rico (`es-PR`)
+- Spanish Spain (`es-ES`)
+- Spanish United States (`es-US`)
+- Spanish Uruguay (`es-UY`)
+- Spanish Venezuela (`es-VE`)
+- Swedish (`sv`)
+- Thai (`th`)
+- Turkish (`tr`)
+- Ukrainian (`uk`)
+- Vietnamese (`vi`)
 
 ---
 
@@ -127,19 +217,26 @@ CloudNow/
 │   ├── AuthManager.swift           @Observable auth state, Keychain persistence
 │   └── NVIDIAAuthAPI.swift         OAuth 2.0 PKCE, token refresh, user info
 ├── Session/
-│   ├── SessionState.swift          Models: GameInfo, SessionInfo, StreamSettings
-│   ├── CloudMatchClient.swift      Session create/poll/stop/active-sessions
+│   ├── SessionState.swift          Models: GameInfo, SessionInfo, StreamSettings, color-mode state
+│   ├── CloudMatchClient.swift      Session create/poll/stop/active-sessions, color-aware request fields
 │   └── GamesClient.swift           Game catalog via GraphQL persisted query
 ├── Streaming/
-│   ├── GFNStreamController.swift   WebRTC peer connection lifecycle (@Observable)
+│   ├── GFNStreamController.swift   WebRTC peer connection lifecycle, color negotiation state, audio session setup
 │   ├── SignalingClient.swift        WebSocket signaling — SDP offer/answer + ICE
 │   ├── SDPMunger.swift             Codec filtering + bandwidth injection for WebRTC SDP
 │   └── InputSender.swift           GCController/keyboard/mouse/Siri Remote → XInput + GFN protocol (v2/v3) → data channel
 ├── Video/
-│   └── VideoSurfaceView.swift      AVSampleBufferDisplayLayer video surface + keyboard/mouse first responder
+│   ├── VideoSurfaceView.swift      AVSampleBufferDisplayLayer video surface + decoded-format-aware renderer
+│   ├── VideoColorFormat.swift      Local video capability detection + decoded pixel-buffer format inspection
+│   ├── VideoPipelineDiagnostics.swift Render/decode pipeline diagnostics
+│   └── I420FrameConverter.swift    Software I420 conversion fallback path
+├── Localization/
+│   ├── AppLocalization.swift       tvOS language selection, tvOS→GFN locale mapping, translation helpers
+│   ├── L10nEN.swift                English fallback strings
+│   └── L10nXX.swift                One file per supported locale, easy to edit independently
 └── UI/
     ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings
-    ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings)
+    ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings) with controller tab cycling
     ├── HomeView.swift              Hero banner + Continue Playing + Favorites rows
     ├── LibraryView.swift           LIBRARY panel grid with favorite toggles
     ├── StoreView.swift             MAIN catalog grid with "In Library" badges
@@ -163,16 +260,41 @@ The GFN streaming protocol was independently reverse-engineered from NVIDIA's ne
 
 ---
 
+## Color and HDR Notes
+
+CloudNow does **not** treat a stream as HDR merely because:
+
+- the stream is 10-bit
+- the connected display supports HDR
+- tvOS is currently outputting HDR or Dolby Vision
+- the user selected an HDR-related setting
+
+CloudNow uses three separate pieces of information:
+
+1. **What to request** — based on user preference and local capabilities
+2. **What the server negotiated** — based on session and signaling state
+3. **What is actually being rendered** — based on decoded video metadata from the real pixel buffer
+
+This means an HDR request can legitimately fall back to SDR10 or SDR8, and the app will report that instead of falsely claiming HDR is active.
+
+---
+
 ## Known Limitations
 
 - **No App Store.** NVIDIA has not published a public API for third-party GFN clients. Sideloading only.
 - **Queue ad playback.** During high demand GFN shows ads while in queue. The app plays them via AVPlayer and reports lifecycle events (start/pause/finish) back to CloudMatch.
 - **Zone/region selection.** Settings → Server Region lets you pick a specific zone or leave it on Automatic (40% ping + 60% queue depth scoring). Zone list + queue depths fetched from the PrintedWaste community API.
+- **HDR depends on the full pipeline.** A selected HDR-capable mode does not guarantee the server will deliver HDR, and a 10-bit stream is not automatically HDR.
+- **AV1 currently uses the software I420 path.** On the current implementation this falls back to SDR 8-bit BT.709 rather than preserving SDR10 or HDR metadata.
+- **Color diagnostics are only as good as decoded metadata.** If the decoder or software conversion path strips metadata, CloudNow will conservatively report fallback or unknown modes instead of guessing.
+
 ## Contributing
 
 PRs welcome, especially for:
 
 - macOS Catalyst or visionOS port
+- Better verified HDR negotiation evidence and decoder-path coverage
+- Additional diagnostics and test coverage for tvOS playback paths
 
 ## Sponsoring
 

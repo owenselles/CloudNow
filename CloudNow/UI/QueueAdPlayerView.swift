@@ -24,7 +24,7 @@ struct QueueAdPlayerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Watch an ad to stay in queue", systemImage: "play.rectangle.fill")
+            Label(L10n.text("watch_ad_to_stay_in_queue"), systemImage: "play.rectangle.fill")
                 .font(.caption.bold())
                 .foregroundStyle(.secondary)
 
@@ -68,7 +68,7 @@ struct QueueAdPlayerView: View {
                     .fill(Color.secondary.opacity(0.15))
                     .frame(height: 200)
                     .overlay(
-                        Label("Ad media unavailable", systemImage: "video.slash.fill")
+                        Label(L10n.text("ad_media_unavailable"), systemImage: "video.slash.fill")
                             .foregroundStyle(.secondary)
                     )
             }

@@ -2,6 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>TVTopShelfImage</key>
+	<dict>
+		<key>TVTopShelfPrimaryImageWide</key>
+		<string>Top Shelf Image Wide</string>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>CloudNow does not use the camera. This string is required because a linked SDK references camera APIs.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.owenselles.CloudNow.tokenRefresh</string>

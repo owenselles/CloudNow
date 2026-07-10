@@ -15,6 +15,7 @@ struct VideoPipelineSnapshot {
     var avDroppedFrames: Int = 0
     var avCorruptedFrames: Int = 0
     var avAccumulatedFrameDelayMs: Double = 0
+    var decodedVideoFormat: DecodedVideoFormat?
 }
 
 struct VideoFrameTrace {
@@ -180,6 +181,12 @@ final class VideoPipelineDiagnostics: @unchecked Sendable {
                 state.snapshot.avAccumulatedFrameDelayMs = 0
             }
             state.previousAVMetrics = current
+        }
+    }
+
+    func updateDecodedVideoFormat(_ format: DecodedVideoFormat) {
+        state.withLock { state in
+            state.snapshot.decodedVideoFormat = format
         }
     }
 

@@ -23,7 +23,46 @@ struct LastSessionRecord: Codable {
     let serverIp: String
     let appId: String
     let base: String
+    let routingZoneUrl: String?
+    let clientId: String?
+    let deviceId: String?
     let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt
+    }
+
+    init(
+        sessionId: String,
+        serverIp: String,
+        appId: String,
+        base: String,
+        routingZoneUrl: String?,
+        clientId: String?,
+        deviceId: String?,
+        createdAt: Date
+    ) {
+        self.sessionId = sessionId
+        self.serverIp = serverIp
+        self.appId = appId
+        self.base = base
+        self.routingZoneUrl = routingZoneUrl
+        self.clientId = clientId
+        self.deviceId = deviceId
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        serverIp = try c.decode(String.self, forKey: .serverIp)
+        appId = try c.decode(String.self, forKey: .appId)
+        base = try c.decode(String.self, forKey: .base)
+        routingZoneUrl = try c.decodeIfPresent(String.self, forKey: .routingZoneUrl)
+        clientId = try c.decodeIfPresent(String.self, forKey: .clientId)
+        deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
 }
 
 @Observable
@@ -94,6 +133,9 @@ class GamesViewModel {
             }
         #endif
         streamSettings = streamSettings.normalizedForClient
+        print(
+            "[Localization] preferred=\(Locale.preferredLanguages.first ?? "nil") ui=\(L10n.localeCode) keyboard=\(streamSettings.keyboardLayout) gameLanguage=\(streamSettings.gameLanguage) effectiveGameLanguage=\(streamSettings.effectiveGameLanguage)"
+        )
     }
 
     // MARK: Computed — Entitled Resolutions & FPS
@@ -192,6 +234,7 @@ class GamesViewModel {
             if let sub {
                 print("[MES] tier=\(sub.membershipTier) resolutions=\(sub.entitledResolutions.map(\.resolutionLabel))")
                 subscription = sub
+                normalizeStreamSettingsForCurrentEntitlements()
             }
 
             mainGames = fetchedMain
@@ -329,6 +372,22 @@ class GamesViewModel {
     func clearLastSession() {
         lastSession = nil
         UserDefaults.standard.removeObject(forKey: "gfn.lastSession")
+    }
+
+    private func normalizeStreamSettingsForCurrentEntitlements() {
+        let resolutions = availableResolutions
+        guard !resolutions.isEmpty else { return }
+
+        if !resolutions.contains(streamSettings.resolution) {
+            // Keep the tvOS Picker in a valid state if the persisted resolution is no
+            // longer entitled. Prefer the highest available value for the account.
+            streamSettings.resolution = resolutions.last ?? resolutions[0]
+        }
+
+        let fpsValues = availableFps
+        if !fpsValues.contains(streamSettings.fps), let fallbackFPS = fpsValues.last {
+            streamSettings.fps = fallbackFPS
+        }
     }
 
     // MARK: Zone Auto-Selection

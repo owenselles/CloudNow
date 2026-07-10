@@ -31,6 +31,11 @@ final class VideoSurfaceView: UIView {
     private lazy var renderer = WebRTCFrameRenderer(diagnostics: pipelineDiagnostics)
     private var currentTrack: LKRTCVideoTrack?
     private var notificationTokens: [NSObjectProtocol] = []
+    private var activeRemoteTouch: UITouch?
+    private var lastRemoteTouchLocation: CGPoint?
+    private var remoteSelectMouseDown = false
+
+    private static let remoteTouchSensitivity: CGFloat = 1.0
 
     /// Set by GFNStreamController once the input data channel handshake completes.
     weak var inputHandler: InputEventHandler?
@@ -40,13 +45,27 @@ final class VideoSurfaceView: UIView {
     /// the press bubble up to the system (which opens the Apple TV control center).
     var menuPressHandler: (() -> Void)?
 
+    var onDecodedVideoFormatChanged: ((DecodedVideoFormat) -> Void)? {
+        didSet {
+            renderer.onDecodedVideoFormatChanged = onDecodedVideoFormatChanged
+        }
+    }
+
     /// When true, an extended gamepad owns input. UIKit presses from the controller
     /// (e.g. Options mapping to .playPause) are suppressed to avoid double-firing the overlay.
-    var gamepadModeActive = false
+    var gamepadModeActive = false {
+        didSet {
+            if gamepadModeActive { cancelRemoteMouseTracking() }
+        }
+    }
 
     /// Tracks whether the pause overlay is currently visible. Used to decide whether a
     /// .menu press should close the overlay or be silently consumed.
-    var overlayVisible: Bool = false
+    var overlayVisible: Bool = false {
+        didSet {
+            if overlayVisible { cancelRemoteMouseTracking() }
+        }
+    }
 
     var videoTrack: LKRTCVideoTrack? {
         didSet {
@@ -151,15 +170,18 @@ final class VideoSurfaceView: UIView {
         for press in presses {
             if press.type == .menu {
                 // Always consume .menu — never let it bubble to the system as a back/dismiss
-                // gesture. The only valid exits are the in-overlay "Exit Session" button or
-                // force-quitting the app. If the overlay is open, treat this as "close overlay".
-                if overlayVisible { menuPressHandler?() }
-                handled = true
-            } else if press.type == .playPause, !gamepadModeActive {
-                // Play/Pause toggles the HUD overlay (Siri Remote only).
-                // Suppressed when a gamepad is in control — the overlay is toggled there
-                // via Options long press detected in InputSender.tick().
+                // gesture. Use it as the universal overlay toggle so the user can both open
+                // and close the diagnostics overlay from Siri Remote or a controller.
                 menuPressHandler?()
+                handled = true
+            } else if press.type == .playPause {
+                // Play/Pause also toggles the overlay so Siri Remote users always have a
+                // direct way to open diagnostics, even when a controller is connected.
+                menuPressHandler?()
+                handled = true
+            } else if press.type == .select, remoteMouseInputEnabled {
+                inputHandler?.sendMouseButton(down: true, button: 1)
+                remoteSelectMouseDown = true
                 handled = true
             } else if let key = press.key {
                 inputHandler?.sendKeyEvent(
@@ -176,7 +198,11 @@ final class VideoSurfaceView: UIView {
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if let key = press.key {
+            if press.type == .select, remoteSelectMouseDown {
+                inputHandler?.sendMouseButton(down: false, button: 1)
+                remoteSelectMouseDown = false
+                handled = true
+            } else if let key = press.key {
                 inputHandler?.sendKeyEvent(
                     down: false,
                     keyCode: key.keyCode,
@@ -190,6 +216,99 @@ final class VideoSurfaceView: UIView {
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         pressesEnded(presses, with: event)
+    }
+
+    // MARK: - Siri Remote Touch Surface
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard remoteMouseInputEnabled,
+              activeRemoteTouch == nil,
+              let touch = touches.first(where: isRemoteTouch)
+        else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+
+        activeRemoteTouch = touch
+        lastRemoteTouchLocation = touch.location(in: self)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard remoteMouseInputEnabled else {
+            clearRemoteTouchTracking()
+            super.touchesMoved(touches, with: event)
+            return
+        }
+        guard let trackedTouch = activeRemoteTouch,
+              touches.contains(where: { $0 === trackedTouch })
+        else {
+            super.touchesMoved(touches, with: event)
+            return
+        }
+
+        let location = trackedTouch.location(in: self)
+        let previous = lastRemoteTouchLocation ?? trackedTouch.previousLocation(in: self)
+        lastRemoteTouchLocation = location
+        forwardRemoteTouchDelta(from: previous, to: location)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let trackedTouch = activeRemoteTouch,
+              touches.contains(where: { $0 === trackedTouch })
+        else {
+            super.touchesEnded(touches, with: event)
+            return
+        }
+
+        activeRemoteTouch = nil
+        lastRemoteTouchLocation = nil
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let trackedTouch = activeRemoteTouch,
+              touches.contains(where: { $0 === trackedTouch })
+        else {
+            super.touchesCancelled(touches, with: event)
+            return
+        }
+
+        activeRemoteTouch = nil
+        lastRemoteTouchLocation = nil
+    }
+
+    private func isRemoteTouch(_ touch: UITouch) -> Bool {
+        switch touch.type {
+        case .indirect, .indirectPointer:
+            true
+        default:
+            false
+        }
+    }
+
+    private func forwardRemoteTouchDelta(from previous: CGPoint, to location: CGPoint) {
+        let dx = (location.x - previous.x) * Self.remoteTouchSensitivity
+        let dy = (location.y - previous.y) * Self.remoteTouchSensitivity
+        let packetDX = Int16(clamping: Int(dx.rounded()))
+        let packetDY = Int16(clamping: Int(dy.rounded()))
+        guard packetDX != 0 || packetDY != 0 else { return }
+        inputHandler?.sendMouseMove(dx: packetDX, dy: packetDY)
+    }
+
+    private var remoteMouseInputEnabled: Bool {
+        !gamepadModeActive && !overlayVisible
+    }
+
+    private func clearRemoteTouchTracking() {
+        activeRemoteTouch = nil
+        lastRemoteTouchLocation = nil
+    }
+
+    private func cancelRemoteMouseTracking() {
+        clearRemoteTouchTracking()
+        if remoteSelectMouseDown {
+            inputHandler?.sendMouseButton(down: false, button: 1)
+            remoteSelectMouseDown = false
+        }
     }
 }
 
@@ -205,6 +324,8 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
 
     private struct State {
         var formatDescription: CMVideoFormatDescription?
+        var formatSignature: VideoFormatSignature?
+        var decodedFormatSignature: VideoFormatSignature?
         var isFlushing = false
         var generation: UInt64 = 0
         var metricsRequestInFlight = false
@@ -213,6 +334,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     }
 
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
+    var onDecodedVideoFormatChanged: ((DecodedVideoFormat) -> Void)?
     private let diagnostics: VideoPipelineDiagnostics
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let i420Converter = I420FrameConverter()
@@ -244,8 +366,10 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         // H.265/HDR/AV1 can fall back to software decoding (LKRTCI420Buffer) on some
         // hardware — convert to a planar CVPixelBuffer so the display layer can render it.
         let cvBuf: CVPixelBuffer
+        let decoderPath: VideoDecoderPath
         if let hwBuf = frame.buffer as? LKRTCCVPixelBuffer {
             cvBuf = hwBuf.pixelBuffer
+            decoderPath = .hardware
         } else if let i420 = frame.buffer as? LKRTCI420Buffer {
             let conversionStart = diagnostics.beginConversion(trace)
             guard let converted = i420Converter.convert(i420) else {
@@ -255,14 +379,27 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             }
             diagnostics.endConversion(trace, startedAt: conversionStart)
             cvBuf = converted
+            decoderPath = .softwareI420
         } else {
             print("[WebRTCFrameRenderer] Unhandled frame type: \(type(of: frame.buffer))")
             diagnostics.recordDrop(trace)
             return
         }
 
+        let decodedFormat = DecodedVideoFormatInspector.inspect(pixelBuffer: cvBuf, decoderPath: decoderPath)
+        let decodedSignature = DecodedVideoFormatInspector.signature(for: decodedFormat)
+        let shouldPublishFormat = state.withLock { state -> Bool in
+            guard state.decodedFormatSignature != decodedSignature else { return false }
+            state.decodedFormatSignature = decodedSignature
+            return true
+        }
+        if shouldPublishFormat {
+            diagnostics.updateDecodedVideoFormat(decodedFormat)
+            onDecodedVideoFormatChanged?(decodedFormat)
+        }
+
         let sampleCreationStart = diagnostics.beginSampleCreation(trace)
-        guard let formatDescription = formatDescription(for: cvBuf) else {
+        guard let formatDescription = formatDescription(for: cvBuf, signature: decodedSignature) else {
             diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
             diagnostics.recordDrop(trace)
             return
@@ -370,6 +507,8 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             state.isFlushing = true
             state.generation &+= 1
             state.formatDescription = nil
+            state.formatSignature = nil
+            state.decodedFormatSignature = nil
             let request = FlushRequest(
                 generation: state.generation,
                 removeDisplayedImage: !preservingDisplayedImage
@@ -408,9 +547,13 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         }
     }
 
-    private func formatDescription(for pixelBuffer: CVPixelBuffer) -> CMVideoFormatDescription? {
+    private func formatDescription(
+        for pixelBuffer: CVPixelBuffer,
+        signature: VideoFormatSignature
+    ) -> CMVideoFormatDescription? {
         state.withLock { state in
             if let cached = state.formatDescription,
+               state.formatSignature == signature,
                CMVideoFormatDescriptionMatchesImageBuffer(cached, imageBuffer: pixelBuffer)
             {
                 return cached
@@ -424,6 +567,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
             )
             guard status == noErr else { return nil }
             state.formatDescription = created
+            state.formatSignature = signature
             return created
         }
     }
@@ -481,6 +625,9 @@ struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: StreamingViewController, context _: Context) {
         vc.videoSurface.videoTrack = streamController.videoTrack
+        // Route controller input to the GameController layer during gameplay so the
+        // overlay trigger button can be sampled. Switch to the responder chain only
+        // while the overlay is visible so SwiftUI focus navigation works there.
         vc.controllerUserInteractionEnabled = showOverlay
         vc.videoSurface.overlayVisible = showOverlay
     }

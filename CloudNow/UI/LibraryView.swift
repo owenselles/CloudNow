@@ -1,29 +1,45 @@
 import SwiftUI
 
-private enum LibrarySortOrder: String, CaseIterable {
+enum LibrarySortOrder: String, CaseIterable {
     case `default` = "Default"
     case titleAZ = "A → Z"
     case titleZA = "Z → A"
     case recentFirst = "Recently Played"
+
+    var label: String {
+        L10n.librarySortLabel(self)
+    }
 }
 
 struct LibraryView: View {
     let games: [GameInfo]
     let onPlay: (GameInfo) -> Void
 
+    @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
 
     @State private var searchText = ""
     @State private var sortOrder: LibrarySortOrder = .default
+    @State private var selectedStore: String? = nil
 
     private let columns = [
         GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40),
     ]
 
+    private var availableStores: [String] {
+        let stores = Set(games.flatMap(\.ownedStores)
+            .filter { $0 != "unknown" })
+        return stores.sorted()
+    }
+
     private var filteredGames: [GameInfo] {
-        var result = searchText.isEmpty
-            ? games
-            : games.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        var result = games
+        if let store = selectedStore {
+            result = result.filter { $0.matchesStore(store) }
+        }
+        if !searchText.isEmpty {
+            result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        }
         switch sortOrder {
         case .default: break
         case .titleAZ: result.sort { $0.title < $1.title }
@@ -41,8 +57,7 @@ struct LibraryView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            if games.isEmpty, viewModel.isLoading {
+            if games.isEmpty, viewModel.isLibraryLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(0 ..< 12, id: \.self) { _ in
@@ -59,67 +74,116 @@ struct LibraryView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    Task { await viewModel.refreshLibrary(authManager: authManager) }
+                } label: {
+                    Label(L10n.text("refresh_library"), systemImage: "arrow.clockwise")
+                }
+                .disabled(viewModel.isLibraryLoading)
+
                 Menu {
-                    Picker("Sort", selection: $sortOrder) {
+                    Picker(L10n.text("sort"), selection: $sortOrder) {
                         ForEach(LibrarySortOrder.allCases, id: \.self) { order in
-                            Text(order.rawValue).tag(order)
+                            Text(order.label).tag(order)
                         }
                     }
                 } label: {
-                    Label("Sort", systemImage: "arrow.up.arrow.down")
+                    Label(L10n.text("sort"), systemImage: "arrow.up.arrow.down")
                 }
             }
         }
-        .searchable(text: $searchText, prompt: "Search library")
+        .searchable(text: $searchText, prompt: games.isEmpty ? Text(L10n.text("loading_library")) : Text(L10n.format("search_games_count", games.count)))
     }
 
     private var gameGrid: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 40) {
-                ForEach(filteredGames) { game in
-                    Button {
-                        onPlay(viewModel.gameWithPreferredStore(game))
-                    } label: {
-                        GameCardLabel(game: game)
+            VStack(alignment: .leading, spacing: 0) {
+                if let statusMessage = viewModel.libraryError ?? viewModel.libraryWarning {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        Text(statusMessage)
+                            .font(.caption)
+                            .lineLimit(2)
                     }
-                    .aspectRatio(2 / 3, contentMode: .fit)
-                    #if os(tvOS)
-                        .buttonStyle(.card)
-                    #else
-                        .buttonStyle(.plain)
-                    #endif
-                        .contextMenu {
-                            Button {
-                                viewModel.toggleFavorite(game.id)
-                            } label: {
-                                let isFav = viewModel.favoriteIds.contains(game.id)
-                                Label(
-                                    isFav ? "Remove from Favorites" : "Add to Favorites",
-                                    systemImage: isFav ? "star.slash.fill" : "star"
-                                )
+                    .foregroundStyle(viewModel.libraryError == nil ? .orange : .red)
+                    .padding(.horizontal, 60)
+                    .padding(.top, 24)
+                }
+                if availableStores.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            filterChip(L10n.text("all"), isSelected: selectedStore == nil) { selectedStore = nil }
+                            ForEach(availableStores, id: \.self) { store in
+                                filterChip(storeName(store), isSelected: selectedStore == store) {
+                                    selectedStore = selectedStore == store ? nil : store
+                                }
                             }
-                            if game.variants.count > 1 {
-                                Menu("Launch via...") {
-                                    ForEach(game.variants, id: \.id) { variant in
-                                        Button {
-                                            viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
-                                        } label: {
-                                            let isSelected = viewModel.preferredVariantId(for: game) == variant.id
-                                            if isSelected {
-                                                Label(variant.storeName, systemImage: "checkmark")
-                                            } else {
-                                                Text(variant.storeName)
+                        }
+                        .padding(.horizontal, 60)
+                    }
+                    .scrollClipDisabled()
+                    .padding(.vertical, 32)
+                }
+                LazyVGrid(columns: columns, spacing: 40) {
+                    ForEach(filteredGames) { game in
+                        Button {
+                            onPlay(viewModel.gameWithPreferredStore(game))
+                        } label: {
+                            GameCardLabel(game: game)
+                        }
+                        .aspectRatio(2 / 3, contentMode: .fit)
+                        #if os(tvOS)
+                            .buttonStyle(.card)
+                        #else
+                            .buttonStyle(.plain)
+                        #endif
+                            .contextMenu {
+                                Button {
+                                    viewModel.toggleFavorite(game.id)
+                                } label: {
+                                    let isFav = viewModel.favoriteIds.contains(game.id)
+                                    Label(
+                                        isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
+                                        systemImage: isFav ? "star.slash.fill" : "star"
+                                    )
+                                }
+                                if game.variants.count > 1 {
+                                    Menu(L10n.text("launch_via")) {
+                                        ForEach(game.variants, id: \.id) { variant in
+                                            Button {
+                                                viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
+                                            } label: {
+                                                let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+                                                if isSelected {
+                                                    Label(variant.storeName, systemImage: "checkmark")
+                                                } else {
+                                                    Text(variant.storeName)
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
+                    }
                 }
+                .padding(60)
+                .padding(.top, 0)
             }
-            .padding(60)
         }
+    }
+
+    private func filterChip(_ label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+        }
+        .buttonStyle(.bordered)
+        .tint(isSelected ? .blue : nil)
+    }
+
+    private func storeName(_ store: String) -> String {
+        GameVariant(id: "", appStore: store).storeName
     }
 
     private var emptyState: some View {
@@ -127,16 +191,16 @@ struct LibraryView: View {
             Image(systemName: viewModel.libraryError != nil ? "exclamationmark.triangle" : "books.vertical")
                 .font(.system(size: 60))
                 .foregroundStyle(.secondary)
-            Text(viewModel.libraryError != nil ? "Library Failed to Load" : "Library Empty")
+            Text(viewModel.libraryError != nil ? L10n.text("library_failed_to_load") : L10n.text("library_empty"))
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             if let err = viewModel.libraryError ?? viewModel.error {
                 Text(err)
                     .font(.caption)
                     .foregroundStyle(.red.opacity(0.8))
                     .multilineTextAlignment(.center)
             } else {
-                Text("Games you own or have linked will appear here.")
+                Text(L10n.text("games_you_own_or_have_linked_will_appear_here"))
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

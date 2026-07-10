@@ -8,7 +8,7 @@ enum SDPMunger {
     /// Removes all video payload types except the preferred codec.
     /// Apply to the remote offer before setRemoteDescription so the answer
     /// reflects the user's codec choice.
-    static func preferCodec(_ sdp: String, codec: VideoCodec) -> String {
+    static func preferCodec(_ sdp: String, codec: VideoCodec, preferTenBit: Bool = false) -> String {
         let targetName = rtpName(for: codec)
         let sep = sdp.contains("\r\n") ? "\r\n" : "\n"
         let lines = sdp.components(separatedBy: sep)
@@ -44,15 +44,17 @@ enum SDPMunger {
             }
         }
 
-        // For H.265, prefer Main profile (profile-id=1) by sorting its PTs to the front
-        var h265MainPTs: [String] = []
+        // For H.265, prefer a profile by sorting its PTs to the front (WebRTC picks the
+        // first PT). HDR/10-bit needs Main10 (profile-id=2); SDR uses Main (profile-id=1).
+        let preferredProfileId = preferTenBit ? "profile-id=2" : "profile-id=1"
+        var h265PreferredPTs: [String] = []
         var h265OtherPTs: [String] = []
         if codec == .h265 {
             for pt in allowedPTs {
-                let isMain = lines.contains(where: {
-                    $0.hasPrefix("a=fmtp:\(pt) ") && $0.contains("profile-id=1")
+                let isPreferred = lines.contains(where: {
+                    $0.hasPrefix("a=fmtp:\(pt) ") && $0.contains(preferredProfileId)
                 })
-                if isMain { h265MainPTs.append(pt) } else { h265OtherPTs.append(pt) }
+                if isPreferred { h265PreferredPTs.append(pt) } else { h265OtherPTs.append(pt) }
             }
         }
 
@@ -68,8 +70,8 @@ enum SDPMunger {
                     let header = Array(parts.prefix(3))
                     var orderedPTs: [String]
                     if codec == .h265 {
-                        // Main profile first, then others, then their RTX counterparts
-                        orderedPTs = h265MainPTs.sorted() + h265OtherPTs.sorted()
+                        // Preferred profile first, then others, then their RTX counterparts
+                        orderedPTs = h265PreferredPTs.sorted() + h265OtherPTs.sorted()
                         let rtxPTs = allowedPTs.subtracting(Set(orderedPTs))
                         orderedPTs += rtxPTs.sorted()
                     } else {

@@ -10,6 +10,7 @@ import Observation
 import os.log
 
 private let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
+private let videoColorLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "VideoColor")
 
 // MARK: - Session Time Warning
 
@@ -67,7 +68,7 @@ struct StreamStats {
     var remoteCandidateAddress: String = ""
     var availableIncomingBitrateKbps: Int = 0
     var candidatePairChanges: Int = 0
-    var selectedNetworkPath: String = "Unknown"
+    var selectedNetworkPath: String = "unknown"
     var inputGenerated: UInt64 = 0
     var inputSubmitted: UInt64 = 0
     var inputAccepted: UInt64 = 0
@@ -128,6 +129,15 @@ final class GFNStreamController: NSObject {
     private(set) var videoTrack: LKRTCVideoTrack?
     private(set) var statsMode: StreamStatsMode = .hud
     private(set) var videoDiagnostics = VideoPipelineSnapshot()
+    private(set) var colorState = StreamColorState(
+        preference: .automatic,
+        requestedMode: .sdr8,
+        negotiatedMode: nil,
+        detectedMode: nil,
+        displayHDRSupport: .unknown,
+        fallbackReason: nil
+    )
+    private(set) var diagnosticSessionSummary: String = ""
     private(set) var rtcEventLogURL: URL?
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
@@ -141,6 +151,7 @@ final class GFNStreamController: NSObject {
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
     @ObservationIgnored private nonisolated(unsafe) var reliableSendChannel: LKRTCDataChannel?
+    @ObservationIgnored private nonisolated(unsafe) var rumbleSink: ((Int, UInt16, UInt16) -> Void)?
     @ObservationIgnored private nonisolated(unsafe) var inputGenerated: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputSubmitted: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputAccepted: UInt64 = 0
@@ -172,6 +183,8 @@ final class GFNStreamController: NSObject {
     private var partialReliableThresholdMs = 300
     private var sessionInfo: SessionInfo?
     private var settings = StreamSettings()
+    /// Account HDR entitlement resolved from the subscription tier at connect time.
+    private var accountAllowsHDR: Bool?
     private var micAudioSource: LKRTCAudioSource?
     private var micAudioTrack: LKRTCAudioTrack?
     private var signalingComplete = false
@@ -186,6 +199,9 @@ final class GFNStreamController: NSObject {
     private var wasStreaming = false
     private var reconnectAttempt = 0
     private static let maxReconnectAttempts = 3
+    /// Set when the server sends an `exitMessage` (game closed, session ended, kicked). The
+    /// subsequent ICE disconnect is then treated as a normal end — not a reconnect candidate.
+    private var serverStopped = false
     /// Set by the caller to enable auto-reconnect on ICE disconnect.
     var onReconnectNeeded: (() async -> SessionInfo?)?
     private var previousSelectedCandidatePairId = ""
@@ -194,25 +210,46 @@ final class GFNStreamController: NSObject {
     private static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
         let encoderFactory = LKRTCDefaultVideoEncoderFactory()
-        let decoderFactory = LKRTCDefaultVideoDecoderFactory()
+        let decoderFactory = GFNVideoDecoderFactory()
         return LKRTCPeerConnectionFactory(encoderFactory: encoderFactory, decoderFactory: decoderFactory)
     }()
 
     // MARK: Connect
 
-    func connect(session: SessionInfo, settings: StreamSettings) async {
+    func connect(session: SessionInfo, settings: StreamSettings, accountAllowsHDR: Bool? = nil) async {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
-        switch state {
+        let currentState = state
+        switch currentState {
         case .connecting, .streaming:
-            gfnLog.info("connect: already \(String(describing: state)), ignoring")
+            gfnLog.info("connect: already \(String(describing: currentState)), ignoring")
             return
         default: break
         }
         let settings = settings.normalizedForClient
+        let localCapabilities = LocalVideoCapabilities.detect(codec: settings.codec)
+        let colorRequest = settings.colorRequest(localCapabilities: localCapabilities, accountAllowsHDR: accountAllowsHDR)
         gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl)")
+        videoColorLog.info("request preference=\(settings.colorPreference.rawValue) requested=\(colorRequest.mode.rawValue) bitDepth=\(colorRequest.bitDepth) hdr=\(colorRequest.hdrRequested) codec=\(settings.codec.rawValue) decoder10Bit=\(localCapabilities.supportsHardware10BitDecode) hdrPipeline=\(localCapabilities.supportsHDRRendering) displayHDR=\(localCapabilities.displaySupportsHDR)")
         state = .connecting
+        serverStopped = false
         sessionInfo = session
         self.settings = settings
+        self.accountAllowsHDR = accountAllowsHDR
+        colorState = StreamColorState(
+            preference: settings.colorPreference,
+            requestedMode: colorRequest.mode,
+            negotiatedMode: nil,
+            detectedMode: nil,
+            displayHDRSupport: localCapabilities.displaySupportsHDR ? .supported : .unsupported,
+            fallbackReason: nil
+        )
+        diagnosticSessionSummary = L10n.diagnosticSessionSummary(
+            sessionIdPrefix: String(session.sessionId.prefix(8)),
+            serverIp: session.serverIp,
+            resolution: settings.resolution,
+            fps: settings.fps,
+            codec: L10n.videoCodecLabel(settings.codec)
+        )
         setStatsMode(settings.statsMode)
         stats = StreamStats()
         stats.gpuType = session.gpuType ?? ""
@@ -247,6 +284,11 @@ final class GFNStreamController: NSObject {
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
         view.setDiagnosticsEnabled(statsMode == .diagnostic)
+        view.onDecodedVideoFormatChanged = { [weak self] format in
+            Task { @MainActor [weak self] in
+                self?.applyDecodedVideoFormat(format)
+            }
+        }
         view.inputHandler = inputSender
         view.menuPressHandler = { [weak self] in self?.handleMenuPress() }
     }
@@ -330,6 +372,7 @@ final class GFNStreamController: NSObject {
         stopStatsTimer()
         wasStreaming = false
         reconnectAttempt = 0
+        serverStopped = false
         inputSender?.stop()
         signaling?.disconnect()
         videoView?.videoTrack = nil
@@ -343,6 +386,7 @@ final class GFNStreamController: NSObject {
             inputDropped &+= UInt64(pending.count)
             pending.forEach { $0.completion(.channelUnavailable) }
         }
+        inputSendQueue.async { [weak self] in self?.rumbleSink = nil }
         partiallyReliableDataChannel = nil
         controlChannel = nil
         videoTrack = nil
@@ -360,6 +404,7 @@ final class GFNStreamController: NSObject {
         lastZoneRttFeedbackAt = nil
         videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
+        videoView?.onDecodedVideoFormatChanged = nil
         videoView = nil
         #if os(tvOS)
             remoteMode = .mouse
@@ -367,6 +412,15 @@ final class GFNStreamController: NSObject {
         menuPressCount = 0
         timeWarning = nil
         videoDiagnostics = VideoPipelineSnapshot()
+        colorState = StreamColorState(
+            preference: .automatic,
+            requestedMode: .sdr8,
+            negotiatedMode: nil,
+            detectedMode: nil,
+            displayHDRSupport: .unknown,
+            fallbackReason: nil
+        )
+        diagnosticSessionSummary = ""
         state = .idle
     }
 
@@ -474,6 +528,43 @@ final class GFNStreamController: NSObject {
 
     // MARK: Private — WebRTC Peer Connection
 
+    private func configureAudioSession(microphoneRequested: Bool) -> Bool {
+        let audioSession = AVAudioSession.sharedInstance()
+        if microphoneRequested, audioSession.availableCategories.contains(.playAndRecord) {
+            do {
+                try audioSession.setCategory(
+                    .playAndRecord,
+                    mode: .voiceChat,
+                    options: [.allowBluetoothHFP, .allowBluetoothA2DP]
+                )
+                try audioSession.setActive(true)
+                guard audioSession.isInputAvailable else {
+                    print("[Stream] AVAudioSession has no input route, falling back to playback")
+                    return configurePlaybackAudioSession(audioSession)
+                }
+                print("[Stream] AVAudioSession configured for playback + microphone")
+                return true
+            } catch {
+                print("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error)")
+            }
+        } else if microphoneRequested {
+            print("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
+        }
+
+        return configurePlaybackAudioSession(audioSession)
+    }
+
+    private func configurePlaybackAudioSession(_ audioSession: AVAudioSession) -> Bool {
+        do {
+            try audioSession.setCategory(.playback, mode: .moviePlayback, options: [])
+            try audioSession.setActive(true)
+            print("[Stream] AVAudioSession configured for playback")
+        } catch {
+            print("[Stream] AVAudioSession playback configuration failed: \(error)")
+        }
+        return false
+    }
+
     private func handleOffer(sdp: String) async {
         guard let session = sessionInfo else { return }
         #if DEBUG
@@ -481,23 +572,7 @@ final class GFNStreamController: NSObject {
             sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
         #endif
 
-        // Configure audio session for real-time streaming before creating the peer connection.
-        // On tvOS, .moviePlayback + Bluetooth options give the lowest latency path.
-        // On visionOS, spatial audio routing is OS-managed — only setActive is needed.
-        do {
-            #if os(tvOS)
-                try AVAudioSession.sharedInstance().setCategory(
-                    .playback,
-                    mode: .moviePlayback,
-                    options: [.allowBluetooth, .allowBluetoothA2DP]
-                )
-            #else
-                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-            #endif
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("[Stream] AVAudioSession configuration failed (non-fatal): \(error)")
-        }
+        let microphoneEnabledForConnection = configureAudioSession(microphoneRequested: settings.micEnabled)
 
         // The lifetime is immutable after channel creation, so resolve the server's value first.
         if let match = sdp.range(of: #"ri\.partialReliableThresholdMs[: ]+(\d+)"#, options: .regularExpression),
@@ -553,7 +628,7 @@ final class GFNStreamController: NSObject {
 
         // Attach microphone audio track if enabled (must happen before answer creation
         // so the m=audio sendrecv line is included in the SDP)
-        if settings.micEnabled {
+        if microphoneEnabledForConnection {
             await attachMicrophone(to: pc)
         }
 
@@ -569,14 +644,12 @@ final class GFNStreamController: NSObject {
         let serverMediaIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
             ?? Self.extractIpFromHost(signaling?.connectedHost ?? "")
         let fixedSdp = serverMediaIp.map { ip in
-            sdp
-                .replacingOccurrences(of: "c=IN IP4 0.0.0.0", with: "c=IN IP4 \(ip)")
-                .replacingOccurrences(of: "c=IN IP4 127.0.0.1", with: "c=IN IP4 \(ip)")
+            Self.rewriteOfferConnectionAddresses(sdp, serverIp: ip)
         } ?? sdp
         if let ip = serverMediaIp {
-            print("[Stream] Fixed c= lines in offer SDP: 0.0.0.0 → \(ip)")
+            print("[Stream] Fixed placeholder IPs in offer SDP: 0.0.0.0/127.0.0.1 -> \(ip)")
         } else {
-            print("[Stream] Warning: no server IP available — offer c= lines left as 0.0.0.0")
+            print("[Stream] Warning: no server IP available — offer placeholder IPs left unchanged")
         }
         // Normalize H.265 fmtp in the offer before setRemoteDescription so WebRTC
         // keeps H.265 in the generated answer (tier-flag and level-id must be valid).
@@ -606,13 +679,22 @@ final class GFNStreamController: NSObject {
             }
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
-            let codecFilteredSdp = SDPMunger.preferCodec(answer.sdp, codec: settings.codec)
+            let answerColorRequest = settings.colorRequest(localCapabilities: .detect(codec: settings.codec), accountAllowsHDR: accountAllowsHDR)
+            let codecFilteredSdp = SDPMunger.preferCodec(
+                answer.sdp,
+                codec: settings.codec,
+                preferTenBit: answerColorRequest.bitDepth >= 10
+            )
             // For H.265: rewrite tier-flag=1→0 and cap level-id to hardware-safe values.
             // Apple's decoder may reject High-tier or above-spec level-id advertisements.
             let h265SafeSdp = settings.codec == .h265
                 ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(codecFilteredSdp))
                 : codecFilteredSdp
             let mangledAnswerSdp = SDPMunger.injectBandwidth(h265SafeSdp, videoKbps: settings.maxBitrateKbps)
+            let answerH265Params = mangledAnswerSdp.components(separatedBy: "\r\n")
+                .filter { ($0.hasPrefix("a=rtpmap:") && $0.contains("H265")) || ($0.hasPrefix("a=fmtp:") && $0.contains("profile-id")) }
+                .joined(separator: " ")
+            videoColorLog.info("answer H265: \(answerH265Params.isEmpty ? "none" : answerH265Params)")
             #if DEBUG
                 print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
                 mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
@@ -735,7 +817,7 @@ final class GFNStreamController: NSObject {
             "a=vqos.bw.maximumBitrateKbps:\(settings.maxBitrateKbps)",
             "a=vqos.bw.minimumBitrateKbps:\(minBitrateKbps)",
             "a=vqos.bw.peakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=video.bitDepth:\(settings.colorQuality.bitDepth)",
+            "a=video.bitDepth:\(settings.colorRequest(localCapabilities: .detect(codec: settings.codec), accountAllowsHDR: accountAllowsHDR).bitDepth)",
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
         ]
@@ -803,6 +885,14 @@ final class GFNStreamController: NSObject {
         return dashParts.joined(separator: ".")
     }
 
+    private static func rewriteOfferConnectionAddresses(_ sdp: String, serverIp: String) -> String {
+        sdp
+            .replacingOccurrences(of: "c=IN IP4 0.0.0.0", with: "c=IN IP4 \(serverIp)")
+            .replacingOccurrences(of: "c=IN IP4 127.0.0.1", with: "c=IN IP4 \(serverIp)")
+            .replacingOccurrences(of: " 0.0.0.0 ", with: " \(serverIp) ")
+            .replacingOccurrences(of: " 127.0.0.1 ", with: " \(serverIp) ")
+    }
+
     private func addRemoteICE(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
         print("[ICE] Adding remote candidate: \(candidate) mid=\(sdpMid ?? "nil") mLineIndex=\(sdpMLineIndex ?? -1)")
         let ice = LKRTCIceCandidate(
@@ -810,7 +900,7 @@ final class GFNStreamController: NSObject {
             sdpMLineIndex: Int32(sdpMLineIndex ?? 0),
             sdpMid: sdpMid
         )
-        peerConnection?.add(ice)
+        peerConnection?.add(ice, completionHandler: { _ in })
     }
 
     // MARK: Private — Stats
@@ -1010,13 +1100,13 @@ final class GFNStreamController: NSObject {
             : remote?.protocolName ?? ""
         let usesRelay = local?.candidateType == "relay" || remote?.candidateType == "relay"
         let selectedNetworkPath = if protocolName == "tcp" || protocolName == "tls" {
-            "TCP/TLS fallback"
+            "tcp_tls_fallback"
         } else if usesRelay, protocolName == "udp" {
-            "TURN/UDP relay"
+            "turn_udp_relay"
         } else if protocolName == "udp" {
-            "Direct UDP"
+            "direct_udp"
         } else {
-            "Unknown"
+            "unknown"
         }
         return ConnectionStatsSnapshot(
             rttMs: selectedPair.rttMs,
@@ -1104,6 +1194,43 @@ final class GFNStreamController: NSObject {
         appendHistory(&bitrateHistory, value: Double(stats.bitrateKbps) / 1000.0)
     }
 
+    private func applyDecodedVideoFormat(_ format: DecodedVideoFormat) {
+        videoColorLog.info(
+            "decoded mode=\(format.mode.rawValue) path=\(format.decoderPath.rawValue) \(format.width)x\(format.height) pixelFormat=\(format.pixelFormatName) bitDepth=\(format.bitDepth ?? -1) transfer=\(format.transferFunction ?? "nil") primaries=\(format.colorPrimaries ?? "nil") matrix=\(format.yCbCrMatrix ?? "nil") range=\(format.colorRange ?? "nil")"
+        )
+        colorState.detectedMode = format.mode
+        colorState.fallbackReason = fallbackReason(for: format)
+    }
+
+    private func applyNegotiatedHDRMode(_ rawMode: Int) {
+        videoColorLog.info("negotiated gameSessionHdrMode=\(rawMode)")
+        if rawMode == 0 {
+            if colorState.requestedMode != .hdr10 {
+                colorState.negotiatedMode = colorState.requestedMode
+            } else if colorState.fallbackReason == nil {
+                colorState.fallbackReason = .serverReturnedSDR
+            }
+        } else {
+            colorState.negotiatedMode = .hdr10
+        }
+    }
+
+    private func fallbackReason(for format: DecodedVideoFormat) -> ColorFallbackReason? {
+        if format.decoderPath == .softwareI420 {
+            return .softwareDecoder
+        }
+        switch (colorState.requestedMode, format.mode) {
+        case (.hdr10, .sdr10), (.hdr10, .sdr8):
+            return .serverReturnedSDR
+        case (.sdr10, .sdr8):
+            return .decoderReturned8Bit
+        case (_, .unknown10Bit), (_, .unknown8Bit):
+            return .missingColorMetadata
+        default:
+            return nil
+        }
+    }
+
     private func intervalAverage(_ current: Double, _ previous: Double, count: Double) -> Double {
         guard count > 0 else { return 0 }
         return max(0, current - previous) / count * 1000
@@ -1176,13 +1303,13 @@ final class GFNStreamController: NSObject {
         let usesRelay = stats.localCandidateType.lowercased() == "relay"
             || stats.remoteCandidateType.lowercased() == "relay"
         if protocolName == "tcp" || protocolName == "tls" {
-            stats.selectedNetworkPath = "TCP/TLS fallback"
+            stats.selectedNetworkPath = "tcp_tls_fallback"
         } else if usesRelay, protocolName == "udp" {
-            stats.selectedNetworkPath = "TURN/UDP relay"
+            stats.selectedNetworkPath = "turn_udp_relay"
         } else if protocolName == "udp" {
-            stats.selectedNetworkPath = "Direct UDP"
+            stats.selectedNetworkPath = "direct_udp"
         } else {
-            stats.selectedNetworkPath = "Unknown"
+            stats.selectedNetworkPath = "unknown"
         }
 
         let now = Date()
@@ -1247,14 +1374,18 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                 startStatsTimer()
             case .disconnected:
                 stopStatsTimer()
-                if wasStreaming {
+                if serverStopped {
+                    state = .sessionEnded
+                } else if wasStreaming {
                     attemptReconnect()
                 } else {
                     state = .disconnected(reason: "ICE disconnected")
                 }
             case .failed:
                 stopStatsTimer()
-                if wasStreaming {
+                if serverStopped {
+                    state = .sessionEnded
+                } else if wasStreaming {
                     attemptReconnect()
                 } else {
                     state = .failed(message: "ICE connection failed")
@@ -1373,6 +1504,28 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                     }
                 }
             }
+            if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
+               let hdrMode = json["gameSessionHdrMode"] as? [String: Any],
+               let rawMode = hdrMode["hdrMode"] as? Int
+            {
+                Task { @MainActor [weak self] in
+                    self?.applyNegotiatedHDRMode(rawMode)
+                }
+            }
+            // The server sends an `exitMessage` when it deliberately ends the stream — the user
+            // closed the game, the session was stopped, a time limit was hit, or an idle kick.
+            // Mark it so the ICE disconnect that follows ends the session instead of triggering a
+            // pointless reconnect (the seat is being torn down; a reclaim would fail anyway).
+            if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
+               json["exitMessage"] != nil
+            {
+                gfnLog.info("control channel exitMessage received — server ended stream, not reconnecting")
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    serverStopped = true
+                    state = .sessionEnded
+                }
+            }
             return
         }
 
@@ -1392,6 +1545,13 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             version = Int(firstWord)
             print("[DataChannel] Handshake: byte[0]=0x0e, version=\(version)")
         } else {
+            if let cmd = GFNHapticsDecoder.decode(buffer.data) {
+                print("[Rumble] inbound controller=\(cmd.controllerId) weak=\(cmd.weak) strong=\(cmd.strong)")
+                inputSendQueue.async { [weak self] in
+                    self?.rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
+                }
+                return
+            }
             print("[DataChannel] Non-handshake message on \(dataChannel.label): firstWord=\(firstWord) (0x\(String(firstWord, radix: 16)))")
             return
         }
@@ -1403,14 +1563,17 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             protocolVersion = negotiatedVersion
             print("[DataChannel] Input ready — starting InputSender (protocol v\(negotiatedVersion))")
             let sender = InputSender(channel: self)
-            sender.setProtocolVersion(negotiatedVersion)
-            sender.deadzone = Float(settings.controllerDeadzone)
-            sender.overlayTriggerButton = settings.overlayTriggerButton
-            #if os(tvOS)
-                sender.remoteMode = settings.defaultRemoteInputMode
-                remoteMode = sender.remoteMode
-                videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
-            #endif
+            sender.configure(
+                protocolVersion: negotiatedVersion,
+                deadzone: Float(settings.controllerDeadzone),
+                overlayTriggerButton: settings.overlayTriggerButton,
+                steamOverlayGestureEnabled: settings.enableSteamOverlayGesture,
+                remoteMode: settings.defaultRemoteInputMode,
+                rumbleEnabled: settings.rumbleEnabled,
+                rumbleIntensity: Float(settings.rumbleIntensity)
+            )
+            remoteMode = settings.defaultRemoteInputMode
+            videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
             sender.menuToggleHandler = { [weak self] in self?.handleMenuPress() }
             #if os(tvOS)
                 sender.onRemoteModeChanged = { [weak self] mode in
@@ -1420,6 +1583,9 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             #endif
             sender.start()
             inputSender = sender
+            inputSendQueue.async { [weak self, weak sender] in
+                self?.rumbleSink = { sender?.applyRumble(controllerId: $0, weak: $1, strong: $2) }
+            }
             // Forward keyboard/mouse events from the video surface to the sender
             videoView?.inputHandler = sender
         }
