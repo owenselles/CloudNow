@@ -104,9 +104,21 @@ final class GFNAudioDevice: NSObject {
         }
 
         engine.attach(source)
-        engine.connect(source, to: engine.mainMixerNode, format: format)
+        if channels >= 6 {
+            // Surround must bypass the main mixer: AVAudioMixerNode folds multichannel
+            // input into the front channels when layouts differ, silencing the rears
+            // while the HDMI output stays 6-channel. The output node maps by layout.
+            engine.connect(source, to: engine.outputNode, format: format)
+        } else {
+            engine.connect(source, to: engine.mainMixerNode, format: format)
+        }
         sourceNode = source
         playoutFormat = format
+        let hwFormat = engine.outputNode.outputFormat(forBus: 0)
+        let hwLayoutTag = hwFormat.channelLayout?.layoutTag
+        audioDeviceLog.info(
+            "output hw: \(hwFormat.channelCount)ch @\(hwFormat.sampleRate)Hz layoutTag=\(hwLayoutTag.map(String.init) ?? "none", privacy: .public)"
+        )
         // portChannels is the EDID-derived channel count of the connected sink (unlike
         // maximumOutputNumberOfChannels, which reports the OS mixer's 32-ch capability).
         let portChannels = session.currentRoute.outputs.first?.channels?.count ?? 0
