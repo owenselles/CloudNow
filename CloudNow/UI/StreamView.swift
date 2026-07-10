@@ -82,6 +82,7 @@ struct StreamView: View {
         .onChange(of: streamController.menuPressCount) { _, _ in
             toggleOverlay()
         }
+        #if os(tvOS)
         .onExitCommand {
             if streamController.state != .streaming {
                 disconnect()
@@ -91,6 +92,7 @@ struct StreamView: View {
             guard streamController.state == .streaming else { return }
             toggleOverlay()
         }
+        #endif
     }
 
     // MARK: Connecting
@@ -341,13 +343,35 @@ struct StreamView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+
+            #if !os(tvOS)
+                // On visionOS there is no Siri Remote, so provide an explicit menu button.
+                // Shown only when the overlay is hidden so it doesn't compete with pause menu controls.
+                if !showOverlay {
+                    Button {
+                        toggleOverlay()
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(12)
+                            .background(.black.opacity(0.55), in: Circle())
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(20)
+                }
+            #endif
         }
         .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
         .animation(.easeInOut(duration: 0.2), value: showOverlay)
         .onChange(of: showOverlay) { _, showing in
             // Pause game input while overlay is open in gamepad mode so D-pad
             // navigates overlay buttons instead of moving the in-game character.
-            streamController.setInputPaused(showing && streamController.remoteMode != .mouse)
+            #if os(tvOS)
+                streamController.setInputPaused(showing && streamController.remoteMode != .mouse)
+            #else
+                streamController.setInputPaused(showing)
+            #endif
         }
         .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
             Button(L10n.text("end_session"), role: .destructive) { disconnect() }
@@ -372,14 +396,16 @@ struct StreamView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
 
-                Button {
-                    streamController.toggleRemoteMode()
-                } label: {
-                    Label(remoteModeLabel, systemImage: remoteModeIcon)
-                        .frame(minWidth: 180)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
+                #if os(tvOS)
+                    Button {
+                        streamController.toggleRemoteMode()
+                    } label: {
+                        Label(remoteModeLabel, systemImage: remoteModeIcon)
+                            .frame(minWidth: 180)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                #endif
 
                 Button {
                     leave()
@@ -395,8 +421,9 @@ struct StreamView: View {
                 } label: {
                     Label(L10n.text("end_session"), systemImage: "xmark.circle")
                         .frame(minWidth: 180)
+                        .foregroundStyle(.white)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .tint(.red)
             }
 
@@ -599,17 +626,19 @@ struct StreamView: View {
         String(format: "%.2f ms", value)
     }
 
-    private var remoteModeLabel: String {
-        L10n.remoteInputModeLabel(streamController.remoteMode)
-    }
-
-    private var remoteModeIcon: String {
-        switch streamController.remoteMode {
-        case .mouse: "cursorarrow"
-        case .gamepad: "gamecontroller"
-        case .dualsense: "hand.point.up.left"
+    #if os(tvOS)
+        private var remoteModeLabel: String {
+            L10n.remoteInputModeLabel(streamController.remoteMode)
         }
-    }
+
+        private var remoteModeIcon: String {
+            switch streamController.remoteMode {
+            case .mouse: "cursorarrow"
+            case .gamepad: "gamecontroller"
+            case .dualsense: "hand.point.up.left"
+            }
+        }
+    #endif
 
     private func metricRow(icon: String, label: String, value: String, history: [Double], color: Color) -> some View {
         HStack(spacing: 8) {

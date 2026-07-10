@@ -89,6 +89,12 @@ class GamesViewModel {
     /// Top 5 lowest-latency zones, populated on launch.
     var topZones: [GFNZone] = []
 
+    #if os(visionOS)
+        /// Set before opening the ImmersiveSpace so the content view can read the pending game.
+        var pendingGame: GameInfo?
+        var pendingSession: ActiveSessionInfo?
+    #endif
+
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
 
@@ -118,12 +124,14 @@ class GamesViewModel {
         {
             lastSession = session
         }
-        // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
-        // If Apple raises the cap in a future tvOS release this will automatically unlock.
-        let screenMax = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
-        if streamSettings.fps > screenMax {
-            streamSettings.fps = screenMax
-        }
+        #if os(tvOS)
+            // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
+            // If Apple raises the cap in a future tvOS release this will automatically unlock.
+            let screenMax = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
+            if streamSettings.fps > screenMax {
+                streamSettings.fps = screenMax
+            }
+        #endif
         streamSettings = streamSettings.normalizedForClient
         print(
             "[Localization] preferred=\(Locale.preferredLanguages.first ?? "nil") ui=\(L10n.localeCode) keyboard=\(streamSettings.keyboardLayout) gameLanguage=\(streamSettings.gameLanguage) effectiveGameLanguage=\(streamSettings.effectiveGameLanguage)"
@@ -150,7 +158,11 @@ class GamesViewModel {
     /// screen's maximum refresh rate. Today tvOS caps at 60 Hz; if Apple raises it
     /// in a future update this will automatically expose the higher option.
     var availableFps: [Int] {
-        let maxFps = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
+        #if os(tvOS)
+            let maxFps = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
+        #else
+            let maxFps = 120
+        #endif
         guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
             return [30, 60].filter { $0 <= maxFps }
         }

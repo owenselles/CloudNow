@@ -14,13 +14,18 @@ import UIKit
 /// Also acts as first responder for hardware keyboard input and pointer (mouse)
 /// input, forwarding events to `inputHandler` as GFN protocol packets.
 final class VideoSurfaceView: UIView {
-    override class var layerClass: AnyClass {
-        AVSampleBufferDisplayLayer.self
-    }
+    #if os(tvOS)
+        // swiftlint:disable:next force_cast - reason: layerClass guarantees AVSampleBufferDisplayLayer backing
+        override class var layerClass: AnyClass {
+            AVSampleBufferDisplayLayer.self
+        }
 
-    private var displayLayer: AVSampleBufferDisplayLayer {
-        layer as! AVSampleBufferDisplayLayer
-    }
+        private var displayLayer: AVSampleBufferDisplayLayer {
+            layer as! AVSampleBufferDisplayLayer
+        }
+    #else
+        private let displayLayer = AVSampleBufferDisplayLayer()
+    #endif
 
     private let pipelineDiagnostics = VideoPipelineDiagnostics()
     private lazy var renderer = WebRTCFrameRenderer(diagnostics: pipelineDiagnostics)
@@ -98,8 +103,19 @@ final class VideoSurfaceView: UIView {
         setup()
     }
 
+    // On visionOS the displayLayer is a sublayer, so its frame must track the view bounds.
+    #if !os(tvOS)
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            displayLayer.frame = bounds
+        }
+    #endif
+
     private func setup() {
         backgroundColor = .black
+        #if !os(tvOS)
+            layer.addSublayer(displayLayer)
+        #endif
         displayLayer.videoGravity = .resizeAspectFill
         displayLayer.controlTimebase = nil
 

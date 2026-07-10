@@ -4,12 +4,15 @@ import UIKit
 
 struct MainTabView: View {
     @Environment(AuthManager.self) var authManager
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var viewModel = GamesViewModel()
+    @Environment(GamesViewModel.self) var viewModel
     @State private var gameToPlay: GameInfo?
     @State private var sessionToResume: ActiveSessionInfo? = nil
     @State private var directSessionToResume: SessionInfo? = nil
     @State private var selectedTab: AppTab = .home
+    #if os(visionOS)
+        @Environment(\.openImmersiveSpace) var openImmersiveSpace
+        @Environment(\.dismissImmersiveSpace) var dismissImmersiveSpace
+    #endif
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -23,7 +26,7 @@ struct MainTabView: View {
                                 return appId == sessionAppId
                             }
                         }
-                        gameToPlay = game
+                        play(game, session: sessionToResume)
                     },
                     onResume: { rs in
                         directSessionToResume = rs.session
@@ -51,11 +54,6 @@ struct MainTabView: View {
         )
         .environment(viewModel)
         .task { await viewModel.load(authManager: authManager) }
-        .task { await viewModel.measureTopZones() }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            Task { await viewModel.refreshLibrary(authManager: authManager) }
-        }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
             if new == nil {
@@ -63,27 +61,47 @@ struct MainTabView: View {
                 Task { await viewModel.refreshActiveSessions(authManager: authManager) }
             }
         }
-        .fullScreenCover(item: $gameToPlay) { game in
-            StreamView(
-                game: game,
-                settings: viewModel.streamSettings,
-                existingSession: sessionToResume,
-                directSession: directSessionToResume,
-                onDismiss: {
-                    gameToPlay = nil
-                    sessionToResume = nil
-                },
-                onLeave: { leftGame, session in
-                    viewModel.resumableSession = ResumableSession(
-                        game: leftGame,
-                        session: session,
-                        leftAt: Date()
-                    )
-                }
-            )
-            .environment(authManager)
-            .environment(viewModel)
+        #if os(visionOS)
+        .onChange(of: gameToPlay) { _, game in
+            guard let game else { return }
+            viewModel.pendingGame = game
+            viewModel.pendingSession = sessionToResume
+            Task { await openImmersiveSpace(id: "stream") }
         }
+        .onChange(of: viewModel.pendingGame) { _, pending in
+            if pending == nil {
+                gameToPlay = nil
+                sessionToResume = nil
+            }
+        }
+        #else
+        .fullScreenCover(item: $gameToPlay) { game in
+                    StreamView(
+                        game: game,
+                        settings: viewModel.streamSettings,
+                        existingSession: sessionToResume,
+                        directSession: directSessionToResume,
+                        onDismiss: {
+                            gameToPlay = nil
+                            sessionToResume = nil
+                        },
+                        onLeave: { leftGame, session in
+                            viewModel.resumableSession = ResumableSession(
+                                game: leftGame,
+                                session: session,
+                                leftAt: Date()
+                            )
+                        }
+                    )
+                    .environment(authManager)
+                    .environment(viewModel)
+                }
+        #endif
+    }
+
+    private func play(_ game: GameInfo, session: ActiveSessionInfo? = nil) {
+        sessionToResume = session
+        gameToPlay = game
     }
 }
 

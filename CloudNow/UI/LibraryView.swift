@@ -133,34 +133,38 @@ struct LibraryView: View {
                             GameCardLabel(game: game)
                         }
                         .aspectRatio(2 / 3, contentMode: .fit)
-                        .buttonStyle(.card)
-                        .contextMenu {
-                            Button {
-                                viewModel.toggleFavorite(game.id)
-                            } label: {
-                                let isFav = viewModel.favoriteIds.contains(game.id)
-                                Label(
-                                    isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
-                                    systemImage: isFav ? "star.slash.fill" : "star"
-                                )
-                            }
-                            if game.variants.count > 1 {
-                                Menu(L10n.text("launch_via")) {
-                                    ForEach(game.variants, id: \.id) { variant in
-                                        Button {
-                                            viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
-                                        } label: {
-                                            let isSelected = viewModel.preferredVariantId(for: game) == variant.id
-                                            if isSelected {
-                                                Label(variant.storeName, systemImage: "checkmark")
-                                            } else {
-                                                Text(variant.storeName)
+                        #if os(tvOS)
+                            .buttonStyle(.card)
+                        #else
+                            .buttonStyle(.plain)
+                        #endif
+                            .contextMenu {
+                                Button {
+                                    viewModel.toggleFavorite(game.id)
+                                } label: {
+                                    let isFav = viewModel.favoriteIds.contains(game.id)
+                                    Label(
+                                        isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
+                                        systemImage: isFav ? "star.slash.fill" : "star"
+                                    )
+                                }
+                                if game.variants.count > 1 {
+                                    Menu(L10n.text("launch_via")) {
+                                        ForEach(game.variants, id: \.id) { variant in
+                                            Button {
+                                                viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
+                                            } label: {
+                                                let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+                                                if isSelected {
+                                                    Label(variant.storeName, systemImage: "checkmark")
+                                                } else {
+                                                    Text(variant.storeName)
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
                     }
                 }
                 .padding(60)
@@ -278,7 +282,11 @@ struct GameCardView: View {
         Button(action: onPlay) {
             GameCardLabel(game: game)
         }
+        #if os(tvOS)
         .buttonStyle(.card)
+        #else
+        .buttonStyle(.plain)
+        #endif
     }
 }
 
@@ -294,6 +302,10 @@ struct LibraryCardView: View {
         Button(action: onPlay) {
             GameCardLabel(game: game)
         }
+        #if os(tvOS)
         .buttonStyle(.card)
+        #else
+        .buttonStyle(.plain)
+        #endif
     }
 }

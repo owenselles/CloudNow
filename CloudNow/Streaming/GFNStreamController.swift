@@ -174,7 +174,9 @@ final class GFNStreamController: NSObject {
     private var signaling: GFNSignalingClient?
     private var inputSender: InputSender?
     private(set) var videoView: VideoSurfaceView?
-    private(set) var remoteMode: RemoteInputMode = .mouse
+    #if os(tvOS)
+        private(set) var remoteMode: RemoteInputMode = .mouse
+    #endif
     private var statsTimer: Timer?
     private var videoReceiver: LKRTCRtpReceiver?
     private var protocolVersion = 2
@@ -347,9 +349,11 @@ final class GFNStreamController: NSObject {
 
     // MARK: Input Control
 
-    func toggleRemoteMode() {
-        inputSender?.toggleRemoteMode()
-    }
+    #if os(tvOS)
+        func toggleRemoteMode() {
+            inputSender?.toggleRemoteMode()
+        }
+    #endif
 
     func setInputPaused(_ paused: Bool) {
         inputSender?.setPaused(paused)
@@ -402,7 +406,9 @@ final class GFNStreamController: NSObject {
         videoView?.menuPressHandler = nil
         videoView?.onDecodedVideoFormatChanged = nil
         videoView = nil
-        remoteMode = .mouse
+        #if os(tvOS)
+            remoteMode = .mouse
+        #endif
         menuPressCount = 0
         timeWarning = nil
         videoDiagnostics = VideoPipelineSnapshot()
@@ -839,6 +845,8 @@ final class GFNStreamController: NSObject {
     private func attachMicrophone(to pc: LKRTCPeerConnection) async {
         #if os(tvOS)
             let granted = true
+        #elseif os(visionOS)
+            let granted = await AVAudioApplication.requestRecordPermission()
         #else
             let granted = await withCheckedContinuation { cont in
                 AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
@@ -1567,10 +1575,12 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             remoteMode = settings.defaultRemoteInputMode
             videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
             sender.menuToggleHandler = { [weak self] in self?.handleMenuPress() }
-            sender.onRemoteModeChanged = { [weak self] mode in
-                self?.remoteMode = mode
-                self?.videoView?.gamepadModeActive = (mode == .gamepad || mode == .dualsense)
-            }
+            #if os(tvOS)
+                sender.onRemoteModeChanged = { [weak self] mode in
+                    self?.remoteMode = mode
+                    self?.videoView?.gamepadModeActive = (mode == .gamepad || mode == .dualsense)
+                }
+            #endif
             sender.start()
             inputSender = sender
             inputSendQueue.async { [weak self, weak sender] in

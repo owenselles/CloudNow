@@ -23,7 +23,7 @@ struct StoreView: View {
             result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
         }
         if let store = selectedStore {
-            result = result.filter { $0.matchesStore(store) }
+            result = result.filter { $0.variants.contains { $0.appStore == store } }
         }
         return result
     }
@@ -89,36 +89,40 @@ struct StoreView: View {
                             StoreCardLabel(game: game)
                         }
                         .aspectRatio(2 / 3, contentMode: .fit)
-                        .buttonStyle(.card)
-                        .contextMenu {
-                            if game.isInLibrary {
-                                Button {
-                                    viewModel.toggleFavorite(game.id)
-                                } label: {
-                                    let isFav = viewModel.favoriteIds.contains(game.id)
-                                    Label(
-                                        isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
-                                        systemImage: isFav ? "star.slash.fill" : "star"
-                                    )
-                                }
-                                if game.variants.count > 1 {
-                                    Menu(L10n.text("launch_via")) {
-                                        ForEach(game.variants, id: \.id) { variant in
-                                            Button {
-                                                viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
-                                            } label: {
-                                                let isSelected = viewModel.preferredVariantId(for: game) == variant.id
-                                                if isSelected {
-                                                    Label(variant.storeName, systemImage: "checkmark")
-                                                } else {
-                                                    Text(variant.storeName)
+                        #if os(tvOS)
+                            .buttonStyle(.card)
+                        #else
+                            .buttonStyle(.plain)
+                        #endif
+                            .contextMenu {
+                                if game.isInLibrary {
+                                    Button {
+                                        viewModel.toggleFavorite(game.id)
+                                    } label: {
+                                        let isFav = viewModel.favoriteIds.contains(game.id)
+                                        Label(
+                                            isFav ? L10n.text("remove_from_favorites") : L10n.text("add_to_favorites"),
+                                            systemImage: isFav ? "star.slash.fill" : "star"
+                                        )
+                                    }
+                                    if game.variants.count > 1 {
+                                        Menu(L10n.text("launch_via")) {
+                                            ForEach(game.variants, id: \.id) { variant in
+                                                Button {
+                                                    viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
+                                                } label: {
+                                                    let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+                                                    if isSelected {
+                                                        Label(variant.storeName, systemImage: "checkmark")
+                                                    } else {
+                                                        Text(variant.storeName)
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
                     }
                 }
                 .padding(60)
