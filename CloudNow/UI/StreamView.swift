@@ -340,11 +340,13 @@ struct StreamView: View {
 
             // Stays visible while the pause menu is open (the menu is a left sidebar)
             // so cycling the Statistics level takes effect on screen immediately.
+            // Padding must sit INSIDE the flexible frame: outside it would grow the
+            // ZStack beyond the screen and stretch the video underneath.
             if streamController.statsMode != .off {
                 StatsHUDView(streamController: streamController)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .padding(.top, 60)
                     .padding(.trailing, 60)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .transition(.opacity)
             }
 
@@ -382,7 +384,7 @@ struct StreamView: View {
                 Label(L10n.text("resume"), systemImage: "play.fill")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .tint(.green)
 
             Button {
@@ -391,8 +393,7 @@ struct StreamView: View {
                 Label(remoteModeLabel, systemImage: remoteModeIcon)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.white)
+            .buttonStyle(.bordered)
 
             Button {
                 let next = streamController.statsMode.nextHUDLevel
@@ -406,8 +407,7 @@ struct StreamView: View {
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.white)
+            .buttonStyle(.bordered)
 
             Button {
                 leave()
@@ -415,8 +415,7 @@ struct StreamView: View {
                 Label(L10n.text("leave_game"), systemImage: "house")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.white)
+            .buttonStyle(.bordered)
 
             Button(role: .destructive) {
                 showExitConfirmation = true

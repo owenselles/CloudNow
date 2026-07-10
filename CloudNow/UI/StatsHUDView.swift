@@ -44,7 +44,7 @@ struct StatsHUDView: View {
     @ViewBuilder private var compactRows: some View {
         let stats = streamController.stats
         row(
-            L10n.text("fps"), "\(Int(stats.fps))",
+            L10n.text("fps_game_stream"), fpsValue,
             color: StatsFormat.fpsColor(stats.fps), history: streamController.fpsHistory
         )
         row(
@@ -63,9 +63,7 @@ struct StatsHUDView: View {
     @ViewBuilder private var standardSections: some View {
         networkSection
         videoSection
-        videoFormatSection
         audioSection
-        audioFormatSection
         sessionSection
         if streamController.diagnosticsEnabled {
             debugSection
@@ -79,12 +77,11 @@ struct StatsHUDView: View {
             L10n.text("rtt"), "\(Int(stats.rttMs)) ms",
             color: StatsFormat.pingColor(stats.rttMs), history: streamController.pingHistory
         )
-        row(L10n.text("jitter"), String(format: "%.1f ms", stats.jitterMs))
-        row(L10n.text("packet_loss"), String(format: "%.1f %%", stats.packetLossPercent))
-        row(L10n.text("bitrate"), "\(stats.bitrateKbps / 1000) Mbps", history: streamController.bitrateHistory)
-        if stats.availableIncomingBitrateKbps > 0 {
-            row(L10n.text("bandwidth"), "\(stats.availableIncomingBitrateKbps / 1000) Mbps")
-        }
+        row(
+            L10n.text("jitter_loss"),
+            String(format: "%.1f ms / %.1f %%", stats.jitterMs, stats.packetLossPercent)
+        )
+        row(L10n.text("bitrate"), bitrateValue, history: streamController.bitrateHistory)
         row(L10n.text("connection"), L10n.text(stats.selectedNetworkPath))
         if !stats.serverZone.isEmpty {
             row(L10n.text("server_location"), stats.serverZone)
@@ -96,29 +93,16 @@ struct StatsHUDView: View {
         header(L10n.text("video"))
         row(L10n.text("resolution"), "\(stats.resolutionWidth)×\(stats.resolutionHeight)")
         row(
-            L10n.text("fps"), "\(Int(stats.fps))",
+            L10n.text("fps_game_stream"), fpsValue,
             color: StatsFormat.fpsColor(stats.fps), history: streamController.fpsHistory
         )
-        row(L10n.text("frames_dropped"), "\(stats.framesDropped)")
-        row(L10n.text("freezes"), "\(stats.freezeCount) (\(Int(stats.freezeDurationMs)) ms)")
+        row(L10n.text("drops_freezes"), "\(stats.framesDropped) / \(stats.freezeCount)")
         row(
             L10n.text("jitter_buffer"),
             "\(Int(stats.jitterBufferDelayMs)) / \(Int(stats.jitterBufferTargetDelayMs)) ms"
         )
         row(L10n.text("decode_time"), StatsFormat.formatMs(stats.decodeTimeMs))
-    }
-
-    @ViewBuilder private var videoFormatSection: some View {
-        let stats = streamController.stats
-        header(L10n.text("video_format"))
-        if !stats.codec.isEmpty {
-            row(L10n.text("codec"), stats.codec)
-        }
-        if !stats.decoderImplementation.isEmpty {
-            let hardware = stats.powerEfficientDecoder == true ? " (\(L10n.text("hardware")))" : ""
-            row(L10n.text("decoder"), stats.decoderImplementation + hardware)
-        }
-        row(L10n.text("color_mode"), colorModeValue)
+        row(L10n.text("format"), videoFormatValue)
     }
 
     @ViewBuilder private var audioSection: some View {
@@ -128,28 +112,19 @@ struct StatsHUDView: View {
             L10n.text("jitter_buffer"),
             "\(Int(audio.jitterBufferCurrentMs)) / \(Int(audio.jitterBufferTargetMs)) ms"
         )
-        row(L10n.text("concealment"), String(format: "%.0f ms/s", audio.concealedMsPerSecond))
         row(
-            L10n.text("time_stretch"),
-            String(format: "+%.0f/−%.0f ms/s", audio.stretchedMsPerSecond, audio.acceleratedMsPerSecond)
+            L10n.text("conceal_stretch"),
+            String(
+                format: "%.0f · +%.0f/−%.0f ms/s",
+                audio.concealedMsPerSecond, audio.stretchedMsPerSecond, audio.acceleratedMsPerSecond
+            )
         )
         row(L10n.text("output_latency"), String(format: "%.0f ms", audio.outputLatencyMs))
-    }
-
-    @ViewBuilder private var audioFormatSection: some View {
-        let audio = streamController.audioStats
-        header(L10n.text("audio_format"))
         if !audio.codecName.isEmpty {
-            row(L10n.text("codec"), "\(audio.codecName) \(channelLayoutLabel(audio.codecChannels))")
+            row(L10n.text("format"), "\(audio.codecName) \(channelLayoutLabel(audio.codecChannels))")
         }
         if audio.outputChannels > 0 {
-            row(
-                L10n.text("output"),
-                "\(channelLayoutLabel(audio.outputChannels)) @ \(Int(audio.outputSampleRateHz / 1000)) kHz"
-            )
-        }
-        if !audio.outputRouteName.isEmpty {
-            row(L10n.text("audio_route"), audio.outputRouteName)
+            row(L10n.text("output"), audioOutputValue)
         }
     }
 
@@ -175,6 +150,10 @@ struct StatsHUDView: View {
             String(format: "%.1f / %.1f ms", stats.inputQueueP95Ms, stats.inputQueueMaxMs)
         )
         row(L10n.text("input_buffer"), "\(stats.inputBufferedBytes) B (\(stats.inputChannelState))")
+        if !stats.decoderImplementation.isEmpty {
+            let hardware = stats.powerEfficientDecoder == true ? " (\(L10n.text("hardware")))" : ""
+            row(L10n.text("decoder"), stats.decoderImplementation + hardware)
+        }
         if stats.inputDropped > 0 {
             line(L10n.format("input_drops_status", stats.inputDropped), color: .orange)
         }
@@ -297,6 +276,45 @@ struct StatsHUDView: View {
             return L10n.detectedColorModeLabel(detected)
         }
         return L10n.streamColorModeLabel(streamController.colorState.requestedMode)
+    }
+
+    /// "58 / 60" — game FPS (server render rate from the stats channel) / stream
+    /// FPS (WebRTC decode rate), in the official overlay's order (game engine first).
+    private var fpsValue: String {
+        let stream = Int(streamController.stats.fps)
+        let game = streamController.stats.gameFps
+        return game > 0 ? "\(Int(game.rounded())) / \(stream)" : "– / \(stream)"
+    }
+
+    /// "45 Mbps (max 87)" — current receive bitrate plus the estimated available
+    /// bandwidth when WebRTC reports one.
+    private var bitrateValue: String {
+        let current = "\(streamController.stats.bitrateKbps / 1000) Mbps"
+        let available = streamController.stats.availableIncomingBitrateKbps
+        return available > 0 ? "\(current) (max \(available / 1000))" : current
+    }
+
+    /// "H265 · HDR10 · HW" — codec, detected color mode, decode path in one line.
+    private var videoFormatValue: String {
+        var parts: [String] = []
+        if !streamController.stats.codec.isEmpty {
+            parts.append(streamController.stats.codec)
+        }
+        parts.append(colorModeValue)
+        if streamController.stats.powerEfficientDecoder == true {
+            parts.append("HW")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// "5.1 Surround @ 48 kHz · HDMI" — playout layout, sample rate, and route.
+    private var audioOutputValue: String {
+        let audio = streamController.audioStats
+        var value = "\(channelLayoutLabel(audio.outputChannels)) @ \(Int(audio.outputSampleRateHz / 1000)) kHz"
+        if !audio.outputRouteName.isEmpty {
+            value += " · \(audio.outputRouteName)"
+        }
+        return value
     }
 
     private func channelLayoutLabel(_ channels: Int) -> String {

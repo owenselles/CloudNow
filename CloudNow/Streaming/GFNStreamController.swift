@@ -83,6 +83,10 @@ struct StreamStats {
     var inputQueueMaxMs: Double = 0
     var newestGamepadAgeMs: Double = 0
     var inputChannelState: String = "closed"
+    /// Average FPS the game renders on the cloud rig, from the server's stats_channel
+    /// messages (0 until the first message arrives). The official client shows this
+    /// alongside the stream FPS.
+    var gameFps: Double = 0
 }
 
 /// Audio metrics surfaced in the statistics HUD, refreshed once per stats tick.
@@ -241,6 +245,7 @@ final class GFNStreamController: NSObject {
     private var micAudioTrack: LKRTCAudioTrack?
     private var signalingComplete = false
     private var partiallyReliableDataChannel: LKRTCDataChannel?
+    private var statsChannel: LKRTCDataChannel?
     private var controlChannel: LKRTCDataChannel?
     private var inputReady = false
     private var previousVideoStats: VideoStatsSnapshot?
@@ -454,6 +459,7 @@ final class GFNStreamController: NSObject {
         }
         inputSendQueue.async { [weak self] in self?.rumbleSink = nil }
         partiallyReliableDataChannel = nil
+        statsChannel = nil
         controlChannel = nil
         videoTrack = nil
         videoReceiver = nil
@@ -511,6 +517,7 @@ final class GFNStreamController: NSObject {
         peerConnection = nil
         inputDataChannel = nil
         partiallyReliableDataChannel = nil
+        statsChannel = nil
         reliableSendChannel = nil
         controlChannel = nil
         videoTrack = nil
@@ -733,6 +740,17 @@ final class GFNStreamController: NSObject {
         prConfig.isNegotiated = false
         if let dc = pc.dataChannel(forLabel: "input_channel_partially_reliable", configuration: prConfig) {
             partiallyReliableDataChannel = dc
+        }
+
+        // Server performance stats (game FPS, server RTD) arrive as binary messages
+        // here — same channel the official client opens for its statistics overlay.
+        let statsConfig = LKRTCDataChannelConfiguration()
+        statsConfig.isOrdered = false
+        statsConfig.maxRetransmits = 0
+        statsConfig.isNegotiated = false
+        if let dc = pc.dataChannel(forLabel: "stats_channel", configuration: statsConfig) {
+            statsChannel = dc
+            dc.delegate = self
         }
 
         // Attach microphone audio track if enabled (must happen before answer creation
@@ -1018,6 +1036,27 @@ final class GFNStreamController: NSObject {
     }
 
     // MARK: Private — Stats
+
+    /// Extracts the average game FPS from a stats_channel binary message. Layout
+    /// (mirrors the official web client's parser): byte 0 is the message type —
+    /// 3: payload starts at byte 1; 4: the type byte doubles as the payload version.
+    /// Payload: u8 version (>= 4), then little-endian float64s at offsets 1
+    /// (timestamp), 9, 17 (round-trip delay) and 25 (average game FPS).
+    private nonisolated static func parseStatsChannelGameFps(_ data: Data) -> Double? {
+        guard let type = data.first else { return nil }
+        let payload: Data
+        switch type {
+        case 3: payload = data.dropFirst()
+        case 4: payload = data
+        default: return nil
+        }
+        guard payload.count >= 33, let version = payload.first, version >= 4 else { return nil }
+        let bytes = payload.subdata(in: (payload.startIndex + 25) ..< (payload.startIndex + 33))
+        let bits = bytes.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self) }
+        let value = Double(bitPattern: UInt64(littleEndian: bits))
+        guard value.isFinite, value >= 0, value < 1000 else { return nil }
+        return value
+    }
 
     /// "https://np-frk-08.cloudmatchbeta.nvidiagrid.net/" → "FRK-08": first host label
     /// without the "np-" prefix, uppercased — the form the official client displays.
@@ -1712,6 +1751,13 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
     }
 
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
+        if dataChannel.label == "stats_channel" {
+            if let gameFps = Self.parseStatsChannelGameFps(buffer.data) {
+                Task { @MainActor [weak self] in self?.stats.gameFps = gameFps }
+            }
+            return
+        }
+
         // Handle control channel messages (timerNotification etc.)
         if dataChannel.label == "control_channel" {
             let text = String(data: buffer.data, encoding: .utf8) ?? "<binary \(buffer.data.count)B>"
