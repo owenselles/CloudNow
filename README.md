@@ -32,17 +32,20 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Color mode preferences** — Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR. CloudNow separates user preference, requested stream mode, negotiated server mode, and actual detected decoded format instead of assuming HDR from bit depth or Apple TV output mode
 - **Decoded video format detection** — inspects the actual decoded pixel buffer for bit depth, transfer function, color primaries, matrix, and range. HDR is only treated as active when the decoded stream metadata supports it
 - **Conservative HDR behavior** — requests HDR only when the local pipeline qualifies; accepts safe server-side fallback to SDR10 or SDR8 without treating every 10-bit stream as HDR
-- **Codec-aware SDP negotiation** — offer is filtered to your chosen codec before WebRTC negotiation; H.265 prefers Main profile; bandwidth hints sent to prevent server overshoot
+- **Codec-aware SDP negotiation** — the SDP answer is filtered to your chosen codec; H.265 Main10 is front-loaded for 10-bit/HDR requests with tier/level capped to hardware-safe values; bandwidth hints sent to prevent server overshoot
+- **HDR-preserving H.265 decoder** — custom VideoToolbox decoder keeps 10-bit depth and VUI colorimetry intact (the bundled WebRTC decoder pins 8-bit NV12 and stamps BT.709), so HDR10 survives from the wire to the display
 - **Renderer metadata preservation** — decoded color metadata is tracked through the render path and the format description cache is refreshed when color characteristics change, not just when resolution changes
 - **Session diagnostics** — diagnostic HUD can show color preference, requested mode, detected mode, display HDR support, fallback reason, decoder path, pixel format, transfer function, and bit depth
 - **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"); waits indefinitely in queue with position updates; 180-second setup timeout after queue clears; requires two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
 - **Zone/region selection** — Settings → Server Region shows live queue depths and ping per zone; Automatic mode picks the best zone by weighted score (40% ping + 60% queue depth); powered by the PrintedWaste community API
+- **Surround audio** — Audio Format setting with Automatic, Stereo, and 5.1 Surround; 5.1 uses the multichannel Opus stream the service offers and requires a receiver or soundbar; a custom WebRTC audio device keeps output latency low
 - **Microphone support** — voice chat via AirPods or any Bluetooth headset; toggle in Settings; permission requested on first use; if no valid input route exists, CloudNow falls back to playback-only audio instead of breaking session audio
 - **Favorites** — long-press any game card in Library or Store to add/remove from Favorites; persisted locally
 - **Full GFN streaming** — WebRTC-based, up to 4K@60fps depending on your GFN plan (tvOS caps at 60 Hz; 120fps ready for when Apple raises the limit)
-- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (5–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
+- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (0–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
 - **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
-- **Live stats overlay** — bitrate, resolution, FPS, RTT, real packet loss %, decoder info, and remaining session time (Free/Priority tier) — toggle with Play/Pause (Siri Remote) or long-press the overlay button (controller, default: Start/≡, configurable in Settings)
+- **Pause menu** — left-sidebar in-stream menu with Resume, input mode toggle, Statistics level, Leave Game, and End Session; open with Play/Pause or Menu on the Siri Remote, or hold the overlay trigger button (~2 s) on a controller (default: Start/≡, configurable in Settings)
+- **Statistics HUD** — in-stream statistics overlay styled after the official client, with Compact and Standard levels cycled from the pause menu; Compact shows game/stream FPS, RTT, bitrate, packet loss, and server location; Standard adds jitter, connection path, resolution, drops/freezes, decoder, jitter-buffer, audio, and session detail with live history graphs
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
 - **tvOS localization** — UI text follows the device language automatically using `Bundle.main.preferredLocalizations` with English fallback; translations live in one file per locale under `CloudNow/Localization`
 
@@ -219,12 +222,19 @@ CloudNow/
 ├── Session/
 │   ├── SessionState.swift          Models: GameInfo, SessionInfo, StreamSettings, color-mode state
 │   ├── CloudMatchClient.swift      Session create/poll/stop/active-sessions, color-aware request fields
-│   └── GamesClient.swift           Game catalog via GraphQL persisted query
+│   ├── GamesClient.swift           Game catalog via GraphQL persisted query
+│   ├── MESClient.swift             Subscription tier + entitled resolutions/FPS from the MES API
+│   └── ZoneClient.swift            Zone list, ping probes, and queue-depth scoring (PrintedWaste API)
 ├── Streaming/
 │   ├── GFNStreamController.swift   WebRTC peer connection lifecycle, color negotiation state, audio session setup
 │   ├── SignalingClient.swift        WebSocket signaling — SDP offer/answer + ICE
 │   ├── SDPMunger.swift             Codec filtering + bandwidth injection for WebRTC SDP
-│   └── InputSender.swift           GCController/keyboard/mouse/Siri Remote → XInput + GFN protocol (v2/v3) → data channel
+│   ├── InputSender.swift           GCController/keyboard/mouse/Siri Remote → XInput + GFN protocol (v2/v3) → data channel
+│   ├── GFNAudioDevice.swift        Custom WebRTC audio device — low-latency stereo/5.1 output path
+│   ├── GFNVideoDecoderFactory.swift Advertises H.265 Main10 so the 10-bit payload survives negotiation
+│   ├── GFNVideoDecoderH265.swift   VideoToolbox H.265 decoder preserving bit depth + VUI colorimetry
+│   ├── ControllerHaptics.swift     Controller rumble output via CoreHaptics
+│   └── GFNHapticsDecoder.swift     Decodes GFN rumble packets from the data channel
 ├── Video/
 │   ├── VideoSurfaceView.swift      AVSampleBufferDisplayLayer video surface + decoded-format-aware renderer
 │   ├── VideoColorFormat.swift      Local video capability detection + decoded pixel-buffer format inspection
@@ -242,7 +252,9 @@ CloudNow/
     ├── StoreView.swift             MAIN catalog grid with "In Library" badges
     ├── SettingsView.swift          Stream quality pickers + account info + sign out
     ├── LoginView.swift             Sign-in screen with QR code + PIN display
-    └── StreamView.swift            Full-screen player + HUD stats overlay
+    ├── QueueAdPlayerView.swift     AVPlayer queue-ad playback with CloudMatch lifecycle reporting
+    ├── StatsHUDView.swift          Statistics overlay (Compact/Standard) with history graphs
+    └── StreamView.swift            Full-screen player + pause menu sidebar
 ```
 
 ### Protocol
