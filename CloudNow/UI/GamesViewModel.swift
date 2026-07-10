@@ -189,17 +189,28 @@ class GamesViewModel {
     // MARK: Load
 
     private static let libraryCacheKey = "gfn.cache.libraryGames.v2"
+    private static let subscriptionCacheKey = "gfn.cache.subscription.v1"
+    private static let vpcIdCacheKey = "gfn.cache.vpcId"
 
     func load(authManager: AuthManager) async {
         // Invalidate stale v1 cache from the old panels API
         UserDefaults.standard.removeObject(forKey: "gfn.cache.mainGames")
         UserDefaults.standard.removeObject(forKey: "gfn.cache.libraryGames")
 
-        // Show cached library instantly (catalog is too large to cache)
+        // Show cached data instantly while fresh data loads in the background:
+        // library and subscription from UserDefaults, the much larger catalog
+        // from a file in Caches (too big for tvOS UserDefaults).
         if libraryGames.isEmpty, let cached = loadCache(Self.libraryCacheKey, as: [GameInfo].self) {
             libraryGames = cached
         }
-        let hadCache = !libraryGames.isEmpty
+        if subscription == nil, let cachedSub = loadCache(Self.subscriptionCacheKey, as: SubscriptionInfo.self) {
+            subscription = cachedSub
+            normalizeStreamSettingsForCurrentEntitlements()
+        }
+        if mainGames.isEmpty, let cachedCatalog = await Self.readCatalogCache() {
+            mainGames = cachedCatalog
+        }
+        let hadCache = !libraryGames.isEmpty || !mainGames.isEmpty
         isLoading = !hadCache
         error = nil
         libraryError = nil
@@ -209,11 +220,15 @@ class GamesViewModel {
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
 
+            // The catalog, library, and subscription queries all need the vpcId;
+            // resolve it once up front instead of three times in parallel.
+            let vpcId = await resolveVpcIdCached(token: token, base: base)
+
             // Fetch main games, library, active sessions, and subscription in parallel
-            async let mainTask = gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
-            async let libraryTask = fetchLibrarySafe(token: token, base: base)
+            async let mainTask = gamesClient.fetchMainGames(token: token, streamingBaseUrl: base, vpcId: vpcId)
+            async let libraryTask = fetchLibrarySafe(token: token, base: base, vpcId: vpcId)
             async let sessionsTask = fetchSessionsSafe(token: token, base: base)
-            async let subTask = fetchSubscriptionSafe(authManager: authManager, token: token, base: base)
+            async let subTask = fetchSubscriptionSafe(authManager: authManager, token: token, vpcId: vpcId ?? "")
 
             let fetchedMain = try await mainTask
             let panelLibrary = await libraryTask
@@ -223,6 +238,7 @@ class GamesViewModel {
                 print("[MES] tier=\(sub.membershipTier) resolutions=\(sub.entitledResolutions.map(\.resolutionLabel))")
                 subscription = sub
                 normalizeStreamSettingsForCurrentEntitlements()
+                saveCache(Self.subscriptionCacheKey, data: sub)
             }
 
             mainGames = fetchedMain
@@ -234,8 +250,8 @@ class GamesViewModel {
             }
             libraryGames = merged
 
-            // Only cache library (small); catalog is too large for tvOS UserDefaults
             saveCache(Self.libraryCacheKey, data: merged)
+            await Self.writeCatalogCache(fetchedMain)
         } catch {
             if !hadCache { self.error = error.localizedDescription }
         }
@@ -243,18 +259,57 @@ class GamesViewModel {
         isLoading = false
     }
 
-    private func fetchLibrarySafe(token: String, base: String) async -> [GameInfo] {
-        await (try? gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)) ?? []
+    /// Returns the vpcId shared by the launch queries. Uses the value from the
+    /// previous launch when available (it changes only if NVIDIA migrates the
+    /// account to another region) and revalidates it in the background, so the
+    /// launch fetches don't wait a /v2/serverInfo round trip.
+    private func resolveVpcIdCached(token: String, base: String) async -> String? {
+        if let cached = UserDefaults.standard.string(forKey: Self.vpcIdCacheKey), !cached.isEmpty {
+            Task {
+                if let fresh = try? await MESClient.shared.fetchVpcId(token: token, base: base), !fresh.isEmpty {
+                    UserDefaults.standard.set(fresh, forKey: Self.vpcIdCacheKey)
+                }
+            }
+            return cached
+        }
+        let fetched = await ((try? MESClient.shared.fetchVpcId(token: token, base: base)) ?? nil)
+        if let fetched, !fetched.isEmpty {
+            UserDefaults.standard.set(fetched, forKey: Self.vpcIdCacheKey)
+        }
+        return fetched
+    }
+
+    private func fetchLibrarySafe(token: String, base: String, vpcId: String?) async -> [GameInfo] {
+        await (try? gamesClient.fetchLibrary(token: token, streamingBaseUrl: base, vpcId: vpcId)) ?? []
     }
 
     private func fetchSessionsSafe(token: String, base: String) async -> [ActiveSessionInfo] {
         await (try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
     }
 
-    private func fetchSubscriptionSafe(authManager: AuthManager, token: String, base: String) async -> SubscriptionInfo? {
+    private func fetchSubscriptionSafe(authManager: AuthManager, token: String, vpcId: String) async -> SubscriptionInfo? {
         guard let userId = authManager.session?.user.userId else { return nil }
-        let vpcId = await (try? MESClient.shared.fetchVpcId(token: token, base: base)) ?? ""
         return try? await MESClient.shared.fetchSubscription(token: token, vpcId: vpcId, userId: userId)
+    }
+
+    // MARK: Catalog Disk Cache
+
+    /// The full catalog (~2000+ games) exceeds what tvOS UserDefaults tolerates,
+    /// so it lives as a JSON file in Caches. Read/write run off the main actor.
+    private nonisolated static var catalogCacheURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("gfn.catalog.v1.json")
+    }
+
+    private nonisolated static func readCatalogCache() async -> [GameInfo]? {
+        guard let url = catalogCacheURL, let data = try? Data(contentsOf: url) else { return nil }
+        let games = try? JSONDecoder().decode([GameInfo].self, from: data)
+        return (games?.isEmpty ?? true) ? nil : games
+    }
+
+    private nonisolated static func writeCatalogCache(_ games: [GameInfo]) async {
+        guard let url = catalogCacheURL, let data = try? JSONEncoder().encode(games) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 
     private func loadCache<T: Decodable>(_ key: String, as type: T.Type) -> T? {
@@ -278,7 +333,8 @@ class GamesViewModel {
             let token = try await authManager.resolveToken()
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
-            libraryGames = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
+            let vpcId = UserDefaults.standard.string(forKey: Self.vpcIdCacheKey)
+            libraryGames = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base, vpcId: vpcId)
             saveCache(Self.libraryCacheKey, data: libraryGames)
         } catch {
             libraryError = error.localizedDescription

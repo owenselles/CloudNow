@@ -573,7 +573,7 @@ struct ActiveSessionInfo {
 
 // MARK: - Subscription / Entitlements
 
-struct EntitledResolution: Equatable {
+struct EntitledResolution: Equatable, Codable {
     let widthInPixels: Int
     let heightInPixels: Int
     let framesPerSecond: Int
@@ -583,7 +583,7 @@ struct EntitledResolution: Equatable {
     }
 }
 
-struct SubscriptionInfo {
+struct SubscriptionInfo: Codable {
     let membershipTier: String
     let isUnlimited: Bool
     let remainingMinutes: Int?

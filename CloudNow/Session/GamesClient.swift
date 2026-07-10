@@ -51,25 +51,50 @@ actor GamesClient {
 
     // MARK: Fetch Full Catalog (browse API)
 
-    func fetchMainGames(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
-        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+    func fetchMainGames(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl, vpcId: String? = nil) async throws -> [GameInfo] {
+        let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
+        // The public catalog is independent of the browse pagination — fetch both at once.
+        async let publicTask = fetchPublicCatalog()
         let games = try await browseCatalog(token: token, vpcId: vpcId, filters: [:], maxPages: 15)
-        let publicGames = await (try? fetchPublicCatalog()) ?? []
+        let publicGames = await (try? publicTask) ?? []
         return mergeCatalog(games, supplemental: publicGames)
     }
 
     // MARK: Fetch Library (owned/purchased games via browse filter)
 
-    func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
-        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+    func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl, vpcId: String? = nil) async throws -> [GameInfo] {
+        let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
         let libraryFilter: [String: Any] = ["variants": ["gfn": ["library": ["status": ["notEquals": "NOT_OWNED"]]]]]
         let games = try await browseCatalog(token: token, vpcId: vpcId, filters: libraryFilter, maxPages: 10)
         return await (try? enrich(token: token, vpcId: vpcId, games: games)) ?? games
     }
 
+    /// Callers that load catalog, library, and subscription together fetch the vpcId
+    /// once and pass it in; standalone calls fall back to fetching it here.
+    private func resolveVpcId(_ provided: String?, token: String, baseUrl: String) async -> String {
+        if let provided, !provided.isEmpty { return provided }
+        return await (try? fetchVpcId(token: token, baseUrl: baseUrl)) ?? "GFN-PC"
+    }
+
     // MARK: - Catalog Browse
 
+    /// Cursor pagination is inherently serial (each page needs the previous cursor),
+    /// so page count dominates load time. Large pages cut the round trips; if the
+    /// endpoint ever rejects the large size, retry once with the long-proven 200.
     private func browseCatalog(token: String, vpcId: String, filters: [String: Any], searchString: String? = nil, maxPages: Int = 3) async throws -> [GameInfo] {
+        if let games = try? await browsePages(
+            token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+            pageSize: 500, maxPages: maxPages
+        ) {
+            return games
+        }
+        return try await browsePages(
+            token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+            pageSize: 200, maxPages: maxPages
+        )
+    }
+
+    private func browsePages(token: String, vpcId: String, filters: [String: Any], searchString: String?, pageSize: Int, maxPages: Int) async throws -> [GameInfo] {
         var allGames: [GameInfo] = []
         var seen = Set<String>()
         var cursor = ""
@@ -79,7 +104,7 @@ actor GamesClient {
                 "vpcId": vpcId,
                 "locale": localeCode,
                 "sortString": "sortName:ASC",
-                "fetchCount": 200,
+                "fetchCount": pageSize,
                 "cursor": cursor,
                 "filters": filters,
             ]
