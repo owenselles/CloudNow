@@ -667,7 +667,7 @@ final class GFNStreamController: NSObject {
     private func handleOffer(sdp: String) async {
         guard let session = sessionInfo else { return }
         #if DEBUG
-            gfnLog.debug("[Stream] Offer SDP (\(sdp.count, privacy: .public) chars):\n\(sdp.replacingOccurrences(of: "\r\n", with: "\n"), privacy: .public)")
+            gfnLog.debug("[Stream] Offer SDP (\(sdp.count, privacy: .public) chars):\n\(sdp, privacy: .private)")
         #endif
 
         // The server offers multiopus/48000/6 when the session requested 5.1 (see
@@ -773,7 +773,7 @@ final class GFNStreamController: NSObject {
             Self.rewriteOfferConnectionAddresses(sdp, serverIp: ip)
         } ?? sdp
         if let ip = serverMediaIp {
-            gfnLog.debug("[Stream] Fixed placeholder IPs in offer SDP: 0.0.0.0/127.0.0.1 -> \(ip, privacy: .public)")
+            gfnLog.debug("[Stream] Fixed placeholder IPs in offer SDP: 0.0.0.0/127.0.0.1 -> \(ip, privacy: .private)")
         } else {
             gfnLog.warning("[Stream] Warning: no server IP available — offer placeholder IPs left unchanged")
         }
@@ -829,7 +829,7 @@ final class GFNStreamController: NSObject {
                 .joined(separator: " ")
             videoColorLog.info("answer H265: \(answerH265Params.isEmpty ? "none" : answerH265Params)")
             #if DEBUG
-                gfnLog.debug("[Stream] Answer SDP (\(mangledAnswerSdp.count, privacy: .public) chars):\n\(mangledAnswerSdp.replacingOccurrences(of: "\r\n", with: "\n"), privacy: .public)")
+                gfnLog.debug("[Stream] Answer SDP (\(mangledAnswerSdp.count, privacy: .public) chars):\n\(mangledAnswerSdp, privacy: .private)")
             #endif
 
             // Set local description
@@ -880,14 +880,14 @@ final class GFNStreamController: NSObject {
             if pairs.isEmpty {
                 gfnLog.warning("[ICE] No server IPs or ports available — ICE candidate injection skipped")
             } else {
-                gfnLog.debug("[ICE] Injecting \(pairs.count, privacy: .public) candidate(s) (mciIp=\(mciIp ?? "nil", privacy: .public) mciPort=\(mciPort, privacy: .public) sdpPort=\(sdpPort, privacy: .public))")
+                gfnLog.debug("[ICE] Injecting \(pairs.count, privacy: .public) candidate(s) (mciIp=\(mciIp ?? "nil", privacy: .private) mciPort=\(mciPort, privacy: .public) sdpPort=\(sdpPort, privacy: .public))")
                 for (i, (ip, port)) in pairs.enumerated() {
                     let cand = LKRTCIceCandidate(
                         sdp: "candidate:\(i + 1) 1 UDP 2130706431 \(ip) \(port) typ host",
                         sdpMLineIndex: 0, sdpMid: "0"
                     )
                     try? await pc.add(cand)
-                    gfnLog.debug("[ICE]   → \(ip, privacy: .public):\(port, privacy: .public)")
+                    gfnLog.debug("[ICE]   → \(ip, privacy: .private):\(port, privacy: .public)")
                 }
             }
         } catch {
@@ -1024,7 +1024,7 @@ final class GFNStreamController: NSObject {
     }
 
     private func addRemoteICE(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
-        gfnLog.debug("[ICE] Adding remote candidate: \(candidate, privacy: .public) mid=\(sdpMid ?? "nil", privacy: .public) mLineIndex=\(sdpMLineIndex ?? -1, privacy: .public)")
+        gfnLog.debug("[ICE] Adding remote candidate: \(candidate, privacy: .private) mid=\(sdpMid ?? "nil", privacy: .public) mLineIndex=\(sdpMLineIndex ?? -1, privacy: .public)")
         let ice = LKRTCIceCandidate(
             sdp: candidate,
             sdpMLineIndex: Int32(sdpMLineIndex ?? 0),
@@ -1551,7 +1551,7 @@ final class GFNStreamController: NSObject {
         if !previousSelectedCandidatePairId.isEmpty, previousSelectedCandidatePairId != pairId {
             stats.candidatePairChanges += 1
             let previousPairId = previousSelectedCandidatePairId
-            gfnLog.debug("[ICE] Selected pair changed: \(previousPairId, privacy: .public) -> \(pairId, privacy: .public)")
+            gfnLog.debug("[ICE] Selected pair changed: \(previousPairId, privacy: .private) -> \(pairId, privacy: .private)")
         }
         previousSelectedCandidatePairId = pairId
 
@@ -1760,7 +1760,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
         // Handle control channel messages (timerNotification etc.)
         if dataChannel.label == "control_channel" {
             let text = String(data: buffer.data, encoding: .utf8) ?? "<binary \(buffer.data.count)B>"
-            gfnLog.debug("[ControlChannel] Message: \(text, privacy: .public)")
+            gfnLog.debug("[ControlChannel] Message: \(text, privacy: .private)")
 
             // Parse timerNotification — maps server codes to severity levels (matches OpenNOW)
             if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
