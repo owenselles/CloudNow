@@ -181,7 +181,7 @@ final class AuthManager {
             try? persist(refreshed)
         } catch {
             if s.tokens.isExpired {
-                authLog.error("[Auth] Token expired and refresh failed: \(error, privacy: .public) — clearing session, re-login required")
+                authLog.error("[Auth] Token expired and refresh failed: \(error, privacy: .private) — clearing session, re-login required")
                 refreshTimer?.cancel()
                 session = nil
                 KeychainService.delete()
@@ -219,7 +219,7 @@ final class AuthManager {
             do {
                 clientTokenRefreshed = try await api.refreshWithClientToken(clientToken, userId: s.user.userId)
             } catch {
-                authLog.warning("[Auth] client_token grant failed: \(error, privacy: .public)")
+                authLog.warning("[Auth] client_token grant failed: \(error, privacy: .private)")
             }
         }
         if let refreshed = clientTokenRefreshed {
@@ -254,13 +254,13 @@ final class AuthManager {
             do {
                 ct = try await api.fetchClientToken(accessToken: idToken)
             } catch {
-                authLog.error("[Auth] idToken bootstrap — fetchClientToken failed: \(error, privacy: .public)")
+                authLog.error("[Auth] idToken bootstrap — fetchClientToken failed: \(error, privacy: .private)")
                 throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
             }
             do {
                 rebound = try await api.refreshWithClientToken(ct.token, userId: s.user.userId)
             } catch {
-                authLog.error("[Auth] idToken bootstrap — refreshWithClientToken failed: \(error, privacy: .public)")
+                authLog.error("[Auth] idToken bootstrap — refreshWithClientToken failed: \(error, privacy: .private)")
                 throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
             }
             authLog.info("[Auth] refresh via idToken bootstrap succeeded")
@@ -282,7 +282,7 @@ final class AuthManager {
             updated.tokens.clientToken = ct.token
             updated.tokens.clientTokenExpiresAt = ct.expiresAt
         } catch {
-            authLog.warning("[Auth] warning: failed to re-bootstrap client_token after refresh: \(error, privacy: .public)")
+            authLog.warning("[Auth] warning: failed to re-bootstrap client_token after refresh: \(error, privacy: .private)")
         }
         session = updated
         scheduleProactiveRefresh()

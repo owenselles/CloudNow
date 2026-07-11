@@ -728,7 +728,7 @@ struct StreamView: View {
 
                 // Check for a locally saved session for this game — resume instead of creating new.
                 if let last = viewModel.lastSession, last.appId == appId {
-                    streamLog.info("[Resume] found saved session \(last.sessionId, privacy: .public) for appId=\(appId, privacy: .public), trying resume")
+                    streamLog.info("[Resume] found saved session \(last.sessionId, privacy: .private) for appId=\(appId, privacy: .public), trying resume")
                     do {
                         sessionInfo = try await cloudMatchClient.claimSession(
                             sessionId: last.sessionId,
@@ -745,7 +745,7 @@ struct StreamView: View {
                         streamLog.info("[Resume] claimed session, status=\(sessionInfo.status, privacy: .public)")
                         createdSession = sessionInfo
                     } catch {
-                        streamLog.warning("[Resume] claim failed: \(error, privacy: .public), stopping old session and creating new")
+                        streamLog.warning("[Resume] claim failed: \(error, privacy: .private), stopping old session and creating new")
                         try? await cloudMatchClient.stopSession(
                             sessionId: last.sessionId,
                             token: token,
@@ -921,7 +921,7 @@ struct StreamView: View {
 
         do {
             let sessionInfo = try await cloudMatchClient.createSession(request)
-            streamLog.info("[Session] created, sessionId=\(sessionInfo.sessionId, privacy: .public), status=\(sessionInfo.status, privacy: .public)")
+            streamLog.info("[Session] created, sessionId=\(sessionInfo.sessionId, privacy: .private), status=\(sessionInfo.status, privacy: .public)")
             return sessionInfo
         } catch {
             guard shouldForceStopExistingSession(error) else { throw error }
@@ -930,7 +930,7 @@ struct StreamView: View {
             await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
 
             let sessionInfo = try await cloudMatchClient.createSession(request)
-            streamLog.info("[Session] created after conflict cleanup, sessionId=\(sessionInfo.sessionId, privacy: .public), status=\(sessionInfo.status, privacy: .public)")
+            streamLog.info("[Session] created after conflict cleanup, sessionId=\(sessionInfo.sessionId, privacy: .private), status=\(sessionInfo.status, privacy: .public)")
             return sessionInfo
         }
     }

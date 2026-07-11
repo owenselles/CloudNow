@@ -595,7 +595,9 @@ actor CloudMatchClient {
         let (data, resp) = try await urlSession.data(for: request)
         let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1
         cloudMatchLog.debug("[CloudMatch] getActiveSessions HTTP \(httpStatus, privacy: .public), \(data.count, privacy: .public) bytes")
-        if let raw = String(data: data, encoding: .utf8) { cloudMatchLog.debug("[CloudMatch] getActiveSessions raw: \(raw.prefix(500), privacy: .private)") }
+        if cloudMatchOSLog.isEnabled(type: .debug), let raw = String(data: data, encoding: .utf8) {
+            cloudMatchLog.debug("[CloudMatch] getActiveSessions raw: \(raw.prefix(500), privacy: .private)")
+        }
         try validateHTTPStatus(resp, data: data, context: "getActiveSessions")
         let decoded = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
         try validateAPIStatus(decoded, context: "getActiveSessions")
@@ -631,7 +633,7 @@ actor CloudMatchClient {
                 )
             }
         } catch {
-            cloudMatchLog.warning("[CloudMatch] stopActiveSessions failed: \(error, privacy: .public)")
+            cloudMatchLog.warning("[CloudMatch] stopActiveSessions failed: \(error, privacy: .private)")
         }
     }
 
@@ -719,11 +721,13 @@ actor CloudMatchClient {
             throw CloudMatchError.missingSession(context: "CloudMatch response")
         }
         let connections = s.connectionInfo ?? []
-        let connInfoLog = connections.map { c -> String in
-            let ipStr = c.ip.map { $0.value ?? "value_nil" } ?? "field_nil"
-            return "usage=\(c.usage) ip=\(ipStr) port=\(c.port) path=\(c.resourcePath ?? "nil")"
-        }.joined(separator: " | ")
-        cloudMatchLog.debug("[CloudMatch] connectionInfo: \(connInfoLog, privacy: .private)")
+        if cloudMatchOSLog.isEnabled(type: .debug) {
+            let connInfoLog = connections.map { c -> String in
+                let ipStr = c.ip.map { $0.value ?? "value_nil" } ?? "field_nil"
+                return "usage=\(c.usage) ip=\(ipStr) port=\(c.port) path=\(c.resourcePath ?? "nil")"
+            }.joined(separator: " | ")
+            cloudMatchLog.debug("[CloudMatch] connectionInfo: \(connInfoLog, privacy: .private)")
+        }
 
         // Diagnostic dump (once per active session — status==2 or 3). Gated on debug being
         // enabled so the JSON re-parse never runs otherwise; values carry TURN credentials

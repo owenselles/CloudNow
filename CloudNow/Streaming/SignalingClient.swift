@@ -3,6 +3,9 @@ import Network
 import os
 
 private let signalingLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Signaling")
+/// Same subsystem/category as signalingLog, used only for `isEnabled(type:)` so the
+/// outgoing-message serialization is skipped unless debug logging is on.
+private let signalingOSLog = OSLog(subsystem: "com.owenselles.CloudNow2", category: "Signaling")
 
 // MARK: - Signaling Events
 
@@ -245,7 +248,7 @@ final class GFNSignalingClient {
                     }
                 } catch {
                     if !Task.isCancelled {
-                        signalingLog.error("[Signaling] Receive error: \(error, privacy: .public)")
+                        signalingLog.error("[Signaling] Receive error: \(error, privacy: .private)")
                         onEvent?(.disconnected(reason: error.localizedDescription))
                     }
                     return
@@ -307,12 +310,14 @@ final class GFNSignalingClient {
     private func sendJson(_ obj: [String: Any]) {
         guard let conn = connection,
               let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
-        if let str = String(data: data, encoding: .utf8) { signalingLog.debug("[Signaling] → \(str.prefix(300), privacy: .private)") }
+        if signalingOSLog.isEnabled(type: .debug), let str = String(data: data, encoding: .utf8) {
+            signalingLog.debug("[Signaling] → \(str.prefix(300), privacy: .private)")
+        }
         let meta = NWProtocolWebSocket.Metadata(opcode: .text)
         let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
         conn.send(content: data, contentContext: ctx, isComplete: true,
                   completion: .contentProcessed { err in
-                      if let err { signalingLog.warning("[Signaling] Send error: \(err, privacy: .public)") }
+                      if let err { signalingLog.warning("[Signaling] Send error: \(err, privacy: .private)") }
                   })
     }
 
@@ -495,7 +500,7 @@ final class GFNSignalingClient {
                         resumeOnce { continuation.resume() }
                     case let .failed(error):
                         connection.stateUpdateHandler = nil
-                        signalingLog.warning("[Signaling] Connection failed (\(candidateHost, privacy: .private)): \(error, privacy: .public)")
+                        signalingLog.warning("[Signaling] Connection failed (\(candidateHost, privacy: .private)): \(error, privacy: .private)")
                         resumeOnce { continuation.resume(throwing: error) }
                     case .cancelled:
                         connection.stateUpdateHandler = nil

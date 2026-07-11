@@ -23,7 +23,7 @@ final nonisolated class ControllerHaptics {
             guard !loggedError else { return }
 
             let localityName = locality.rawValue
-            hapticsLog.warning("[ControllerHaptics] \(localityName, privacy: .public) error: \(error, privacy: .public)")
+            hapticsLog.warning("[ControllerHaptics] \(localityName, privacy: .public) error: \(error, privacy: .private)")
             loggedError = true
         }
     }
@@ -103,7 +103,7 @@ final nonisolated class ControllerHaptics {
             try engine.start()
             hapticsLog.info("[Rumble] engine \(locality.rawValue, privacy: .public) started")
         } catch {
-            hapticsLog.warning("[ControllerHaptics] \(locality.rawValue, privacy: .public) error: \(error, privacy: .public)")
+            hapticsLog.warning("[ControllerHaptics] \(locality.rawValue, privacy: .public) error: \(error, privacy: .private)")
             return nil
         }
 

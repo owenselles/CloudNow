@@ -391,7 +391,7 @@ final class GFNStreamController: NSObject {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             try pruneRtcEventLogs(in: directory, keeping: 2)
         } catch {
-            gfnLog.warning("[Stats] Unable to prepare RTC event log directory: \(error, privacy: .public)")
+            gfnLog.warning("[Stats] Unable to prepare RTC event log directory: \(error, privacy: .private)")
             return nil
         }
 
@@ -619,7 +619,7 @@ final class GFNStreamController: NSObject {
                 logAudioSessionConfiguration(audioSession)
                 return true
             } catch {
-                gfnLog.warning("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error, privacy: .public)")
+                gfnLog.warning("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error, privacy: .private)")
             }
         } else if microphoneRequested {
             gfnLog.warning("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
@@ -640,7 +640,7 @@ final class GFNStreamController: NSObject {
             gfnLog.info("[Stream] AVAudioSession configured for playback")
             logAudioSessionConfiguration(audioSession)
         } catch {
-            gfnLog.error("[Stream] AVAudioSession playback configuration failed: \(error, privacy: .public)")
+            gfnLog.error("[Stream] AVAudioSession playback configuration failed: \(error, privacy: .private)")
         }
         return false
     }
@@ -788,7 +788,7 @@ final class GFNStreamController: NSObject {
                 }
             }
         } catch {
-            gfnLog.error("[Stream] setRemoteDescription failed: \(error, privacy: .public)")
+            gfnLog.error("[Stream] setRemoteDescription failed: \(error, privacy: .private)")
         }
 
         // Create answer
@@ -841,7 +841,7 @@ final class GFNStreamController: NSObject {
                     }
                 }
             } catch {
-                gfnLog.error("[Stream] setLocalDescription failed: \(error, privacy: .public)")
+                gfnLog.error("[Stream] setLocalDescription failed: \(error, privacy: .private)")
             }
             let (iceUfrag, icePwd, dtlsFingerprint) = Self.extractIceCredentials(from: mangledAnswerSdp)
             signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp(iceUfrag: iceUfrag, icePwd: icePwd, dtlsFingerprint: dtlsFingerprint))

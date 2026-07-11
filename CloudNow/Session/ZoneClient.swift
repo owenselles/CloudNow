@@ -152,7 +152,7 @@ actor ZoneClient {
                 cacheAutomaticSelections(from: zones)
             }
         } catch {
-            zoneLog.warning("[Zone] Automatic routing prewarm failed: \(error, privacy: .public)")
+            zoneLog.warning("[Zone] Automatic routing prewarm failed: \(error, privacy: .private)")
         }
     }
 

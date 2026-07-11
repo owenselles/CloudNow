@@ -402,7 +402,7 @@ actor GamesClient {
                 throw GamesError.unauthorized
             } catch {
                 failedChunkCount += 1
-                gamesLog.warning("[Games] metadata chunk failed for \(chunk.count, privacy: .public) apps: \(error, privacy: .public)")
+                gamesLog.warning("[Games] metadata chunk failed for \(chunk.count, privacy: .public) apps: \(error, privacy: .private)")
             }
         }
         return MetadataFetchResult(failedChunkCount: failedChunkCount)

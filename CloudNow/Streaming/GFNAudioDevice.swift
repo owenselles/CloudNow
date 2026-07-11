@@ -62,7 +62,7 @@ final class GFNAudioDevice: NSObject {
             try session.setPreferredOutputNumberOfChannels(min(wanted, routeMax))
             try session.setPreferredIOBufferDuration(0.01)
         } catch {
-            audioDeviceLog.error("preferred output configuration failed: \(error, privacy: .public)")
+            audioDeviceLog.error("preferred output configuration failed: \(error, privacy: .private)")
         }
         let granted = max(1, session.outputNumberOfChannels)
         let channels = min(wanted, granted)
@@ -220,7 +220,7 @@ final class GFNAudioDevice: NSObject {
         do {
             try engine.start()
         } catch {
-            audioDeviceLog.error("engine start failed: \(error, privacy: .public)")
+            audioDeviceLog.error("engine start failed: \(error, privacy: .private)")
             return false
         }
         return true
