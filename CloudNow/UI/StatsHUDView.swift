@@ -111,6 +111,7 @@ struct StatsHUDView: View {
             "\(Int(stats.jitterBufferDelayMs)) / \(Int(stats.jitterBufferTargetDelayMs)) ms"
         )
         row(L10n.text("decode_time"), StatsFormat.formatMs(stats.decodeTimeMs))
+        row(L10n.text("processing_delay"), StatsFormat.formatMs(stats.processingDelayMs))
         row(L10n.text("format"), videoFormatValue)
     }
 
@@ -152,7 +153,6 @@ struct StatsHUDView: View {
         header(L10n.text("debug"))
         row("NACK/PLI/FIR", "\(stats.nackCount)/\(stats.pliCount)/\(stats.firCount)")
         row(L10n.text("retransmits"), "\(stats.retransmittedPackets)")
-        row(L10n.text("processing_delay"), StatsFormat.formatMs(stats.processingDelayMs))
         row(
             L10n.text("input_queue"),
             String(format: "%.1f / %.1f ms", stats.inputQueueP95Ms, stats.inputQueueMaxMs)

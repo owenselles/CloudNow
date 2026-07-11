@@ -67,6 +67,11 @@ struct StreamSettings: Codable, Equatable {
 
     var normalizedForClient: StreamSettings {
         var normalized = self
+        #if !DEBUG
+            // Developer diagnostics are a DEBUG-build-only feature. Never honor a persisted
+            // flag in Release, even if it was enabled on a debug build or carried over.
+            normalized.diagnosticsEnabled = false
+        #endif
         if !normalized.diagnosticsEnabled {
             normalized.enableRtcEventLog = false
         }
