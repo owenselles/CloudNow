@@ -184,6 +184,7 @@ enum L10nZHHant {
         "remote_mouse": "滑鼠 (Siri Remote)",
         "remote_gamepad": "手把",
         "remote_touchpad": "手把 + 觸控板",
+        "remote_gamepad_mouse": "手把 + 滑鼠 (Siri Remote)",
         "reconnecting": "正在重新連線…",
         "attempt_of": "第 %d 次，共 3 次",
         "session_ended": "工作階段已結束",

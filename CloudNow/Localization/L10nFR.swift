@@ -184,6 +184,7 @@ enum L10nFR {
         "remote_mouse": "Souris (Siri Remote)",
         "remote_gamepad": "Manette",
         "remote_touchpad": "Manette + pavé tactile",
+        "remote_gamepad_mouse": "Manette + Souris (Siri Remote)",
         "reconnecting": "Reconnexion…",
         "attempt_of": "Tentative %d sur 3",
         "session_ended": "Session terminée",

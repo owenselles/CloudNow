@@ -471,6 +471,7 @@ struct StreamView: View {
         switch streamController.remoteMode {
         case .mouse: "cursorarrow"
         case .gamepad: "gamecontroller"
+        case .gamepadMouse: "cursorarrow.click"
         case .dualsense: "hand.point.up.left"
         }
     }

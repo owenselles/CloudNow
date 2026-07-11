@@ -184,6 +184,7 @@ enum L10nES {
         "remote_mouse": "Ratón (Siri Remote)",
         "remote_gamepad": "Mando",
         "remote_touchpad": "Mando + panel táctil",
+        "remote_gamepad_mouse": "Mando + Ratón (Siri Remote)",
         "reconnecting": "Reconectando…",
         "attempt_of": "Intento %d de 3",
         "session_ended": "Sesión finalizada",

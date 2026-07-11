@@ -189,6 +189,7 @@ enum L10nAR {
         "remote_mouse": "الفأرة (Siri Remote)",
         "remote_gamepad": "وحدة التحكم",
         "remote_touchpad": "وحدة التحكم + لوحة اللمس",
+        "remote_gamepad_mouse": "وحدة التحكم + الفأرة (Siri Remote)",
         "reconnecting": "جارٍ إعادة الاتصال…",
         "attempt_of": "المحاولة %d من 3",
         "session_ended": "انتهت الجلسة",

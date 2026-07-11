@@ -303,6 +303,7 @@ struct SettingsView: View {
                     Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
                         Text(L10n.remoteInputModeLabel(.mouse)).tag(RemoteInputMode.mouse)
                         Text(L10n.remoteInputModeLabel(.gamepad)).tag(RemoteInputMode.gamepad)
+                        Text(L10n.remoteInputModeLabel(.gamepadMouse)).tag(RemoteInputMode.gamepadMouse)
                         Text(L10n.remoteInputModeLabel(.dualsense)).tag(RemoteInputMode.dualsense)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {

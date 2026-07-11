@@ -184,6 +184,7 @@ enum L10nPTBR {
         "remote_mouse": "Mouse (Siri Remote)",
         "remote_gamepad": "Controle",
         "remote_touchpad": "Controle + touchpad",
+        "remote_gamepad_mouse": "Controle + Mouse (Siri Remote)",
         "reconnecting": "Reconectando…",
         "attempt_of": "Tentativa %d de 3",
         "session_ended": "Sessão encerrada",
