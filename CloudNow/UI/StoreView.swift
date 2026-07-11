@@ -192,5 +192,6 @@ private struct StoreCardLabel: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
+        .prefetchHeroArtOnFocus(game.heroImageUrl ?? game.heroBannerUrl)
     }
 }

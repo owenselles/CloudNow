@@ -275,6 +275,7 @@ private struct HeroBannerView: View {
                     onPlay(game)
                 } label: {
                     Label(L10n.text("play"), systemImage: "play.fill")
+                        .prefetchHeroArtOnFocus(game.heroImageUrl ?? game.heroBannerUrl)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)

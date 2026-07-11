@@ -265,6 +265,7 @@ struct GameCardLabel: View {
                 .lineLimit(2)
                 .padding(10)
         }
+        .prefetchHeroArtOnFocus(game.heroImageUrl ?? game.heroBannerUrl)
     }
 }
 
