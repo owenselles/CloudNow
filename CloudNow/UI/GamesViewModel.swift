@@ -100,6 +100,13 @@ class GamesViewModel {
     /// Refreshes are skipped until the initial load has finished.
     private var hasCompletedInitialLoad = false
 
+    /// Sessions the user just ended, keyed by id. The server keeps listing a
+    /// stopped session for a few seconds, and the refresh triggered by the
+    /// player dismissing races the stop request — so refreshes exclude these
+    /// ids for a grace window instead of re-adding the dead session to Home.
+    private var recentlyStoppedSessions: [String: Date] = [:]
+    private static let stoppedSessionGracePeriod: TimeInterval = 60
+
     init() {
         if let data = UserDefaults.standard.data(forKey: "gfn.favoriteIds"),
            let ids = try? JSONDecoder().decode([String].self, from: data)
@@ -239,7 +246,7 @@ class GamesViewModel {
 
             let fetchedMain = try await mainTask
             let panelLibrary = await libraryTask
-            activeSessions = await sessionsTask
+            activeSessions = await filterStopped(sessionsTask)
             let sub = await subTask
             if let sub {
                 gamesLog.info("[MES] tier=\(sub.membershipTier, privacy: .public) resolutions=\(String(describing: sub.entitledResolutions.map(\.resolutionLabel)), privacy: .public)")
@@ -353,7 +360,24 @@ class GamesViewModel {
         guard let token = try? await authManager.resolveToken() else { return }
         let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
         let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
-        activeSessions = await (try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+        activeSessions = await filterStopped((try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? [])
+    }
+
+    /// Called when the user ends a session: removes it from the UI immediately
+    /// and keeps refreshes from re-adding it while the server catches up with
+    /// the stop. If the stop actually failed, the session reappears once the
+    /// grace window passes — which is the honest outcome.
+    func markSessionStopped(_ sessionId: String) {
+        recentlyStoppedSessions[sessionId] = Date()
+        activeSessions.removeAll { $0.sessionId == sessionId }
+    }
+
+    private func filterStopped(_ sessions: [ActiveSessionInfo]) -> [ActiveSessionInfo] {
+        recentlyStoppedSessions = recentlyStoppedSessions.filter {
+            Date().timeIntervalSince($0.value) < Self.stoppedSessionGracePeriod
+        }
+        guard !recentlyStoppedSessions.isEmpty else { return sessions }
+        return sessions.filter { recentlyStoppedSessions[$0.sessionId] == nil }
     }
 
     // MARK: Recently Played

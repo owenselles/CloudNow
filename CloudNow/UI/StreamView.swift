@@ -881,17 +881,26 @@ struct StreamView: View {
         // Intentional end — clear any pending resumable session
         viewModel.resumableSession = nil
         viewModel.clearLastSession()
-        // Tell the server to stop the session so it doesn't linger
-        if let session = createdSession, let token = sessionToken {
-            Task {
-                try? await cloudMatchClient.stopSession(
-                    sessionId: session.sessionId,
-                    token: token,
-                    base: session.streamingBaseUrl,
-                    serverIp: session.serverIp.isEmpty ? nil : session.serverIp,
-                    clientId: session.clientId,
-                    deviceId: session.deviceId
-                )
+        if let session = createdSession {
+            // Drop the session from Home immediately: the refresh fired by the
+            // dismissal below races the stop request, and the server keeps
+            // listing a stopped session for a few seconds.
+            viewModel.markSessionStopped(session.sessionId)
+            // Tell the server to stop the session so it doesn't linger
+            if let token = sessionToken {
+                Task {
+                    try? await cloudMatchClient.stopSession(
+                        sessionId: session.sessionId,
+                        token: token,
+                        base: session.streamingBaseUrl,
+                        serverIp: session.serverIp.isEmpty ? nil : session.serverIp,
+                        clientId: session.clientId,
+                        deviceId: session.deviceId
+                    )
+                    // Converge to server truth once the stop has actually landed
+                    // (the grace window still excludes the stopped id).
+                    await viewModel.refreshActiveSessions(authManager: authManager)
+                }
             }
         }
         streamController.disconnect()
