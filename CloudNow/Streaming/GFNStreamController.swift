@@ -195,7 +195,6 @@ final class GFNStreamController: NSObject {
         displayHDRSupport: .unknown,
         fallbackReason: nil
     )
-    private(set) var diagnosticSessionSummary: String = ""
     private(set) var rtcEventLogURL: URL?
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
@@ -308,13 +307,6 @@ final class GFNStreamController: NSObject {
             detectedMode: nil,
             displayHDRSupport: localCapabilities.displaySupportsHDR ? .supported : .unsupported,
             fallbackReason: nil
-        )
-        diagnosticSessionSummary = L10n.diagnosticSessionSummary(
-            sessionIdPrefix: String(session.sessionId.prefix(8)),
-            serverIp: session.serverIp,
-            resolution: settings.resolution,
-            fps: settings.fps,
-            codec: L10n.videoCodecLabel(settings.codec)
         )
         setStatsMode(settings.statsMode)
         setDiagnosticsEnabled(settings.diagnosticsEnabled)
@@ -491,7 +483,6 @@ final class GFNStreamController: NSObject {
             displayHDRSupport: .unknown,
             fallbackReason: nil
         )
-        diagnosticSessionSummary = ""
         state = .idle
     }
 
