@@ -584,10 +584,22 @@ final class GFNStreamController: NSObject {
         case let .disconnected(reason):
             // Always stop the signaling client — kills heartbeat and releases the connection.
             signaling?.disconnect()
+            let establishing = switch state {
+            case .connecting, .reconnecting: true
+            default: false
+            }
             if signalingComplete {
                 // Server closes the WebSocket after answer + ICE exchange — expected GFN behavior.
                 // The media runs over WebRTC ICE/DTLS/SRTP; let ICE state drive the outcome.
                 gfnLog.info("[Stream] Signaling closed after setup (expected): \(reason, privacy: .public)")
+            } else if establishing, !serverStopped, onReconnectNeeded != nil {
+                // Signaling closed before setup completed. On a resume this is GFN's RESUME
+                // host-rotation race — a freshly-claimed media host isn't ready yet and drops
+                // the peer (peerRemoved). Reclaim to a fresh host and retry (bounded, with
+                // backoff) instead of dead-ending on a transient failure the user would
+                // otherwise have to fix by hand.
+                gfnLog.info("signaling closed before setup (\(reason, privacy: .public)); reclaiming to a fresh host")
+                attemptReconnect()
             } else {
                 state = .disconnected(reason: reason)
             }

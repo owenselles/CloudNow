@@ -529,17 +529,26 @@ struct StreamView: View {
         statusView(
             icon: "exclamationmark.triangle",
             title: L10n.text("stream_failed"),
-            message: entitlementMessage(from: message),
+            message: friendlyFailureMessage(from: message),
             color: .red
         )
     }
 
-    private func entitlementMessage(from raw: String) -> String {
-        if raw.uppercased().contains("ENTITLEMENT") || raw.contains("3237093650") {
+    private func friendlyFailureMessage(from raw: String) -> String {
+        let upper = raw.uppercased()
+        if upper.contains("ENTITLEMENT") || raw.contains("3237093650") {
             return L10n.format("not_in_library", game.title)
         }
-        if raw.contains("SESSION_LIMIT_EXCEEDED") {
+        if upper.contains("SESSION_LIMIT_EXCEEDED") {
             return L10n.text("previous_session_still_active")
+        }
+        // Never surface the raw JSON body on the failure screen: when the payload carries
+        // a CloudMatch status phrase (e.g. "REQUEST_LIMIT_EXCEEDED_STATUS"), show just that.
+        if let range = raw.range(of: "\"statusDescription\":\""),
+           let end = raw[range.upperBound...].firstIndex(of: "\"")
+        {
+            let phrase = raw[range.upperBound ..< end].trimmingCharacters(in: .whitespaces)
+            if !phrase.isEmpty { return phrase }
         }
         return raw
     }
@@ -659,11 +668,15 @@ struct StreamView: View {
                 streamLog.info("startSession: direct path ready, connecting WebRTC")
                 viewModel.recordPlayed(game)
                 await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
+                return
             } catch {
-                streamLog.error("startSession: direct path failed: \(error)")
-                streamController.fail(with: error.localizedDescription)
+                // Resume/claim failed — the saved session has almost certainly expired
+                // server-side. Drop the stale resume offer and fall through to create a
+                // fresh session rather than dead-ending on a raw server error.
+                streamLog.error("startSession: direct path failed: \(error, privacy: .private); falling back to a fresh session")
+                viewModel.resumableSession = nil
+                createdSession = nil
             }
-            return
         }
 
         // Stop any previously created server session before opening a new one.

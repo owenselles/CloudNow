@@ -261,66 +261,48 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     ]
 }
 
-private func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String, accountAllowsHDR: Bool?) -> [String: Any] {
-    let (width, height) = resolutionPixels(for: settings)
-    let audioChannels = settings.audioFormat.resolvedChannelCount
-    let color = settings.colorRequest(
-        localCapabilities: .detect(codec: settings.codec),
-        accountAllowsHDR: accountAllowsHDR
-    )
+private func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String) -> [String: Any] {
+    // A RESUME (action 2) must NOT renegotiate streaming parameters: the session is already
+    // configured server-side, and resending fps/resolution/codec/HDR/monitor settings makes
+    // the server reject the claim (INTERNAL_ERROR 8A8C0000). Mirror the official client /
+    // OpenNOW minimal resume body — identity, audio, timezone, launch mode only; no monitor
+    // settings, requestedStreamingFeatures, HDR capabilities, or physical-resolution metadata.
     var requestData: [String: Any] = [
-        "availableSupportedControllers": [],
+        "audioMode": 2,
+        "remoteControllersBitmap": 0,
+        "sdrHdrMode": 0,
         "networkTestSessionId": NSNull(),
-        "parentSessionId": NSNull(),
-        "clientIdentification": "GFN-PC",
-        "deviceHashId": deviceId,
+        "availableSupportedControllers": [],
         "clientVersion": "30.0",
-        "sdkVersion": "1.0",
-        "streamerVersion": 1,
+        "deviceHashId": deviceId,
+        "internalTitle": NSNull(),
         "clientPlatformName": "windows",
-        "clientRequestMonitorSettings": [[
-            "monitorId": 0,
-            "positionX": 0,
-            "positionY": 0,
-            "widthInPixels": width,
-            "heightInPixels": height,
-            "framesPerSecond": settings.fps,
-            "sdrHdrMode": cloudMatchSdrHdrMode(color),
-            "displayData": cloudMatchDisplayData(color),
-            "hdr10PlusGamingData": NSNull(),
-            "dpi": 100,
-        ]],
-        "clientTimezoneOffset": TimeZone.current.secondsFromGMT() * 1000,
         "metaData": [
             ["key": "SubSessionId", "value": UUID().uuidString],
             ["key": "wssignaling", "value": "1"],
             ["key": "GSStreamerType", "value": "WebRTC"],
             ["key": "networkType", "value": "Unknown"],
             ["key": "ClientImeSupport", "value": "0"],
-            ["key": "clientPhysicalResolution", "value": "{\"horizontalPixels\":\(width),\"verticalPixels\":\(height)}"],
-            ["key": "surroundAudioInfo", "value": "\(audioChannels)"],
+            ["key": "surroundAudioInfo", "value": "2"],
         ],
-        "sdrHdrMode": cloudMatchSdrHdrMode(color),
-        "clientDisplayHdrCapabilities": cloudMatchDisplayCapabilities(color),
-        "surroundAudioInfo": audioChannels >= 6 ? 4_128_774 : 0,
+        "surroundAudioInfo": 0,
+        "clientTimezoneOffset": TimeZone.current.secondsFromGMT() * 1000,
+        "clientIdentification": "GFN-PC",
+        "parentSessionId": NSNull(),
+        "streamerVersion": 1,
         "appLaunchMode": settings.appLaunchMode.cloudMatchValue,
+        "sdkVersion": "1.0",
+        "enhancedStreamMode": 1,
+        "useOps": true,
+        "clientDisplayHdrCapabilities": NSNull(),
+        "accountLinked": true,
+        "partnerCustomData": "",
         "enablePersistingInGameSettings": settings.persistInGameSettings,
-        "requestedStreamingFeatures": [
-            "reflex": settings.fps >= 120,
-            "bitDepth": cloudMatchBitDepth(color),
-            "cloudGsync": false,
-            "enabledL4S": settings.enableL4S,
-            "profile": 0,
-            "fallbackToLogicalResolution": false,
-            "chromaFormat": cloudMatchChromaFormat(color),
-            "prefilterMode": 0,
-            "prefilterSharpness": 0,
-            "prefilterNoiseReduction": 0,
-            "hudStreamingMode": 0,
-        ],
+        "secureRTSPSupported": false,
+        "userAge": 26,
     ]
-    if let appId {
-        requestData["appId"] = appId
+    if let appId, let appIdInt = Int(appId) {
+        requestData["appId"] = appIdInt
     }
     return requestData
 }
@@ -652,7 +634,7 @@ actor CloudMatchClient {
         deviceId existingDeviceId: String? = nil,
         appId: String? = nil,
         settings: StreamSettings,
-        accountAllowsHDR: Bool? = nil
+        accountAllowsHDR _: Bool? = nil
     ) async throws -> SessionInfo {
         let clientId = existingClientId ?? UUID().uuidString
         let deviceId = existingDeviceId ?? GFNDeviceIdentity.stableDeviceId()
@@ -685,7 +667,8 @@ actor CloudMatchClient {
         let body: [String: Any] = [
             "action": 2,
             "data": "RESUME",
-            "sessionRequestData": buildResumeSessionRequestData(appId: appId, settings: settings, deviceId: deviceId, accountAllowsHDR: accountAllowsHDR),
+            "sessionRequestData": buildResumeSessionRequestData(appId: appId, settings: settings, deviceId: deviceId),
+            "metaData": [],
         ]
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"

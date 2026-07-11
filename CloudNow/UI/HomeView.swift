@@ -6,7 +6,6 @@ struct HomeView: View {
 
     @Environment(GamesViewModel.self) var viewModel
     @Environment(AuthManager.self) var authManager
-    @State private var tick = 0
 
     var body: some View {
         ZStack {
@@ -68,7 +67,6 @@ struct HomeView: View {
             guard viewModel.resumableSession != nil else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
-                tick &+= 1
                 if viewModel.resumableSession?.isExpired == true {
                     viewModel.resumableSession = nil
                     return
@@ -118,9 +116,11 @@ struct HomeView: View {
                             .padding(.vertical, 3)
                             .background(.green, in: Capsule())
                     }
-                    Text(L10n.format("session_expires_in", rs.secondsRemaining))
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.8))
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(L10n.format("session_expires_in", rs.secondsRemaining))
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
                     Button { onResume(rs) } label: {
                         Label(L10n.text("rejoin_session"), systemImage: "arrow.counterclockwise")
                     }
