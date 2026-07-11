@@ -151,7 +151,6 @@ struct StatsHUDView: View {
 
     @ViewBuilder private var debugSection: some View {
         let stats = streamController.stats
-        let pipeline = streamController.videoDiagnostics
         header(L10n.text("debug"))
         row("NACK/PLI/FIR", "\(stats.nackCount)/\(stats.pliCount)/\(stats.firCount)")
         row(L10n.text("retransmits"), "\(stats.retransmittedPackets)")
@@ -182,43 +181,8 @@ struct StatsHUDView: View {
                 "\(stats.localCandidateType) → \(stats.remoteCandidateType) (\(stats.selectedProtocol))"
             )
         }
-        if !streamController.diagnosticSessionSummary.isEmpty {
-            line(streamController.diagnosticSessionSummary)
-        }
-        line(L10n.format(
-            "app_queue_status",
-            pipeline.enqueuedFrames, pipeline.droppedFrames, pipeline.backpressureEvents
-        ))
-        line(L10n.format(
-            "sample_and_convert_status",
-            StatsFormat.formatMs(pipeline.averageSampleCreationMs),
-            StatsFormat.formatMs(pipeline.averageConversionMs)
-        ))
-        line(L10n.displayLayerMetrics(
-            totalFrames: pipeline.avTotalFrames,
-            droppedFrames: pipeline.avDroppedFrames,
-            corruptedFrames: pipeline.avCorruptedFrames,
-            accumulatedFrameDelayMs: pipeline.avAccumulatedFrameDelayMs
-        ))
-        line(L10n.colorDiagnosticStatus(
-            preference: streamController.colorState.preference.label,
-            requested: L10n.streamColorModeLabel(streamController.colorState.requestedMode),
-            detected: detectedColorLabel(pipeline: pipeline),
-            display: L10n.hdrSupportLabel(streamController.colorState.displayHDRSupport)
-        ))
         if let fallback = streamController.colorState.fallbackReason {
             line("\(L10n.text("fallback")) \(L10n.colorFallbackReasonLabel(fallback))", color: .orange)
-        }
-        if let format = pipeline.decodedVideoFormat {
-            line(L10n.decodedVideoStatus(
-                decoderPath: L10n.decoderPathLabel(format.decoderPath),
-                mode: L10n.detectedColorModeLabel(format.mode),
-                width: format.width,
-                height: format.height,
-                pixelFormatName: format.pixelFormatName,
-                bitDepth: format.bitDepth.map { "\($0)-bit" } ?? L10n.text("unknown_bit_depth"),
-                metadataSummary: format.metadataDiagnosticSummary
-            ))
         }
         if streamController.rtcEventLogURL != nil {
             line(L10n.text("rtc_event_log_active"))
@@ -295,16 +259,6 @@ struct StatsHUDView: View {
 
     private var secondaryForegroundColor: Color {
         primaryForegroundColor.opacity(0.68)
-    }
-
-    private func detectedColorLabel(pipeline: VideoPipelineSnapshot) -> String {
-        if let format = pipeline.decodedVideoFormat {
-            return L10n.detectedColorModeLabel(format.mode)
-        }
-        if let detected = streamController.colorState.detectedMode {
-            return L10n.detectedColorModeLabel(detected)
-        }
-        return L10n.text("unknown")
     }
 
     private var colorModeValue: String {
