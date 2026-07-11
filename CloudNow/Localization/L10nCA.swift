@@ -151,6 +151,7 @@ enum L10nCA {
         "remote_mouse": "Ratolí (Siri Remote)",
         "remote_gamepad": "Comandament",
         "remote_touchpad": "Comandament + touchpad",
+        "remote_gamepad_mouse": "Comandament + Ratolí (Siri Remote)",
         "reconnecting": "S'està reconnectant…",
         "attempt_of": "Intent %d de 3",
         "session_ended": "La sessió ha acabat",

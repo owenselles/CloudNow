@@ -246,6 +246,7 @@ enum L10n {
         switch mode {
         case .mouse: text("remote_mouse")
         case .gamepad: text("remote_gamepad")
+        case .gamepadMouse: text("remote_gamepad_mouse")
         case .dualsense: text("remote_touchpad")
         }
     }
