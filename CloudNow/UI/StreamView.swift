@@ -335,47 +335,51 @@ struct StreamView: View {
     // MARK: Streaming
 
     private var streamingView: some View {
-        ZStack {
-            VideoSurfaceViewRepresentable(streamController: streamController, showOverlay: showOverlay)
-                .ignoresSafeArea()
+        VideoSurfaceViewRepresentable(streamController: streamController, showOverlay: showOverlay)
+            .ignoresSafeArea()
+            // The video is a UIViewControllerRepresentable, which (unlike a plain view) can
+            // expand to the union of its ZStack siblings' content. A tall Statistics HUD
+            // (Standard + Diagnostics) grew the layout and zoomed the video via
+            // resizeAspectFill. An overlay is sized to the video and can never grow it, so
+            // the HUD/menu/warning live here instead of as ZStack siblings.
+            .overlay {
+                ZStack {
+                    if showOverlay {
+                        pauseMenu
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
 
-            if showOverlay {
-                pauseMenu
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
+                    // Stays visible while the pause menu is open (the menu is a left sidebar)
+                    // so cycling the Statistics level takes effect on screen immediately.
+                    if streamController.statsMode != .off {
+                        StatsHUDView(streamController: streamController)
+                            .padding(.top, 60)
+                            .padding(.trailing, 60)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .transition(.opacity)
+                    }
 
-            // Stays visible while the pause menu is open (the menu is a left sidebar)
-            // so cycling the Statistics level takes effect on screen immediately.
-            // Padding must sit INSIDE the flexible frame: outside it would grow the
-            // ZStack beyond the screen and stretch the video underneath.
-            if streamController.statsMode != .off {
-                StatsHUDView(streamController: streamController)
-                    .padding(.top, 60)
-                    .padding(.trailing, 60)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .transition(.opacity)
+                    if let warning = streamController.timeWarning, !showOverlay {
+                        timeWarningBanner(warning)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                }
             }
-
-            if let warning = streamController.timeWarning, !showOverlay {
-                timeWarningBanner(warning)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
+            .animation(.easeInOut(duration: 0.2), value: showOverlay)
+            .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
+            .onChange(of: showOverlay) { _, showing in
+                // Pause game input while overlay is open in gamepad mode so D-pad
+                // navigates overlay buttons instead of moving the in-game character.
+                streamController.setInputPaused(showing && streamController.remoteMode != .mouse)
             }
-        }
-        .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
-        .animation(.easeInOut(duration: 0.2), value: showOverlay)
-        .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
-        .onChange(of: showOverlay) { _, showing in
-            // Pause game input while overlay is open in gamepad mode so D-pad
-            // navigates overlay buttons instead of moving the in-game character.
-            streamController.setInputPaused(showing && streamController.remoteMode != .mouse)
-        }
-        .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
-            Button(L10n.text("end_session"), role: .destructive) { disconnect() }
-            Button(L10n.text("keep_playing"), role: .cancel) {}
-        } message: {
-            Text(L10n.text("end_session_message"))
-        }
+            .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
+                Button(L10n.text("end_session"), role: .destructive) { disconnect() }
+                Button(L10n.text("keep_playing"), role: .cancel) {}
+            } message: {
+                Text(L10n.text("end_session_message"))
+            }
     }
 
     // MARK: Pause Menu
