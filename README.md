@@ -2,7 +2,7 @@
 
 A native GeForce NOW client for Apple TV. Stream your entire PC game library directly on tvOS with full controller support, no browser, no workarounds.
 
-![CloudNow Home screen on Apple TV](CloudNow/App%20Store%20Media/Screenshot%201.png)
+![CloudNow Home screen on Apple TV](App%20Store%20Media/Screenshot%201.png)
 
 > **Personal use / sideload only.** This project is not affiliated with, endorsed by, or sponsored by NVIDIA. NVIDIA and GeForce NOW are trademarks of NVIDIA Corporation.
 
