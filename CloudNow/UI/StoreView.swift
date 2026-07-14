@@ -10,23 +10,23 @@ struct StoreView: View {
     @FocusState private var focusedGameId: String?
     @State private var expandedGame: GameInfo?
     @State private var searchText = ""
-    @State private var selectedStore: String? = nil
+    @State private var filterState = GameFilterState()
+    @State private var sortOrder: LibrarySortOrder = .default
 
-    private var availableStores: [String] {
-        let stores = Set(games.flatMap { $0.variants.map(\.appStore) }
-            .filter { $0 != "unknown" })
-        return stores.sorted()
+    private var filterOptions: GameFilterOptions {
+        GameFilterOptions(games: games, favoriteIds: viewModel.favoriteIds, context: .store)
     }
 
     private var filteredGames: [GameInfo] {
-        var result = games
-        if !searchText.isEmpty {
-            result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
-        }
-        if let store = selectedStore {
-            result = result.filter { $0.matchesStore(store) }
-        }
-        return result
+        GameFilterEngine.apply(
+            to: games,
+            context: .store,
+            state: filterState,
+            searchText: searchText,
+            sortOrder: sortOrder,
+            favoriteIds: viewModel.favoriteIds,
+            recentlyPlayedIds: viewModel.recentlyPlayedIds
+        )
     }
 
     private let columns = [
@@ -45,10 +45,10 @@ struct StoreView: View {
                     .padding(60)
                 }
                 .allowsHitTesting(false)
-            } else if filteredGames.isEmpty {
+            } else if games.isEmpty {
                 emptyState
             } else {
-                gameGrid
+                gameContent
             }
         }
         .searchable(text: $searchText, prompt: Text(L10n.text("search_games")))
@@ -69,48 +69,48 @@ struct StoreView: View {
         .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
     }
 
-    private var gameGrid: some View {
-        VStack(spacing: 0) {
-            if availableStores.count > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        filterChip(L10n.text("all"), isSelected: selectedStore == nil) { selectedStore = nil }
-                        ForEach(availableStores, id: \.self) { store in
-                            filterChip(storeName(store), isSelected: selectedStore == store) {
-                                selectedStore = selectedStore == store ? nil : store
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 60)
-                }
-                .scrollClipDisabled()
-                .padding(.vertical, 32)
+    private var gameContent: some View {
+        let visibleGames = filteredGames
+        let options = filterOptions
+
+        return GameGrid(
+            games: visibleGames,
+            focusedId: $focusedGameId,
+            showLibraryBadge: true,
+            hasActiveFilters: !filterState.isEmpty,
+            onClearFilters: { filterState.clear() },
+            onSelect: { game in
+                carouselRequest = CarouselRequest(games: visibleGames, startId: game.id)
+            },
+            onExpand: { game in
+                expandedGame = game
             }
-            GameGrid(
-                games: filteredGames,
-                focusedId: $focusedGameId,
-                showLibraryBadge: true,
-                onSelect: { game in
-                    carouselRequest = CarouselRequest(games: filteredGames, startId: game.id)
-                },
-                onExpand: { game in
-                    expandedGame = game
-                }
-            )
+        ) {
+            filterHeader(visibleGames: visibleGames, options: options)
         }
     }
 
-    private func filterChip(_ label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-        }
-        .buttonStyle(.bordered)
-        .tint(isSelected ? .blue : nil)
-    }
-
-    private func storeName(_ store: String) -> String {
-        GameVariant(id: "", appStore: store).storeName
+    private func filterHeader(visibleGames: [GameInfo], options: GameFilterOptions) -> some View {
+        GameFilterBar(
+            totalCount: games.count,
+            resultCount: visibleGames.count,
+            context: .store,
+            options: options,
+            availableSortOrders: LibrarySortOrder.allCases,
+            previewCount: { state in
+                GameFilterEngine.apply(
+                    to: games,
+                    context: .store,
+                    state: state,
+                    searchText: searchText,
+                    sortOrder: sortOrder,
+                    favoriteIds: viewModel.favoriteIds,
+                    recentlyPlayedIds: viewModel.recentlyPlayedIds
+                ).count
+            },
+            filterState: $filterState,
+            sortOrder: $sortOrder
+        )
     }
 
     private var emptyState: some View {

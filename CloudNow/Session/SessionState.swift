@@ -616,7 +616,7 @@ struct SubscriptionInfo: Codable {
 /// A streaming feature GFN surfaces as a loading-screen badge. Matches the three feature keys
 /// the official client shows there (RTX_ENABLED, HDR, REFLEX_ENABLED); labels are brand terms
 /// shown untranslated. Symbols are Apple SF Symbols to avoid third-party badge artwork.
-enum GameFeature: String, Codable, CaseIterable {
+enum GameFeature: String, Codable, CaseIterable, Hashable {
     case rtx
     case hdr
     case reflex
@@ -642,7 +642,7 @@ struct GameInfo: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let longDescription: String?
-    let genres: [String]?
+    var genres: [String]?
     let developer: String?
     let publisher: String?
     let contentRating: String?
@@ -675,30 +675,95 @@ struct GameInfo: Identifiable, Equatable, Codable {
 }
 
 extension GameInfo {
+    var genreCodes: [String] {
+        Array(Set((genres ?? []).map(Self.normalizedGenreCode).filter { !$0.isEmpty })).sorted()
+    }
+
     var genreItems: [String] {
-        let mapped = (genres ?? []).map { GameInfo.genreLabel($0) }
+        let mapped = genreCodes.map { GameInfo.genreLabel($0) }
         return mapped.isEmpty ? variants.map(\.storeName) : mapped
     }
 
     static func genreLabel(_ code: String) -> String {
-        switch code {
-        case "ACTION":                return "Action"
-        case "ADVENTURE":             return "Adventure"
-        case "ROLE_PLAYING":          return "Role-Playing"
-        case "STRATEGY":              return "Strategy"
-        case "SPORTS":                return "Sports"
-        case "RACING":                return "Racing"
-        case "SIMULATION":            return "Simulation"
-        case "PUZZLE":                return "Puzzle"
-        case "SHOOTER":               return "Shooter"
-        case "FIGHTING":              return "Fighting"
-        case "PLATFORMER":            return "Platformer"
-        case "HORROR":                return "Horror"
-        case "CASUAL":                return "Casual"
-        case "INDIE":                 return "Indie"
-        case "MASSIVELY_MULTIPLAYER": return "MMO"
-        default: return code.replacingOccurrences(of: "_", with: " ").capitalized
+        let normalizedCode = normalizedGenreCode(code)
+        return switch normalizedCode {
+        case "ACTION": L10n.text("genre_action")
+        case "ADVENTURE": L10n.text("genre_adventure")
+        case "ARCADE": L10n.text("genre_arcade")
+        case "FAMILY": L10n.text("genre_family")
+        case "FIRST_PERSON_SHOOTER": L10n.text("genre_first_person_shooter")
+        case "FREE_TO_PLAY": L10n.text("genre_free_to_play")
+        case "ROLE_PLAYING": L10n.text("genre_role_playing")
+        case "STRATEGY": L10n.text("genre_strategy")
+        case "SPORTS": L10n.text("genre_sports")
+        case "RACING": L10n.text("genre_racing")
+        case "SIMULATION": L10n.text("genre_simulation")
+        case "PUZZLE": L10n.text("genre_puzzle")
+        case "SHOOTER": L10n.text("genre_shooter")
+        case "FIGHTING": L10n.text("genre_fighting")
+        case "PLATFORMER": L10n.text("genre_platformer")
+        case "HORROR": L10n.text("genre_horror")
+        case "CASUAL": L10n.text("genre_casual")
+        case "INDIE": L10n.text("genre_indie")
+        case "MASSIVELY_MULTIPLAYER", "MASSIVELY_MULTIPLAYER_ONLINE": L10n.text("genre_mmo")
+        case "MULTIPLAYER_ONLINE_BATTLE_ARENA": L10n.text("genre_moba")
+        case "TECH_DEMO": L10n.text("genre_tech_demo")
+        default: normalizedCode.replacingOccurrences(of: "_", with: " ").capitalized
         }
+    }
+
+    private nonisolated static func normalizedGenreCode(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: "_")
+    }
+}
+
+// MARK: - Game cache compatibility
+
+extension GameInfo {
+    private enum CodingKeys: String, CodingKey {
+        case id, title, longDescription, genres, developer, publisher, contentRating
+        case boxArtUrl, heroBannerUrl, heroImageUrl, supportedFeatures, screenshots
+        case isInLibrary, variants
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        longDescription = try c.decodeIfPresent(String.self, forKey: .longDescription)
+        genres = try c.decodeIfPresent([String].self, forKey: .genres)
+        developer = try c.decodeIfPresent(String.self, forKey: .developer)
+        publisher = try c.decodeIfPresent(String.self, forKey: .publisher)
+        contentRating = try c.decodeIfPresent(String.self, forKey: .contentRating)
+        boxArtUrl = try c.decodeIfPresent(String.self, forKey: .boxArtUrl)
+        heroBannerUrl = try c.decodeIfPresent(String.self, forKey: .heroBannerUrl)
+        heroImageUrl = try c.decodeIfPresent(String.self, forKey: .heroImageUrl)
+        supportedFeatures = try c.decodeIfPresent([GameFeature].self, forKey: .supportedFeatures)
+        screenshots = try c.decodeIfPresent([String].self, forKey: .screenshots) ?? []
+        isInLibrary = try c.decode(Bool.self, forKey: .isInLibrary)
+        variants = try c.decode([GameVariant].self, forKey: .variants)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(longDescription, forKey: .longDescription)
+        try c.encodeIfPresent(genres, forKey: .genres)
+        try c.encodeIfPresent(developer, forKey: .developer)
+        try c.encodeIfPresent(publisher, forKey: .publisher)
+        try c.encodeIfPresent(contentRating, forKey: .contentRating)
+        try c.encodeIfPresent(boxArtUrl, forKey: .boxArtUrl)
+        try c.encodeIfPresent(heroBannerUrl, forKey: .heroBannerUrl)
+        try c.encodeIfPresent(heroImageUrl, forKey: .heroImageUrl)
+        try c.encodeIfPresent(supportedFeatures, forKey: .supportedFeatures)
+        try c.encode(screenshots, forKey: .screenshots)
+        try c.encode(isInLibrary, forKey: .isInLibrary)
+        try c.encode(variants, forKey: .variants)
     }
 }
 
@@ -711,6 +776,28 @@ struct GameVariant: Equatable, Codable {
 
     var storeName: String {
         L10n.storeName(for: appStore)
+    }
+}
+
+extension GameVariant {
+    private enum CodingKeys: String, CodingKey {
+        case id, appStore, appId, isOwned
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        appStore = try c.decode(String.self, forKey: .appStore)
+        appId = try c.decodeIfPresent(String.self, forKey: .appId)
+        isOwned = try c.decodeIfPresent(Bool.self, forKey: .isOwned) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(appStore, forKey: .appStore)
+        try c.encodeIfPresent(appId, forKey: .appId)
+        try c.encode(isOwned, forKey: .isOwned)
     }
 }
 
