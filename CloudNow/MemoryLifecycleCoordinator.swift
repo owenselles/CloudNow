@@ -40,7 +40,7 @@ final class MemoryLifecycleCoordinator {
     func streamDidLeavePlayback() {
         guard isStreamOpen, isStreaming else { return }
         isStreaming = false
-        enqueue(isAppActive ? .foreground : .background)
+        enqueue(isAppActive ? .streamOpening : .background)
     }
 
     func streamDidClose() {
@@ -67,12 +67,18 @@ final class MemoryLifecycleCoordinator {
         isAppActive = true
         if isStreaming {
             enqueue(.streaming)
+        } else if isStreamOpen {
+            enqueue(.streamOpening)
         } else {
             enqueue(.foreground)
         }
     }
 
     func didReceiveMemoryWarning() {
+        releaseCachedArtwork()
+    }
+
+    func releaseCachedArtwork() {
         HeroArtPrefetcher.shared.cancelAll()
         BoxArtPrefetcher.shared.cancelAll()
         enqueue(.memoryWarning)
@@ -88,11 +94,15 @@ final class MemoryLifecycleCoordinator {
     }
 
     private func didApply(_ event: ArtworkMemoryEvent) {
-        guard event == .foreground, isAppActive, !isStreaming else { return }
-        if !isStreamOpen {
+        guard isAppActive, !isStreaming else { return }
+        if event == .foreground, !isStreamOpen {
             HeroArtPrefetcher.shared.resume()
             BoxArtPrefetcher.shared.resume()
         }
+        guard event == .foreground
+            || (event == .streamOpening && isStreamOpen)
+            || event == .memoryWarning
+        else { return }
         NotificationCenter.default.post(name: .artworkLoadingDidResume, object: nil)
     }
 }

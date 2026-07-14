@@ -290,12 +290,10 @@ struct GameDetailView: View {
                 LazyHStack(spacing: 16) {
                     ForEach(Array(game.screenshots.enumerated()), id: \.offset) { _, url in
                         Button {} label: {
-                            AsyncImage(url: URL(string: url)) { phase in
-                                switch phase {
-                                case let .success(image): image.resizable().aspectRatio(contentMode: .fill)
-                                default: Color.gray.opacity(0.3)
-                                }
-                            }
+                            SharedArtworkImage(
+                                urlString: url,
+                                maxPixelSize: ArtworkImagePipeline.screenshotPixelSize
+                            )
                             .frame(width: 426, height: 240)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         }

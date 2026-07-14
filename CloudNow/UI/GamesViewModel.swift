@@ -172,6 +172,7 @@ class GamesViewModel {
     private var currentVpcId: String?
     private var activeSessionsTask: Task<[ActiveSessionInfo], Never>?
     private var vpcIdRefreshTask: Task<String?, Never>?
+    private var latestNetworkLibraryGames: [GameInfo]?
 
     /// The scene-activation refresh in MainTabView also fires on cold launch,
     /// which would fetch the library a second time in parallel with load().
@@ -254,6 +255,7 @@ class GamesViewModel {
     }
 
     func load(authManager: AuthManager) async {
+        latestNetworkLibraryGames = nil
         let snapshot = await persistence.loadGamesSnapshot()
         let catalogLocaleCode = L10n.nvidiaLocaleCode()
         favoriteIds = snapshot.favoriteIds
@@ -412,7 +414,10 @@ class GamesViewModel {
         await persistence.saveCatalog(fetchedMain, localeCode: localeCode, vpcId: vpcId)
 
         // If the library request completed first, fold in catalog ownership now.
-        let merged = mergeLibrary(libraryGames, catalog: fetchedMain)
+        let merged = mergeLibrary(
+            latestNetworkLibraryGames ?? libraryGames,
+            catalog: fetchedMain
+        )
         if merged != libraryGames {
             libraryGames = merged
             await persistence.saveLibraryGames(merged)
@@ -431,6 +436,7 @@ class GamesViewModel {
             return
         }
 
+        latestNetworkLibraryGames = panelLibrary
         let merged = mergeLibrary(panelLibrary, catalog: mainGames)
         libraryGames = merged
         libraryLoadPhase = .loaded
@@ -588,10 +594,11 @@ class GamesViewModel {
     // MARK: Recently Played
 
     func recordPlayed(_ game: GameInfo) {
-        recentlyPlayedIds.removeAll { $0 == game.id }
-        recentlyPlayedIds.insert(game.id, at: 0)
-        if recentlyPlayedIds.count > 10 { recentlyPlayedIds = Array(recentlyPlayedIds.prefix(10)) }
-        let ids = recentlyPlayedIds
+        var ids = recentlyPlayedIds
+        ids.removeAll { $0 == game.id }
+        ids.insert(game.id, at: 0)
+        if ids.count > 10 { ids = Array(ids.prefix(10)) }
+        recentlyPlayedIds = ids
         Task { await persistence.saveRecentlyPlayedIds(ids) }
     }
 

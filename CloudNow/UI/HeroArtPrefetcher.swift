@@ -27,6 +27,7 @@ actor ArtworkImagePipeline {
     static let shared = ArtworkImagePipeline()
 
     static let boxArtPixelSize = 640
+    static let screenshotPixelSize = 960
     static let heroArtPixelSize = 1920
 
     private struct CacheEntry {
@@ -72,7 +73,9 @@ actor ArtworkImagePipeline {
 
     func image(for url: URL, maxPixelSize: Int) async throws -> CGImage {
         let kind = Self.artworkKind(maxPixelSize: maxPixelSize)
-        guard permitsNewLoads(for: kind) else { throw CancellationError() }
+        guard permitsNewLoads(for: kind, maxPixelSize: maxPixelSize) else {
+            throw CancellationError()
+        }
 
         let key = Self.cacheKey(url: url, maxPixelSize: maxPixelSize)
         if let cached = cachedImage(for: key) { return cached }
@@ -93,7 +96,7 @@ actor ArtworkImagePipeline {
             let image = try await task.value
             inFlight[key] = nil
             guard generation[kind, default: 0] == requestGeneration,
-                  permitsNewLoads(for: kind)
+                  permitsNewLoads(for: kind, maxPixelSize: maxPixelSize)
             else {
                 throw CancellationError()
             }
@@ -119,7 +122,7 @@ actor ArtworkImagePipeline {
     }
 
     func handleMemoryEvent(_ event: ArtworkMemoryEvent) {
-        if event != .memoryWarning, event != .streamOpening {
+        if event != .memoryWarning {
             memoryEvent = event
         }
 
@@ -146,8 +149,15 @@ actor ArtworkImagePipeline {
         }
     }
 
-    private func permitsNewLoads(for _: ArtworkKind) -> Bool {
-        memoryEvent == .foreground
+    private func permitsNewLoads(for kind: ArtworkKind, maxPixelSize: Int) -> Bool {
+        switch memoryEvent {
+        case .foreground:
+            true
+        case .streamOpening:
+            kind == .heroArt && maxPixelSize == Self.heroArtPixelSize
+        case .streaming, .background, .memoryWarning:
+            false
+        }
     }
 
     private func cachedImage(for key: String) -> CGImage? {

@@ -45,6 +45,11 @@ struct CloudNowApp: App {
             }
             .environment(authManager)
             .task { await authManager.initialize() }
+            .onChange(of: authManager.isAuthenticated) { _, authenticated in
+                if !authenticated {
+                    MemoryLifecycleCoordinator.shared.releaseCachedArtwork()
+                }
+            }
         }
     }
 }

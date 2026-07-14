@@ -45,7 +45,10 @@ final class VideoSurfaceView: UIView {
 
     var onDecodedVideoFormatChanged: (@Sendable (DecodedVideoFormat) -> Void)? {
         didSet {
-            renderer.onDecodedVideoFormatChanged = onDecodedVideoFormatChanged
+            let handler = onDecodedVideoFormatChanged
+            renderer.onDecodedVideoFormatChanged = { format in
+                handler?(format)
+            }
         }
     }
 
