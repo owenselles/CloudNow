@@ -73,21 +73,29 @@ final class AuthManager {
                     priority: 0
                 )
 
-                // Request device authorization (get PIN)
-                let deviceAuth = try await api.requestDeviceAuthorization(idpId: selectedProvider.idpId)
-                loginPhase = .showingPIN(
-                    code: deviceAuth.userCode,
-                    url: deviceAuth.verificationUri
-                        .replacingOccurrences(of: "https://", with: ""),
-                    urlComplete: deviceAuth.verificationUriComplete
-                )
-
-                // Poll for user to complete login
-                var tokens = try await api.pollForDeviceToken(
-                    deviceCode: deviceAuth.deviceCode,
-                    interval: deviceAuth.interval,
-                    expiresIn: deviceAuth.expiresIn
-                )
+                // Device flow loop: restart automatically when the code expires.
+                // access_denied and other hard errors escape to the outer catch.
+                var tokens: AuthTokens
+                while true {
+                    try Task.checkCancellation()
+                    let deviceAuth = try await api.requestDeviceAuthorization(idpId: selectedProvider.idpId)
+                    loginPhase = .showingPIN(
+                        code: deviceAuth.userCode,
+                        url: deviceAuth.verificationUri
+                            .replacingOccurrences(of: "https://", with: ""),
+                        urlComplete: deviceAuth.verificationUriComplete
+                    )
+                    do {
+                        tokens = try await api.pollForDeviceToken(
+                            deviceCode: deviceAuth.deviceCode,
+                            interval: deviceAuth.interval,
+                            expiresIn: deviceAuth.expiresIn
+                        )
+                        break
+                    } catch AuthError.deviceFlowExpired {
+                        continue
+                    }
+                }
                 loginPhase = .exchangingTokens
 
                 let user = try await api.fetchUserInfo(tokens: tokens)

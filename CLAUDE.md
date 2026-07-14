@@ -8,9 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Git
 
-- **Upstream**: `origin` → `owenselles/CloudNow` (original author)
-- **Fork**: `fork` → `yowmamasita/CloudNow` (our fork — push here)
-- `project.pbxproj` contains our dev team ID (`7RX5G7H8DW`) and deployment target (`18.0`) — don't commit this to branches intended for upstream PRs
+- `origin` → `owenselles/CloudNow`
+- Push feature branches to `origin` and open PRs against `main`
 
 ## Building
 

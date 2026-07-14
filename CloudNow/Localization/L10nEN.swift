@@ -5,6 +5,7 @@ enum L10nEN {
         "app_name": "CloudNow",
         "app_tagline": "GeForce NOW for Apple TV",
         "sign_in_with_nvidia": "Sign in with NVIDIA",
+        "requires_geforce_now_account": "Requires a GeForce NOW account",
         "sign_in_to_geforce_now": "Sign in to GeForce NOW",
         "scan_qr_or_go_to": "Scan the QR code, or go to:",
         "and_enter_pin": "and enter this PIN:",

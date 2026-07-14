@@ -36,16 +36,22 @@ struct LoginView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Button {
-                authManager.login()
-            } label: {
-                Label(L10n.text("sign_in_with_nvidia"), systemImage: "person.badge.key")
-                    .font(.title2.weight(.semibold))
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 16)
+            VStack(spacing: 16) {
+                Button {
+                    authManager.login()
+                } label: {
+                    Label(L10n.text("sign_in_with_nvidia"), systemImage: "person.badge.key")
+                        .font(.title2.weight(.semibold))
+                        .padding(.horizontal, 40)
+                        .padding(.vertical, 16)
+                }
+                .buttonStyle(.bordered)
+                .tint(.green)
+
+                Text(L10n.text("requires_geforce_now_account"))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.bordered)
-            .tint(.green)
         }
         .padding(80)
     }
