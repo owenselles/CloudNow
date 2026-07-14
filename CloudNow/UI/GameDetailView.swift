@@ -287,7 +287,7 @@ struct GameDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Screenshots").font(.title3.weight(.semibold))
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
+                LazyHStack(spacing: 16) {
                     ForEach(Array(game.screenshots.enumerated()), id: \.offset) { _, url in
                         Button {} label: {
                             AsyncImage(url: URL(string: url)) { phase in
@@ -437,12 +437,12 @@ struct GameDetailBackground: View {
 
     var body: some View {
         ZStack {
-            AsyncImage(url: game.heroBannerUrl.flatMap(URL.init) ?? game.boxArtUrl.flatMap(URL.init)) { phase in
-                switch phase {
-                case let .success(image): image.resizable().aspectRatio(contentMode: .fill)
-                default: Color.black
-                }
-            }
+            SharedArtworkImage(
+                urlString: game.heroBannerUrl.flatMap(URL.init) == nil
+                    ? game.boxArtUrl
+                    : game.heroBannerUrl,
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .blur(radius: blurred ? 20 : 0)

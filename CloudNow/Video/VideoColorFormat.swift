@@ -4,7 +4,7 @@ import CoreVideo
 import UIKit
 import VideoToolbox
 
-struct LocalVideoCapabilities: Equatable {
+nonisolated struct LocalVideoCapabilities: Equatable {
     let supportsHardware10BitDecode: Bool
     let supportsHDRRendering: Bool
     let supportsExtendedDynamicRange: Bool
@@ -12,7 +12,7 @@ struct LocalVideoCapabilities: Equatable {
     let supportedPixelFormats: Set<OSType>
     let supportedCodecs: Set<VideoCodec>
 
-    static func detect(codec: VideoCodec?) -> LocalVideoCapabilities {
+    @MainActor static func detect(codec: VideoCodec?) -> LocalVideoCapabilities {
         let hevcHardwareDecode = VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC)
         let displayEDRHeadroom: CGFloat = if #available(tvOS 16.0, *) {
             UIApplication.shared.connectedScenes
@@ -26,7 +26,7 @@ struct LocalVideoCapabilities: Equatable {
         // EDR, so potentialEDRHeadroom reports 1.0 even on a 4K-HDR display. AVPlayer's
         // availableHDRModes reflects the connected display's actual HDR capability
         // (empty == SDR-only), which is the correct signal on tvOS.
-        let displaySupportsHDR = !AVPlayer.availableHDRModes.isEmpty || displayEDRHeadroom > 1.0
+        let displaySupportsHDR = AVPlayer.eligibleForHDRPlayback || displayEDRHeadroom > 1.0
         var codecs: Set<VideoCodec> = [.h264]
         if hevcHardwareDecode {
             codecs.insert(.h265)
@@ -48,13 +48,13 @@ struct LocalVideoCapabilities: Equatable {
     }
 }
 
-enum VideoDecoderPath: String, Codable, Equatable {
+nonisolated enum VideoDecoderPath: String, Codable, Equatable {
     case hardware
     case softwareI420
     case unknown
 }
 
-struct DecodedVideoFormat: Codable, Equatable {
+nonisolated struct DecodedVideoFormat: Codable, Equatable {
     let mode: DetectedColorMode
     let width: Int
     let height: Int
@@ -69,7 +69,7 @@ struct DecodedVideoFormat: Codable, Equatable {
     let hasContentLightLevelMetadata: Bool
     let decoderPath: VideoDecoderPath
 
-    var metadataDiagnosticSummary: String {
+    @MainActor var metadataDiagnosticSummary: String {
         L10n.metadataDiagnosticSummary(
             transferFunction: transferFunction,
             colorPrimaries: colorPrimaries,
@@ -80,7 +80,7 @@ struct DecodedVideoFormat: Codable, Equatable {
     }
 }
 
-struct VideoFormatSignature: Hashable {
+nonisolated struct VideoFormatSignature: Hashable {
     let width: Int
     let height: Int
     let pixelFormat: OSType
@@ -91,7 +91,7 @@ struct VideoFormatSignature: Hashable {
     let colorRange: String?
 }
 
-enum DecodedVideoFormatInspector {
+nonisolated enum DecodedVideoFormatInspector {
     static func inspect(pixelBuffer: CVPixelBuffer, decoderPath: VideoDecoderPath) -> DecodedVideoFormat {
         let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
         let bitDepth = bitDepth(for: pixelFormat)

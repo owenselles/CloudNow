@@ -1,6 +1,6 @@
-import CoreHaptics
+@preconcurrency import CoreHaptics
 import Foundation
-import GameController
+@preconcurrency import GameController
 import os.log
 
 private nonisolated let hapticsLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Haptics")
@@ -126,19 +126,21 @@ final nonisolated class ControllerHaptics: @unchecked Sendable {
 
     private func setHandlers(for motor: Motor) {
         motor.engine?.stoppedHandler = { [weak self, weak motor] _ in
-            self?.queue.async {
-                motor?.player = nil
-                motor?.playing = false
+            guard let self, let motor else { return }
+            queue.async { [motor] in
+                motor.player = nil
+                motor.playing = false
             }
         }
         motor.engine?.resetHandler = { [weak self, weak motor] in
-            self?.queue.async {
-                motor?.player = nil
-                motor?.playing = false
+            guard let self, let motor else { return }
+            queue.async { [motor] in
+                motor.player = nil
+                motor.playing = false
                 do {
-                    try motor?.engine?.start()
+                    try motor.engine?.start()
                 } catch {
-                    motor?.log(error)
+                    motor.log(error)
                 }
             }
         }

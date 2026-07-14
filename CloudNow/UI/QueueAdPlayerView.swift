@@ -109,21 +109,23 @@ struct QueueAdPlayerView: View {
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { _ in
-            let currentMs = max(0, Int(player.currentTime().seconds * 1000))
-            watchedTimeMs = currentMs
-            let playing = player.rate > 0.01
-            isPlaying = playing
+            MainActor.assumeIsolated {
+                let currentMs = max(0, Int(player.currentTime().seconds * 1000))
+                watchedTimeMs = currentMs
+                let playing = player.rate > 0.01
+                isPlaying = playing
 
-            if playing, !hasReportedStart {
-                hasReportedStart = true
-                isPaused = false
-                onStart(ad.adId)
-            } else if !playing, hasReportedStart, !hasSentFinish, !isPaused {
-                isPaused = true
-                onPause(ad.adId)
-            } else if playing, isPaused {
-                isPaused = false
-                onResume(ad.adId)
+                if playing, !hasReportedStart {
+                    hasReportedStart = true
+                    isPaused = false
+                    onStart(ad.adId)
+                } else if !playing, hasReportedStart, !hasSentFinish, !isPaused {
+                    isPaused = true
+                    onPause(ad.adId)
+                } else if playing, isPaused {
+                    isPaused = false
+                    onResume(ad.adId)
+                }
             }
         }
 
@@ -132,10 +134,12 @@ struct QueueAdPlayerView: View {
             object: item,
             queue: .main
         ) { _ in
-            guard !hasSentFinish else { return }
-            hasSentFinish = true
-            isPlaying = false
-            onFinish(ad.adId, watchedTimeMs)
+            MainActor.assumeIsolated {
+                guard !hasSentFinish else { return }
+                hasSentFinish = true
+                isPlaying = false
+                onFinish(ad.adId, watchedTimeMs)
+            }
         }
     }
 

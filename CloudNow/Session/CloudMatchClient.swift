@@ -1,14 +1,14 @@
 import Foundation
 import os.log
 
-private let cloudMatchLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "CloudMatch")
+private nonisolated let cloudMatchLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "CloudMatch")
 /// Same subsystem/category as cloudMatchLog, used only for `isEnabled(type:)` so the
 /// verbose connection-info dumps skip their JSON work unless debug logging is on.
-private let cloudMatchOSLog = OSLog(subsystem: "com.owenselles.CloudNow2", category: "CloudMatch")
+private nonisolated let cloudMatchOSLog = OSLog(subsystem: "com.owenselles.CloudNow2", category: "CloudMatch")
 
 // MARK: - CloudMatch Headers
 
-private func gfnHeaders(token: String, clientId: String, deviceId: String, includeOrigin: Bool = true) -> [String: String] {
+private nonisolated func gfnHeaders(token: String, clientId: String, deviceId: String, includeOrigin: Bool = true) -> [String: String] {
     var h: [String: String] = [
         "User-Agent": NVIDIAAuth.userAgent,
         "Authorization": "GFNJWT \(token)",
@@ -33,7 +33,7 @@ private func gfnHeaders(token: String, clientId: String, deviceId: String, inclu
 
 // MARK: - CloudMatch Response Types
 
-private struct CloudMatchResponse: Decodable {
+private nonisolated struct CloudMatchResponse: Decodable {
     let requestStatus: RequestStatus?
     let session: SessionPayload?
     struct RequestStatus: Decodable {
@@ -101,7 +101,7 @@ private struct CloudMatchResponse: Decodable {
 }
 
 /// Ad action codes sent to CloudMatch
-enum AdAction: Int {
+nonisolated enum AdAction: Int {
     case start = 1
     case pause = 2
     case resume = 3
@@ -110,7 +110,7 @@ enum AdAction: Int {
 }
 
 /// GFN API returns ip as a string, array of strings, 32-bit integer, or {"value": ...} object
-private struct AnyCodableString: Decodable {
+private nonisolated struct AnyCodableString: Decodable {
     let value: String?
     init(from decoder: Decoder) throws {
         // Nested object: {"value": "80.84.170.152"} or {"value": 1345682432}
@@ -137,7 +137,7 @@ private struct AnyCodableString: Decodable {
     }
 }
 
-private struct AnyCodableStringArray: Decodable {
+private nonisolated struct AnyCodableStringArray: Decodable {
     let values: [String]
     init(from decoder: Decoder) throws {
         if let arr = try? [String](from: decoder) {
@@ -150,7 +150,7 @@ private struct AnyCodableStringArray: Decodable {
     }
 }
 
-private struct GetSessionsResponse: Decodable {
+private nonisolated struct GetSessionsResponse: Decodable {
     let requestStatus: RequestStatus
     let sessions: [SessionEntry]?
     struct RequestStatus: Decodable {
@@ -173,19 +173,19 @@ private struct GetSessionsResponse: Decodable {
 
 // MARK: - Session Request Body
 
-private func resolutionPixels(for settings: StreamSettings) -> (width: Int, height: Int) {
+private nonisolated func resolutionPixels(for settings: StreamSettings) -> (width: Int, height: Int) {
     let resolutionParts = settings.resolution.split(separator: "x")
     let width = Int(resolutionParts.first ?? "1920") ?? 1920
     let height = Int(resolutionParts.last ?? "1080") ?? 1080
     return (width, height)
 }
 
-private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
+private nonisolated func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
     let (width, height) = resolutionPixels(for: input.settings)
     let tzOffset = TimeZone.current.secondsFromGMT() * 1000
     let audioChannels = input.settings.audioFormat.resolvedChannelCount
     let color = input.settings.colorRequest(
-        localCapabilities: .detect(codec: input.settings.codec),
+        localCapabilities: input.localVideoCapabilities,
         accountAllowsHDR: input.accountAllowsHDR
     )
 
@@ -261,7 +261,7 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     ]
 }
 
-private func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String) -> [String: Any] {
+private nonisolated func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String) -> [String: Any] {
     // A RESUME (action 2) must NOT renegotiate streaming parameters: the session is already
     // configured server-side, and resending fps/resolution/codec/HDR/monitor settings makes
     // the server reject the claim (INTERNAL_ERROR 8A8C0000). Mirror the official client /
@@ -307,21 +307,21 @@ private func buildResumeSessionRequestData(appId: String?, settings: StreamSetti
     return requestData
 }
 
-private func cloudMatchSdrHdrMode(_ color: StreamColorRequest) -> Int {
+private nonisolated func cloudMatchSdrHdrMode(_ color: StreamColorRequest) -> Int {
     color.hdrRequested ? 1 : 0
 }
 
-private func cloudMatchBitDepth(_ color: StreamColorRequest) -> Int {
+private nonisolated func cloudMatchBitDepth(_ color: StreamColorRequest) -> Int {
     // CloudMatch has historically used 0 for 8-bit and 1 for 10-bit in this client.
     color.bitDepth >= 10 ? 1 : 0
 }
 
-private func cloudMatchChromaFormat(_ color: StreamColorRequest) -> Int {
+private nonisolated func cloudMatchChromaFormat(_ color: StreamColorRequest) -> Int {
     // Meaning is undocumented. Preserve the known-working 4:2:0 value for SDR8, SDR10, and HDR10.
     color.chromaFormat ?? 1
 }
 
-private func cloudMatchDisplayData(_ color: StreamColorRequest) -> Any {
+private nonisolated func cloudMatchDisplayData(_ color: StreamColorRequest) -> Any {
     guard let capabilities = color.displayCapabilities else { return NSNull() }
     return [
         "desiredContentMaxLuminance": capabilities.desiredContentMaxLuminance,
@@ -330,7 +330,7 @@ private func cloudMatchDisplayData(_ color: StreamColorRequest) -> Any {
     ]
 }
 
-private func cloudMatchDisplayCapabilities(_ color: StreamColorRequest) -> Any {
+private nonisolated func cloudMatchDisplayCapabilities(_ color: StreamColorRequest) -> Any {
     guard let capabilities = color.displayCapabilities else { return NSNull() }
     return [
         "version": 1,
@@ -341,7 +341,7 @@ private func cloudMatchDisplayCapabilities(_ color: StreamColorRequest) -> Any {
 
 // MARK: - Signaling URL Resolution
 
-private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> String {
+private nonisolated func resolveSignalingUrl(serverIp: String, resourcePath: String) -> String {
     if resourcePath.hasPrefix("rtsps://") || resourcePath.hasPrefix("rtsp://") {
         let withoutScheme = resourcePath.hasPrefix("rtsps://")
             ? String(resourcePath.dropFirst("rtsps://".count))
@@ -357,7 +357,7 @@ private func resolveSignalingUrl(serverIp: String, resourcePath: String) -> Stri
     return "wss://\(serverIp):443/nvst/"
 }
 
-private func hostFromResourcePath(_ resourcePath: String?) -> String? {
+private nonisolated func hostFromResourcePath(_ resourcePath: String?) -> String? {
     guard let resourcePath, !resourcePath.isEmpty, !resourcePath.hasPrefix("/") else { return nil }
     return URL(string: resourcePath)?.host
 }
@@ -954,7 +954,7 @@ actor CloudMatchClient {
 
 // MARK: - Errors
 
-enum CloudMatchError: Error, LocalizedError {
+nonisolated enum CloudMatchError: Error, LocalizedError {
     case sessionCreateFailed(String)
     case missingServerIp
     case missingSession(context: String)

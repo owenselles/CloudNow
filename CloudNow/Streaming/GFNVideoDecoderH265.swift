@@ -2,9 +2,10 @@ import CoreMedia
 import Foundation
 @preconcurrency import LiveKitWebRTC
 import os.log
+import Synchronization
 import VideoToolbox
 
-private let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", category: "H265Decoder")
+private nonisolated let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", category: "H265Decoder")
 
 /// VideoToolbox H.265 decoder that preserves bit depth and colorimetry.
 ///
@@ -16,7 +17,7 @@ private let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", category: "H
 /// The upstream fix is proposed as webrtc-sdk/webrtc#267; once it ships in a LiveKitWebRTC
 /// release this class can be deleted and `GFNVideoDecoderFactory` reverted to the default
 /// decoder.
-final class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder {
+final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unchecked Sendable {
     private var callback: RTCVideoDecoderCallback?
     private var videoFormat: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
@@ -72,12 +73,11 @@ final class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder {
         }
 
         let rtpTimestamp = Int32(bitPattern: encodedImage.timeStamp)
-        // Captured by reference; the synchronous decode below runs the handler before returning.
-        var decodeFailed = false
+        let decodeFailed = Mutex(false)
         let handler: VTDecompressionOutputHandler = { [weak self] status, _, imageBuffer, _, _ in
             guard status == noErr, let imageBuffer else {
                 h265Log.error("decode output failed: \(status)")
-                decodeFailed = true
+                decodeFailed.withLock { $0 = true }
                 return
             }
             let frame = LKRTCVideoFrame(
@@ -97,7 +97,7 @@ final class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder {
             guard createSession(format: videoFormat), let retrySession = self.session else { return -1 }
             status = VTDecompressionSessionDecodeFrame(retrySession, sampleBuffer: sampleBuffer, flags: [], infoFlagsOut: nil, outputHandler: handler)
         }
-        if status != noErr || decodeFailed {
+        if status != noErr || decodeFailed.withLock({ $0 }) {
             h265Log.error("decode failed: \(status)")
             return -1
         }

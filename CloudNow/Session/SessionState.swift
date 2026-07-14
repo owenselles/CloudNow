@@ -269,7 +269,7 @@ nonisolated enum ColorModePreference: String, Codable, CaseIterable {
     }
 }
 
-enum StreamColorMode: String, Codable, Equatable {
+nonisolated enum StreamColorMode: String, Codable, Equatable {
     case sdr8
     case sdr10
     case hdr10
@@ -278,19 +278,19 @@ enum StreamColorMode: String, Codable, Equatable {
         self == .sdr8 ? 8 : 10
     }
 
-    var diagnosticLabel: String {
+    @MainActor var diagnosticLabel: String {
         L10n.streamColorModeLabel(self)
     }
 }
 
-enum DetectedColorMode: String, Codable, Equatable {
+nonisolated enum DetectedColorMode: String, Codable, Equatable {
     case sdr8
     case sdr10
     case hdr10
     case unknown8Bit
     case unknown10Bit
 
-    var diagnosticLabel: String {
+    @MainActor var diagnosticLabel: String {
         L10n.detectedColorModeLabel(self)
     }
 
@@ -304,13 +304,13 @@ enum DetectedColorMode: String, Codable, Equatable {
     }
 }
 
-enum HDRSupport: String, Codable {
+nonisolated enum HDRSupport: String, Codable {
     case supported
     case unsupported
     case unknown
 }
 
-enum ColorFallbackReason: String, Codable {
+nonisolated enum ColorFallbackReason: String, Codable {
     case gameHDRUnknown
     case gameHDRUnsupported
     case accountHDRUnavailable
@@ -327,7 +327,7 @@ enum ColorFallbackReason: String, Codable {
     case sessionNegotiationFailed
 }
 
-struct StreamColorState: Codable, Equatable {
+nonisolated struct StreamColorState: Codable, Equatable {
     let preference: ColorModePreference
     var requestedMode: StreamColorMode
     var negotiatedMode: StreamColorMode?
@@ -336,7 +336,7 @@ struct StreamColorState: Codable, Equatable {
     var fallbackReason: ColorFallbackReason?
 }
 
-struct StreamColorCapabilities {
+nonisolated struct StreamColorCapabilities {
     let gameHDRSupport: HDRSupport
     let accountAllowsHDR: Bool?
     let serverAllowsHDR: Bool?
@@ -345,7 +345,7 @@ struct StreamColorCapabilities {
     let displaySupportsHDR: Bool
 }
 
-struct HDRDisplayCapabilities: Codable, Equatable {
+nonisolated struct HDRDisplayCapabilities: Codable, Equatable {
     let desiredContentMaxLuminance: Int
     let desiredContentMinLuminance: Int
     let desiredContentMaxFrameAverageLuminance: Int
@@ -359,7 +359,7 @@ struct HDRDisplayCapabilities: Codable, Equatable {
     )
 }
 
-struct StreamColorRequest: Codable, Equatable {
+nonisolated struct StreamColorRequest: Codable, Equatable {
     let mode: StreamColorMode
     let bitDepth: Int
     let hdrRequested: Bool
@@ -418,7 +418,7 @@ struct StreamColorRequest: Codable, Equatable {
 }
 
 extension StreamSettings {
-    func colorRequest(
+    nonisolated func colorRequest(
         localCapabilities: LocalVideoCapabilities,
         gameHDRSupport: HDRSupport = .unknown,
         accountAllowsHDR: Bool? = nil,
@@ -454,7 +454,7 @@ nonisolated enum ColorQuality: String, Codable, CaseIterable {
 
 // MARK: - ICE Server
 
-struct IceServer: Codable {
+nonisolated struct IceServer: Codable {
     let urls: [String]
     let username: String?
     let credential: String?
@@ -462,12 +462,12 @@ struct IceServer: Codable {
 
 // MARK: - Queue Ads
 
-struct SessionAdMediaFile: Codable, Equatable {
+nonisolated struct SessionAdMediaFile: Codable, Equatable {
     let mediaFileUrl: String?
     let encodingProfile: String?
 }
 
-struct SessionAdInfo: Codable, Equatable, Identifiable {
+nonisolated struct SessionAdInfo: Codable, Equatable, Identifiable {
     let adId: String
     let adUrl: String?
     let mediaUrl: String?
@@ -485,7 +485,7 @@ struct SessionAdInfo: Codable, Equatable, Identifiable {
     }
 }
 
-struct SessionAdState: Codable, Equatable {
+nonisolated struct SessionAdState: Codable, Equatable {
     let isAdsRequired: Bool
     let isQueuePaused: Bool?
     let gracePeriodSeconds: Int?
@@ -495,7 +495,7 @@ struct SessionAdState: Codable, Equatable {
 
 // MARK: - Session Info (returned by CloudMatch)
 
-struct SessionInfo {
+nonisolated struct SessionInfo {
     let sessionId: String
     let status: Int
     let zone: String
@@ -534,7 +534,7 @@ struct SessionInfo {
 /// Server-reported setup stage during session provisioning, matching the official client's
 /// seatSetupStep values (0 Connecting, 1 InQueue, 5 PreviousSessionCleanup, 6 WaitingForStorage;
 /// anything else is treated as generic Configuring).
-enum SetupStage: Equatable {
+nonisolated enum SetupStage: Equatable {
     case connecting
     case inQueue
     case configuring
@@ -551,19 +551,19 @@ enum SetupStage: Equatable {
         }
     }
 
-    var label: String {
+    @MainActor var label: String {
         L10n.setupStageLabel(self)
     }
 }
 
-struct MediaConnectionInfo {
+nonisolated struct MediaConnectionInfo {
     let ip: String
     let port: Int
 }
 
 // MARK: - Active Session Info
 
-struct ActiveSessionInfo {
+nonisolated struct ActiveSessionInfo {
     let sessionId: String
     let status: Int
     let appId: String?
@@ -803,13 +803,14 @@ extension GameVariant {
 
 // MARK: - Session Create Request
 
-struct SessionCreateRequest {
+nonisolated struct SessionCreateRequest {
     let appId: String
     let internalTitle: String?
     let token: String
     let streamingBaseUrl: String?
     let routingZoneUrl: String?
     let settings: StreamSettings
+    let localVideoCapabilities: LocalVideoCapabilities
     let accountLinked: Bool
     let accountAllowsHDR: Bool?
 }

@@ -69,9 +69,6 @@ struct StreamView: View {
         .ignoresSafeArea()
         .task {
             computeLoadingBadges()
-            streamController.onReconnectNeeded = { [self] in
-                await reclaimSession()
-            }
             await startSession()
         }
         .onDisappear { streamController.disconnect() }
@@ -230,14 +227,13 @@ struct StreamView: View {
     @ViewBuilder private var loadingBackground: some View {
         // Prefer HERO_IMAGE (full-bleed key art) for the full-screen loading background, matching
         // the official client; fall back to the TV_BANNER-based heroBannerUrl when it's absent.
-        if let url = (game.heroImageUrl ?? game.heroBannerUrl).flatMap({ URL(string: $0) }) {
-            AsyncImage(url: url) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color.black
-            }
+        if let urlString = game.heroImageUrl ?? game.heroBannerUrl,
+           URL(string: urlString) != nil
+        {
+            SharedArtworkImage(
+                urlString: urlString,
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
             .ignoresSafeArea()
             .overlay(
                 LinearGradient(
@@ -615,6 +611,7 @@ struct StreamView: View {
         streamLog.info("startSession: game=\(game.title), existingSession=\(existingSession != nil), directSession=\(directSession != nil)")
         // Reset stream controller (handles retry from failed/disconnected state)
         streamController.disconnect()
+        installReconnectHandler()
 
         // Reconnect path — RESUME PUT tells the server to rebuild its media endpoint,
         // then connect WebRTC as soon as we get a single status 2/3 (no double-poll wait).
@@ -855,28 +852,40 @@ struct StreamView: View {
         }
     }
 
-    private func reclaimSession() async -> SessionInfo? {
-        guard let session = createdSession, let token = sessionToken else { return nil }
-        streamLog.info("reclaimSession: attempting to reclaim \(session.sessionId)")
-        do {
-            let reclaimed = try await cloudMatchClient.claimSession(
-                sessionId: session.sessionId,
-                serverIp: session.serverIp,
-                token: token,
-                base: session.streamingBaseUrl,
-                routingZoneUrl: session.zone,
-                clientId: session.clientId,
-                deviceId: session.deviceId,
-                appId: game.variants.first?.appId ?? game.variants.first?.id,
-                settings: settings,
-                accountAllowsHDR: viewModel.subscription?.allowsHDR
-            )
-            createdSession = reclaimed
-            streamLog.info("reclaimSession: success, status=\(reclaimed.status)")
-            return reclaimed
-        } catch {
-            streamLog.error("reclaimSession: failed: \(error)")
-            return nil
+    private func installReconnectHandler() {
+        let createdSession = $createdSession
+        let sessionToken = $sessionToken
+        let client = cloudMatchClient
+        let appId = game.variants.first?.appId ?? game.variants.first?.id
+        let reconnectSettings = settings.normalizedForClient
+        let accountAllowsHDR = viewModel.subscription?.allowsHDR
+
+        // Capture only the reconnect inputs. Capturing StreamView here also captures its
+        // @State-held controller, creating controller -> callback -> controller ownership.
+        streamController.onReconnectNeeded = {
+            guard let session = createdSession.wrappedValue,
+                  let token = sessionToken.wrappedValue else { return nil }
+            streamLog.info("reclaimSession: attempting to reclaim \(session.sessionId)")
+            do {
+                let reclaimed = try await client.claimSession(
+                    sessionId: session.sessionId,
+                    serverIp: session.serverIp,
+                    token: token,
+                    base: session.streamingBaseUrl,
+                    routingZoneUrl: session.zone,
+                    clientId: session.clientId,
+                    deviceId: session.deviceId,
+                    appId: appId,
+                    settings: reconnectSettings,
+                    accountAllowsHDR: accountAllowsHDR
+                )
+                createdSession.wrappedValue = reclaimed
+                streamLog.info("reclaimSession: success, status=\(reclaimed.status)")
+                return reclaimed
+            } catch {
+                streamLog.error("reclaimSession: failed: \(error)")
+                return nil
+            }
         }
     }
 
@@ -937,6 +946,7 @@ struct StreamView: View {
             streamingBaseUrl: routeSelection.base,
             routingZoneUrl: routeSelection.routingZoneUrl,
             settings: settings,
+            localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec),
             accountLinked: true,
             accountAllowsHDR: viewModel.subscription?.allowsHDR
         )

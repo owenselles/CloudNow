@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-struct VideoPipelineSnapshot {
+nonisolated struct VideoPipelineSnapshot {
     var callbackFrames: Int = 0
     var softwareConvertedFrames: Int = 0
     var enqueuedFrames: Int = 0
@@ -18,11 +18,11 @@ struct VideoPipelineSnapshot {
     var decodedVideoFormat: DecodedVideoFormat?
 }
 
-struct VideoFrameTrace {
+nonisolated struct VideoFrameTrace {
     fileprivate let signpostID: OSSignpostID
 }
 
-final class VideoPipelineDiagnostics: @unchecked Sendable {
+final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
     private struct State {
         var isEnabled = false
         var snapshot = VideoPipelineSnapshot()

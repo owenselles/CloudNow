@@ -1,13 +1,13 @@
 import Foundation
-import GameController
+@preconcurrency import GameController
 import os.log
-import UIKit
+@preconcurrency import UIKit
 
-private let inputLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Input")
+private nonisolated let inputLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Input")
 
 // MARK: - GFN Input Protocol Constants
 
-private enum GFNInput {
+private nonisolated enum GFNInput {
     static let keyDown: UInt8 = 3
     static let keyUp: UInt8 = 4
     static let mouseRel: UInt8 = 7
@@ -57,7 +57,7 @@ nonisolated enum RemoteInputMode: String, Codable, Equatable {
 // MARK: - Input Event Handler
 
 /// Implemented by InputSender; adopted by VideoSurfaceView to forward keyboard/mouse events.
-protocol InputEventHandler: AnyObject {
+nonisolated protocol InputEventHandler: AnyObject {
     func sendKeyEvent(down: Bool, keyCode: UIKeyboardHIDUsage, modifiers: UIKeyModifierFlags)
     func sendMouseMove(dx: Int16, dy: Int16)
     func sendMouseButton(down: Bool, button: UInt8)
@@ -66,7 +66,7 @@ protocol InputEventHandler: AnyObject {
 
 // MARK: - Encoded Packet
 
-enum InputPacketCategory: String {
+nonisolated enum InputPacketCategory: String {
     case heartbeat
     case gamepadSnapshot
     case keyboard
@@ -76,23 +76,24 @@ enum InputPacketCategory: String {
     case hapticsEnabled
 }
 
-enum InputSendDisposition {
+nonisolated enum InputSendDisposition {
     case accepted
     case channelUnavailable
     case rejected
     case superseded
 }
 
-/// Reusable fixed-capacity storage handed from InputSender to the WebRTC send queue.
-final class EncodedInputPacket: @unchecked Sendable {
+/// Reusable fixed-capacity storage handed exclusively from InputSender to the WebRTC send queue.
+/// The sender does not mutate a packet again until the completion returns it to the pool.
+final nonisolated class EncodedInputPacket: @unchecked Sendable {
     static let capacity = 64
 
-    nonisolated(unsafe) let storage = NSMutableData(length: capacity)!
-    private(set) nonisolated(unsafe) var count = 0
-    private(set) nonisolated(unsafe) var category: InputPacketCategory = .heartbeat
-    private(set) nonisolated(unsafe) var generatedAt: UInt64 = 0
-    private(set) nonisolated(unsafe) var gamepadSlot: Int?
-    private(set) nonisolated(unsafe) var isReplaceableGamepadSnapshot = false
+    let storage = NSMutableData(length: capacity)!
+    private(set) var count = 0
+    private(set) var category: InputPacketCategory = .heartbeat
+    private(set) var generatedAt: UInt64 = 0
+    private(set) var gamepadSlot: Int?
+    private(set) var isReplaceableGamepadSnapshot = false
 
     func markGenerated(
         as category: InputPacketCategory,
@@ -119,7 +120,7 @@ final class EncodedInputPacket: @unchecked Sendable {
 // MARK: - Input Encoder
 
 /// Encodes controller and HID input into reusable GFN protocol packet buffers.
-final class InputEncoder {
+final nonisolated class InputEncoder {
     private var protocolVersion = 2
     private var gamepadSequence = [Int: UInt16]()
 
@@ -340,7 +341,7 @@ final class InputEncoder {
 
 // MARK: - GCController → XInput Mapping
 
-func mapGCControllerToXInput(_ controller: GCController, deadzone: Float = 0.15) -> (
+nonisolated func mapGCControllerToXInput(_ controller: GCController, deadzone: Float = 0.15) -> (
     buttons: UInt16, leftTrigger: UInt8, rightTrigger: UInt8,
     lx: Int16, ly: Int16, rx: Int16, ry: Int16
 ) {
@@ -385,7 +386,7 @@ func mapGCControllerToXInput(_ controller: GCController, deadzone: Float = 0.15)
     return (buttons, lt, rt, lx, ly, rx, ry)
 }
 
-private func radialDeadzone(x: Float, y: Float, deadzone: Float) -> (Int16, Int16) {
+private nonisolated func radialDeadzone(x: Float, y: Float, deadzone: Float) -> (Int16, Int16) {
     let clampedX = max(-1, min(1, x))
     let clampedY = max(-1, min(1, y))
     let magnitude = (clampedX * clampedX + clampedY * clampedY).squareRoot()
@@ -396,7 +397,7 @@ private func radialDeadzone(x: Float, y: Float, deadzone: Float) -> (Int16, Int1
     return (axisToInt16(clampedX * factor), axisToInt16(clampedY * factor))
 }
 
-private func axisToInt16(_ value: Float) -> Int16 {
+private nonisolated func axisToInt16(_ value: Float) -> Int16 {
     let clamped = max(-1, min(1, value))
     return Int16(clamped < 0 ? clamped * 32768 : clamped * 32767)
 }
@@ -404,14 +405,14 @@ private func axisToInt16(_ value: Float) -> Int16 {
 // MARK: - DataChannelSender
 
 /// Abstracts the WebRTC data channel so the WebRTC dependency stays in GFNStreamController.
-protocol DataChannelSender: AnyObject {
-    func sendData(_ packet: EncodedInputPacket, completion: @escaping (InputSendDisposition) -> Void)
+nonisolated protocol DataChannelSender: AnyObject {
+    func sendData(_ packet: EncodedInputPacket, completion: @escaping @Sendable (InputSendDisposition) -> Void)
 }
 
 // MARK: - InputSender
 
 /// Owns all mutable input state on one latency-sensitive serial queue.
-final class InputSender {
+final nonisolated class InputSender: @unchecked Sendable {
     static let remoteSensitivity: Float = 250
 
     private struct OverlayPressState {
@@ -436,10 +437,10 @@ final class InputSender {
     }
 
     /// Called when the user long-presses the overlay trigger button to toggle the GFN overlay.
-    var menuToggleHandler: (() -> Void)?
+    var menuToggleHandler: (@MainActor @Sendable () -> Void)?
 
     /// Called when remoteMode changes due to controller connect/disconnect auto-switching.
-    var onRemoteModeChanged: ((RemoteInputMode) -> Void)?
+    var onRemoteModeChanged: (@MainActor @Sendable (RemoteInputMode) -> Void)?
 
     private weak var channel: DataChannelSender?
     private let encoder = InputEncoder()
@@ -1434,7 +1435,7 @@ extension InputSender: InputEventHandler {
         inputQueue.async { [weak self] in self?.sendMouseWheelNow(delta) }
     }
 
-    private static func gfnModifiers(from flags: UIKeyModifierFlags) -> UInt16 {
+    private nonisolated static func gfnModifiers(from flags: UIKeyModifierFlags) -> UInt16 {
         var mods: UInt16 = 0
         if flags.contains(.shift) { mods |= 0x0001 }
         if flags.contains(.control) { mods |= 0x0002 }
@@ -1443,7 +1444,7 @@ extension InputSender: InputEventHandler {
         return mods
     }
 
-    private static let hidToKeyMapping: [UIKeyboardHIDUsage: (vk: UInt16, scancode: UInt16)] = [
+    private nonisolated static let hidToKeyMapping: [UIKeyboardHIDUsage: (vk: UInt16, scancode: UInt16)] = [
         .keyboardA: (0x41, 0x1E), .keyboardB: (0x42, 0x30), .keyboardC: (0x43, 0x2E),
         .keyboardD: (0x44, 0x20), .keyboardE: (0x45, 0x12), .keyboardF: (0x46, 0x21),
         .keyboardG: (0x47, 0x22), .keyboardH: (0x48, 0x23), .keyboardI: (0x49, 0x17),

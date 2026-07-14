@@ -9,9 +9,9 @@ import Foundation
 import Observation
 import os.log
 
-private let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
-private let videoColorLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "VideoColor")
-private let audioSyncLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "AudioSync")
+private nonisolated let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
+private nonisolated let videoColorLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "VideoColor")
+private nonisolated let audioSyncLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "AudioSync")
 
 // MARK: - Session Time Warning
 
@@ -37,7 +37,7 @@ enum StreamState: Equatable {
 
 // MARK: - Stream Statistics
 
-struct StreamStats {
+nonisolated struct StreamStats: Equatable {
     var bitrateKbps: Int = 0
     var resolutionWidth: Int = 0
     var resolutionHeight: Int = 0
@@ -79,6 +79,7 @@ struct StreamStats {
     var inputDropped: UInt64 = 0
     var inputSuperseded: UInt64 = 0
     var inputBufferedBytes: UInt64 = 0
+    var inputQueueP50Ms: Double = 0
     var inputQueueP95Ms: Double = 0
     var inputQueueMaxMs: Double = 0
     var newestGamepadAgeMs: Double = 0
@@ -92,7 +93,7 @@ struct StreamStats {
 /// Audio metrics surfaced in the statistics HUD, refreshed once per stats tick.
 /// NetEQ values are interval averages derived from AudioSyncStatsSnapshot pairs;
 /// device/route fields are sampled from the live audio session.
-struct AudioStats {
+nonisolated struct AudioStats: Equatable {
     var jitterBufferCurrentMs: Double = 0
     var jitterBufferTargetMs: Double = 0
     var devicePlayoutMs: Double = 0
@@ -111,7 +112,7 @@ struct AudioStats {
     var codecChannels: Int = 0
 }
 
-private struct VideoStatsSnapshot {
+private nonisolated struct VideoStatsSnapshot {
     var timestampUs: Double = 0
     var bytesReceived: Double = 0
     var packetsReceived: Double = 0
@@ -139,7 +140,7 @@ private struct VideoStatsSnapshot {
     var powerEfficientDecoder: Bool?
 }
 
-private struct ConnectionStatsSnapshot {
+private nonisolated struct ConnectionStatsSnapshot {
     var rttMs: Double
     var selectedNetworkPath: String
 }
@@ -147,7 +148,7 @@ private struct ConnectionStatsSnapshot {
 /// Audio-pipeline latency counters sampled from the full statistics report in diagnostic mode.
 /// All values cumulative (interval-averaged at log time), mirroring VideoStatsSnapshot, to
 /// pinpoint where the audio→video lag accumulates: NetEQ jitter buffer vs device playout.
-private struct AudioSyncStatsSnapshot {
+private nonisolated struct AudioSyncStatsSnapshot {
     var timestampUs: Double = 0
     var packetsReceived: Double = 0
     var packetsLost: Double = 0
@@ -168,7 +169,7 @@ private struct AudioSyncStatsSnapshot {
     var videoPlayoutTimestampMs: Double?
 }
 
-private let streamStatsParsingQueue = DispatchQueue(
+private nonisolated let streamStatsParsingQueue = DispatchQueue(
     label: "com.cloudnow.stream-stats",
     qos: .utility
 )
@@ -208,8 +209,11 @@ final class GFNStreamController: NSObject {
 
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
+    // WebRTC invokes its delegates from arbitrary threads. Every mutable field in this block is
+    // confined to inputSendQueue; nonisolated(unsafe) documents that GCD-backed boundary until the
+    // imported Objective-C delegate APIs can express Swift actor isolation.
     @ObservationIgnored private nonisolated(unsafe) var reliableSendChannel: LKRTCDataChannel?
-    @ObservationIgnored private nonisolated(unsafe) var rumbleSink: ((Int, UInt16, UInt16) -> Void)?
+    @ObservationIgnored private nonisolated(unsafe) var rumbleSink: (@Sendable (Int, UInt16, UInt16) -> Void)?
     @ObservationIgnored private nonisolated(unsafe) var inputGenerated: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputSubmitted: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputAccepted: UInt64 = 0
@@ -217,14 +221,17 @@ final class GFNStreamController: NSObject {
     @ObservationIgnored private nonisolated(unsafe) var inputSuperseded: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputBufferedBytes: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputQueueWaitsNs: [UInt64] = []
+    @ObservationIgnored private nonisolated(unsafe) var inputQueueWaitWriteIndex = 0
     @ObservationIgnored private nonisolated(unsafe) var inputQueueMaxNs: UInt64 = 0
+    @ObservationIgnored private nonisolated(unsafe) var inputLatencySamplingEnabled = false
     @ObservationIgnored private nonisolated(unsafe) var newestGamepadGeneratedAt: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputChannelState = "closed"
     @ObservationIgnored private nonisolated(unsafe) var pendingGamepadSnapshots: [
-        Int: (packet: EncodedInputPacket, completion: (InputSendDisposition) -> Void)
+        Int: (packet: EncodedInputPacket, completion: @Sendable (InputSendDisposition) -> Void)
     ] = [:]
-    @ObservationIgnored private nonisolated(unsafe) let inputBackpressureHighWaterBytes: UInt64 = 512
-    @ObservationIgnored private nonisolated(unsafe) let inputBackpressureLowWaterBytes: UInt64 = 128
+    private nonisolated static let maximumInputLatencySamples = 4096
+    private nonisolated let inputBackpressureHighWaterBytes: UInt64 = 512
+    private nonisolated let inputBackpressureLowWaterBytes: UInt64 = 128
     private let inputSendQueue = DispatchQueue(
         label: "com.cloudnow.input.send",
         qos: .userInteractive
@@ -261,7 +268,7 @@ final class GFNStreamController: NSObject {
     /// subsequent ICE disconnect is then treated as a normal end — not a reconnect candidate.
     private var serverStopped = false
     /// Set by the caller to enable auto-reconnect on ICE disconnect.
-    var onReconnectNeeded: (() async -> SessionInfo?)?
+    var onReconnectNeeded: (@MainActor () async -> SessionInfo?)?
     private var previousSelectedCandidatePairId = ""
     private var lastZoneRttFeedbackAt: Date?
 
@@ -318,9 +325,10 @@ final class GFNStreamController: NSObject {
         )
         setStatsMode(settings.statsMode)
         setDiagnosticsEnabled(settings.diagnosticsEnabled)
-        stats = StreamStats()
-        stats.gpuType = session.gpuType ?? ""
-        stats.serverZone = Self.zoneShortName(from: session.zone)
+        var initialStats = StreamStats()
+        initialStats.gpuType = session.gpuType ?? ""
+        initialStats.serverZone = Self.zoneShortName(from: session.zone)
+        stats = initialStats
         audioStats = AudioStats()
         streamingStartedAt = nil
         inputSendQueue.sync {
@@ -331,6 +339,7 @@ final class GFNStreamController: NSObject {
             inputSuperseded = 0
             inputBufferedBytes = 0
             inputQueueWaitsNs.removeAll(keepingCapacity: true)
+            inputQueueWaitWriteIndex = 0
             inputQueueMaxNs = 0
             newestGamepadGeneratedAt = 0
             inputChannelState = "closed"
@@ -363,10 +372,13 @@ final class GFNStreamController: NSObject {
         view.menuPressHandler = { [weak self] in self?.handleMenuPress() }
     }
 
-    /// Sets the statistics HUD level. Stats collection runs regardless while streaming;
-    /// the level only controls what is rendered (and the full-report cadence).
+    /// Sets the statistics HUD level. Core stream health remains sampled for the pause menu,
+    /// while per-packet input-latency sampling runs only for a visible HUD or diagnostics.
     func setStatsMode(_ mode: StreamStatsMode) {
+        let changed = statsMode != mode
         statsMode = mode
+        if changed { resetInputLatencyPresentation() }
+        updateInputLatencySampling(resetSamples: changed)
     }
 
     /// Enables developer diagnostics: video-pipeline tracing, AudioSync logging, and the
@@ -375,6 +387,42 @@ final class GFNStreamController: NSObject {
         guard diagnosticsEnabled != enabled else { return }
         diagnosticsEnabled = enabled
         videoView?.setDiagnosticsEnabled(enabled)
+        resetInputLatencyPresentation()
+        updateInputLatencySampling(resetSamples: true)
+    }
+
+    private func updateInputLatencySampling(resetSamples: Bool = false) {
+        let enabled = statsMode != .off || diagnosticsEnabled
+        inputSendQueue.async { [weak self] in
+            guard let self else { return }
+            inputLatencySamplingEnabled = enabled
+            guard resetSamples || !enabled else { return }
+            inputQueueWaitsNs.removeAll(keepingCapacity: true)
+            inputQueueWaitWriteIndex = 0
+            inputQueueMaxNs = 0
+        }
+    }
+
+    private func resetInputLatencyPresentation() {
+        updateStats {
+            $0.inputQueueP50Ms = 0
+            $0.inputQueueP95Ms = 0
+            $0.inputQueueMaxMs = 0
+        }
+    }
+
+    private func updateStats(_ update: (inout StreamStats) -> Void) {
+        var next = stats
+        update(&next)
+        guard next != stats else { return }
+        stats = next
+    }
+
+    private func updateAudioStats(_ update: (inout AudioStats) -> Void) {
+        var next = audioStats
+        update(&next)
+        guard next != audioStats else { return }
+        audioStats = next
     }
 
     @discardableResult
@@ -439,6 +487,7 @@ final class GFNStreamController: NSObject {
     // MARK: Disconnect
 
     func disconnect() {
+        onReconnectNeeded = nil
         stopRtcEventLog()
         stopStatsTimer()
         wasStreaming = false
@@ -452,12 +501,17 @@ final class GFNStreamController: NSObject {
         inputDataChannel = nil
         inputSendQueue.sync {
             reliableSendChannel = nil
+            rumbleSink = nil
+            inputLatencySamplingEnabled = false
+            inputQueueWaitsNs.removeAll(keepingCapacity: true)
+            inputQueueWaitWriteIndex = 0
+            inputQueueMaxNs = 0
             let pending = Array(pendingGamepadSnapshots.values)
             pendingGamepadSnapshots.removeAll()
             inputDropped &+= UInt64(pending.count)
             pending.forEach { $0.completion(.channelUnavailable) }
         }
-        inputSendQueue.async { [weak self] in self?.rumbleSink = nil }
+        inputSender = nil
         partiallyReliableDataChannel = nil
         statsChannel = nil
         controlChannel = nil
@@ -512,13 +566,25 @@ final class GFNStreamController: NSObject {
 
         // Tear down current peer connection before reconnecting
         inputSender?.stop()
+        videoView?.inputHandler = nil
         signaling?.disconnect()
         peerConnection?.close()
         peerConnection = nil
         inputDataChannel = nil
         partiallyReliableDataChannel = nil
         statsChannel = nil
-        reliableSendChannel = nil
+        inputSendQueue.sync {
+            reliableSendChannel = nil
+            rumbleSink = nil
+            inputQueueWaitsNs.removeAll(keepingCapacity: true)
+            inputQueueWaitWriteIndex = 0
+            inputQueueMaxNs = 0
+            let pending = Array(pendingGamepadSnapshots.values)
+            pendingGamepadSnapshots.removeAll()
+            inputDropped &+= UInt64(pending.count)
+            pending.forEach { $0.completion(.channelUnavailable) }
+        }
+        inputSender = nil
         controlChannel = nil
         videoTrack = nil
         micAudioTrack = nil
@@ -688,8 +754,10 @@ final class GFNStreamController: NSObject {
         // so the audio device initializes with the right graph.
         let surroundOffered = sdp.contains("multiopus/")
         GFNAudioDevice.shared.requestedOutputChannels = surroundOffered ? 6 : 2
-        audioStats.codecName = surroundOffered ? "Multiopus" : "Opus"
-        audioStats.codecChannels = surroundOffered ? 6 : 2
+        updateAudioStats {
+            $0.codecName = surroundOffered ? "Multiopus" : "Opus"
+            $0.codecChannels = surroundOffered ? 6 : 2
+        }
         audioSyncLog.info("offer audio: \(surroundOffered ? "multiopus 5.1" : "opus stereo", privacy: .public)")
 
         let microphoneEnabledForConnection = configureAudioSession(microphoneRequested: settings.micEnabled)
@@ -987,14 +1055,12 @@ final class GFNStreamController: NSObject {
     // MARK: Private — Microphone
 
     private func attachMicrophone(to pc: LKRTCPeerConnection) async {
-        #if os(tvOS)
-            let granted = true
-        #else
+        #if !os(tvOS)
             let granted = await withCheckedContinuation { cont in
                 AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
             }
+            guard granted else { return }
         #endif
-        guard granted else { return }
 
         let audioConstraints = LKRTCMediaConstraints(
             mandatoryConstraints: nil,
@@ -1103,7 +1169,9 @@ final class GFNStreamController: NSObject {
 
     private func collectStats() {
         guard let peerConnection else { return }
-        collectInputStats()
+        if statsMode != .off || diagnosticsEnabled {
+            collectInputStats()
+        }
         if diagnosticsEnabled {
             let generation = statsGeneration
             videoView?.captureDiagnostics { [weak self] snapshot in
@@ -1120,7 +1188,7 @@ final class GFNStreamController: NSObject {
 
         if let videoReceiver, !videoStatsRequestInFlight {
             videoStatsRequestInFlight = true
-            peerConnection.statistics(for: videoReceiver) { [weak self] report in
+            peerConnection.statistics(for: videoReceiver) { report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseVideoStats(report)
                     Task { @MainActor [weak self] in
@@ -1140,7 +1208,7 @@ final class GFNStreamController: NSObject {
         if wantFullReport, !connectionStatsRequestInFlight {
             connectionStatsRequestInFlight = true
             let wantAudio = statsMode == .standard || diagnosticsEnabled
-            peerConnection.statistics { [weak self] report in
+            peerConnection.statistics { report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseConnectionStats(report)
                     let audioSample = wantAudio ? Self.parseAudioSyncStats(report) : nil
@@ -1148,8 +1216,10 @@ final class GFNStreamController: NSObject {
                         guard let self, statsGeneration == generation else { return }
                         connectionStatsRequestInFlight = false
                         if let snapshot {
-                            stats.rttMs = snapshot.rttMs
-                            stats.selectedNetworkPath = snapshot.selectedNetworkPath
+                            updateStats {
+                                $0.rttMs = snapshot.rttMs
+                                $0.selectedNetworkPath = snapshot.selectedNetworkPath
+                            }
                         }
                         if let audioSample { applyAudioSyncStats(audioSample) }
                     }
@@ -1162,10 +1232,8 @@ final class GFNStreamController: NSObject {
         inputSendQueue.async { [weak self] in
             guard let self else { return }
             let sortedWaits = inputQueueWaitsNs.sorted()
-            let p95Index = sortedWaits.isEmpty
-                ? 0
-                : min(sortedWaits.count - 1, Int((Double(sortedWaits.count) * 0.95).rounded(.up)) - 1)
-            let p95Ns = sortedWaits.isEmpty ? 0 : sortedWaits[p95Index]
+            let p50Ns = Self.percentile(0.50, in: sortedWaits)
+            let p95Ns = Self.percentile(0.95, in: sortedWaits)
             let now = DispatchTime.now().uptimeNanoseconds
             let gamepadAgeNs = newestGamepadGeneratedAt == 0
                 ? 0
@@ -1179,22 +1247,32 @@ final class GFNStreamController: NSObject {
             let maxNs = inputQueueMaxNs
             let channelState = inputChannelState
             inputQueueWaitsNs.removeAll(keepingCapacity: true)
+            inputQueueWaitWriteIndex = 0
             inputQueueMaxNs = 0
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                stats.inputGenerated = generated
-                stats.inputSubmitted = submitted
-                stats.inputAccepted = accepted
-                stats.inputDropped = dropped
-                stats.inputSuperseded = superseded
-                stats.inputBufferedBytes = bufferedBytes
-                stats.inputQueueP95Ms = Double(p95Ns) / 1_000_000
-                stats.inputQueueMaxMs = Double(maxNs) / 1_000_000
-                stats.newestGamepadAgeMs = Double(gamepadAgeNs) / 1_000_000
-                stats.inputChannelState = channelState
+                updateStats {
+                    $0.inputGenerated = generated
+                    $0.inputSubmitted = submitted
+                    $0.inputAccepted = accepted
+                    $0.inputDropped = dropped
+                    $0.inputSuperseded = superseded
+                    $0.inputBufferedBytes = bufferedBytes
+                    $0.inputQueueP50Ms = Double(p50Ns) / 1_000_000
+                    $0.inputQueueP95Ms = Double(p95Ns) / 1_000_000
+                    $0.inputQueueMaxMs = Double(maxNs) / 1_000_000
+                    $0.newestGamepadAgeMs = Double(gamepadAgeNs) / 1_000_000
+                    $0.inputChannelState = channelState
+                }
             }
         }
+    }
+
+    private nonisolated static func percentile(_ percentile: Double, in sorted: [UInt64]) -> UInt64 {
+        guard !sorted.isEmpty else { return 0 }
+        let rank = Int((Double(sorted.count) * percentile).rounded(.up)) - 1
+        return sorted[min(sorted.count - 1, max(0, rank))]
     }
 
     private nonisolated static func parseVideoStats(_ report: LKRTCStatisticsReport) -> VideoStatsSnapshot? {
@@ -1341,18 +1419,19 @@ final class GFNStreamController: NSObject {
     }
 
     private func applyVideoStats(_ sample: VideoStatsSnapshot) {
-        stats.fps = sample.framesPerSecond
-        stats.resolutionWidth = Int(sample.frameWidth)
-        stats.resolutionHeight = Int(sample.frameHeight)
-        stats.codec = sample.codec
-        stats.jitterMs = sample.jitterSeconds * 1000
-        stats.decoderImplementation = sample.decoderImplementation
-        stats.powerEfficientDecoder = sample.powerEfficientDecoder
+        var next = stats
+        next.fps = sample.framesPerSecond
+        next.resolutionWidth = Int(sample.frameWidth)
+        next.resolutionHeight = Int(sample.frameHeight)
+        next.codec = sample.codec
+        next.jitterMs = sample.jitterSeconds * 1000
+        next.decoderImplementation = sample.decoderImplementation
+        next.powerEfficientDecoder = sample.powerEfficientDecoder
 
         if let previous = previousVideoStats {
             let elapsedSeconds = (sample.timestampUs - previous.timestampUs) / 1_000_000
             if elapsedSeconds > 0 {
-                stats.bitrateKbps = Int(
+                next.bitrateKbps = Int(
                     max(0, sample.bytesReceived - previous.bytesReceived) * 8 / elapsedSeconds / 1000
                 )
             }
@@ -1360,56 +1439,57 @@ final class GFNStreamController: NSObject {
             let received = max(0, sample.packetsReceived - previous.packetsReceived)
             let lost = max(0, sample.packetsLost - previous.packetsLost)
             if received + lost > 0 {
-                stats.packetLossPercent = lost / (received + lost) * 100
+                next.packetLossPercent = lost / (received + lost) * 100
             }
 
             let emitted = max(0, sample.jitterBufferEmittedCount - previous.jitterBufferEmittedCount)
-            stats.jitterBufferDelayMs = intervalAverage(
+            next.jitterBufferDelayMs = intervalAverage(
                 sample.jitterBufferDelaySeconds,
                 previous.jitterBufferDelaySeconds,
                 count: emitted
             )
-            stats.jitterBufferTargetDelayMs = intervalAverage(
+            next.jitterBufferTargetDelayMs = intervalAverage(
                 sample.jitterBufferTargetDelaySeconds,
                 previous.jitterBufferTargetDelaySeconds,
                 count: emitted
             )
-            stats.jitterBufferMinimumDelayMs = intervalAverage(
+            next.jitterBufferMinimumDelayMs = intervalAverage(
                 sample.jitterBufferMinimumDelaySeconds,
                 previous.jitterBufferMinimumDelaySeconds,
                 count: emitted
             )
 
             let decoded = max(0, sample.framesDecoded - previous.framesDecoded)
-            stats.decodeTimeMs = intervalAverage(
+            next.decodeTimeMs = intervalAverage(
                 sample.totalDecodeTimeSeconds,
                 previous.totalDecodeTimeSeconds,
                 count: decoded
             )
-            stats.processingDelayMs = intervalAverage(
+            next.processingDelayMs = intervalAverage(
                 sample.totalProcessingDelaySeconds,
                 previous.totalProcessingDelaySeconds,
                 count: decoded
             )
-            stats.framesDropped = intervalCount(sample.framesDropped, previous.framesDropped)
-            stats.freezeCount = intervalCount(sample.freezeCount, previous.freezeCount)
-            stats.freezeDurationMs = max(
+            next.framesDropped = intervalCount(sample.framesDropped, previous.framesDropped)
+            next.freezeCount = intervalCount(sample.freezeCount, previous.freezeCount)
+            next.freezeDurationMs = max(
                 0,
                 sample.totalFreezeDurationSeconds - previous.totalFreezeDurationSeconds
             ) * 1000
-            stats.nackCount = intervalCount(sample.nackCount, previous.nackCount)
-            stats.pliCount = intervalCount(sample.pliCount, previous.pliCount)
-            stats.firCount = intervalCount(sample.firCount, previous.firCount)
-            stats.retransmittedPackets = intervalCount(
+            next.nackCount = intervalCount(sample.nackCount, previous.nackCount)
+            next.pliCount = intervalCount(sample.pliCount, previous.pliCount)
+            next.firCount = intervalCount(sample.firCount, previous.firCount)
+            next.retransmittedPackets = intervalCount(
                 sample.retransmittedPackets,
                 previous.retransmittedPackets
             )
         }
 
         previousVideoStats = sample
-        appendHistory(&pingHistory, value: stats.rttMs)
-        appendHistory(&fpsHistory, value: stats.fps)
-        appendHistory(&bitrateHistory, value: Double(stats.bitrateKbps) / 1000.0)
+        if next != stats { stats = next }
+        appendHistory(&pingHistory, value: next.rttMs)
+        appendHistory(&fpsHistory, value: next.fps)
+        appendHistory(&bitrateHistory, value: Double(next.bitrateKbps) / 1000.0)
     }
 
     private func applyDecodedVideoFormat(_ format: DecodedVideoFormat) {
@@ -1486,19 +1566,21 @@ final class GFNStreamController: NSObject {
         // audio unit (then device reads 0), so also sample the route's latency directly.
         let osOutputLatencyMs = AVAudioSession.sharedInstance().outputLatency * 1000
 
-        audioStats.jitterBufferCurrentMs = neteqMs
-        audioStats.jitterBufferTargetMs = targetMs
-        audioStats.devicePlayoutMs = deviceMs
-        audioStats.packetsLost = Int(lost)
-        audioStats.jitterMs = sample.jitterSeconds * 1000
-        audioStats.concealedMsPerSecond = concealedMs
-        audioStats.stretchedMsPerSecond = sloweddMs
-        audioStats.acceleratedMsPerSecond = acceleratedMs
-        audioStats.avOffsetMs = avOffsetMs
-        audioStats.outputLatencyMs = osOutputLatencyMs
-        audioStats.outputChannels = GFNAudioDevice.shared.outputNumberOfChannels
-        audioStats.outputSampleRateHz = GFNAudioDevice.shared.deviceOutputSampleRate
-        audioStats.outputRouteName = GFNAudioDevice.shared.outputRouteName
+        updateAudioStats {
+            $0.jitterBufferCurrentMs = neteqMs
+            $0.jitterBufferTargetMs = targetMs
+            $0.devicePlayoutMs = deviceMs
+            $0.packetsLost = Int(lost)
+            $0.jitterMs = sample.jitterSeconds * 1000
+            $0.concealedMsPerSecond = concealedMs
+            $0.stretchedMsPerSecond = sloweddMs
+            $0.acceleratedMsPerSecond = acceleratedMs
+            $0.avOffsetMs = avOffsetMs
+            $0.outputLatencyMs = osOutputLatencyMs
+            $0.outputChannels = GFNAudioDevice.shared.outputNumberOfChannels
+            $0.outputSampleRateHz = GFNAudioDevice.shared.deviceOutputSampleRate
+            $0.outputRouteName = GFNAudioDevice.shared.outputRouteName
+        }
 
         guard diagnosticsEnabled else { return }
         let offset = avOffsetMs.map { String(format: "%+.0fms", $0) } ?? "n/a (no RTCP SR mapping)"
@@ -1559,47 +1641,49 @@ final class GFNStreamController: NSObject {
         let local = localId.flatMap { report.statistics[$0] }
         let remote = remoteId.flatMap { report.statistics[$0] }
         let pairId = selectedPair.id
+        var next = stats
 
         if !previousSelectedCandidatePairId.isEmpty, previousSelectedCandidatePairId != pairId {
-            stats.candidatePairChanges += 1
+            next.candidatePairChanges += 1
             let previousPairId = previousSelectedCandidatePairId
             gfnLog.debug("[ICE] Selected pair changed: \(previousPairId, privacy: .private) -> \(pairId, privacy: .private)")
         }
         previousSelectedCandidatePairId = pairId
 
-        stats.selectedCandidatePairId = pairId
-        stats.rttMs = numericValue(selectedPair.values["currentRoundTripTime"]) * 1000
-        stats.availableIncomingBitrateKbps = Int(
+        next.selectedCandidatePairId = pairId
+        next.rttMs = numericValue(selectedPair.values["currentRoundTripTime"]) * 1000
+        next.availableIncomingBitrateKbps = Int(
             numericValue(selectedPair.values["availableIncomingBitrate"]) / 1000
         )
         let localProtocol = local?.values["protocol"] as? String ?? ""
         let remoteProtocol = remote?.values["protocol"] as? String ?? ""
-        stats.selectedProtocol = localProtocol.isEmpty ? remoteProtocol : localProtocol
-        stats.localCandidateType = local?.values["candidateType"] as? String ?? ""
-        stats.remoteCandidateType = remote?.values["candidateType"] as? String ?? ""
-        stats.localCandidateAddress = candidateAddress(local)
-        stats.remoteCandidateAddress = candidateAddress(remote)
-        let protocolName = stats.selectedProtocol.lowercased()
-        let usesRelay = stats.localCandidateType.lowercased() == "relay"
-            || stats.remoteCandidateType.lowercased() == "relay"
+        next.selectedProtocol = localProtocol.isEmpty ? remoteProtocol : localProtocol
+        next.localCandidateType = local?.values["candidateType"] as? String ?? ""
+        next.remoteCandidateType = remote?.values["candidateType"] as? String ?? ""
+        next.localCandidateAddress = candidateAddress(local)
+        next.remoteCandidateAddress = candidateAddress(remote)
+        let protocolName = next.selectedProtocol.lowercased()
+        let usesRelay = next.localCandidateType.lowercased() == "relay"
+            || next.remoteCandidateType.lowercased() == "relay"
         if protocolName == "tcp" || protocolName == "tls" {
-            stats.selectedNetworkPath = "tcp_tls_fallback"
+            next.selectedNetworkPath = "tcp_tls_fallback"
         } else if usesRelay, protocolName == "udp" {
-            stats.selectedNetworkPath = "turn_udp_relay"
+            next.selectedNetworkPath = "turn_udp_relay"
         } else if protocolName == "udp" {
-            stats.selectedNetworkPath = "direct_udp"
+            next.selectedNetworkPath = "direct_udp"
         } else {
-            stats.selectedNetworkPath = "unknown"
+            next.selectedNetworkPath = "unknown"
         }
+        if next != stats { stats = next }
 
         let now = Date()
-        if stats.rttMs > 0,
+        if next.rttMs > 0,
            lastZoneRttFeedbackAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true,
            let zoneUrl = sessionInfo?.zone,
            !zoneUrl.isEmpty
         {
             lastZoneRttFeedbackAt = now
-            let rttMs = stats.rttMs
+            let rttMs = next.rttMs
             Task { await ZoneClient.shared.recordSessionRtt(zoneUrl: zoneUrl, rttMs: rttMs) }
         }
     }
@@ -1764,7 +1848,9 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didReceiveMessageWith buffer: LKRTCDataBuffer) {
         if dataChannel.label == "stats_channel" {
             if let gameFps = Self.parseStatsChannelGameFps(buffer.data) {
-                Task { @MainActor [weak self] in self?.stats.gameFps = gameFps }
+                Task { @MainActor [weak self] in
+                    self?.updateStats { $0.gameFps = gameFps }
+                }
             }
             return
         }
@@ -1868,8 +1954,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             }
             sender.start()
             inputSender = sender
-            inputSendQueue.async { [weak self, weak sender] in
-                self?.rumbleSink = { sender?.applyRumble(controllerId: $0, weak: $1, strong: $2) }
+            inputSendQueue.async { [weak self, sender] in
+                self?.rumbleSink = { sender.applyRumble(controllerId: $0, weak: $1, strong: $2) }
             }
             // Forward keyboard/mouse events from the video surface to the sender
             videoView?.inputHandler = sender
@@ -1882,7 +1968,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 extension GFNStreamController: DataChannelSender {
     nonisolated func sendData(
         _ packet: EncodedInputPacket,
-        completion: @escaping (InputSendDisposition) -> Void
+        completion: @escaping @Sendable (InputSendDisposition) -> Void
     ) {
         inputSendQueue.async { [weak self] in
             guard let self else {
@@ -1917,12 +2003,19 @@ extension GFNStreamController: DataChannelSender {
 
     private nonisolated func sendImmediately(
         _ packet: EncodedInputPacket,
-        completion: @escaping (InputSendDisposition) -> Void,
+        completion: @escaping @Sendable (InputSendDisposition) -> Void,
         on dataChannel: LKRTCDataChannel
     ) {
         let waitNs = DispatchTime.now().uptimeNanoseconds &- packet.generatedAt
-        inputQueueWaitsNs.append(waitNs)
-        inputQueueMaxNs = max(inputQueueMaxNs, waitNs)
+        if inputLatencySamplingEnabled {
+            if inputQueueWaitsNs.count < Self.maximumInputLatencySamples {
+                inputQueueWaitsNs.append(waitNs)
+            } else {
+                inputQueueWaitsNs[inputQueueWaitWriteIndex] = waitNs
+                inputQueueWaitWriteIndex = (inputQueueWaitWriteIndex + 1) % Self.maximumInputLatencySamples
+            }
+            inputQueueMaxNs = max(inputQueueMaxNs, waitNs)
+        }
         if packet.category == .gamepadSnapshot {
             newestGamepadGeneratedAt = packet.generatedAt
         }

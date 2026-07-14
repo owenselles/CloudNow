@@ -147,7 +147,12 @@ struct StatsHUDView: View {
         row(L10n.text("processing_delay"), StatsFormat.formatMs(stats.processingDelayMs))
         row(
             L10n.text("input_queue"),
-            String(format: "%.1f / %.1f ms", stats.inputQueueP95Ms, stats.inputQueueMaxMs)
+            String(
+                format: "p50 %.1f · p95 %.1f · max %.1f ms",
+                stats.inputQueueP50Ms,
+                stats.inputQueueP95Ms,
+                stats.inputQueueMaxMs
+            )
         )
         row(L10n.text("input_buffer"), "\(stats.inputBufferedBytes) B (\(stats.inputChannelState))")
         if !stats.decoderImplementation.isEmpty {

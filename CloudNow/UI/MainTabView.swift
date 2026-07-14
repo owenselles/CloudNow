@@ -1,4 +1,4 @@
-import GameController
+@preconcurrency import GameController
 import SwiftUI
 import UIKit
 
@@ -140,7 +140,7 @@ private struct ControllerTabNavigationBridge: UIViewControllerRepresentable {
         context.coordinator.refreshControllerHandlers()
     }
 
-    final class Coordinator {
+    @MainActor final class Coordinator {
         let viewController = UIViewController()
 
         var onPrevious: () -> Void
@@ -160,7 +160,7 @@ private struct ControllerTabNavigationBridge: UIViewControllerRepresentable {
             registerForControllerNotifications()
         }
 
-        deinit {
+        isolated deinit {
             observers.forEach(NotificationCenter.default.removeObserver)
             clearControllerHandlers()
         }
@@ -176,13 +176,17 @@ private struct ControllerTabNavigationBridge: UIViewControllerRepresentable {
             observers.append(
                 center.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] notification in
                     guard let controller = notification.object as? GCController else { return }
-                    self?.installHandlers(on: controller)
+                    MainActor.assumeIsolated {
+                        self?.installHandlers(on: controller)
+                    }
                 }
             )
             observers.append(
                 center.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] _ in
-                    self?.clearControllerHandlers()
-                    self?.refreshControllerHandlers()
+                    MainActor.assumeIsolated {
+                        self?.clearControllerHandlers()
+                        self?.refreshControllerHandlers()
+                    }
                 }
             )
             refreshControllerHandlers()

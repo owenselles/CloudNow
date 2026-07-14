@@ -1,13 +1,13 @@
 import AVFAudio
 import Foundation
-import LiveKitWebRTC
+@preconcurrency import LiveKitWebRTC
 import os.log
 
-private let audioDeviceLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "AudioDevice")
+private nonisolated let audioDeviceLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "AudioDevice")
 
 /// Owns a preallocated Int16 conversion buffer; deallocates when the capturing
 /// render closure (and thus the audio node) is released.
-private final class ScratchBuffer {
+private final nonisolated class ScratchBuffer: @unchecked Sendable {
     let pointer: UnsafeMutablePointer<Int16>
 
     init(capacity: Int) {
@@ -33,7 +33,7 @@ private final class ScratchBuffer {
 /// ADM thread between `initializeWithDelegate` and `terminateDevice`. The render closures
 /// run on the audio I/O thread; they capture the delegate blocks and buffers at
 /// node-creation time so the realtime path never reads mutable state on `self`.
-final class GFNAudioDevice: NSObject {
+final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
     static let shared = GFNAudioDevice()
 
     /// Output channels the next stream wants (2 or 6), set from the negotiated offer before

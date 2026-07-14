@@ -103,7 +103,7 @@ actor MESClient {
 
 // MARK: - Codable Response Types
 
-private struct MESRawResponse: Decodable {
+private nonisolated struct MESRawResponse: Decodable {
     let membershipTier: String?
     let type: String?
     let subType: String?
@@ -124,7 +124,7 @@ private struct MESRawResponse: Decodable {
 
 // MARK: - Errors
 
-enum MESError: Error, LocalizedError {
+nonisolated enum MESError: Error, LocalizedError {
     case invalidURL
     case fetchFailed(String)
 

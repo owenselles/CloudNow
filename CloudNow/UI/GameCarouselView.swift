@@ -235,20 +235,15 @@ private struct CarouselCard: View {
             } else {
                 // Fixed height lets the image overflow its natural width; the outer frame clips to the aligned region for the parallax effect.
                 GeometryReader { geo in
-                    AsyncImage(url: game.heroBannerUrl.flatMap(URL.init) ?? game.boxArtUrl.flatMap(URL.init)) { phase in
-                        switch phase {
-                        case let .success(image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(height: geo.size.height)
-                                .frame(width: geo.size.width, alignment: Alignment(horizontal: imageAlignment, vertical: .center))
-                                .clipped()
-                        default:
-                            Color.gray.opacity(0.25)
-                                .frame(width: geo.size.width, height: geo.size.height)
-                        }
-                    }
+                    SharedArtworkImage(
+                        urlString: game.heroBannerUrl.flatMap(URL.init) == nil
+                            ? game.boxArtUrl
+                            : game.heroBannerUrl,
+                        maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+                    )
+                    .frame(height: geo.size.height)
+                    .frame(width: geo.size.width, alignment: Alignment(horizontal: imageAlignment, vertical: .center))
+                    .clipped()
                 }
             }
 

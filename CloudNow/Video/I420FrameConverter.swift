@@ -1,9 +1,9 @@
 import Accelerate
-import CoreVideo
+@preconcurrency import CoreVideo
 import LiveKitWebRTC
 import os
 
-final class I420FrameConverter: @unchecked Sendable {
+final nonisolated class I420FrameConverter: @unchecked Sendable {
     private final nonisolated class PoolBox: @unchecked Sendable {
         let pool: CVPixelBufferPool
 
