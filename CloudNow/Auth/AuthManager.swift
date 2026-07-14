@@ -92,7 +92,7 @@ final class AuthManager {
                             expiresIn: deviceAuth.expiresIn
                         )
                         break
-                    } catch AuthError.deviceFlowExpired {
+                    } catch AuthError.deviceFlowExpired, AuthError.deviceFlowDenied {
                         continue
                     }
                 }
