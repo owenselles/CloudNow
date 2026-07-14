@@ -7,58 +7,244 @@ private nonisolated enum ArtworkPipelineError: Error {
     case decodeFailed
 }
 
+nonisolated enum ArtworkMemoryEvent: Equatable {
+    case foreground
+    case streamOpening
+    case streaming
+    case background
+    case memoryWarning
+}
+
+private nonisolated enum ArtworkKind: Hashable {
+    case boxArt
+    case heroArt
+}
+
 /// One decoded-image pipeline for cards, hero banners, and loading artwork.
-/// The actor coalesces identical in-flight work, while NSCache bounds decoded memory.
+/// The actor coalesces identical in-flight work and enforces separate hard LRU budgets for
+/// card and hero artwork so cache-owned decoded memory cannot drift past configured targets.
 actor ArtworkImagePipeline {
     static let shared = ArtworkImagePipeline()
 
     static let boxArtPixelSize = 640
     static let heroArtPixelSize = 1920
 
-    private let cache = NSCache<NSString, CGImage>()
-    private var inFlight: [String: Task<CGImage, Error>] = [:]
-
-    private init() {
-        cache.countLimit = 180
-        cache.totalCostLimit = 128 * 1024 * 1024
+    private struct CacheEntry {
+        let image: CGImage
+        let cost: Int
+        let kind: ArtworkKind
+        var lastAccess: UInt64
     }
 
-    func image(for url: URL, maxPixelSize: Int) async throws -> CGImage {
-        let key = Self.cacheKey(url: url, maxPixelSize: maxPixelSize)
-        let cacheKey = key as NSString
-        if let cached = cache.object(forKey: cacheKey) { return cached }
-        if let task = inFlight[key] { return try await task.value }
+    private struct InFlightRequest {
+        let task: Task<CGImage, Error>
+        let kind: ArtworkKind
+        let generation: UInt64
+    }
 
-        let task = Task.detached(priority: .userInitiated) {
-            try await Self.fetchAndDownsample(url: url, maxPixelSize: maxPixelSize)
+    private struct CacheBudget {
+        let totalCostLimit: Int
+        let countLimit: Int
+    }
+
+    private static let megabyte = 1024 * 1024
+    private static let foregroundBoxArtBudget = CacheBudget(
+        totalCostLimit: 96 * megabyte,
+        countLimit: 96
+    )
+    private static let backgroundBoxArtBudget = CacheBudget(
+        totalCostLimit: 32 * megabyte,
+        countLimit: 32
+    )
+    private static let heroArtBudget = CacheBudget(
+        totalCostLimit: 32 * megabyte,
+        countLimit: 4
+    )
+
+    private var cache: [String: CacheEntry] = [:]
+    private var totalCost: [ArtworkKind: Int] = [.boxArt: 0, .heroArt: 0]
+    private var accessCounter: UInt64 = 0
+    private var inFlight: [String: InFlightRequest] = [:]
+    private var generation: [ArtworkKind: UInt64] = [.boxArt: 0, .heroArt: 0]
+    private var memoryEvent = ArtworkMemoryEvent.foreground
+
+    private init() {}
+
+    func image(for url: URL, maxPixelSize: Int) async throws -> CGImage {
+        let kind = Self.artworkKind(maxPixelSize: maxPixelSize)
+        guard permitsNewLoads(for: kind) else { throw CancellationError() }
+
+        let key = Self.cacheKey(url: url, maxPixelSize: maxPixelSize)
+        if let cached = cachedImage(for: key) { return cached }
+        if let request = inFlight[key] { return try await request.task.value }
+
+        let requestGeneration = generation[kind, default: 0]
+        let task = Task(priority: .userInitiated) { @concurrent in
+            let image = try await Self.fetchAndDownsample(url: url, maxPixelSize: maxPixelSize)
+            try Task.checkCancellation()
+            return image
         }
-        inFlight[key] = task
+        inFlight[key] = InFlightRequest(
+            task: task,
+            kind: kind,
+            generation: requestGeneration
+        )
         do {
             let image = try await task.value
-            cache.setObject(
-                image,
-                forKey: cacheKey,
-                cost: image.bytesPerRow * image.height
-            )
             inFlight[key] = nil
+            guard generation[kind, default: 0] == requestGeneration,
+                  permitsNewLoads(for: kind)
+            else {
+                throw CancellationError()
+            }
+            insert(image, for: key, kind: kind)
             return image
         } catch {
-            inFlight[key] = nil
+            if inFlight[key]?.generation == requestGeneration {
+                inFlight[key] = nil
+            }
             throw error
         }
     }
 
     func prefetch(_ url: URL, maxPixelSize: Int) async -> Bool {
         do {
+            try Task.checkCancellation()
             _ = try await image(for: url, maxPixelSize: maxPixelSize)
+            try Task.checkCancellation()
             return true
         } catch {
             return false
         }
     }
 
+    func handleMemoryEvent(_ event: ArtworkMemoryEvent) {
+        if event != .memoryWarning, event != .streamOpening {
+            memoryEvent = event
+        }
+
+        switch event {
+        case .foreground:
+            trimCache(for: .boxArt, to: Self.foregroundBoxArtBudget)
+            trimCache(for: .heroArt, to: Self.heroArtBudget)
+        case .streamOpening:
+            cancelInFlight(for: .boxArt)
+        case .streaming:
+            cancelInFlight(for: .boxArt)
+            cancelInFlight(for: .heroArt)
+            removeCachedImages(for: .heroArt)
+        case .background:
+            cancelInFlight(for: .boxArt)
+            cancelInFlight(for: .heroArt)
+            removeCachedImages(for: .heroArt)
+            trimCache(for: .boxArt, to: Self.backgroundBoxArtBudget)
+        case .memoryWarning:
+            cancelInFlight(for: .boxArt)
+            cancelInFlight(for: .heroArt)
+            removeCachedImages(for: .boxArt)
+            removeCachedImages(for: .heroArt)
+        }
+    }
+
+    private func permitsNewLoads(for _: ArtworkKind) -> Bool {
+        memoryEvent == .foreground
+    }
+
+    private func cachedImage(for key: String) -> CGImage? {
+        guard var entry = cache[key] else { return nil }
+        accessCounter &+= 1
+        entry.lastAccess = accessCounter
+        cache[key] = entry
+        return entry.image
+    }
+
+    private func insert(_ image: CGImage, for key: String, kind: ArtworkKind) {
+        let budget = budget(for: kind)
+        let cost = image.bytesPerRow * image.height
+        guard cost <= budget.totalCostLimit else { return }
+
+        if let existing = cache.removeValue(forKey: key) {
+            totalCost[existing.kind, default: 0] -= existing.cost
+        }
+        accessCounter &+= 1
+        cache[key] = CacheEntry(
+            image: image,
+            cost: cost,
+            kind: kind,
+            lastAccess: accessCounter
+        )
+        totalCost[kind, default: 0] += cost
+        trimCache(for: kind, to: budget)
+    }
+
+    private func trimCache(for kind: ArtworkKind, to budget: CacheBudget) {
+        while totalCost[kind, default: 0] > budget.totalCostLimit
+            || cachedImageCount(for: kind) > budget.countLimit
+        {
+            guard let key = leastRecentlyUsedKey(for: kind),
+                  let removed = cache.removeValue(forKey: key)
+            else { return }
+            totalCost[kind, default: 0] -= removed.cost
+        }
+    }
+
+    private func cachedImageCount(for kind: ArtworkKind) -> Int {
+        cache.values.lazy.filter { $0.kind == kind }.count
+    }
+
+    private func leastRecentlyUsedKey(for kind: ArtworkKind) -> String? {
+        var candidate: (key: String, lastAccess: UInt64)?
+        for (key, entry) in cache where entry.kind == kind {
+            if let current = candidate {
+                if entry.lastAccess < current.lastAccess {
+                    candidate = (key, entry.lastAccess)
+                }
+            } else {
+                candidate = (key, entry.lastAccess)
+            }
+        }
+        return candidate?.key
+    }
+
+    private func removeCachedImages(for kind: ArtworkKind) {
+        let keys = cache.compactMap { key, entry in
+            entry.kind == kind ? key : nil
+        }
+        for key in keys {
+            cache[key] = nil
+        }
+        totalCost[kind] = 0
+    }
+
+    private func cancelInFlight(for kind: ArtworkKind) {
+        generation[kind, default: 0] &+= 1
+        var keys: [String] = []
+        for (key, request) in inFlight where request.kind == kind {
+            request.task.cancel()
+            keys.append(key)
+        }
+        for key in keys {
+            inFlight[key] = nil
+        }
+    }
+
+    private func budget(for kind: ArtworkKind) -> CacheBudget {
+        switch kind {
+        case .boxArt:
+            memoryEvent == .background
+                ? Self.backgroundBoxArtBudget
+                : Self.foregroundBoxArtBudget
+        case .heroArt:
+            Self.heroArtBudget
+        }
+    }
+
     private nonisolated static func cacheKey(url: URL, maxPixelSize: Int) -> String {
         "\(url.absoluteString)#\(maxPixelSize)"
+    }
+
+    private nonisolated static func artworkKind(maxPixelSize: Int) -> ArtworkKind {
+        maxPixelSize <= boxArtPixelSize ? .boxArt : .heroArt
     }
 
     private nonisolated static func fetchAndDownsample(
@@ -107,9 +293,10 @@ struct SharedArtworkImage: View {
 
     @State private var image: CGImage?
     @State private var loadState: ArtworkLoadState = .loading
+    @State private var reloadGeneration = 0
 
     private var requestID: String {
-        "\(urlString ?? "")#\(maxPixelSize)"
+        "\(urlString ?? "")#\(maxPixelSize)#\(reloadGeneration)"
     }
 
     var body: some View {
@@ -124,6 +311,10 @@ struct SharedArtworkImage: View {
         }
         .task(id: requestID) {
             await loadImage()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .artworkLoadingDidResume)) { _ in
+            guard image == nil else { return }
+            reloadGeneration &+= 1
         }
     }
 
@@ -179,23 +370,71 @@ struct SharedArtworkImage: View {
 final class HeroArtPrefetcher {
     static let shared = HeroArtPrefetcher()
 
+    private static let maximumConcurrentRequests = 2
+    private static let maximumPendingRequests = 2
+
     private var requested = Set<String>()
+    private var pending: [(key: String, url: URL)] = []
+    private var activeTasks: [String: Task<Void, Never>] = [:]
+    private var isSuspended = false
 
     func prefetch(_ urlString: String?) {
-        guard let urlString, let url = URL(string: urlString),
+        guard !isSuspended,
+              let urlString,
+              let url = URL(string: urlString),
               requested.insert(urlString).inserted else { return }
-        Task { @concurrent in
-            let succeeded = await ArtworkImagePipeline.shared.prefetch(
-                url,
-                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
-            )
-            guard !succeeded else { return }
-            await HeroArtPrefetcher.shared.removeFailedRequest(urlString)
+        if pending.count >= Self.maximumPendingRequests {
+            let stale = pending.removeFirst()
+            requested.remove(stale.key)
+        }
+        pending.append((key: urlString, url: url))
+        startPendingRequests()
+    }
+
+    func suspend(cancelActive: Bool) {
+        isSuspended = true
+        requested.subtract(pending.map(\.key))
+        pending.removeAll(keepingCapacity: true)
+        guard cancelActive else { return }
+        cancelAll()
+    }
+
+    func resume() {
+        isSuspended = false
+        startPendingRequests()
+    }
+
+    func cancelAll() {
+        activeTasks.values.forEach { $0.cancel() }
+        activeTasks.removeAll(keepingCapacity: true)
+        pending.removeAll(keepingCapacity: true)
+        requested.removeAll(keepingCapacity: true)
+    }
+
+    private func startPendingRequests() {
+        while !isSuspended,
+              activeTasks.count < Self.maximumConcurrentRequests,
+              !pending.isEmpty
+        {
+            let item = pending.removeFirst()
+            let task = Task { @concurrent in
+                let succeeded = await ArtworkImagePipeline.shared.prefetch(
+                    item.url,
+                    maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+                )
+                await HeroArtPrefetcher.shared.finishedRequest(
+                    key: item.key,
+                    succeeded: succeeded
+                )
+            }
+            activeTasks[item.key] = task
         }
     }
 
-    private func removeFailedRequest(_ urlString: String) {
-        requested.remove(urlString)
+    private func finishedRequest(key: String, succeeded: Bool) {
+        activeTasks[key] = nil
+        if !succeeded { requested.remove(key) }
+        startPendingRequests()
     }
 }
 
@@ -209,9 +448,11 @@ final class BoxArtPrefetcher {
     private var requested = Set<String>()
     private var pending: [(key: String, url: URL)] = []
     private var nextPendingIndex = 0
-    private var activeRequestCount = 0
+    private var activeTasks: [String: Task<Void, Never>] = [:]
+    private var isSuspended = false
 
     func prefetch(_ urlStrings: some Sequence<String>) {
+        guard !isSuspended else { return }
         for urlString in urlStrings {
             guard let url = URL(string: urlString), requested.insert(urlString).inserted else {
                 continue
@@ -221,15 +462,33 @@ final class BoxArtPrefetcher {
         startPendingRequests()
     }
 
+    func suspend() {
+        isSuspended = true
+        cancelAll()
+    }
+
+    func resume() {
+        isSuspended = false
+        startPendingRequests()
+    }
+
+    func cancelAll() {
+        activeTasks.values.forEach { $0.cancel() }
+        activeTasks.removeAll(keepingCapacity: true)
+        pending.removeAll(keepingCapacity: true)
+        nextPendingIndex = 0
+        requested.removeAll(keepingCapacity: true)
+    }
+
     private func startPendingRequests() {
-        while activeRequestCount < Self.maximumConcurrentRequests,
+        while !isSuspended,
+              activeTasks.count < Self.maximumConcurrentRequests,
               nextPendingIndex < pending.count
         {
             let item = pending[nextPendingIndex]
             nextPendingIndex += 1
-            activeRequestCount += 1
 
-            Task { @concurrent in
+            let task = Task { @concurrent in
                 let succeeded = await ArtworkImagePipeline.shared.prefetch(
                     item.url,
                     maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
@@ -239,6 +498,7 @@ final class BoxArtPrefetcher {
                     succeeded: succeeded
                 )
             }
+            activeTasks[item.key] = task
         }
         if nextPendingIndex == pending.count {
             pending.removeAll(keepingCapacity: true)
@@ -247,7 +507,7 @@ final class BoxArtPrefetcher {
     }
 
     private func finishedRequest(key: String, succeeded: Bool) {
-        activeRequestCount -= 1
+        activeTasks[key] = nil
         if !succeeded { requested.remove(key) }
         startPendingRequests()
     }

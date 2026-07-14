@@ -19,7 +19,6 @@ actor GamesClient {
     private static let clientVersion = NVIDIAAuth.gfnClientVersion
 
     private let urlSession = URLSession.shared
-    private var metadataCache: [String: AppData] = [:]
     private var localeCode: String {
         L10n.nvidiaLocaleCode()
     }
@@ -443,7 +442,6 @@ actor GamesClient {
         for start in stride(from: 0, to: appIds.count, by: chunkSize) {
             let chunk = Array(appIds[start ..< min(start + chunkSize, appIds.count)])
             let payloadApps = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
-            cacheMetadata(payloadApps)
             apps.append(contentsOf: payloadApps)
         }
         return apps
@@ -457,8 +455,7 @@ actor GamesClient {
         for start in stride(from: 0, to: appIds.count, by: chunkSize) {
             let chunk = Array(appIds[start ..< min(start + chunkSize, appIds.count)])
             do {
-                let payloadApps = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
-                cacheMetadata(payloadApps)
+                _ = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
             } catch is CancellationError {
                 throw CancellationError()
             } catch GamesError.unauthorized {
@@ -494,13 +491,6 @@ actor GamesClient {
             throw GamesError.fetchFailed("GraphQL response did not contain app metadata")
         }
         return apps
-    }
-
-    private func cacheMetadata(_ apps: [AppData]) {
-        for app in apps {
-            guard let id = app.id?.stringValue else { continue }
-            metadataCache[id] = app
-        }
     }
 
     // MARK: - Owned Apps

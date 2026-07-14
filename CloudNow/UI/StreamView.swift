@@ -71,7 +71,17 @@ struct StreamView: View {
             computeLoadingBadges()
             await startSession()
         }
-        .onDisappear { streamController.disconnect() }
+        .onDisappear {
+            streamController.disconnect()
+            MemoryLifecycleCoordinator.shared.streamDidClose()
+        }
+        .onChange(of: streamController.state) { oldState, state in
+            if state == .streaming {
+                MemoryLifecycleCoordinator.shared.streamDidStart()
+            } else if oldState == .streaming {
+                MemoryLifecycleCoordinator.shared.streamDidLeavePlayback()
+            }
+        }
         // During streaming, VideoSurfaceView is first responder and intercepts Menu via UIKit,
         // signaling us through menuPressCount. .onExitCommand fires when the focus engine is
         // active: non-streaming states (loading, error) and while the pause menu holds focus —

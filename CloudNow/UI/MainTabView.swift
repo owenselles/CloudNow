@@ -53,14 +53,31 @@ struct MainTabView: View {
         .task { await viewModel.load(authManager: authManager) }
         .task { await viewModel.measureTopZones() }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            Task { await viewModel.refreshLibrary(authManager: authManager) }
+            switch phase {
+            case .active:
+                MemoryLifecycleCoordinator.shared.appDidBecomeActive()
+                Task { await viewModel.refreshLibrary(authManager: authManager) }
+            case .background:
+                MemoryLifecycleCoordinator.shared.appDidEnterBackground()
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didReceiveMemoryWarningNotification
+        )) { _ in
+            MemoryLifecycleCoordinator.shared.didReceiveMemoryWarning()
         }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
             if new == nil {
+                MemoryLifecycleCoordinator.shared.streamDidClose()
                 directSessionToResume = nil
                 Task { await viewModel.refreshActiveSessions(authManager: authManager) }
+            } else {
+                MemoryLifecycleCoordinator.shared.streamWillOpen()
             }
         }
         .fullScreenCover(item: $gameToPlay) { game in
