@@ -1834,7 +1834,6 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             gfnLog.debug("[DataChannel] Handshake: byte[0]=0x0e, version=\(version, privacy: .public)")
         } else {
             if let cmd = GFNHapticsDecoder.decode(buffer.data) {
-                gfnLog.debug("[Rumble] inbound controller=\(cmd.controllerId, privacy: .public) weak=\(cmd.weak, privacy: .public) strong=\(cmd.strong, privacy: .public)")
                 inputSendQueue.async { [weak self] in
                     self?.rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
                 }

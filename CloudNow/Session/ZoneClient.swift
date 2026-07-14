@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let zoneLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Zones")
+private nonisolated let zoneLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Zones")
 
 // MARK: - Zone Model
 
@@ -114,12 +114,12 @@ actor ZoneClient {
     }
 
     /// Refreshes zone queue data and stale latency probes without delaying game launch.
-    func prewarmAutomaticRouting() async {
+    func prewarmAutomaticRouting() async -> [GFNZone] {
         let now = Date()
         guard !isPrewarming,
               lastPrewarmAt.map({ now.timeIntervalSince($0) >= Self.prewarmInterval }) ?? true
         else {
-            return
+            return await (try? fetchZones()) ?? []
         }
 
         isPrewarming = true
@@ -151,8 +151,10 @@ actor ZoneClient {
                 }
                 cacheAutomaticSelections(from: zones)
             }
+            return zones
         } catch {
             zoneLog.warning("[Zone] Automatic routing prewarm failed: \(error, privacy: .private)")
+            return []
         }
     }
 

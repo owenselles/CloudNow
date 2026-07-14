@@ -5,8 +5,6 @@ struct HomeView: View {
     let onResume: (ResumableSession) -> Void
 
     @Environment(GamesViewModel.self) var viewModel
-    @Environment(AuthManager.self) var authManager
-    @State private var tick = 0
     @State private var carouselRequest: CarouselRequest?
     @State private var restoreScrollId: String?
 
@@ -79,9 +77,6 @@ struct HomeView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear {
-            Task { await viewModel.refreshActiveSessions(authManager: authManager) }
-        }
         .task(id: viewModel.resumableSession?.session.sessionId) {
             guard viewModel.resumableSession != nil else { return }
             while !Task.isCancelled {

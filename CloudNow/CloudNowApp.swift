@@ -32,14 +32,29 @@ struct CloudNowApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if authManager.isAuthenticated {
-                    MainTabView()
-                } else {
-                    LoginView()
+                switch authManager.startupPhase {
+                case .pending, .restoringSession:
+                    AuthRestorationView()
+                case .ready:
+                    if authManager.isAuthenticated {
+                        MainTabView()
+                    } else {
+                        LoginView()
+                    }
                 }
             }
             .environment(authManager)
             .task { await authManager.initialize() }
+        }
+    }
+}
+
+private struct AuthRestorationView: View {
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            ProgressView()
+                .tint(.secondary)
         }
     }
 }

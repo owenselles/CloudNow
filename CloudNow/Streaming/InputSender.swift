@@ -48,7 +48,7 @@ private enum GFNInput {
 
 // MARK: - Remote Input Mode
 
-enum RemoteInputMode: String, Codable, Equatable {
+nonisolated enum RemoteInputMode: String, Codable, Equatable {
     case mouse
     case gamepad
     case dualsense
@@ -561,7 +561,7 @@ final class InputSender {
             self.remoteMode = remoteMode
             self.rumbleEnabled = rumbleEnabled
             self.rumbleIntensity = rumbleIntensity
-            haptics.values.forEach { $0.intensityScale = rumbleIntensity }
+            haptics.values.forEach { $0.setIntensityScale(rumbleIntensity) }
         }
     }
 
@@ -594,7 +594,6 @@ final class InputSender {
     func applyRumble(controllerId: Int, weak: UInt16, strong: UInt16) {
         inputQueue.async { [weak self] in
             guard let self, rumbleEnabled, !self.isPaused else { return }
-            inputLog.debug("[Rumble] applyRumble slot=\(controllerId, privacy: .public) weak=\(weak, privacy: .public) strong=\(strong, privacy: .public) hasEngine=\(haptics[controllerId] != nil, privacy: .public)")
             haptics[controllerId]?.setMotors(strong: strong, weak: weak)
         }
     }
@@ -1268,8 +1267,8 @@ final class InputSender {
             extendedControllers.append(controller)
             controllerSlots[ObjectIdentifier(controller)] = slot
             controller.playerIndex = playerIndex(for: slot)
-            if rumbleEnabled, let haptic = ControllerHaptics(controller: controller, queue: inputQueue) {
-                haptic.intensityScale = rumbleIntensity
+            if rumbleEnabled, let haptic = ControllerHaptics(controller: controller) {
+                haptic.setIntensityScale(rumbleIntensity)
                 haptics[slot] = haptic
                 advertiseHaptics(true)
             }

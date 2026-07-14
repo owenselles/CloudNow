@@ -3,7 +3,7 @@ import Foundation
 
 // MARK: - Stream Settings
 
-struct StreamSettings: Codable, Equatable {
+nonisolated struct StreamSettings: Codable, Equatable {
     static let maxSelectableBitrateKbps = 100_000
     static let minControllerDeadzone = 0.0
     static let maxControllerDeadzone = 0.30
@@ -26,7 +26,7 @@ struct StreamSettings: Codable, Equatable {
     var enableL4S: Bool = false
     var micEnabled: Bool = false
     var rumbleEnabled: Bool = true
-    /// Rumble power multiplier (0.0–2.0, 1.0 = default). Higher stresses controller motors.
+    /// Rumble power multiplier (0.0–2.0, 1.0 = default). Higher values stress controller motors.
     var rumbleIntensity: Double = 1.0 {
         didSet { rumbleIntensity = min(max(rumbleIntensity, Self.minRumbleIntensity), Self.maxRumbleIntensity) }
     }
@@ -97,7 +97,7 @@ extension StreamSettings {
         case colorQuality
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = StreamSettings()
         self.init()
@@ -137,7 +137,7 @@ extension StreamSettings {
         audioFormat = try c.decodeIfPresent(AudioFormatPreference.self, forKey: .audioFormat) ?? d.audioFormat
     }
 
-    func encode(to encoder: Encoder) throws {
+    nonisolated func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(resolution, forKey: .resolution)
         try c.encode(fps, forKey: .fps)
@@ -166,12 +166,12 @@ extension StreamSettings {
 
 /// Level of the in-game statistics HUD, mirroring the official client's Statistics
 /// overlay (Off → Compact → Standard).
-enum StreamStatsMode: String, Codable, CaseIterable {
+nonisolated enum StreamStatsMode: String, Codable, CaseIterable {
     case off
     case compact
     case standard
 
-    var label: String {
+    @MainActor var label: String {
         switch self {
         case .off: L10n.text("off")
         case .compact: L10n.text("compact")
@@ -189,16 +189,16 @@ enum StreamStatsMode: String, Codable, CaseIterable {
     }
 }
 
-enum OverlayTriggerButton: String, Codable, CaseIterable {
+nonisolated enum OverlayTriggerButton: String, Codable, CaseIterable {
     case start = "Start (≡)"
     case options = "Options/Back (⊟)"
 
-    var label: String {
+    @MainActor var label: String {
         L10n.overlayTriggerButtonLabel(self)
     }
 }
 
-enum AppLaunchMode: String, Codable, CaseIterable {
+nonisolated enum AppLaunchMode: String, Codable, CaseIterable {
     case `default`
     case bigPicture
 
@@ -207,17 +207,17 @@ enum AppLaunchMode: String, Codable, CaseIterable {
         self == .bigPicture ? 2 : 1
     }
 
-    var label: String {
+    @MainActor var label: String {
         L10n.appLaunchModeLabel(self)
     }
 }
 
-enum AudioFormatPreference: String, Codable, CaseIterable {
+nonisolated enum AudioFormatPreference: String, Codable, CaseIterable {
     case automatic
     case stereo
     case surround51
 
-    var label: String {
+    @MainActor var label: String {
         switch self {
         case .automatic: L10n.text("automatic")
         case .stereo: L10n.text("stereo")
@@ -244,27 +244,27 @@ enum AudioFormatPreference: String, Codable, CaseIterable {
     }
 }
 
-enum VideoCodec: String, Codable, CaseIterable {
+nonisolated enum VideoCodec: String, Codable, CaseIterable {
     case h264 = "H264"
     case h265 = "H265"
     case av1 = "AV1"
 
-    var label: String {
+    @MainActor var label: String {
         L10n.videoCodecLabel(self)
     }
 }
 
-enum ColorModePreference: String, Codable, CaseIterable {
+nonisolated enum ColorModePreference: String, Codable, CaseIterable {
     case automatic
     case preferHDR
     case preferSDR10
     case forceSDR8
 
-    var label: String {
+    @MainActor var label: String {
         L10n.colorModeLabel(self)
     }
 
-    var description: String {
+    @MainActor var description: String {
         L10n.colorModeDescription(self)
     }
 }
@@ -419,7 +419,7 @@ struct StreamColorRequest: Codable, Equatable {
 
 extension StreamSettings {
     func colorRequest(
-        localCapabilities: LocalVideoCapabilities = .detect(codec: nil),
+        localCapabilities: LocalVideoCapabilities,
         gameHDRSupport: HDRSupport = .unknown,
         accountAllowsHDR: Bool? = nil,
         serverAllowsHDR: Bool? = nil
@@ -438,7 +438,7 @@ extension StreamSettings {
     }
 }
 
-enum ColorQuality: String, Codable, CaseIterable {
+nonisolated enum ColorQuality: String, Codable, CaseIterable {
     case sdr8bit = "SDR8bit"
     case sdr10bit = "SDR10bit"
     case hdr10bit = "HDR10bit"
@@ -573,7 +573,7 @@ struct ActiveSessionInfo {
 
 // MARK: - Subscription / Entitlements
 
-struct EntitledResolution: Equatable, Codable {
+nonisolated struct EntitledResolution: Equatable, Codable {
     let widthInPixels: Int
     let heightInPixels: Int
     let framesPerSecond: Int
@@ -583,7 +583,7 @@ struct EntitledResolution: Equatable, Codable {
     }
 }
 
-struct SubscriptionInfo: Codable {
+nonisolated struct SubscriptionInfo: Codable {
     let membershipTier: String
     let isUnlimited: Bool
     let remainingMinutes: Int?
@@ -616,7 +616,7 @@ struct SubscriptionInfo: Codable {
 /// A streaming feature GFN surfaces as a loading-screen badge. Matches the three feature keys
 /// the official client shows there (RTX_ENABLED, HDR, REFLEX_ENABLED); labels are brand terms
 /// shown untranslated. Symbols are Apple SF Symbols to avoid third-party badge artwork.
-enum GameFeature: String, Codable, CaseIterable, Hashable {
+nonisolated enum GameFeature: String, Codable, CaseIterable, Hashable {
     case rtx
     case hdr
     case reflex
@@ -638,7 +638,7 @@ enum GameFeature: String, Codable, CaseIterable, Hashable {
     }
 }
 
-struct GameInfo: Identifiable, Equatable, Codable {
+nonisolated struct GameInfo: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let longDescription: String?
@@ -679,12 +679,12 @@ extension GameInfo {
         Array(Set((genres ?? []).map(Self.normalizedGenreCode).filter { !$0.isEmpty })).sorted()
     }
 
-    var genreItems: [String] {
+    @MainActor var genreItems: [String] {
         let mapped = genreCodes.map { GameInfo.genreLabel($0) }
         return mapped.isEmpty ? variants.map(\.storeName) : mapped
     }
 
-    static func genreLabel(_ code: String) -> String {
+    @MainActor static func genreLabel(_ code: String) -> String {
         let normalizedCode = normalizedGenreCode(code)
         return switch normalizedCode {
         case "ACTION": L10n.text("genre_action")
@@ -730,7 +730,7 @@ extension GameInfo {
         case isInLibrary, variants
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         title = try c.decode(String.self, forKey: .title)
@@ -748,7 +748,7 @@ extension GameInfo {
         variants = try c.decode([GameVariant].self, forKey: .variants)
     }
 
-    func encode(to encoder: Encoder) throws {
+    nonisolated func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(title, forKey: .title)
@@ -767,14 +767,14 @@ extension GameInfo {
     }
 }
 
-struct GameVariant: Equatable, Codable {
+nonisolated struct GameVariant: Equatable, Codable {
     let id: String
     let appStore: String
     var appId: String?
     /// True when GFN reports MANUAL, PLATFORM_SYNC, or IN_LIBRARY for this variant.
     var isOwned: Bool = false
 
-    var storeName: String {
+    @MainActor var storeName: String {
         L10n.storeName(for: appStore)
     }
 }
@@ -784,7 +784,7 @@ extension GameVariant {
         case id, appStore, appId, isOwned
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         appStore = try c.decode(String.self, forKey: .appStore)
@@ -792,7 +792,7 @@ extension GameVariant {
         isOwned = try c.decodeIfPresent(Bool.self, forKey: .isOwned) ?? false
     }
 
-    func encode(to encoder: Encoder) throws {
+    nonisolated func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(appStore, forKey: .appStore)

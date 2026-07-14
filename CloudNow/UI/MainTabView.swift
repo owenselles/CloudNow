@@ -33,10 +33,10 @@ struct MainTabView: View {
                 )
             }
             Tab(L10n.text("library"), systemImage: "books.vertical.fill", value: AppTab.library) {
-                LibraryView(games: viewModel.libraryGames, onPlay: { gameToPlay = $0 })
+                LibraryView(onPlay: { gameToPlay = $0 })
             }
             Tab(L10n.text("store"), systemImage: "bag.fill", value: AppTab.store) {
-                StoreView(games: viewModel.mainGames, onPlay: { gameToPlay = $0 })
+                StoreView(onPlay: { gameToPlay = $0 })
             }
             Tab(L10n.text("settings"), systemImage: "gearshape.fill", value: AppTab.settings) {
                 SettingsView()

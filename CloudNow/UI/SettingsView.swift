@@ -218,17 +218,23 @@ struct SettingsView: View {
                         LabeledContent {
                             HStack(spacing: 16) {
                                 Button {
-                                    vm.streamSettings.rumbleIntensity = max(StreamSettings.minRumbleIntensity, vm.streamSettings.rumbleIntensity - 0.05)
+                                    vm.streamSettings.rumbleIntensity = max(
+                                        StreamSettings.minRumbleIntensity,
+                                        vm.streamSettings.rumbleIntensity - 0.05
+                                    )
                                 } label: {
                                     Image(systemName: "minus.circle")
                                 }
                                 .buttonStyle(.plain)
-                                Text("\(Int((vm.streamSettings.rumbleIntensity * 100).rounded()))%")
+                                Text(rumbleMultiplierLabel(vm.streamSettings.rumbleIntensity))
                                     .monospacedDigit()
-                                    .frame(minWidth: 44)
+                                    .frame(minWidth: 64)
                                     .padding(.horizontal, 24)
                                 Button {
-                                    vm.streamSettings.rumbleIntensity = min(StreamSettings.maxRumbleIntensity, vm.streamSettings.rumbleIntensity + 0.05)
+                                    vm.streamSettings.rumbleIntensity = min(
+                                        StreamSettings.maxRumbleIntensity,
+                                        vm.streamSettings.rumbleIntensity + 0.05
+                                    )
                                 } label: {
                                     Image(systemName: "plus.circle")
                                 }
@@ -399,6 +405,10 @@ struct SettingsView: View {
         return host.components(separatedBy: ".").first?.uppercased() ?? url
     }
 
+    private func rumbleMultiplierLabel(_ value: Double) -> String {
+        String(format: "%.2f×", value)
+    }
+
     private struct ResolutionEntry { let res: String; let badge: String; let symbol: String }
     private let commonResolutions: [ResolutionEntry] = [
         ResolutionEntry(res: "1280x720", badge: "HD", symbol: "tv"),
@@ -538,11 +548,12 @@ private struct ZonePickerView: View {
         do {
             zones = try await ZoneClient.shared.fetchZones()
             isLoading = false
+            let staleZones = zones.filter(\.isMeasuring)
             let batchSize = 6
-            for start in stride(from: 0, to: zones.count, by: batchSize) {
+            for start in stride(from: 0, to: staleZones.count, by: batchSize) {
                 if Task.isCancelled { return }
-                let end = min(start + batchSize, zones.count)
-                let batch = zones[start ..< end]
+                let end = min(start + batchSize, staleZones.count)
+                let batch = staleZones[start ..< end]
                 await withTaskGroup(of: (String, Int?).self) { group in
                     for zone in batch {
                         group.addTask {

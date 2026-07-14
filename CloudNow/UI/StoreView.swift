@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct StoreView: View {
-    let games: [GameInfo]
     let onPlay: (GameInfo) -> Void
 
     @Environment(GamesViewModel.self) var viewModel
@@ -9,33 +8,16 @@ struct StoreView: View {
     @State private var carouselRequest: CarouselRequest?
     @FocusState private var focusedGameId: String?
     @State private var expandedGame: GameInfo?
-    @State private var searchText = ""
-    @State private var filterState = GameFilterState()
-    @State private var sortOrder: LibrarySortOrder = .default
-
-    private var filterOptions: GameFilterOptions {
-        GameFilterOptions(games: games, favoriteIds: viewModel.favoriteIds, context: .store)
-    }
-
-    private var filteredGames: [GameInfo] {
-        GameFilterEngine.apply(
-            to: games,
-            context: .store,
-            state: filterState,
-            searchText: searchText,
-            sortOrder: sortOrder,
-            favoriteIds: viewModel.favoriteIds,
-            recentlyPlayedIds: viewModel.recentlyPlayedIds
-        )
-    }
 
     private let columns = [
         GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40),
     ]
 
     var body: some View {
+        @Bindable var viewModel = viewModel
+
         ZStack {
-            if games.isEmpty, viewModel.isLoading {
+            if viewModel.mainGames.isEmpty, viewModel.isLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(0 ..< 12, id: \.self) { _ in
@@ -45,13 +27,13 @@ struct StoreView: View {
                     .padding(60)
                 }
                 .allowsHitTesting(false)
-            } else if games.isEmpty {
+            } else if viewModel.mainGames.isEmpty {
                 emptyState
             } else {
                 gameContent
             }
         }
-        .searchable(text: $searchText, prompt: Text(L10n.text("search_games")))
+        .searchable(text: $viewModel.storeSearchText, prompt: Text(L10n.text("search_games")))
         .fullScreenCover(item: $carouselRequest) { req in
             GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
                 carouselRequest = nil
@@ -70,15 +52,17 @@ struct StoreView: View {
     }
 
     private var gameContent: some View {
-        let visibleGames = filteredGames
-        let options = filterOptions
+        @Bindable var viewModel = viewModel
+        let visibleGames = viewModel.filteredStoreGames
 
         return GameGrid(
             games: visibleGames,
             focusedId: $focusedGameId,
             showLibraryBadge: true,
-            hasActiveFilters: !filterState.isEmpty,
-            onClearFilters: { filterState.clear() },
+            pageSize: 96,
+            boxArtPrefetchDistance: 24,
+            hasActiveFilters: !viewModel.storeFilterState.isEmpty,
+            onClearFilters: { viewModel.storeFilterState.clear() },
             onSelect: { game in
                 carouselRequest = CarouselRequest(games: visibleGames, startId: game.id)
             },
@@ -86,31 +70,23 @@ struct StoreView: View {
                 expandedGame = game
             },
             header: {
-                filterHeader(visibleGames: visibleGames, options: options)
+                filterHeader(visibleGames: visibleGames)
             }
         )
     }
 
-    private func filterHeader(visibleGames: [GameInfo], options: GameFilterOptions) -> some View {
-        GameFilterBar(
-            totalCount: games.count,
+    private func filterHeader(visibleGames: [GameInfo]) -> some View {
+        @Bindable var viewModel = viewModel
+
+        return GameFilterBar(
+            totalCount: viewModel.mainGames.count,
             resultCount: visibleGames.count,
             context: .store,
-            options: options,
+            options: viewModel.storeFilterOptions,
             availableSortOrders: LibrarySortOrder.allCases,
-            previewCount: { state in
-                GameFilterEngine.apply(
-                    to: games,
-                    context: .store,
-                    state: state,
-                    searchText: searchText,
-                    sortOrder: sortOrder,
-                    favoriteIds: viewModel.favoriteIds,
-                    recentlyPlayedIds: viewModel.recentlyPlayedIds
-                ).count
-            },
-            filterState: $filterState,
-            sortOrder: $sortOrder
+            previewCount: viewModel.storePreviewCount,
+            filterState: $viewModel.storeFilterState,
+            sortOrder: $viewModel.storeSortOrder
         )
     }
 

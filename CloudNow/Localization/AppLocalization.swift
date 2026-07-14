@@ -275,11 +275,11 @@ enum L10n {
         return host.components(separatedBy: ".").first?.uppercased() ?? zoneUrl
     }
 
-    static func nvidiaLocaleCode(for locale: Locale = .autoupdatingCurrent) -> String {
+    nonisolated static func nvidiaLocaleCode(for locale: Locale = .autoupdatingCurrent) -> String {
         nvidiaLocaleCode(forTVOSLanguageIdentifier: tvOSLanguageIdentifier(for: locale))
     }
 
-    static func tvOSLanguageIdentifier(for locale: Locale = .autoupdatingCurrent) -> String {
+    nonisolated static func tvOSLanguageIdentifier(for locale: Locale = .autoupdatingCurrent) -> String {
         let language = locale.language.languageCode?.identifier.lowercased() ?? "en"
         let region = locale.region?.identifier.uppercased()
         let identifier = locale.identifier.lowercased()
@@ -401,7 +401,7 @@ enum L10n {
         }
     }
 
-    static func nvidiaLocaleCode(forTVOSLanguageIdentifier identifier: String) -> String {
+    nonisolated static func nvidiaLocaleCode(forTVOSLanguageIdentifier identifier: String) -> String {
         let locale = Locale(identifier: identifier.replacingOccurrences(of: "_", with: "-"))
         let language = locale.language.languageCode?.identifier.lowercased() ?? "en"
         let region = locale.region?.identifier.uppercased()
@@ -510,7 +510,7 @@ enum L10n {
         return tvOSLanguageIdentifier(for: locale)
     }
 
-    static func keyboardLayoutCode(for locale: Locale = .autoupdatingCurrent) -> String {
+    nonisolated static func keyboardLayoutCode(for locale: Locale = .autoupdatingCurrent) -> String {
         nvidiaLocaleCode(for: locale).replacingOccurrences(of: "_", with: "-")
     }
 

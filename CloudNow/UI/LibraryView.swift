@@ -12,42 +12,23 @@ enum LibrarySortOrder: String, CaseIterable {
 }
 
 struct LibraryView: View {
-    let games: [GameInfo]
     let onPlay: (GameInfo) -> Void
 
     @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
 
-    @State private var searchText = ""
-    @State private var sortOrder: LibrarySortOrder = .default
-    @State private var filterState = GameFilterState()
     @State private var carouselRequest: CarouselRequest?
     @State private var expandedGame: GameInfo?
     @FocusState private var focusedGameId: String?
-
     private let columns = [
         GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40),
     ]
 
-    private var filterOptions: GameFilterOptions {
-        GameFilterOptions(games: games, favoriteIds: viewModel.favoriteIds, context: .library)
-    }
-
-    private var filteredGames: [GameInfo] {
-        GameFilterEngine.apply(
-            to: games,
-            context: .library,
-            state: filterState,
-            searchText: searchText,
-            sortOrder: sortOrder,
-            favoriteIds: viewModel.favoriteIds,
-            recentlyPlayedIds: viewModel.recentlyPlayedIds
-        )
-    }
-
     var body: some View {
+        @Bindable var viewModel = viewModel
+
         ZStack {
-            if games.isEmpty, viewModel.isLibraryLoading {
+            if viewModel.libraryGames.isEmpty, viewModel.isLibraryLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(0 ..< 12, id: \.self) { _ in
@@ -57,7 +38,7 @@ struct LibraryView: View {
                     .padding(60)
                 }
                 .allowsHitTesting(false)
-            } else if games.isEmpty {
+            } else if viewModel.libraryGames.isEmpty {
                 emptyState
             } else {
                 gameContent
@@ -88,18 +69,23 @@ struct LibraryView: View {
                 .disabled(viewModel.isLibraryLoading)
             }
         }
-        .searchable(text: $searchText, prompt: games.isEmpty ? Text(L10n.text("loading_library")) : Text(L10n.format("search_games_count", games.count)))
+        .searchable(
+            text: $viewModel.librarySearchText,
+            prompt: viewModel.libraryGames.isEmpty
+                ? Text(L10n.text("loading_library"))
+                : Text(L10n.format("search_games_count", viewModel.libraryGames.count))
+        )
     }
 
     private var gameContent: some View {
-        let visibleGames = filteredGames
-        let options = filterOptions
+        @Bindable var viewModel = viewModel
+        let visibleGames = viewModel.filteredLibraryGames
 
         return GameGrid(
             games: visibleGames,
             focusedId: $focusedGameId,
-            hasActiveFilters: !filterState.isEmpty,
-            onClearFilters: { filterState.clear() },
+            hasActiveFilters: !viewModel.libraryFilterState.isEmpty,
+            onClearFilters: { viewModel.libraryFilterState.clear() },
             onSelect: { game in
                 carouselRequest = CarouselRequest(games: visibleGames, startId: game.id)
             },
@@ -107,13 +93,15 @@ struct LibraryView: View {
                 expandedGame = game
             },
             header: {
-                filterHeader(visibleGames: visibleGames, options: options)
+                filterHeader(visibleGames: visibleGames)
             }
         )
     }
 
-    private func filterHeader(visibleGames: [GameInfo], options: GameFilterOptions) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func filterHeader(visibleGames: [GameInfo]) -> some View {
+        @Bindable var viewModel = viewModel
+
+        return VStack(alignment: .leading, spacing: 0) {
             if let statusMessage = viewModel.libraryError ?? viewModel.libraryWarning {
                 HStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -126,24 +114,14 @@ struct LibraryView: View {
                 .padding(.top, 24)
             }
             GameFilterBar(
-                totalCount: games.count,
+                totalCount: viewModel.libraryGames.count,
                 resultCount: visibleGames.count,
                 context: .library,
-                options: options,
+                options: viewModel.libraryFilterOptions,
                 availableSortOrders: LibrarySortOrder.allCases,
-                previewCount: { state in
-                    GameFilterEngine.apply(
-                        to: games,
-                        context: .library,
-                        state: state,
-                        searchText: searchText,
-                        sortOrder: sortOrder,
-                        favoriteIds: viewModel.favoriteIds,
-                        recentlyPlayedIds: viewModel.recentlyPlayedIds
-                    ).count
-                },
-                filterState: $filterState,
-                sortOrder: $sortOrder
+                previewCount: viewModel.libraryPreviewCount,
+                filterState: $viewModel.libraryFilterState,
+                sortOrder: $viewModel.librarySortOrder
             )
         }
     }
@@ -251,6 +229,8 @@ struct GameGrid<Header: View>: View {
     let games: [GameInfo]
     var focusedId: FocusState<String?>.Binding
     var showLibraryBadge: Bool = false
+    var pageSize: Int? = nil
+    var boxArtPrefetchDistance = 0
     let hasActiveFilters: Bool
     let onClearFilters: () -> Void
     let onSelect: (GameInfo) -> Void
@@ -259,7 +239,20 @@ struct GameGrid<Header: View>: View {
 
     @Environment(GamesViewModel.self) var viewModel
 
+    @State private var visibleGameCount = 0
+
     private let columns = [GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40)]
+
+    private var renderedGameCount: Int {
+        guard let pageSize else { return games.count }
+        return min(games.count, max(visibleGameCount, pageSize))
+    }
+
+    private var contentIdentity: [String] {
+        [String(games.count)]
+            + games.prefix(4).map(\.id)
+            + games.suffix(4).map(\.id)
+    }
 
     var body: some View {
         ScrollView {
@@ -274,7 +267,7 @@ struct GameGrid<Header: View>: View {
                     .frame(minHeight: 620)
                 } else {
                     LazyVGrid(columns: columns, spacing: 40) {
-                        ForEach(games) { game in
+                        ForEach(Array(games.prefix(renderedGameCount).enumerated()), id: \.element.id) { index, game in
                             Button { onSelect(game) } label: {
                                 GameCardLabel(game: game, showLibraryBadge: showLibraryBadge)
                             }
@@ -312,12 +305,33 @@ struct GameGrid<Header: View>: View {
                                     }
                                 }
                             }
+                            .onAppear { gameAppeared(at: index) }
                         }
                     }
                     .padding(60)
                 }
             }
         }
+        .onChange(of: contentIdentity) {
+            visibleGameCount = pageSize ?? 0
+        }
+    }
+
+    private func gameAppeared(at index: Int) {
+        if boxArtPrefetchDistance > 0 {
+            let start = index + 1
+            let end = min(games.count, start + boxArtPrefetchDistance)
+            if start < end {
+                BoxArtPrefetcher.shared.prefetch(
+                    games[start ..< end].compactMap(\.boxArtUrl)
+                )
+            }
+        }
+
+        guard let pageSize, renderedGameCount < games.count else { return }
+        let loadMoreThreshold = max(0, renderedGameCount - max(boxArtPrefetchDistance, 12))
+        guard index >= loadMoreThreshold else { return }
+        visibleGameCount = min(games.count, renderedGameCount + pageSize)
     }
 }
 

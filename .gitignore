@@ -44,5 +44,10 @@ AuthKey_*.p8
 # Local signing config (each dev sets their own DEVELOPMENT_TEAM)
 Local.xcconfig
 
+# Local Apple TV/Xcode overrides (tracked files also use skip-worktree locally)
+CloudNow/Info.plist
+CloudNow.xcodeproj/project.pbxproj
+CloudNow.xcodeproj/xcshareddata/xcschemes/CloudNow.xcscheme
+
 # Opencode / AI workflow (local-only)
 .omo/
