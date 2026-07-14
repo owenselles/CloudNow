@@ -202,7 +202,7 @@ class GamesViewModel {
 
     // MARK: Load
 
-    private static let libraryCacheKey = "gfn.cache.libraryGames.v2"
+    private static let legacyLibraryCacheKey = "gfn.cache.libraryGames.v2"
     private static let subscriptionCacheKey = "gfn.cache.subscription.v1"
     private static let vpcIdCacheKey = "gfn.cache.vpcId"
 
@@ -210,11 +210,13 @@ class GamesViewModel {
         // Invalidate stale v1 cache from the old panels API
         UserDefaults.standard.removeObject(forKey: "gfn.cache.mainGames")
         UserDefaults.standard.removeObject(forKey: "gfn.cache.libraryGames")
+        // Library metadata can exceed tvOS's per-value UserDefaults limit.
+        // Remove the old preference-backed cache before using the file cache.
+        UserDefaults.standard.removeObject(forKey: Self.legacyLibraryCacheKey)
 
         // Show cached data instantly while fresh data loads in the background:
-        // library and subscription from UserDefaults, the much larger catalog
-        // from a file in Caches (too big for tvOS UserDefaults).
-        if libraryGames.isEmpty, let cached = loadCache(Self.libraryCacheKey, as: [GameInfo].self) {
+        // library and catalog from files in Caches, subscription from UserDefaults.
+        if libraryGames.isEmpty, let cached = await Self.readLibraryCache() {
             libraryGames = cached
         }
         if subscription == nil, let cachedSub = loadCache(Self.subscriptionCacheKey, as: SubscriptionInfo.self) {
@@ -264,7 +266,7 @@ class GamesViewModel {
             }
             libraryGames = merged
 
-            saveCache(Self.libraryCacheKey, data: merged)
+            await Self.writeLibraryCache(merged)
             await Self.writeCatalogCache(fetchedMain)
         } catch {
             if !hadCache { self.error = error.localizedDescription }
@@ -307,13 +309,18 @@ class GamesViewModel {
         return try? await MESClient.shared.fetchSubscription(token: token, vpcId: vpcId, userId: userId)
     }
 
-    // MARK: Catalog Disk Cache
+    // MARK: Game Disk Caches
 
-    /// The full catalog (~2000+ games) exceeds what tvOS UserDefaults tolerates,
-    /// so it lives as a JSON file in Caches. Read/write run off the main actor.
+    /// Game payloads can exceed what tvOS UserDefaults tolerates, so the catalog
+    /// and library live as JSON files in Caches. Read/write run off the main actor.
     private nonisolated static var catalogCacheURL: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent("gfn.catalog.v1.json")
+    }
+
+    private nonisolated static var libraryCacheURL: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("gfn.library.v1.json")
     }
 
     private nonisolated static func readCatalogCache() async -> [GameInfo]? {
@@ -324,6 +331,17 @@ class GamesViewModel {
 
     private nonisolated static func writeCatalogCache(_ games: [GameInfo]) async {
         guard let url = catalogCacheURL, let data = try? JSONEncoder().encode(games) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private nonisolated static func readLibraryCache() async -> [GameInfo]? {
+        guard let url = libraryCacheURL, let data = try? Data(contentsOf: url) else { return nil }
+        let games = try? JSONDecoder().decode([GameInfo].self, from: data)
+        return (games?.isEmpty ?? true) ? nil : games
+    }
+
+    private nonisolated static func writeLibraryCache(_ games: [GameInfo]) async {
+        guard let url = libraryCacheURL, let data = try? JSONEncoder().encode(games) else { return }
         try? data.write(to: url, options: .atomic)
     }
 
@@ -350,7 +368,7 @@ class GamesViewModel {
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
             let vpcId = UserDefaults.standard.string(forKey: Self.vpcIdCacheKey)
             libraryGames = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base, vpcId: vpcId)
-            saveCache(Self.libraryCacheKey, data: libraryGames)
+            await Self.writeLibraryCache(libraryGames)
         } catch {
             libraryError = error.localizedDescription
         }
