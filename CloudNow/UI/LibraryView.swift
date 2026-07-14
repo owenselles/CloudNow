@@ -229,7 +229,7 @@ struct GameGrid<Header: View>: View {
     let games: [GameInfo]
     var focusedId: FocusState<String?>.Binding
     var showLibraryBadge: Bool = false
-    var pageSize: Int? = nil
+    var pageSize: Int?
     var boxArtPrefetchDistance = 0
     let hasActiveFilters: Bool
     let onClearFilters: () -> Void
