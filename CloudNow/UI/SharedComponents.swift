@@ -14,7 +14,7 @@ struct ScrollableText: View {
     var topPadding: CGFloat = 72
     var bottomPadding: CGFloat = 140
     var font: Font = .callout
-    var foregroundStyle: AnyShapeStyle = AnyShapeStyle(.white.opacity(0.85))
+    var foregroundStyle: AnyShapeStyle = .init(.white.opacity(0.85))
     var lineSpacing: CGFloat = 6
     var showsIndicators: Bool = true
 
@@ -31,7 +31,7 @@ struct ScrollableText: View {
         // the description into shorter blocks that can each become a focus target.
         for paragraph in paragraphs {
             let candidate = current.isEmpty ? paragraph : current + "\n\n" + paragraph
-            if candidate.count > blockCharacterLimit && !current.isEmpty {
+            if candidate.count > blockCharacterLimit, !current.isEmpty {
                 blocks.append(current)
                 current = paragraph
             } else {
@@ -50,7 +50,7 @@ struct ScrollableText: View {
         ScrollView(.vertical, showsIndicators: showsIndicators) {
             VStack(alignment: .leading, spacing: spacing) {
                 ForEach(Array(focusBlocks.enumerated()), id: \.offset) { _, block in
-                    Button(action: {}) {
+                    Button(action: {}, label: {
                         Text(block)
                             .font(font)
                             .foregroundStyle(foregroundStyle)
@@ -58,7 +58,7 @@ struct ScrollableText: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                             .contentShape(Rectangle())
-                    }
+                    })
                     .buttonStyle(PassthroughButtonStyle())
                     .focusEffectDisabled()
                 }

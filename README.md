@@ -27,7 +27,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 
 - **Tab bar navigation** — Home, Library, Store, and Settings; fully focus-engine compatible
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
-- **Library & Store** — browse your linked games separately from the full public catalog; Library and Store both have search; Library supports A→Z, Z→A, and Recently Played sort orders; long-press any card to add/remove from Favorites
+- **Library & Store** — browse your linked games separately from the full public catalog; search and sort by default order, recently played, A→Z, or Z→A; filter by collection, genre, game store, RTX, HDR, and Reflex with live result counts; long-press any card to add/remove from Favorites
 - **Instant startup** — catalog, library, and subscription data are cached on device and shown immediately on launch while fresh data loads in the background
 - **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), color mode, keyboard layout, game language, and Low Latency Mode (L4S) from the Settings tab
 - **Color mode preferences** — Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR. CloudNow separates user preference, requested stream mode, negotiated server mode, and actual detected decoded format instead of assuming HDR from bit depth or Apple TV output mode
@@ -48,7 +48,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Pause menu** — left-sidebar in-stream menu with Resume, input mode toggle, Statistics level, Leave Game, and End Session; open with Play/Pause or Menu on the Siri Remote, or hold the overlay trigger button (~2 s) on a controller (default: Start/≡, configurable in Settings)
 - **Statistics HUD** — in-stream statistics overlay styled after the official client, with Compact and Standard levels cycled from the pause menu; Compact shows game/stream FPS, RTT, bitrate, packet loss, and server location; Standard adds jitter, connection path, resolution, drops/freezes, decoder, jitter-buffer, audio, and session detail with live history graphs
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
-- **tvOS localization** — UI text follows the device language automatically using `Bundle.main.preferredLocalizations` with English fallback; translations live in one file per locale under `CloudNow/Localization`
+- **tvOS localization** — UI text follows the device language automatically using `Bundle.main.preferredLocalizations` with English fallback; translations live in one file per locale under `CloudNow/Localization`, and every locale table must contain the complete English key set
 
 ## Requirements
 
@@ -88,7 +88,18 @@ Then attach it to the project in Xcode:
 
 `Local.xcconfig` is gitignored and should never be committed.
 
-### 4. Build & Run
+### 4. Run the required checks
+
+Run both lint checks before building or opening a PR:
+
+```bash
+swiftformat --lint --config .swiftformat CloudNow
+swiftlint --strict --config .swiftlint.yml CloudNow
+```
+
+These commands require the exact tool versions pinned by CI: SwiftFormat 0.61.1 and SwiftLint 0.63.3. See [Linting](#linting) for installation and version details.
+
+### 5. Build & Run
 
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
@@ -190,6 +201,8 @@ brew install swiftlint swiftformat pre-commit
 
 ### Run locally
 
+Run these checks before every build and before opening a PR:
+
 ```bash
 # Format check (no mutation)
 swiftformat --lint --config .swiftformat CloudNow
@@ -209,7 +222,14 @@ After installing, every `git commit` runs SwiftFormat then SwiftLint --fix again
 
 ### Pinned versions
 
-CI uses SwiftLint 0.63.3 and SwiftFormat 0.61.1. Local installs via Homebrew should match or exceed these; verify with `swiftlint version` and `swiftformat --version`.
+CI and the pre-commit hooks use SwiftLint 0.63.3 and SwiftFormat 0.61.1. Local tools must match these exact versions; newer formatter or linter releases can enable additional rules and produce results that differ from CI. Verify before running the checks:
+
+```bash
+swiftformat --version  # expected: 0.61.1
+swiftlint version      # expected: 0.63.3
+```
+
+When Homebrew provides a newer release, use the pinned pre-commit environments or the same release artifacts referenced in `.github/workflows/lint.yml`.
 
 ---
 
@@ -248,6 +268,7 @@ CloudNow/
 └── UI/
     ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings
     ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings) with controller tab cycling
+    ├── GameFilters.swift           Shared catalog filtering, sorting, filter sheet, and result bar
     ├── HomeView.swift              Hero banner + Continue Playing + Favorites rows
     ├── LibraryView.swift           LIBRARY panel grid with favorite toggles
     ├── StoreView.swift             MAIN catalog grid with "In Library" badges

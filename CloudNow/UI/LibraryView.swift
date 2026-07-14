@@ -105,10 +105,11 @@ struct LibraryView: View {
             },
             onExpand: { game in
                 expandedGame = game
+            },
+            header: {
+                filterHeader(visibleGames: visibleGames, options: options)
             }
-        ) {
-            filterHeader(visibleGames: visibleGames, options: options)
-        }
+        )
     }
 
     private func filterHeader(visibleGames: [GameInfo], options: GameFilterOptions) -> some View {

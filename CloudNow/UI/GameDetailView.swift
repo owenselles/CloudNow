@@ -12,7 +12,7 @@ struct GameDetailView: View {
     let game: GameInfo
     let onPlay: (GameInfo) -> Void
     var presentationStyle: ExpandedDetailPresentationStyle = .fullScreen
-    var onCollapse: (() -> Void)? = nil
+    var onCollapse: (() -> Void)?
 
     @Environment(GamesViewModel.self) var viewModel
     @Environment(\.dismiss) private var dismiss
@@ -26,8 +26,13 @@ struct GameDetailView: View {
     @State private var dismissing = false
     @FocusState private var carouselExitCatcherFocused: Bool
 
-    private var isEmbeddedCarousel: Bool { presentationStyle == .embeddedCarousel }
-    private var isCarouselExpanded: Bool { presentationStyle == .carouselExpanded }
+    private var isEmbeddedCarousel: Bool {
+        presentationStyle == .embeddedCarousel
+    }
+
+    private var isCarouselExpanded: Bool {
+        presentationStyle == .carouselExpanded
+    }
 
     private var detailItems: [(String, String)] {
         let genres = game.genreItems
@@ -58,26 +63,26 @@ struct GameDetailView: View {
 
             ScrollViewReader { proxy in
                 detailScrollContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea()
-                .onChange(of: heroFocused) { _, focused in
-                    if focused {
-                        backgroundBlurred = false
-                        withAnimation(.smooth) { proxy.scrollTo("hero", anchor: .top) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                    .onChange(of: heroFocused) { _, focused in
+                        if focused {
+                            backgroundBlurred = false
+                            withAnimation(.smooth) { proxy.scrollTo("hero", anchor: .top) }
+                        }
                     }
-                }
-                .onChange(of: aboutFocused) { _, focused in
-                    if focused {
-                        backgroundBlurred = true
-                        withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
+                    .onChange(of: aboutFocused) { _, focused in
+                        if focused {
+                            backgroundBlurred = true
+                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
+                        }
                     }
-                }
-                .onChange(of: detailsFocused) { _, focused in
-                    if focused {
-                        backgroundBlurred = true
-                        withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
+                    .onChange(of: detailsFocused) { _, focused in
+                        if focused {
+                            backgroundBlurred = true
+                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
+                        }
                     }
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opacity(appeared && !dismissing ? 1 : 0)
@@ -111,7 +116,7 @@ struct GameDetailView: View {
             detailScrollContent
                 .scrollDisabled(true)
                 .allowsHitTesting(false)
-            .padding(.top, 36)
+                .padding(.top, 36)
         }
     }
 
@@ -123,9 +128,9 @@ struct GameDetailView: View {
             // a focused descendant on tvOS, so onExitCommand below always fires
             // (Menu/back), regardless of whether the hero buttons exist or are
             // laid out yet.
-            Button(action: { onCollapse?() }) {
+            Button(action: { onCollapse?() }, label: {
                 Color.clear.frame(width: 1, height: 1)
-            }
+            })
             .buttonStyle(.plain)
             .focused($carouselExitCatcherFocused)
             .focusEffectDisabled()
@@ -287,7 +292,7 @@ struct GameDetailView: View {
                         Button {} label: {
                             AsyncImage(url: URL(string: url)) { phase in
                                 switch phase {
-                                case .success(let image): image.resizable().aspectRatio(contentMode: .fill)
+                                case let .success(image): image.resizable().aspectRatio(contentMode: .fill)
                                 default: Color.gray.opacity(0.3)
                                 }
                             }
@@ -385,13 +390,12 @@ struct GameDetailView: View {
 
     // MARK: Right column
 
-    @ViewBuilder
     private var rightColumn: some View {
         VStack(alignment: .trailing, spacing: 14) {
             if let dev = game.developer { rightInfo("Developer", dev) }
             if let pub = game.publisher, pub != game.developer { rightInfo("Publisher", pub) }
             if let rating = game.contentRating { rightInfo("Rating", rating) }
-            if game.variants.count > 1 && game.isInLibrary {
+            if game.variants.count > 1, game.isInLibrary {
                 Divider().frame(width: 200).opacity(0.3)
                 variantPicker
             }
@@ -435,7 +439,7 @@ struct GameDetailBackground: View {
         ZStack {
             AsyncImage(url: game.heroBannerUrl.flatMap(URL.init) ?? game.boxArtUrl.flatMap(URL.init)) { phase in
                 switch phase {
-                case .success(let image): image.resizable().aspectRatio(contentMode: .fill)
+                case let .success(image): image.resizable().aspectRatio(contentMode: .fill)
                 default: Color.black
                 }
             }
@@ -448,7 +452,7 @@ struct GameDetailBackground: View {
                 stops: [
                     .init(color: .black.opacity(0.92), location: 0),
                     .init(color: .black.opacity(0.55), location: 0.35),
-                    .init(color: .clear,               location: 0.7),
+                    .init(color: .clear, location: 0.7),
                 ],
                 startPoint: .bottomLeading,
                 endPoint: .topTrailing
@@ -475,31 +479,31 @@ struct FullDescriptionView: View {
                 Color.black.opacity(0.75).ignoresSafeArea()
 
                 ScrollableText(text: description)
-                .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
-                .background(cardColor)
-                .overlay(alignment: .top) {
-                    LinearGradient(
-                        colors: [cardColor.opacity(0.95), cardColor.opacity(0)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    .frame(width: cardWidth, height: cardHeight, alignment: .topLeading)
+                    .background(cardColor)
+                    .overlay(alignment: .top) {
+                        LinearGradient(
+                            colors: [cardColor.opacity(0.95), cardColor.opacity(0)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
                         .frame(height: 64)
                         .allowsHitTesting(false)
-                }
-                .overlay(alignment: .bottom) {
-                    LinearGradient(
-                        colors: [cardColor.opacity(0), cardColor],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    }
+                    .overlay(alignment: .bottom) {
+                        LinearGradient(
+                            colors: [cardColor.opacity(0), cardColor],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
                         .frame(height: 88)
                         .allowsHitTesting(false)
-                }
+                    }
                     .clipShape(RoundedRectangle(cornerRadius: 20))
-                .shadow(color: .black.opacity(0.5), radius: 30)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .padding(.horizontal, 60)
-                .padding(.vertical, 48)
+                    .shadow(color: .black.opacity(0.5), radius: 30)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .padding(.horizontal, 60)
+                    .padding(.vertical, 48)
             }
         }
         .onExitCommand { dismiss() }

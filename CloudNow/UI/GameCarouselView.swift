@@ -6,11 +6,6 @@ struct CarouselRequest: Identifiable {
     let id = UUID()
     let games: [GameInfo]
     let startId: String
-
-    init(games: [GameInfo], startId: String) {
-        self.startId = startId
-        self.games = games
-    }
 }
 
 // MARK: - GameCarouselView
@@ -40,7 +35,7 @@ struct GameCarouselView: View {
         self.request = request
         self.onPlay = onPlay
         self.onDismiss = onDismiss
-        self._currentId = State(initialValue: request.startId)
+        _currentId = State(initialValue: request.startId)
     }
 
     var body: some View {
@@ -214,73 +209,73 @@ private struct CarouselCard: View {
             }
         }
         .onChange(of: isExpanded) { _, newValue in
-            if !newValue && isCurrent {
+            if !newValue, isCurrent {
                 showContent = true
             }
         }
     }
 
     private var cardBody: some View {
-            ZStack(alignment: .bottomLeading) {
-                if isExpanded {
-                    GameDetailView(
-                        game: game,
-                        onPlay: onPlay,
-                        presentationStyle: .carouselExpanded,
-                        onCollapse: onCollapseExpanded
-                    )
-                    .environment(viewModel)
-                } else if isCurrent && showContent {
-                    GameDetailView(
-                        game: game,
-                        onPlay: onPlay,
-                        presentationStyle: .embeddedCarousel
-                    )
-                    .environment(viewModel)
-                } else {
-                    // Fixed height lets the image overflow its natural width; the outer frame clips to the aligned region for the parallax effect.
-                    GeometryReader { geo in
-                        AsyncImage(url: game.heroBannerUrl.flatMap(URL.init) ?? game.boxArtUrl.flatMap(URL.init)) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(height: geo.size.height)
-                                    .frame(width: geo.size.width, alignment: Alignment(horizontal: imageAlignment, vertical: .center))
-                                    .clipped()
-                            default:
-                                Color.gray.opacity(0.25)
-                                    .frame(width: geo.size.width, height: geo.size.height)
-                            }
+        ZStack(alignment: .bottomLeading) {
+            if isExpanded {
+                GameDetailView(
+                    game: game,
+                    onPlay: onPlay,
+                    presentationStyle: .carouselExpanded,
+                    onCollapse: onCollapseExpanded
+                )
+                .environment(viewModel)
+            } else if isCurrent, showContent {
+                GameDetailView(
+                    game: game,
+                    onPlay: onPlay,
+                    presentationStyle: .embeddedCarousel
+                )
+                .environment(viewModel)
+            } else {
+                // Fixed height lets the image overflow its natural width; the outer frame clips to the aligned region for the parallax effect.
+                GeometryReader { geo in
+                    AsyncImage(url: game.heroBannerUrl.flatMap(URL.init) ?? game.boxArtUrl.flatMap(URL.init)) { phase in
+                        switch phase {
+                        case let .success(image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(height: geo.size.height)
+                                .frame(width: geo.size.width, alignment: Alignment(horizontal: imageAlignment, vertical: .center))
+                                .clipped()
+                        default:
+                            Color.gray.opacity(0.25)
+                                .frame(width: geo.size.width, height: geo.size.height)
                         }
                     }
                 }
-
-                if !isExpanded {
-                    UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 20)
-                        .stroke(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: .white.opacity(0.65), location: 0),
-                                    .init(color: .white.opacity(0.25), location: 0.35),
-                                    .init(color: .clear, location: 0.65),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.5
-                        )
-                        .allowsHitTesting(false)
-                }
             }
-            .clipShape(UnevenRoundedRectangle(topLeadingRadius: isExpanded ? 0 : 20, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: isExpanded ? 0 : 20))
-            .shadow(
-                color: .black.opacity(isCurrent ? 0.5 : 0.15),
-                radius: isCurrent ? 20 : 4,
-                x: 0,
-                y: isCurrent ? 10 : 2
-            )
+
+            if !isExpanded {
+                UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 20)
+                    .stroke(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0.65), location: 0),
+                                .init(color: .white.opacity(0.25), location: 0.35),
+                                .init(color: .clear, location: 0.65),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.5
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: isExpanded ? 0 : 20, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: isExpanded ? 0 : 20))
+        .shadow(
+            color: .black.opacity(isCurrent ? 0.5 : 0.15),
+            radius: isCurrent ? 20 : 4,
+            x: 0,
+            y: isCurrent ? 10 : 2
+        )
     }
 
     @Environment(GamesViewModel.self) var viewModel

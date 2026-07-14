@@ -622,7 +622,8 @@ actor GamesClient {
         // Move the backend-selected variant to front so variants.first is the default launch store
         if let selectedVariantId,
            let selectedIndex = variants.firstIndex(where: { $0.id == selectedVariantId }),
-           selectedIndex > 0 {
+           selectedIndex > 0
+        {
             let selected = variants.remove(at: selectedIndex)
             variants.insert(selected, at: 0)
         }
@@ -884,15 +885,20 @@ private struct AppData: Decodable {
         private struct AnyKey: CodingKey {
             var stringValue: String
             var intValue: Int?
-            init?(stringValue: String) { self.stringValue = stringValue }
-            init?(intValue: Int) { return nil }
+            init?(stringValue: String) {
+                self.stringValue = stringValue
+            }
+
+            init?(intValue _: Int) {
+                nil
+            }
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: AnyKey.self)
             GAME_BOX_ART = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "GAME_BOX_ART")!)
-            TV_BANNER    = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "TV_BANNER")!)
-            HERO_IMAGE   = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "HERO_IMAGE")!)
+            TV_BANNER = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "TV_BANNER")!)
+            HERO_IMAGE = try c.decodeIfPresent(String.self, forKey: AnyKey(stringValue: "HERO_IMAGE")!)
             screenshots = c.allKeys
                 .filter { $0.stringValue.hasPrefix("SCREENSHOT") }
                 .sorted { $0.stringValue < $1.stringValue }
