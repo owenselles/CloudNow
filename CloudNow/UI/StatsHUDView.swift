@@ -28,6 +28,8 @@ enum StatsFormat {
 struct StatsHUDView: View {
     let streamController: GFNStreamController
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         switch streamController.statsMode {
         case .off:
@@ -223,29 +225,31 @@ struct StatsHUDView: View {
         .font(.system(size: 21).monospacedDigit())
         .frame(width: 380)
         .padding(20)
-        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+        .background(panelBackgroundColor, in: RoundedRectangle(cornerRadius: 12))
         .allowsHitTesting(false)
     }
 
     private func header(_ title: String) -> some View {
         Text(title.uppercased())
             .font(.system(size: 19, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.5))
+            .foregroundStyle(secondaryForegroundColor.opacity(0.75))
             .padding(.top, 8)
     }
 
     private func row(
-        _ label: String, _ value: String, color: Color = .white, history: [Double] = []
+        _ label: String, _ value: String, color: Color? = nil, history: [Double] = []
     ) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        let valueColor = color ?? primaryForegroundColor
+
+        return HStack(alignment: .center, spacing: 12) {
             Text(label)
-                .foregroundStyle(.white.opacity(0.65))
+                .foregroundStyle(secondaryForegroundColor)
             Spacer(minLength: 8)
             if history.count > 1 {
                 Chart {
                     ForEach(Array(history.enumerated()), id: \.offset) { idx, val in
                         LineMark(x: .value("t", idx), y: .value("v", val))
-                            .foregroundStyle(color)
+                            .foregroundStyle(valueColor)
                     }
                 }
                 .chartXAxis(.hidden)
@@ -253,17 +257,29 @@ struct StatsHUDView: View {
                 .frame(width: 64, height: 18)
             }
             Text(value)
-                .foregroundStyle(color)
+                .foregroundStyle(valueColor)
                 .multilineTextAlignment(.trailing)
                 .lineLimit(2)
         }
     }
 
     /// Full-width sentence line for the moved pause-menu diagnostics (Debug section).
-    private func line(_ text: String, color: Color = .white) -> some View {
+    private func line(_ text: String, color: Color? = nil) -> some View {
         Text(text)
             .font(.system(size: 18).monospacedDigit())
-            .foregroundStyle(color.opacity(color == .white ? 0.75 : 1))
+            .foregroundStyle(color ?? secondaryForegroundColor)
+    }
+
+    private var panelBackgroundColor: Color {
+        colorScheme == .dark ? .black.opacity(0.65) : .white.opacity(0.82)
+    }
+
+    private var primaryForegroundColor: Color {
+        colorScheme == .dark ? .white : .black
+    }
+
+    private var secondaryForegroundColor: Color {
+        primaryForegroundColor.opacity(0.68)
     }
 
     private func detectedColorLabel(pipeline: VideoPipelineSnapshot) -> String {

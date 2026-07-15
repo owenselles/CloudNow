@@ -190,23 +190,15 @@ private struct CarouselCard: View {
             }
         }
         .focusSection()
-        .onAppear {
+        .task(id: isCurrent) {
             showContent = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    showContent = true
-                }
+            guard isCurrent else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(360))
+            } catch {
+                return
             }
-        }
-        .onChange(of: isCurrent) { _, newValue in
-            if newValue {
-                showContent = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    withAnimation(.easeInOut(duration: 0.5)) {
-                        showContent = true
-                    }
-                }
-            }
+            showContent = true
         }
         .onChange(of: isExpanded) { _, newValue in
             if !newValue, isCurrent {
@@ -225,25 +217,23 @@ private struct CarouselCard: View {
                     onCollapse: onCollapseExpanded
                 )
                 .environment(viewModel)
-            } else if isCurrent, showContent {
-                GameDetailView(
-                    game: game,
-                    onPlay: onPlay,
-                    presentationStyle: .embeddedCarousel
-                )
-                .environment(viewModel)
             } else {
-                // Fixed height lets the image overflow its natural width; the outer frame clips to the aligned region for the parallax effect.
-                GeometryReader { geo in
-                    SharedArtworkImage(
-                        urlString: game.heroBannerUrl.flatMap(URL.init) == nil
-                            ? game.boxArtUrl
-                            : game.heroBannerUrl,
-                        maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+                carouselArtwork
+
+                GameDetailArtworkScrim()
+                    .opacity(isCurrent ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.2), value: isCurrent)
+
+                if isCurrent {
+                    GameDetailView(
+                        game: game,
+                        onPlay: onPlay,
+                        presentationStyle: .embeddedCarousel,
+                        rendersBackground: false
                     )
-                    .frame(height: geo.size.height)
-                    .frame(width: geo.size.width, alignment: Alignment(horizontal: imageAlignment, vertical: .center))
-                    .clipped()
+                    .environment(viewModel)
+                    .opacity(showContent ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.28), value: showContent)
                 }
             }
 
@@ -271,6 +261,26 @@ private struct CarouselCard: View {
             x: 0,
             y: isCurrent ? 10 : 2
         )
+    }
+
+    /// Keeps one artwork view alive while a card moves between neighbour and current positions.
+    /// The detail scrim and content are overlays, so revealing metadata cannot reload or rescale
+    /// the underlying image.
+    private var carouselArtwork: some View {
+        GeometryReader { geo in
+            SharedArtworkImage(
+                urlString: game.heroBannerUrl.flatMap(URL.init) == nil
+                    ? game.boxArtUrl
+                    : game.heroBannerUrl,
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+            .frame(height: geo.size.height)
+            .frame(
+                width: geo.size.width,
+                alignment: Alignment(horizontal: imageAlignment, vertical: .center)
+            )
+            .clipped()
+        }
     }
 
     @Environment(GamesViewModel.self) var viewModel

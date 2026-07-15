@@ -388,6 +388,7 @@ struct StreamView: View {
                 toggleOverlay()
             } label: {
                 Label(L10n.text("resume"), systemImage: "play.fill")
+                    .foregroundStyle(Color.black.opacity(0.84))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.bordered)
@@ -427,6 +428,7 @@ struct StreamView: View {
                 showExitConfirmation = true
             } label: {
                 Label(L10n.text("end_session"), systemImage: "xmark.circle")
+                    .foregroundStyle(Color.black.opacity(0.84))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.bordered)
@@ -441,16 +443,20 @@ struct StreamView: View {
                     Image(systemName: "clock")
                 }
                 .font(.caption.weight(.medium))
-                .foregroundStyle(rem < 30 ? .orange : .white.opacity(0.8))
+                .foregroundStyle(rem < 30 ? .orange : hostPrimaryForegroundColor.opacity(0.8))
             }
         }
         .padding(.horizontal, 48)
         .padding(.vertical, 80)
         .frame(width: 480)
         .frame(maxHeight: .infinity)
-        .background(.black.opacity(0.75))
+        .background(pauseMenuBackgroundColor)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .ignoresSafeArea()
+    }
+
+    private var pauseMenuBackgroundColor: Color {
+        colorScheme == .dark ? .black.opacity(0.75) : .white.opacity(0.82)
     }
 
     private var remoteModeLabel: String {

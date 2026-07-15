@@ -287,6 +287,7 @@ struct GameGrid<Header: View>: View {
                         }
                     }
                     .padding(60)
+                    .focusSection()
                 }
             }
         }

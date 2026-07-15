@@ -13,6 +13,7 @@ struct GameDetailView: View {
     let onPlay: (GameInfo) -> Void
     var presentationStyle: ExpandedDetailPresentationStyle = .fullScreen
     var onCollapse: (() -> Void)?
+    var rendersBackground = true
 
     @Environment(GamesViewModel.self) var viewModel
     @Environment(\.dismiss) private var dismiss
@@ -111,7 +112,9 @@ struct GameDetailView: View {
 
     private var embeddedBody: some View {
         ZStack {
-            GameDetailBackground(game: game, blurred: false)
+            if rendersBackground {
+                GameDetailBackground(game: game, blurred: false)
+            }
 
             detailScrollContent
                 .scrollDisabled(true)
@@ -285,7 +288,9 @@ struct GameDetailView: View {
 
     private var screenshotsRow: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Screenshots").font(.title3.weight(.semibold))
+            Text("Screenshots")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 16) {
                     ForEach(Array(game.screenshots.enumerated()), id: \.offset) { _, url in
@@ -314,7 +319,9 @@ struct GameDetailView: View {
         if !detailItems.isEmpty {
             HStack(alignment: .top, spacing: 20) {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Details").font(.title3.weight(.semibold))
+                    Text("Details")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
 
                     Button {
                         showFullDetails = true
@@ -324,11 +331,11 @@ struct GameDetailView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(label.uppercased())
                                         .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(.white.opacity(0.55))
                                         .kerning(1)
                                     Text(value)
                                         .font(.callout)
-                                        .foregroundStyle(.primary)
+                                        .foregroundStyle(.white.opacity(0.9))
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -350,7 +357,9 @@ struct GameDetailView: View {
 
     private func aboutPanel(_ desc: String) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("About").font(.title3.weight(.semibold))
+            Text("About")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
             Button {
                 showFullDescription = true
             } label: {
@@ -394,7 +403,9 @@ struct GameDetailView: View {
             if let pub = game.publisher, pub != game.developer { rightInfo("Publisher", pub) }
             if let rating = game.contentRating { rightInfo("Rating", rating) }
             if game.variants.count > 1, game.isInLibrary {
-                Divider().frame(width: 200).opacity(0.3)
+                Divider()
+                    .overlay(Color.white.opacity(0.35))
+                    .frame(width: 200)
                 variantPicker
             }
         }
@@ -402,14 +413,23 @@ struct GameDetailView: View {
 
     private func rightInfo(_ label: String, _ value: String) -> some View {
         VStack(alignment: .trailing, spacing: 2) {
-            Text(label.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(.secondary).kerning(1)
-            Text(value).font(.callout).foregroundStyle(.white.opacity(0.8)).multilineTextAlignment(.trailing)
+            Text(label.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.6))
+                .kerning(1)
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.9))
+                .multilineTextAlignment(.trailing)
         }
     }
 
     private var variantPicker: some View {
         VStack(alignment: .trailing, spacing: 8) {
-            Text("LAUNCH VIA").font(.caption2.weight(.semibold)).foregroundStyle(.secondary).kerning(1)
+            Text("LAUNCH VIA")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.6))
+                .kerning(1)
             ForEach(game.variants, id: \.id) { variant in
                 let isSelected = viewModel.preferredVariantId(for: game) == variant.id
                 Button {
@@ -446,6 +466,15 @@ struct GameDetailBackground: View {
             .blur(radius: blurred ? 20 : 0)
             .animation(.easeInOut(duration: 0.4), value: blurred)
 
+            GameDetailArtworkScrim()
+        }
+        .ignoresSafeArea()
+    }
+}
+
+struct GameDetailArtworkScrim: View {
+    var body: some View {
+        ZStack {
             LinearGradient(
                 stops: [
                     .init(color: .black.opacity(0.92), location: 0),
@@ -455,9 +484,18 @@ struct GameDetailBackground: View {
                 startPoint: .bottomLeading,
                 endPoint: .topTrailing
             )
-            .allowsHitTesting(false)
+
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0.55),
+                    .init(color: .black.opacity(0.2), location: 0.72),
+                    .init(color: .black.opacity(0.74), location: 1),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
         }
-        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 }
 
@@ -532,7 +570,7 @@ struct FullDetailsView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(label.uppercased())
                                     .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.white.opacity(0.55))
                                     .kerning(1)
                                 Text(value)
                                     .font(.body)
