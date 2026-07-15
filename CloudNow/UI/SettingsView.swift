@@ -1646,14 +1646,23 @@ private struct TextInputTriggerSequenceCaptureView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    @State private var capturePhase: CapturePhase = .waiting
+    @FocusState private var focusedControl: FocusedControl?
+
+    @State private var capturePhase: CapturePhase = .idle
     @State private var liveButtons = Set<ControllerSequenceButton>()
     @State private var lastDetectedSequence: ControllerButtonSequence?
     @State private var validationMessage: String?
 
     private enum CapturePhase {
+        case idle
+        case arming
         case waiting
         case collecting
+    }
+
+    private enum FocusedControl: Hashable {
+        case startListening
+        case back
     }
 
     var body: some View {
@@ -1665,42 +1674,83 @@ private struct TextInputTriggerSequenceCaptureView: View {
                 )
             }
 
-            Section {
-                Text(L10n.text("capture_text_input_buttons_instructions"))
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 8)
-
-                Text(statusText)
-                    .font(.body.weight(.medium))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 8)
-
-                if let detectedSequence {
-                    LabeledContent(
-                        L10n.text("detected_sequence"),
-                        value: detectedSequence.label
-                    )
-                }
-
-                if let validationMessage {
-                    Text(validationMessage)
+            if capturePhase == .idle {
+                Section {
+                    Text(L10n.text("capture_text_input_buttons_idle_instructions"))
                         .font(.body)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.vertical, 8)
+
+                    Button {
+                        beginCapture()
+                    } label: {
+                        Label(L10n.text("start_listening"), systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .focused($focusedControl, equals: .startListening)
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label(L10n.text("back_to_settings"), systemImage: "chevron.backward")
+                    }
+                    .buttonStyle(.bordered)
+                    .focused($focusedControl, equals: .back)
                 }
+                .listRowBackground(Color.clear)
+            } else {
+                Section {
+                    Text(L10n.text("capture_text_input_buttons_instructions"))
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 8)
+
+                    Text(statusText)
+                        .font(.body.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.vertical, 8)
+
+                    if let detectedSequence {
+                        LabeledContent(
+                            L10n.text("detected_sequence"),
+                            value: detectedSequence.label
+                        )
+                    }
+
+                    if let validationMessage {
+                        Text(validationMessage)
+                            .font(.body)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.vertical, 8)
+                    }
+                }
+                .listRowBackground(Color.clear)
             }
         }
         .navigationTitle(L10n.text("capture_text_input_buttons"))
-        .task {
+        .defaultFocus($focusedControl, .startListening)
+        .onExitCommand {
+            dismiss()
+        }
+        .task(id: isCapturing) {
+            guard isCapturing else { return }
             await monitorControllerButtons()
         }
     }
 
+    private var isCapturing: Bool {
+        capturePhase != .idle
+    }
+
     private var statusText: String {
         switch capturePhase {
+        case .idle:
+            ""
+        case .arming:
+            L10n.text("release_buttons_to_begin")
         case .waiting:
             L10n.text("press_buttons_now")
         case .collecting:
@@ -1715,9 +1765,23 @@ private struct TextInputTriggerSequenceCaptureView: View {
         return lastDetectedSequence
     }
 
+    private func beginCapture() {
+        capturePhase = .arming
+        liveButtons.removeAll()
+        lastDetectedSequence = nil
+        validationMessage = nil
+    }
+
     @MainActor
     private func updateCapture(with pressedButtons: Set<ControllerSequenceButton>) {
         switch capturePhase {
+        case .idle:
+            return
+
+        case .arming:
+            guard pressedButtons.isEmpty else { return }
+            capturePhase = .waiting
+
         case .waiting:
             guard !pressedButtons.isEmpty else { return }
             capturePhase = .collecting
