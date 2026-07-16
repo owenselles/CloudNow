@@ -5,6 +5,8 @@ struct SettingsView: View {
     @Environment(GamesViewModel.self) var viewModel
 
     @State private var showZonePicker = false
+    @State private var dataDialog: DataDialog?
+    @State private var isPerformingDataAction = false
 
     var body: some View {
         @Bindable var vm = viewModel
@@ -368,6 +370,39 @@ struct SettingsView: View {
                     }
                 #endif
 
+                Section(L10n.text("storage_and_data")) {
+                    Button {
+                        dataDialog = .confirmClearCache
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label(L10n.text("clear_cache"), systemImage: "externaldrive.badge.xmark")
+                                Text(L10n.text("clear_cache_description"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 8)
+                            Spacer()
+                            if isPerformingDataAction {
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isPerformingDataAction)
+
+                    Button(role: .destructive) {
+                        dataDialog = .confirmResetAllData
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(L10n.text("reset_all_data"), systemImage: "trash")
+                            Text(L10n.text("reset_all_data_description"))
+                                .font(.caption)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .disabled(isPerformingDataAction)
+                }
+
                 Section(L10n.text("account")) {
                     if let user = authManager.session?.user {
                         LabeledContent(L10n.text("name"), value: user.displayName)
@@ -397,6 +432,73 @@ struct SettingsView: View {
             .sheet(isPresented: $showZonePicker) {
                 ZonePickerView(selectedZoneUrl: $vm.streamSettings.preferredZoneUrl)
             }
+            .alert(
+                dataDialog?.title ?? "",
+                isPresented: dataDialogBinding,
+                presenting: dataDialog
+            ) { dialog in
+                switch dialog {
+                case .confirmClearCache:
+                    Button(L10n.text("clear_cache"), role: .destructive) {
+                        clearCache()
+                    }
+                    Button(L10n.text("cancel"), role: .cancel) {}
+                case .confirmResetAllData:
+                    Button(L10n.text("reset_all_data"), role: .destructive) {
+                        resetAllData()
+                    }
+                    Button(L10n.text("cancel"), role: .cancel) {}
+                case .result:
+                    Button(L10n.text("ok")) {}
+                }
+            } message: { dialog in
+                Text(dialog.message)
+            }
+        }
+    }
+
+    private var dataDialogBinding: Binding<Bool> {
+        Binding(
+            get: { dataDialog != nil },
+            set: { isPresented in
+                if !isPresented {
+                    dataDialog = nil
+                }
+            }
+        )
+    }
+
+    private func clearCache() {
+        isPerformingDataAction = true
+        viewModel.prepareForCacheClear()
+        Task {
+            do {
+                try await AppDataManager.shared.clearCaches()
+                dataDialog = .result(
+                    title: L10n.text("cache_cleared"),
+                    message: L10n.text("cache_cleared_message")
+                )
+            } catch {
+                dataDialog = .result(
+                    title: L10n.text("cache_clear_failed"),
+                    message: L10n.format("cache_clear_failed_message", error.localizedDescription)
+                )
+            }
+            isPerformingDataAction = false
+        }
+    }
+
+    private func resetAllData() {
+        isPerformingDataAction = true
+        authManager.prepareForDataReset()
+        viewModel.prepareForDataReset()
+
+        Task {
+            try? await AppDataManager.shared.clearCaches()
+            await viewModel.resetAllData()
+            await AppDataManager.shared.clearPersistentData()
+            isPerformingDataAction = false
+            authManager.logout()
         }
     }
 
@@ -418,6 +520,34 @@ struct SettingsView: View {
         ResolutionEntry(res: "2560x1440", badge: "2K", symbol: "tv"),
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
+
+    private enum DataDialog: Equatable {
+        case confirmClearCache
+        case confirmResetAllData
+        case result(title: String, message: String)
+
+        var title: String {
+            switch self {
+            case .confirmClearCache:
+                L10n.text("clear_cache_confirmation_title")
+            case .confirmResetAllData:
+                L10n.text("reset_all_data_confirmation_title")
+            case let .result(title, _):
+                title
+            }
+        }
+
+        var message: String {
+            switch self {
+            case .confirmClearCache:
+                L10n.text("clear_cache_confirmation_message")
+            case .confirmResetAllData:
+                L10n.text("reset_all_data_confirmation_message")
+            case let .result(_, message):
+                message
+            }
+        }
+    }
 }
 
 // MARK: - Zone Picker

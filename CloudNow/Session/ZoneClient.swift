@@ -54,6 +54,7 @@ actor ZoneClient {
     private var autoRouteCache: [String: AutoRouteRecord]
     private var isPrewarming = false
     private var lastPrewarmAt: Date?
+    private var cacheGeneration = 0
 
     private init() {
         let defaults = UserDefaults.standard
@@ -97,6 +98,7 @@ actor ZoneClient {
 
     /// Refreshes the HTTP probe and returns the best known latency for the zone.
     func measurePing(to url: String) async -> Int? {
+        let generation = cacheGeneration
         _ = await headProbe(url) // warm-up
         var samples: [Double] = []
         for _ in 0 ..< 2 {
@@ -104,7 +106,7 @@ actor ZoneClient {
                 samples.append(ms)
             }
         }
-        guard !samples.isEmpty else { return nil }
+        guard generation == cacheGeneration, !samples.isEmpty else { return nil }
         let ping = samples.reduce(0, +) / Double(samples.count)
         var record = latencyCache[cacheKey(for: url)] ?? LatencyRecord()
         record.headPingMs = ping
@@ -117,6 +119,7 @@ actor ZoneClient {
 
     /// Refreshes zone queue data and stale latency probes without delaying game launch.
     func prewarmAutomaticRouting() async -> [GFNZone] {
+        let generation = cacheGeneration
         let now = Date()
         guard !isPrewarming,
               lastPrewarmAt.map({ now.timeIntervalSince($0) >= Self.prewarmInterval }) ?? true
@@ -130,6 +133,7 @@ actor ZoneClient {
 
         do {
             var zones = try await fetchZones()
+            guard generation == cacheGeneration else { return [] }
             cacheAutomaticSelections(from: zones)
 
             let staleZones = zones.filter(\.isMeasuring)
@@ -144,6 +148,7 @@ actor ZoneClient {
                         }
                     }
                     for await (id, ping) in group {
+                        guard generation == cacheGeneration else { return }
                         guard let index = zones.firstIndex(where: { $0.id == id }) else { continue }
                         let record = latencyCache[cacheKey(for: zones[index].zoneUrl)]
                         let effectivePing = effectivePingMs(from: record, now: Date())
@@ -151,6 +156,7 @@ actor ZoneClient {
                         zones[index].isMeasuring = false
                     }
                 }
+                guard generation == cacheGeneration else { return [] }
                 cacheAutomaticSelections(from: zones)
             }
             return zones
@@ -193,6 +199,16 @@ actor ZoneClient {
         if let data = try? JSONEncoder().encode(autoRouteCache) {
             UserDefaults.standard.set(data, forKey: Self.autoRouteCacheKey)
         }
+    }
+
+    func clearCachedRoutingData() {
+        cacheGeneration &+= 1
+        latencyCache.removeAll(keepingCapacity: false)
+        autoRouteCache.removeAll(keepingCapacity: false)
+        lastPrewarmAt = nil
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Self.latencyCacheKey)
+        defaults.removeObject(forKey: Self.autoRouteCacheKey)
     }
 
     // MARK: Private

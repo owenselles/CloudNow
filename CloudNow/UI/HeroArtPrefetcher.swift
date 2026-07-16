@@ -153,6 +153,13 @@ actor ArtworkImagePipeline {
         }
     }
 
+    func clearCache() {
+        cancelInFlight(for: .boxArt)
+        cancelInFlight(for: .heroArt)
+        removeCachedImages(for: .boxArt)
+        removeCachedImages(for: .heroArt)
+    }
+
     private func permitsNewLoads(for kind: ArtworkKind, maxPixelSize: Int) -> Bool {
         switch memoryEvent {
         case .foreground:

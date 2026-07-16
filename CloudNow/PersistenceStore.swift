@@ -141,6 +141,55 @@ actor AppPersistenceStore {
         KeychainService.delete()
     }
 
+    /// Removes cache-backed preferences and files after callers have invalidated
+    /// in-flight producers. Running this on the persistence actor serializes the
+    /// deletion behind writes that were already submitted.
+    func clearCachedData() -> [String] {
+        [
+            "gfn.cache.mainGames",
+            "gfn.cache.libraryGames",
+            Key.legacyLibraryGames,
+            Key.subscription,
+            Key.vpcId,
+        ].forEach(defaults.removeObject(forKey:))
+
+        guard let cachesURL = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first else { return [] }
+
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: cachesURL.path)) ?? []
+        let cacheFiles = names.filter {
+            ($0.hasPrefix("gfn.catalog.") || $0.hasPrefix("gfn.library."))
+                && $0.hasSuffix(".json")
+        }
+        var failures: [String] = []
+        for name in cacheFiles {
+            do {
+                try FileManager.default.removeItem(at: cachesURL.appendingPathComponent(name))
+            } catch CocoaError.fileNoSuchFile {
+                continue
+            } catch {
+                failures.append(name)
+            }
+        }
+        return failures
+    }
+
+    /// Clears every preference and credential after all producers have been
+    /// invalidated. Actor serialization prevents an earlier queued write from
+    /// restoring data after this deletion completes.
+    func clearPersistentData() {
+        if let bundleIdentifier = Bundle.main.bundleIdentifier {
+            defaults.removePersistentDomain(forName: bundleIdentifier)
+        } else {
+            for key in defaults.dictionaryRepresentation().keys {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        KeychainService.delete()
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, forKey key: String) -> T? {
         guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
