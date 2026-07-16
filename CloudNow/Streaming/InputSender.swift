@@ -244,7 +244,7 @@ nonisolated enum InputSendDisposition: Sendable {
     case superseded
 }
 
-nonisolated enum SubmittedTextValidationResult: Sendable {
+nonisolated enum SubmittedTextValidationResult {
     case supported
     case unsupportedCharacters
 }
@@ -651,7 +651,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         let button: GCControllerButtonInput
     }
 
-    private struct KeyboardReplayEvent: Sendable {
+    private struct KeyboardReplayEvent {
         let down: Bool
         let vk: UInt16
         let scancode: UInt16
