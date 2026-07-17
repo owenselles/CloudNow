@@ -4,13 +4,13 @@
 
 repos:
   - repo: https://github.com/nicklockwood/SwiftFormat
-    rev: "0.61.1"
+    rev: "0.62.1"
     hooks:
       - id: swiftformat
         args: ["--config", ".swiftformat"]
 
   - repo: https://github.com/realm/SwiftLint
-    rev: "0.63.3"
+    rev: "0.65.0"
     hooks:
       - id: swiftlint
         args: ["--fix", "--strict", "--config", ".swiftlint.yml"]

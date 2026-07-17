@@ -16,28 +16,32 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install SwiftFormat 0.61.1
+      - name: Install SwiftFormat 0.62.1
         run: |
           mkdir -p "$RUNNER_TEMP/swiftformat"
+          mkdir -p "$RUNNER_TEMP/pinned-tools"
           curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
-            https://github.com/nicklockwood/SwiftFormat/releases/download/0.61.1/swiftformat.artifactbundle.zip
+            https://github.com/nicklockwood/SwiftFormat/releases/download/0.62.1/swiftformat.artifactbundle.zip
           unzip -qo "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat"
           SF_BIN=$(find "$RUNNER_TEMP/swiftformat" -type f -name swiftformat -perm -111 | head -1)
-          sudo install -m 0755 "$SF_BIN" /usr/local/bin/swiftformat
-          swiftformat --version
+          install -m 0755 "$SF_BIN" "$RUNNER_TEMP/pinned-tools/swiftformat"
+          test "$("$RUNNER_TEMP/pinned-tools/swiftformat" --version)" = "0.62.1"
 
-      - name: Install SwiftLint 0.63.3
+      - name: Install SwiftLint 0.65.0
         run: |
           mkdir -p "$RUNNER_TEMP/swiftlint"
+          mkdir -p "$RUNNER_TEMP/pinned-tools"
           curl -fsSL -o "$RUNNER_TEMP/swiftlint.zip" \
-            https://github.com/realm/SwiftLint/releases/download/0.63.3/portable_swiftlint.zip
+            https://github.com/realm/SwiftLint/releases/download/0.65.0/portable_swiftlint.zip
           unzip -qo "$RUNNER_TEMP/swiftlint.zip" -d "$RUNNER_TEMP/swiftlint"
           SL_BIN=$(find "$RUNNER_TEMP/swiftlint" -type f -name swiftlint -perm -111 | head -1)
-          sudo install -m 0755 "$SL_BIN" /usr/local/bin/swiftlint
-          swiftlint version
+          install -m 0755 "$SL_BIN" "$RUNNER_TEMP/pinned-tools/swiftlint"
+          test "$("$RUNNER_TEMP/pinned-tools/swiftlint" version)" = "0.65.0"
 
       - name: SwiftFormat (format check)
-        run: swiftformat --lint --config .swiftformat --reporter github-actions-log CloudNow
+        run: |
+          "$RUNNER_TEMP/pinned-tools/swiftformat" --lint --config .swiftformat --reporter github-actions-log CloudNow
 
       - name: SwiftLint (strict)
-        run: swiftlint --strict --config .swiftlint.yml --reporter github-actions-logging CloudNow
+        run: |
+          "$RUNNER_TEMP/pinned-tools/swiftlint" --strict --config .swiftlint.yml --reporter github-actions-logging CloudNow

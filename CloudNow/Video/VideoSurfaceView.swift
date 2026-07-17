@@ -56,7 +56,9 @@ final class VideoSurfaceView: UIView {
     /// (e.g. Options mapping to .playPause) are suppressed to avoid double-firing the overlay.
     var gamepadModeActive = false {
         didSet {
-            if gamepadModeActive { cancelRemoteMouseTracking() }
+            if gamepadModeActive {
+                cancelRemoteMouseTracking()
+            }
         }
     }
 
@@ -64,7 +66,9 @@ final class VideoSurfaceView: UIView {
     /// .menu press should close the overlay or be silently consumed.
     var overlayVisible: Bool = false {
         didSet {
-            if overlayVisible { cancelRemoteMouseTracking() }
+            if overlayVisible {
+                cancelRemoteMouseTracking()
+            }
         }
     }
 
@@ -182,7 +186,9 @@ final class VideoSurfaceView: UIView {
                 handled = true
             }
         }
-        if !handled { super.pressesBegan(presses, with: event) }
+        if !handled {
+            super.pressesBegan(presses, with: event)
+        }
     }
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -201,7 +207,9 @@ final class VideoSurfaceView: UIView {
                 handled = true
             }
         }
-        if !handled { super.pressesEnded(presses, with: event) }
+        if !handled {
+            super.pressesEnded(presses, with: event)
+        }
     }
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -512,7 +520,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         }
         guard didBeginFlush else { return }
 
-        if recordFailure { diagnostics.recordRendererFailure() }
+        if recordFailure {
+            diagnostics.recordRendererFailure()
+        }
         if let requestToRun {
             performFlush(requestToRun)
         }

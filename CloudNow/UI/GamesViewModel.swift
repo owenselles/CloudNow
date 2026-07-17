@@ -597,7 +597,9 @@ class GamesViewModel {
         var ids = recentlyPlayedIds
         ids.removeAll { $0 == game.id }
         ids.insert(game.id, at: 0)
-        if ids.count > 10 { ids = Array(ids.prefix(10)) }
+        if ids.count > 10 {
+            ids = Array(ids.prefix(10))
+        }
         recentlyPlayedIds = ids
         Task { await persistence.saveRecentlyPlayedIds(ids) }
     }
@@ -705,7 +707,9 @@ class GamesViewModel {
     }
 
     private func autoZoneScore(_ zone: GFNZone, maxPing: [GFNZone], maxQueue: [GFNZone], isUnlimited: Bool) -> Double {
-        if isUnlimited { return Double(zone.pingMs ?? .max) }
+        if isUnlimited {
+            return Double(zone.pingMs ?? .max)
+        }
         let mp = Double(Swift.max(maxPing.compactMap(\.pingMs).max() ?? 1, 1))
         let mq = Double(Swift.max(maxQueue.map(\.queuePosition).max() ?? 1, 1))
         return (Double(zone.pingMs ?? Int(mp)) / mp) * 0.4 + (Double(zone.queuePosition) / mq) * 0.6

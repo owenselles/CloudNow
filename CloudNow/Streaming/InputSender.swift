@@ -382,20 +382,48 @@ nonisolated func mapGCControllerToXInput(_ controller: GCController, deadzone: F
         e.isPressed
     }
 
-    if pressed(pad.dpad.up) { buttons |= GFNInput.dpadUp }
-    if pressed(pad.dpad.down) { buttons |= GFNInput.dpadDown }
-    if pressed(pad.dpad.left) { buttons |= GFNInput.dpadLeft }
-    if pressed(pad.dpad.right) { buttons |= GFNInput.dpadRight }
-    if pressed(pad.buttonMenu) { buttons |= GFNInput.start }
-    if pressed(pad.buttonOptions ?? pad.buttonMenu) { buttons |= GFNInput.back }
-    if let ls = pad.leftThumbstickButton, pressed(ls) { buttons |= GFNInput.ls }
-    if let rs = pad.rightThumbstickButton, pressed(rs) { buttons |= GFNInput.rs }
-    if pressed(pad.leftShoulder) { buttons |= GFNInput.lb }
-    if pressed(pad.rightShoulder) { buttons |= GFNInput.rb }
-    if pressed(pad.buttonA) { buttons |= GFNInput.buttonA }
-    if pressed(pad.buttonB) { buttons |= GFNInput.buttonB }
-    if pressed(pad.buttonX) { buttons |= GFNInput.buttonX }
-    if pressed(pad.buttonY) { buttons |= GFNInput.buttonY }
+    if pressed(pad.dpad.up) {
+        buttons |= GFNInput.dpadUp
+    }
+    if pressed(pad.dpad.down) {
+        buttons |= GFNInput.dpadDown
+    }
+    if pressed(pad.dpad.left) {
+        buttons |= GFNInput.dpadLeft
+    }
+    if pressed(pad.dpad.right) {
+        buttons |= GFNInput.dpadRight
+    }
+    if pressed(pad.buttonMenu) {
+        buttons |= GFNInput.start
+    }
+    if pressed(pad.buttonOptions ?? pad.buttonMenu) {
+        buttons |= GFNInput.back
+    }
+    if let ls = pad.leftThumbstickButton, pressed(ls) {
+        buttons |= GFNInput.ls
+    }
+    if let rs = pad.rightThumbstickButton, pressed(rs) {
+        buttons |= GFNInput.rs
+    }
+    if pressed(pad.leftShoulder) {
+        buttons |= GFNInput.lb
+    }
+    if pressed(pad.rightShoulder) {
+        buttons |= GFNInput.rb
+    }
+    if pressed(pad.buttonA) {
+        buttons |= GFNInput.buttonA
+    }
+    if pressed(pad.buttonB) {
+        buttons |= GFNInput.buttonB
+    }
+    if pressed(pad.buttonX) {
+        buttons |= GFNInput.buttonX
+    }
+    if pressed(pad.buttonY) {
+        buttons |= GFNInput.buttonY
+    }
 
     let lt = UInt8(clamping: Int(pad.leftTrigger.value * 255))
     let rt = UInt8(clamping: Int(pad.rightTrigger.value * 255))
@@ -748,11 +776,21 @@ final nonisolated class InputSender: @unchecked Sendable {
 
         case .gamepad:
             var buttons: UInt16 = 0
-            if pad.dpad.up.isPressed { buttons |= GFNInput.dpadUp }
-            if pad.dpad.down.isPressed { buttons |= GFNInput.dpadDown }
-            if pad.dpad.left.isPressed { buttons |= GFNInput.dpadLeft }
-            if pad.dpad.right.isPressed { buttons |= GFNInput.dpadRight }
-            if pad.buttonA.isPressed { buttons |= GFNInput.buttonA }
+            if pad.dpad.up.isPressed {
+                buttons |= GFNInput.dpadUp
+            }
+            if pad.dpad.down.isPressed {
+                buttons |= GFNInput.dpadDown
+            }
+            if pad.dpad.left.isPressed {
+                buttons |= GFNInput.dpadLeft
+            }
+            if pad.dpad.right.isPressed {
+                buttons |= GFNInput.dpadRight
+            }
+            if pad.buttonA.isPressed {
+                buttons |= GFNInput.buttonA
+            }
             // buttonX (Play/Pause) is reserved for the overlay toggle — not forwarded to game
 
             sendGamepadSnapshot(
@@ -929,7 +967,9 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private func finishOverlayPress(for controller: GCController, slot: Int) {
         guard let press = overlayPresses.removeValue(forKey: slot) else { return }
-        if !press.triggered { sendOverlayTap(for: controller, slot: slot) }
+        if !press.triggered {
+            sendOverlayTap(for: controller, slot: slot)
+        }
     }
 
     private func sendOverlayTap(for controller: GCController, slot: Int) {
@@ -1215,7 +1255,9 @@ final nonisolated class InputSender: @unchecked Sendable {
         input.scroll.valueChangedHandler = { [weak self] _, _, yValue in
             guard let self, !self.isPaused else { return }
             let delta = Int16(clamping: Int((-yValue * 3).rounded()))
-            if delta != 0 { sendMouseWheelNow(delta) }
+            if delta != 0 {
+                sendMouseWheelNow(delta)
+            }
         }
     }
 
@@ -1306,7 +1348,9 @@ final nonisolated class InputSender: @unchecked Sendable {
         if let slot = controllerSlots.removeValue(forKey: id) {
             haptics[slot]?.cleanup()
             haptics[slot] = nil
-            if haptics.isEmpty { advertiseHaptics(false) }
+            if haptics.isEmpty {
+                advertiseHaptics(false)
+            }
             extendedControllers.removeAll { $0 === controller }
             gamepadBitmap &= ~Self.extendedGamepadBitmapMask(for: slot)
             lastButtons[slot] = nil
@@ -1426,10 +1470,18 @@ extension InputSender: InputEventHandler {
 
     private nonisolated static func gfnModifiers(from flags: UIKeyModifierFlags) -> UInt16 {
         var mods: UInt16 = 0
-        if flags.contains(.shift) { mods |= 0x0001 }
-        if flags.contains(.control) { mods |= 0x0002 }
-        if flags.contains(.alternate) { mods |= 0x0004 }
-        if flags.contains(.command) { mods |= 0x0008 }
+        if flags.contains(.shift) {
+            mods |= 0x0001
+        }
+        if flags.contains(.control) {
+            mods |= 0x0002
+        }
+        if flags.contains(.alternate) {
+            mods |= 0x0004
+        }
+        if flags.contains(.command) {
+            mods |= 0x0008
+        }
         return mods
     }
 

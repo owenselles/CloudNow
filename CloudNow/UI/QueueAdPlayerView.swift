@@ -154,8 +154,12 @@ struct QueueAdPlayerView: View {
 
     private func teardown() {
         player.pause()
-        if let o = periodicObserver { player.removeTimeObserver(o); periodicObserver = nil }
-        if let o = endObserver { NotificationCenter.default.removeObserver(o); endObserver = nil }
+        if let o = periodicObserver {
+            player.removeTimeObserver(o); periodicObserver = nil
+        }
+        if let o = endObserver {
+            NotificationCenter.default.removeObserver(o); endObserver = nil
+        }
     }
 }
 

@@ -47,14 +47,12 @@ struct GameDetailView: View {
     }
 
     var body: some View {
-        Group {
-            if isEmbeddedCarousel {
-                embeddedBody
-            } else if isCarouselExpanded {
-                carouselExpandedBody
-            } else {
-                fullScreenBody
-            }
+        if isEmbeddedCarousel {
+            embeddedBody
+        } else if isCarouselExpanded {
+            carouselExpandedBody
+        } else {
+            fullScreenBody
         }
     }
 
@@ -103,7 +101,9 @@ struct GameDetailView: View {
             }
         }
         .fullScreenCover(isPresented: $showFullDescription) {
-            if let desc = game.longDescription { FullDescriptionView(description: desc) }
+            if let desc = game.longDescription {
+                FullDescriptionView(description: desc)
+            }
         }
         .fullScreenCover(isPresented: $showFullDetails) {
             FullDetailsView(title: game.title, items: detailItems)
@@ -176,7 +176,9 @@ struct GameDetailView: View {
             onCollapse?()
         }
         .fullScreenCover(isPresented: $showFullDescription) {
-            if let desc = game.longDescription { FullDescriptionView(description: desc) }
+            if let desc = game.longDescription {
+                FullDescriptionView(description: desc)
+            }
         }
         .fullScreenCover(isPresented: $showFullDetails) {
             FullDetailsView(title: game.title, items: detailItems)
@@ -198,8 +200,12 @@ struct GameDetailView: View {
                         .offset(y: backgroundBlurred ? 0 : 30)
                         .animation(.easeOut(duration: 0.35).delay(0.1), value: backgroundBlurred)
 
-                    if !game.screenshots.isEmpty { screenshotsRow }
-                    if let desc = game.longDescription, !desc.isEmpty { aboutPanel(desc) }
+                    if !game.screenshots.isEmpty {
+                        screenshotsRow
+                    }
+                    if let desc = game.longDescription, !desc.isEmpty {
+                        aboutPanel(desc)
+                    }
                 }
                 .padding(.horizontal, 80)
                 .padding(.vertical, 60)
@@ -388,7 +394,9 @@ struct GameDetailView: View {
         if !items.isEmpty {
             HStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, label in
-                    if idx > 0 { Text("  ·  ").foregroundStyle(.white.opacity(0.45)).font(.callout) }
+                    if idx > 0 {
+                        Text("  ·  ").foregroundStyle(.white.opacity(0.45)).font(.callout)
+                    }
                     Text(label).font(.callout).foregroundStyle(.white.opacity(0.75))
                 }
             }
@@ -399,9 +407,15 @@ struct GameDetailView: View {
 
     private var rightColumn: some View {
         VStack(alignment: .trailing, spacing: 14) {
-            if let dev = game.developer { rightInfo("Developer", dev) }
-            if let pub = game.publisher, pub != game.developer { rightInfo("Publisher", pub) }
-            if let rating = game.contentRating { rightInfo("Rating", rating) }
+            if let dev = game.developer {
+                rightInfo("Developer", dev)
+            }
+            if let pub = game.publisher, pub != game.developer {
+                rightInfo("Publisher", pub)
+            }
+            if let rating = game.contentRating {
+                rightInfo("Rating", rating)
+            }
             if game.variants.count > 1, game.isInLibrary {
                 Divider()
                     .overlay(Color.white.opacity(0.35))
@@ -436,7 +450,9 @@ struct GameDetailView: View {
                     viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
                 } label: {
                     HStack(spacing: 6) {
-                        if isSelected { Image(systemName: "checkmark").font(.caption.weight(.bold)) }
+                        if isSelected {
+                            Image(systemName: "checkmark").font(.caption.weight(.bold))
+                        }
                         Text(variant.storeName).font(.callout.weight(isSelected ? .semibold : .regular))
                     }
                     .foregroundStyle(isSelected ? .white : .white.opacity(0.55))

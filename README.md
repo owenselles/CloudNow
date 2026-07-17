@@ -97,7 +97,7 @@ swiftformat --lint --config .swiftformat CloudNow
 swiftlint --strict --config .swiftlint.yml CloudNow
 ```
 
-These commands require the exact tool versions pinned by CI: SwiftFormat 0.61.1 and SwiftLint 0.63.3. See [Linting](#linting) for installation and version details.
+These commands require the exact tool versions pinned by CI: SwiftFormat 0.62.1 and SwiftLint 0.65.0. See [Linting](#linting) for installation and version details.
 
 ### 5. Build & Run
 
@@ -222,11 +222,11 @@ After installing, every `git commit` runs SwiftFormat then SwiftLint --fix again
 
 ### Pinned versions
 
-CI and the pre-commit hooks use SwiftLint 0.63.3 and SwiftFormat 0.61.1. Local tools must match these exact versions; newer formatter or linter releases can enable additional rules and produce results that differ from CI. Verify before running the checks:
+CI and the pre-commit hooks use SwiftLint 0.65.0 and SwiftFormat 0.62.1. Local tools must match these exact versions; newer formatter or linter releases can enable additional rules and produce results that differ from CI. Verify before running the checks:
 
 ```bash
-swiftformat --version  # expected: 0.61.1
-swiftlint version      # expected: 0.63.3
+swiftformat --version  # expected: 0.62.1
+swiftlint version      # expected: 0.65.0
 ```
 
 When Homebrew provides a newer release, use the pinned pre-commit environments or the same release artifacts referenced in `.github/workflows/lint.yml`.

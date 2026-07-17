@@ -79,7 +79,9 @@ actor GamesClient {
     /// Callers that load catalog, library, and subscription together fetch the vpcId
     /// once and pass it in; standalone calls fall back to fetching it here.
     private func resolveVpcId(_ provided: String?, token: String, baseUrl: String) async -> String {
-        if let provided, !provided.isEmpty { return provided }
+        if let provided, !provided.isEmpty {
+            return provided
+        }
         return await (try? fetchVpcId(token: token, baseUrl: baseUrl)) ?? "GFN-PC"
     }
 
@@ -105,7 +107,9 @@ actor GamesClient {
                     token: token, vpcId: vpcId, filters: filters, searchString: searchString,
                     pageSize: 500, maxPages: maxPages, includeGenres: includeGenres
                 )
-                if !games.isEmpty { return games }
+                if !games.isEmpty {
+                    return games
+                }
             } catch let GamesError.httpStatus(code, _) where (400 ..< 500).contains(code) && code != 403 {
                 // Fall through to the 200-item retry.
             }
@@ -166,7 +170,9 @@ actor GamesClient {
             let (data, response) = try await urlSession.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
-                if statusCode == 401 { throw GamesError.unauthorized }
+                if statusCode == 401 {
+                    throw GamesError.unauthorized
+                }
                 throw GamesError.httpStatus(statusCode, String(data: data, encoding: .utf8) ?? "")
             }
 
@@ -245,10 +251,18 @@ actor GamesClient {
         for variant in variants {
             for flag in variant.gfn?.features ?? [] {
                 switch flag.key {
-                case "RTX_ENABLED": if flag.value == "true" { found.insert(.rtx) }
-                case "HDR_ENABLED": if flag.value == "true" { found.insert(.hdr) }
-                case "SUPPORTED_HDR_VERSION": if !(flag.values ?? []).isEmpty { found.insert(.hdr) }
-                case "REFLEX_ENABLED": if flag.value == "true" { found.insert(.reflex) }
+                case "RTX_ENABLED": if flag.value == "true" {
+                        found.insert(.rtx)
+                    }
+                case "HDR_ENABLED": if flag.value == "true" {
+                        found.insert(.hdr)
+                    }
+                case "SUPPORTED_HDR_VERSION": if !(flag.values ?? []).isEmpty {
+                        found.insert(.hdr)
+                    }
+                case "REFLEX_ENABLED": if flag.value == "true" {
+                        found.insert(.reflex)
+                    }
                 default: break
                 }
             }
@@ -309,7 +323,9 @@ actor GamesClient {
             }
             if let nested = dict[key] as? [String: Any] {
                 let entries = nested.values.compactMap { $0 as? [String: Any] }
-                if !entries.isEmpty { return entries }
+                if !entries.isEmpty {
+                    return entries
+                }
             }
         }
         let entries = dict.values.compactMap { $0 as? [String: Any] }
@@ -373,7 +389,9 @@ actor GamesClient {
                     ?? "GFN"
                 return GameVariant(id: id, appStore: store, appId: isNumericId(id) ? id : nil)
             }
-            if !variants.isEmpty { return variants }
+            if !variants.isEmpty {
+                return variants
+            }
         }
 
         let id = stringValue(entry["appId"])
@@ -686,8 +704,12 @@ actor GamesClient {
     }
 
     private func stringValue(_ value: Any?) -> String? {
-        if let string = value as? String, !string.isEmpty { return string }
-        if let number = value as? NSNumber { return number.stringValue }
+        if let string = value as? String, !string.isEmpty {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
         return nil
     }
 

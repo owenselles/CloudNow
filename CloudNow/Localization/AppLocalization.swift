@@ -162,11 +162,21 @@ enum L10n {
         hasContentLightLevelMetadata: Bool
     ) -> String {
         var parts: [String] = []
-        if transferFunction == nil { parts.append(text("no_transfer")) }
-        if colorPrimaries == nil { parts.append(text("no_primaries")) }
-        if yCbCrMatrix == nil { parts.append(text("no_matrix")) }
-        if !hasDisplayColorVolumeMetadata { parts.append(text("no_mastering_metadata")) }
-        if !hasContentLightLevelMetadata { parts.append(text("no_content_light_metadata")) }
+        if transferFunction == nil {
+            parts.append(text("no_transfer"))
+        }
+        if colorPrimaries == nil {
+            parts.append(text("no_primaries"))
+        }
+        if yCbCrMatrix == nil {
+            parts.append(text("no_matrix"))
+        }
+        if !hasDisplayColorVolumeMetadata {
+            parts.append(text("no_mastering_metadata"))
+        }
+        if !hasContentLightLevelMetadata {
+            parts.append(text("no_content_light_metadata"))
+        }
         return parts.isEmpty ? text("metadata_complete") : parts.joined(separator: " · ")
     }
 

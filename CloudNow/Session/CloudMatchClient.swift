@@ -352,8 +352,12 @@ private nonisolated func resolveSignalingUrl(serverIp: String, resourcePath: Str
             return "wss://\(host)/nvst/"
         }
     }
-    if resourcePath.hasPrefix("wss://") { return resourcePath }
-    if resourcePath.hasPrefix("/") { return "wss://\(serverIp):443\(resourcePath)" }
+    if resourcePath.hasPrefix("wss://") {
+        return resourcePath
+    }
+    if resourcePath.hasPrefix("/") {
+        return "wss://\(serverIp):443\(resourcePath)"
+    }
     return "wss://\(serverIp):443/nvst/"
 }
 
@@ -653,7 +657,9 @@ actor CloudMatchClient {
         )
 
         // If still queuing, return as-is — caller polls from here
-        if preflight.status == 1 || preflight.isInQueue { return preflight }
+        if preflight.status == 1 || preflight.isInQueue {
+            return preflight
+        }
 
         // Status 2 or 3: send RESUME PUT
         let resumeBase = preflight.streamingBaseUrl
@@ -793,8 +799,12 @@ actor CloudMatchClient {
         /// isAdsRequired lives in several possible places
         func bool(_ key: String, in obj: [String: Any]) -> Bool? {
             guard let v = obj[key] else { return nil }
-            if let b = v as? Bool { return b }
-            if let i = v as? Int { return i != 0 }
+            if let b = v as? Bool {
+                return b
+            }
+            if let i = v as? Int {
+                return i != 0
+            }
             return nil
         }
 
@@ -834,7 +844,9 @@ actor CloudMatchClient {
         }
 
         // Only return an ad state if there's actually something to act on
-        if !isAdsRequired, ads.isEmpty, isQueuePaused != true { return nil }
+        if !isAdsRequired, ads.isEmpty, isQueuePaused != true {
+            return nil
+        }
 
         return SessionAdState(
             isAdsRequired: isAdsRequired,
@@ -846,16 +858,26 @@ actor CloudMatchClient {
     }
 
     private func doubleValue(_ key: String, in obj: [String: Any]) -> Double? {
-        if let number = obj[key] as? NSNumber { return number.doubleValue }
-        if let string = obj[key] as? String { return Double(string) }
+        if let number = obj[key] as? NSNumber {
+            return number.doubleValue
+        }
+        if let string = obj[key] as? String {
+            return Double(string)
+        }
         return nil
     }
 
     private func adMediaPreference(_ profile: String?) -> Int {
         let profile = profile?.lowercased() ?? ""
-        if profile.contains("mp4deinterlaced720p") { return 0 }
-        if profile.contains("webm") { return 1 }
-        if profile.contains("hlsadaptive") { return 2 }
+        if profile.contains("mp4deinterlaced720p") {
+            return 0
+        }
+        if profile.contains("webm") {
+            return 1
+        }
+        if profile.contains("hlsadaptive") {
+            return 2
+        }
         return 3
     }
 
@@ -880,8 +902,12 @@ actor CloudMatchClient {
             "adAction": action.rawValue,
             "clientTimestamp": Int(Date().timeIntervalSince1970),
         ]
-        if let ms = watchedTimeMs { adUpdate["watchedTimeInMs"] = max(0, ms) }
-        if let ms = pausedTimeMs { adUpdate["pausedTimeInMs"] = max(0, ms) }
+        if let ms = watchedTimeMs {
+            adUpdate["watchedTimeInMs"] = max(0, ms)
+        }
+        if let ms = pausedTimeMs {
+            adUpdate["pausedTimeInMs"] = max(0, ms)
+        }
         let body: [String: Any] = ["action": 6, "adUpdates": [adUpdate]]
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
         var request = URLRequest(url: url)

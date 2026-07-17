@@ -25,11 +25,15 @@ private final nonisolated class SignalingContinuationGate: Sendable {
 
     func run(_ action: @Sendable () -> Void) {
         let isFirst = hasResumed.withLock { resumed in
-            if resumed { return false }
+            if resumed {
+                return false
+            }
             resumed = true
             return true
         }
-        if isFirst { action() }
+        if isFirst {
+            action()
+        }
     }
 }
 
@@ -175,7 +179,9 @@ final class GFNSignalingClient {
 
     func sendAnswer(sdp: String, nvstSdp: String? = nil) {
         var payload: [String: Any] = ["type": "answer", "sdp": sdp]
-        if let nvstSdp { payload["nvstSdp"] = nvstSdp }
+        if let nvstSdp {
+            payload["nvstSdp"] = nvstSdp
+        }
         sendJson([
             "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString(payload)],
             "ackid": nextAckId(),
@@ -190,8 +196,12 @@ final class GFNSignalingClient {
             return
         }
         var payload: [String: Any] = ["candidate": candidate]
-        if let sdpMid { payload["sdpMid"] = sdpMid }
-        if let sdpMLineIndex { payload["sdpMLineIndex"] = sdpMLineIndex }
+        if let sdpMid {
+            payload["sdpMid"] = sdpMid
+        }
+        if let sdpMLineIndex {
+            payload["sdpMLineIndex"] = sdpMLineIndex
+        }
         sendJson([
             "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString(payload)],
             "ackid": nextAckId(),
@@ -283,15 +293,21 @@ final class GFNSignalingClient {
             let (chunk, opcode, isComplete) = try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<(Data?, NWProtocolWebSocket.Opcode?, Bool), Error>) in
                 conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { content, context, isComplete, error in
-                    if let error { cont.resume(throwing: error); return }
+                    if let error {
+                        cont.resume(throwing: error); return
+                    }
                     let meta = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
                         as? NWProtocolWebSocket.Metadata
                     cont.resume(returning: (content, meta?.opcode, isComplete))
                 }
             }
 
-            if let data = chunk { buffer.append(data) }
-            if messageOpcode == nil, let op = opcode { messageOpcode = op }
+            if let data = chunk {
+                buffer.append(data)
+            }
+            if messageOpcode == nil, let op = opcode {
+                messageOpcode = op
+            }
             guard isComplete else { continue } // more chunks coming for this message
 
             switch messageOpcode {
@@ -330,7 +346,9 @@ final class GFNSignalingClient {
         let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
         conn.send(content: data, contentContext: ctx, isComplete: true,
                   completion: .contentProcessed { err in
-                      if let err { signalingLog.warning("[Signaling] Send error: \(err, privacy: .private)") }
+                      if let err {
+                          signalingLog.warning("[Signaling] Send error: \(err, privacy: .private)")
+                      }
                   })
     }
 
@@ -355,7 +373,9 @@ final class GFNSignalingClient {
         // ACK
         if let ackId = obj["ackid"] as? Int {
             let shouldAck = (obj["peer_info"] as? [String: Any])?["id"] as? Int != localPeerId
-            if shouldAck { sendJson(["ack": ackId]) }
+            if shouldAck {
+                sendJson(["ack": ackId])
+            }
         }
 
         // Heartbeat
@@ -555,7 +575,9 @@ final class GFNSignalingClient {
                                    &buf, socklen_t(NI_MAXHOST), nil, 0, NI_NUMERICHOST) == 0
                     {
                         let ip = String(cString: buf)
-                        if !ips.contains(ip) { ips.append(ip) }
+                        if !ips.contains(ip) {
+                            ips.append(ip)
+                        }
                     }
                     cur = info.pointee.ai_next
                 }

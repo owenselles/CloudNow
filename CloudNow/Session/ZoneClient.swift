@@ -100,7 +100,9 @@ actor ZoneClient {
         _ = await headProbe(url) // warm-up
         var samples: [Double] = []
         for _ in 0 ..< 2 {
-            if let ms = await headProbe(url) { samples.append(ms) }
+            if let ms = await headProbe(url) {
+                samples.append(ms)
+            }
         }
         guard !samples.isEmpty else { return nil }
         let ping = samples.reduce(0, +) / Double(samples.count)
@@ -291,7 +293,9 @@ extension [GFNZone] {
     /// secondary penalty so a distant empty zone cannot beat a nearby busy one.
     nonisolated func autoZone(isUnlimited: Bool = false) -> GFNZone? {
         guard !isEmpty else { return nil }
-        if isUnlimited { return closestZone }
+        if isUnlimited {
+            return closestZone
+        }
         let measured = filter { $0.pingMs != nil }
         guard !measured.isEmpty else { return self.min { $0.queuePosition < $1.queuePosition } }
         return measured.min {

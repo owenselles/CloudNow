@@ -484,8 +484,12 @@ nonisolated struct SessionAdInfo: Codable, Equatable, Identifiable {
 
     /// Returns the best available media URL.
     var preferredMediaURL: URL? {
-        if let url = adMediaFiles.compactMap({ $0.mediaFileUrl.flatMap(URL.init) }).first { return url }
-        if let url = adUrl.flatMap(URL.init) { return url }
+        if let url = adMediaFiles.compactMap({ $0.mediaFileUrl.flatMap(URL.init) }).first {
+            return url
+        }
+        if let url = adUrl.flatMap(URL.init) {
+            return url
+        }
         return mediaUrl.flatMap(URL.init)
     }
 }
@@ -521,7 +525,9 @@ nonisolated struct SessionInfo {
 
     /// True while the session is sitting in the GFN queue (no timeout applies).
     var isInQueue: Bool {
-        if seatSetupStep == 1 { return true }
+        if seatSetupStep == 1 {
+            return true
+        }
         return (queuePosition ?? 0) > 1
     }
 

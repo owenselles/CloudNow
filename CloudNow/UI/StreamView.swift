@@ -212,8 +212,12 @@ struct StreamView: View {
         let caps = LocalVideoCapabilities.detect(codec: .h265)
         let hdrUsable = caps.supportsHardware10BitDecode && caps.displaySupportsHDR && tierPremium
         var badges: [GameFeature] = []
-        if supported.contains(.rtx), tierPremium { badges.append(.rtx) }
-        if supported.contains(.hdr), hdrUsable { badges.append(.hdr) }
+        if supported.contains(.rtx), tierPremium {
+            badges.append(.rtx)
+        }
+        if supported.contains(.hdr), hdrUsable {
+            badges.append(.hdr)
+        }
         loadingBadges = badges
     }
 
@@ -267,7 +271,9 @@ struct StreamView: View {
         case .finding:
             return L10n.text("connecting_to_server")
         case let .inQueue(pos):
-            if let pos { return L10n.format("in_queue_position", pos) }
+            if let pos {
+                return L10n.format("in_queue_position", pos)
+            }
             return L10n.text("in_queue")
         case .preparing:
             return (createdSession?.setupStage ?? .configuring).label
@@ -307,7 +313,9 @@ struct StreamView: View {
             }
         case .preparing:
             let now = Date()
-            if prepareStartedAt == nil { prepareStartedAt = now }
+            if prepareStartedAt == nil {
+                prepareStartedAt = now
+            }
             // seatSetupEta is the server's estimated *remaining* time. Refresh it whenever the
             // server revises the estimate (e.g. 30s → 20s) and count it down between polls so the
             // bar keeps advancing; mapping progress by elapsed / (elapsed + remaining) makes it
@@ -564,7 +572,9 @@ struct StreamView: View {
            let end = raw[range.upperBound...].firstIndex(of: "\"")
         {
             let phrase = raw[range.upperBound ..< end].trimmingCharacters(in: .whitespaces)
-            if !phrase.isEmpty { return phrase }
+            if !phrase.isEmpty {
+                return phrase
+            }
         }
         return raw
     }
@@ -833,7 +843,9 @@ struct StreamView: View {
                     loadingPhase = .inQueue(sessionInfo.queuePosition)
                     setupStartTime = nil
                 } else {
-                    if setupStartTime == nil { setupStartTime = Date() }
+                    if setupStartTime == nil {
+                        setupStartTime = Date()
+                    }
                     if let t = setupStartTime, Date().timeIntervalSince(t) > 180 {
                         loadingPhase = .timedOut
                         return
@@ -847,7 +859,9 @@ struct StreamView: View {
                     readyPollStreak = 0
                 }
 
-                if readyPollStreak >= 2 { break }
+                if readyPollStreak >= 2 {
+                    break
+                }
 
                 try await Task.sleep(for: .seconds(2))
                 sessionInfo = try await cloudMatchClient.pollSession(

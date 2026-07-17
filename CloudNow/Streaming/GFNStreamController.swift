@@ -369,7 +369,9 @@ final class GFNStreamController: NSObject {
     func setStatsMode(_ mode: StreamStatsMode) {
         let changed = statsMode != mode
         statsMode = mode
-        if changed { resetInputLatencyPresentation() }
+        if changed {
+            resetInputLatencyPresentation()
+        }
         updateInputLatencySampling(resetSamples: changed)
     }
 
@@ -855,7 +857,11 @@ final class GFNStreamController: NSObject {
         do {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                 pc.setRemoteDescription(remoteSDP) { error in
-                    if let error { cont.resume(throwing: error) } else { cont.resume() }
+                    if let error {
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume()
+                    }
                 }
             }
         } catch {
@@ -870,8 +876,14 @@ final class GFNStreamController: NSObject {
         do {
             let answer: LKRTCSessionDescription = try await withCheckedThrowingContinuation { cont in
                 pc.answer(for: answerConstraints) { sdp, error in
-                    if let e = error { cont.resume(throwing: e); return }
-                    if let sdp { cont.resume(returning: sdp) } else { cont.resume(throwing: StreamError.noSDP) }
+                    if let e = error {
+                        cont.resume(throwing: e); return
+                    }
+                    if let sdp {
+                        cont.resume(returning: sdp)
+                    } else {
+                        cont.resume(throwing: StreamError.noSDP)
+                    }
                 }
             }
             // Apply codec preference to the answer (not the offer) — avoids the
@@ -908,7 +920,11 @@ final class GFNStreamController: NSObject {
             do {
                 try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                     pc.setLocalDescription(localSDP) { error in
-                        if let error { cont.resume(throwing: error) } else { cont.resume() }
+                        if let error {
+                            cont.resume(throwing: error)
+                        } else {
+                            cont.resume()
+                        }
                     }
                 }
             } catch {
@@ -939,11 +955,15 @@ final class GFNStreamController: NSObject {
             let resolvedIps = signaling?.resolvedIPs ?? []
             let connectedHost = signaling?.connectedHost ?? ""
             var allIps: [String] = []
-            if let ip = mciIp { allIps.append(ip) }
+            if let ip = mciIp {
+                allIps.append(ip)
+            }
             for ip in resolvedIps where !allIps.contains(ip) {
                 allIps.append(ip)
             }
-            if !connectedHost.isEmpty, !allIps.contains(connectedHost) { allIps.append(connectedHost) }
+            if !connectedHost.isEmpty, !allIps.contains(connectedHost) {
+                allIps.append(connectedHost)
+            }
 
             let allPorts = [mciPort, sdpPort].filter { $0 > 0 }
             let pairs = allIps.flatMap { ip in allPorts.map { (ip, $0) } }
@@ -1185,7 +1205,9 @@ final class GFNStreamController: NSObject {
                     Task { @MainActor [weak self] in
                         guard let self, statsGeneration == generation else { return }
                         videoStatsRequestInFlight = false
-                        if let snapshot { applyVideoStats(snapshot) }
+                        if let snapshot {
+                            applyVideoStats(snapshot)
+                        }
                     }
                 }
             }
@@ -1212,7 +1234,9 @@ final class GFNStreamController: NSObject {
                                 $0.selectedNetworkPath = snapshot.selectedNetworkPath
                             }
                         }
-                        if let audioSample { applyAudioSyncStats(audioSample) }
+                        if let audioSample {
+                            applyAudioSyncStats(audioSample)
+                        }
                     }
                 }
             }
@@ -1477,7 +1501,9 @@ final class GFNStreamController: NSObject {
         }
 
         previousVideoStats = sample
-        if next != stats { stats = next }
+        if next != stats {
+            stats = next
+        }
         appendHistory(&pingHistory, value: next.rttMs)
         appendHistory(&fpsHistory, value: next.fps)
         appendHistory(&bitrateHistory, value: Double(next.bitrateKbps) / 1000.0)
@@ -1612,7 +1638,9 @@ final class GFNStreamController: NSObject {
     }
 
     private func appendHistory(_ history: inout [Double], value: Double) {
-        if history.count >= 30 { history.removeFirst() }
+        if history.count >= 30 {
+            history.removeFirst()
+        }
         history.append(value)
     }
 
@@ -1665,7 +1693,9 @@ final class GFNStreamController: NSObject {
         } else {
             next.selectedNetworkPath = "unknown"
         }
-        if next != stats { stats = next }
+        if next != stats {
+            stats = next
+        }
 
         let now = Date()
         if next.rttMs > 0,
@@ -1726,7 +1756,9 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                 wasStreaming = true
                 reconnectAttempt = 0
                 state = .streaming
-                if streamingStartedAt == nil { streamingStartedAt = Date() }
+                if streamingStartedAt == nil {
+                    streamingStartedAt = Date()
+                }
                 startStatsTimer()
             case .disconnected:
                 stopStatsTimer()

@@ -194,7 +194,9 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
     // MARK: Engine lifecycle
 
     private func activeEngine() -> AVAudioEngine {
-        if let engine { return engine }
+        if let engine {
+            return engine
+        }
         let engine = AVAudioEngine()
         self.engine = engine
         return engine
@@ -203,8 +205,12 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
     private func tearDownEngine() {
         engine?.stop()
         if let engine {
-            if let sourceNode { engine.detach(sourceNode) }
-            if let sinkNode { engine.detach(sinkNode) }
+            if let sourceNode {
+                engine.detach(sourceNode)
+            }
+            if let sinkNode {
+                engine.detach(sinkNode)
+            }
         }
         sourceNode = nil
         sinkNode = nil
@@ -247,7 +253,9 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
                 _ = startEngineIfNeeded()
             }
             delegate.notifyAudioOutputParametersChange()
-            if wasRecording { delegate.notifyAudioInputParametersChange() }
+            if wasRecording {
+                delegate.notifyAudioInputParametersChange()
+            }
         }
     }
 }
@@ -351,7 +359,9 @@ extension GFNAudioDevice: LKRTCAudioDevice {
 
     func stopPlayout() -> Bool {
         playingFlag = false
-        if !recordingFlag { engine?.stop() }
+        if !recordingFlag {
+            engine?.stop()
+        }
         return true
     }
 
@@ -382,7 +392,9 @@ extension GFNAudioDevice: LKRTCAudioDevice {
 
     func stopRecording() -> Bool {
         recordingFlag = false
-        if !playingFlag { engine?.stop() }
+        if !playingFlag {
+            engine?.stop()
+        }
         return true
     }
 }

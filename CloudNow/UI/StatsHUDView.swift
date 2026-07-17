@@ -4,15 +4,25 @@ import SwiftUI
 /// Shared color/format helpers for stream statistics, used by the HUD and the pause menu.
 enum StatsFormat {
     static func pingColor(_ ms: Double) -> Color {
-        if ms < 30 { return .green }
-        if ms < 80 { return .yellow }
-        if ms < 150 { return .orange }
+        if ms < 30 {
+            return .green
+        }
+        if ms < 80 {
+            return .yellow
+        }
+        if ms < 150 {
+            return .orange
+        }
         return .red
     }
 
     static func fpsColor(_ fps: Double) -> Color {
-        if fps >= 55 { return .green }
-        if fps >= 30 { return .yellow }
+        if fps >= 55 {
+            return .green
+        }
+        if fps >= 30 {
+            return .yellow
+        }
         return .red
     }
 

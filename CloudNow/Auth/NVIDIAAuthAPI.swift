@@ -281,10 +281,14 @@ actor NVIDIAAuthAPI {
             request.httpBody = body.data(using: .utf8)
             let (data, response) = try await session.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if statusCode == 200 { return try parseTokenResponse(data) }
+            if statusCode == 200 {
+                return try parseTokenResponse(data)
+            }
             let responseBody = String(data: data, encoding: .utf8) ?? "(empty)"
             lastError = AuthError.clientTokenFailed("HTTP \(statusCode): \(responseBody)")
-            if statusCode < 400 || statusCode >= 500 { throw lastError }
+            if statusCode < 400 || statusCode >= 500 {
+                throw lastError
+            }
             // 4xx with clientID mismatch → try next clientID
         }
         throw lastError
@@ -358,7 +362,9 @@ actor NVIDIAAuthAPI {
     func fetchUserInfo(tokens: AuthTokens) async throws -> AuthUser {
         // Try JWT payload first (fast path)
         let jwt = tokens.idToken ?? tokens.accessToken
-        if let user = parseUserFromJWT(jwt) { return user }
+        if let user = parseUserFromJWT(jwt) {
+            return user
+        }
 
         var request = URLRequest(url: URL(string: NVIDIAAuth.userinfoEndpoint)!)
         request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")

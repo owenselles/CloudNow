@@ -78,8 +78,12 @@ actor ArtworkImagePipeline {
         }
 
         let key = Self.cacheKey(url: url, maxPixelSize: maxPixelSize)
-        if let cached = cachedImage(for: key) { return cached }
-        if let request = inFlight[key] { return try await request.task.value }
+        if let cached = cachedImage(for: key) {
+            return cached
+        }
+        if let request = inFlight[key] {
+            return try await request.task.value
+        }
 
         let requestGeneration = generation[kind, default: 0]
         let task = Task(priority: .userInitiated) { @concurrent in
@@ -361,7 +365,9 @@ struct SharedArtworkImage: View {
                 return
             } catch {
                 guard attempt < 2 else {
-                    if !Task.isCancelled { loadState = .failed }
+                    if !Task.isCancelled {
+                        loadState = .failed
+                    }
                     return
                 }
                 let delay = pow(2.0, Double(attempt)) * 0.35 * Double.random(in: 0.8 ... 1.2)
@@ -443,7 +449,9 @@ final class HeroArtPrefetcher {
 
     private func finishedRequest(key: String, succeeded: Bool) {
         activeTasks[key] = nil
-        if !succeeded { requested.remove(key) }
+        if !succeeded {
+            requested.remove(key)
+        }
         startPendingRequests()
     }
 }
@@ -518,7 +526,9 @@ final class BoxArtPrefetcher {
 
     private func finishedRequest(key: String, succeeded: Bool) {
         activeTasks[key] = nil
-        if !succeeded { requested.remove(key) }
+        if !succeeded {
+            requested.remove(key)
+        }
         startPendingRequests()
     }
 }
@@ -529,7 +539,9 @@ private struct PrefetchHeroArtOnFocus: ViewModifier {
 
     func body(content: Content) -> some View {
         content.onChange(of: isFocused) { _, focused in
-            if focused { HeroArtPrefetcher.shared.prefetch(urlString) }
+            if focused {
+                HeroArtPrefetcher.shared.prefetch(urlString)
+            }
         }
     }
 }
