@@ -186,7 +186,6 @@ enum L10nCS {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Ztráta",
-        "remote_mouse": "Myš (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Myš (Siri Remote)",

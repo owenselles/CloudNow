@@ -186,7 +186,6 @@ enum L10nAR {
         "fps": "FPS",
         "bitrate": "معدل البت",
         "loss": "الفقد",
-        "remote_mouse": "الفأرة (Siri Remote)",
         "remote_gamepad": "وحدة التحكم",
         "remote_touchpad": "وحدة التحكم + لوحة اللمس",
         "remote_gamepad_mouse": "وحدة التحكم + الفأرة (Siri Remote)",

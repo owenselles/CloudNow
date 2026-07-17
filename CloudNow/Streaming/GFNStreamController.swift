@@ -238,7 +238,7 @@ final class GFNStreamController: NSObject {
     private var signaling: GFNSignalingClient?
     private var inputSender: InputSender?
     private(set) var videoView: VideoSurfaceView?
-    private(set) var remoteMode: RemoteInputMode = .mouse
+    private(set) var remoteMode: RemoteInputMode = .gamepad
     private var statsTimer: Timer?
     private var videoReceiver: LKRTCRtpReceiver?
     private var protocolVersion = 2
@@ -525,7 +525,7 @@ final class GFNStreamController: NSObject {
         videoView?.menuPressHandler = nil
         videoView?.onDecodedVideoFormatChanged = nil
         videoView = nil
-        remoteMode = .mouse
+        remoteMode = .gamepad
         menuPressCount = 0
         timeWarning = nil
         videoDiagnostics = VideoPipelineSnapshot()
@@ -1937,11 +1937,11 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 rumbleIntensity: Float(settings.rumbleIntensity)
             )
             remoteMode = settings.defaultRemoteInputMode
-            videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
+            videoView?.gamepadModeActive = remoteMode != .gamepadMouse
             sender.menuToggleHandler = { [weak self] in self?.handleMenuPress() }
             sender.onRemoteModeChanged = { [weak self] mode in
                 self?.remoteMode = mode
-                self?.videoView?.gamepadModeActive = (mode == .gamepad || mode == .dualsense)
+                self?.videoView?.gamepadModeActive = mode != .gamepadMouse
             }
             sender.start()
             inputSender = sender

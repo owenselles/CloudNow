@@ -186,7 +186,6 @@ enum L10nHU {
         "fps": "FPS",
         "bitrate": "Bitráta",
         "loss": "Veszteség",
-        "remote_mouse": "Egér (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Egér (Siri Remote)",

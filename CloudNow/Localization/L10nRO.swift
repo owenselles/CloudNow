@@ -186,7 +186,6 @@ enum L10nRO {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Pierdut",
-        "remote_mouse": "Mouse (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Mouse (Siri Remote)",

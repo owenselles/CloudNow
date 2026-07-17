@@ -372,7 +372,7 @@ struct StreamView: View {
             .onChange(of: showOverlay) { _, showing in
                 // Pause game input while overlay is open in gamepad mode so D-pad
                 // navigates overlay buttons instead of moving the in-game character.
-                streamController.setInputPaused(showing && streamController.remoteMode != .mouse)
+                streamController.setInputPaused(showing)
             }
             .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
                 Button(L10n.text("end_session"), role: .destructive) { disconnect() }
@@ -469,10 +469,9 @@ struct StreamView: View {
 
     private var remoteModeIcon: String {
         switch streamController.remoteMode {
-        case .mouse: "cursorarrow"
         case .gamepad: "gamecontroller"
-        case .gamepadMouse: "cursorarrow.click"
         case .dualsense: "hand.point.up.left"
+        case .gamepadMouse: "cursorarrow.click"
         }
     }
 

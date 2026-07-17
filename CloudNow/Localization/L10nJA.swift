@@ -181,7 +181,6 @@ enum L10nJA {
         "fps": "FPS",
         "bitrate": "ビットレート",
         "loss": "損失",
-        "remote_mouse": "マウス (Siri Remote)",
         "remote_gamepad": "コントローラ",
         "remote_touchpad": "コントローラ + タッチパッド",
         "remote_gamepad_mouse": "コントローラ + マウス (Siri Remote)",

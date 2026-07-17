@@ -186,7 +186,6 @@ enum L10nUK {
         "fps": "FPS",
         "bitrate": "Бітрейт",
         "loss": "Втрати",
-        "remote_mouse": "Миша (Siri Remote)",
         "remote_gamepad": "Контролер",
         "remote_touchpad": "Контролер + тачпад",
         "remote_gamepad_mouse": "Контролер + Миша (Siri Remote)",

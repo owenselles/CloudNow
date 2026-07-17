@@ -49,22 +49,36 @@ private nonisolated enum GFNInput {
 // MARK: - Remote Input Mode
 
 nonisolated enum RemoteInputMode: String, Codable, Equatable {
-    case mouse
     case gamepad
     case dualsense
     /// Extended controller acts as a gamepad while the Siri Remote drives the mouse at the same time.
     case gamepadMouse
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        if rawValue == "mouse" {
+            self = .gamepadMouse
+        } else if let mode = Self(rawValue: rawValue) {
+            self = mode
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown remote input mode: \(rawValue)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 extension RemoteInputMode {
-    /// Extended controllers send XInput gamepad input in every mode except pure mouse.
-    var sendsControllerGamepad: Bool {
-        self != .mouse
-    }
-
-    /// The Siri Remote drives the mouse pointer in these modes.
+    /// The Siri Remote drives the mouse pointer alongside the connected controller.
     var remoteActsAsMouse: Bool {
-        self == .mouse || self == .gamepadMouse
+        self == .gamepadMouse
     }
 }
 
@@ -462,7 +476,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var packetPool = (0 ..< 16).map { _ in EncodedInputPacket() }
     private var sampler: DispatchSourceTimer?
     private var observations: [NSObjectProtocol] = []
-    private var remoteMode: RemoteInputMode = .mouse
+    private var remoteMode: RemoteInputMode = .gamepad
     private var deadzone: Float = 0.15
     private var overlayTriggerButton: OverlayTriggerButton = .start
     private var steamOverlayGestureEnabled = true
@@ -513,15 +527,8 @@ final nonisolated class InputSender: @unchecked Sendable {
         inputQueue.sync {
             guard sampler == nil else { return }
             registerControllerNotifications()
-            GCController.controllers().forEach { attachController($0, autoSwitch: false) }
+            GCController.controllers().forEach(attachController)
             GCMouse.mice().forEach(setupMouseHandlers)
-
-            // attachController(autoSwitch:false) won't promote the mode, so do it here for a controller present at start.
-            if !extendedControllers.isEmpty, remoteMode == .mouse {
-                remoteMode = preferredControllerModeForCurrentControllers
-                applyRemoteMode()
-                notifyRemoteModeChanged()
-            }
 
             advertiseHaptics(rumbleEnabled && !haptics.isEmpty)
             lastHeartbeat = DispatchTime.now().uptimeNanoseconds
@@ -619,10 +626,9 @@ final nonisolated class InputSender: @unchecked Sendable {
         inputQueue.async { [weak self] in
             guard let self else { return }
             switch remoteMode {
-            case .mouse: remoteMode = .gamepad
-            case .gamepad: remoteMode = .gamepadMouse
-            case .gamepadMouse: remoteMode = .dualsense
-            case .dualsense: remoteMode = .mouse
+            case .gamepad: remoteMode = .dualsense
+            case .dualsense: remoteMode = .gamepadMouse
+            case .gamepadMouse: remoteMode = .gamepad
             }
             applyRemoteMode()
             notifyRemoteModeChanged()
@@ -645,11 +651,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         steamTriggeredSlots.removeAll()
         lastSnapshots.removeAll()
         for controller in extendedControllers {
-            if remoteMode.sendsControllerGamepad {
-                claimControllerInput(controller)
-            } else {
-                releaseControllerInput(controller)
-            }
+            claimControllerInput(controller)
         }
         for controller in microControllers {
             controller.microGamepad?.reportsAbsoluteDpadValues = remoteMode.remoteActsAsMouse
@@ -699,25 +701,18 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
         guard !isPaused else { return }
 
-        if remoteMode.sendsControllerGamepad {
-            for controller in extendedControllers.sorted(by: { slot(for: $0) < slot(for: $1) }) {
-                sendGamepadState(for: controller, sampleOverlay: true, now: now)
-            }
-
-            if remoteMode == .dualsense,
-               let controller = extendedControllers.first(where: { controllerTouchpad(for: $0) != nil })
-            {
-                handleControllerTouchpad(controller)
-            }
-        } else {
-            overlayPresses.removeAll()
-            overlayReplaySlots.removeAll()
-            steamHoldTicks.removeAll()
-            steamTriggeredSlots.removeAll()
+        for controller in extendedControllers.sorted(by: { slot(for: $0) < slot(for: $1) }) {
+            sendGamepadState(for: controller, sampleOverlay: true, now: now)
         }
 
-        // Siri Remote: drives the mouse in mouse / gamepadMouse; acts as a fallback gamepad
-        // only in gamepad mode when no extended controller is present; suppressed in dualsense.
+        if remoteMode == .dualsense,
+           let controller = extendedControllers.first(where: { controllerTouchpad(for: $0) != nil })
+        {
+            handleControllerTouchpad(controller)
+        }
+
+        // Siri Remote drives the mouse in gamepadMouse, acts as a fallback gamepad in gamepad
+        // when no extended controller is present, and is suppressed in dualsense.
         if let remote = microControllers.first,
            remoteMode.remoteActsAsMouse || (remoteMode == .gamepad && extendedControllers.isEmpty)
         {
@@ -741,7 +736,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         lastMicroDpad = (curX, curY)
 
         switch remoteMode {
-        case .mouse, .gamepadMouse:
+        case .gamepadMouse:
             if now < suppressMicroPointerUntil {
                 microPointerDelta = (0, 0)
             } else if isTouching, wasTouching {
@@ -801,7 +796,6 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private func handleExtendedValueChange(_ controller: GCController) {
         guard !isPaused,
-              remoteMode.sendsControllerGamepad,
               let slot = controllerSlots[ObjectIdentifier(controller)] else { return }
 
         let buttons = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
@@ -1142,10 +1136,6 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
-    private var preferredControllerModeForCurrentControllers: RemoteInputMode {
-        extendedControllers.contains(where: { controllerTouchpad(for: $0) != nil }) ? .dualsense : .gamepad
-    }
-
     private func controllerTouchpad(for controller: GCController) -> ControllerTouchpad? {
         if let dualSense = controller.extendedGamepad as? GCDualSenseGamepad {
             return ControllerTouchpad(surface: dualSense.touchpadPrimary, button: dualSense.touchpadButton)
@@ -1164,7 +1154,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             center.addObserver(forName: .GCControllerDidConnect, object: nil, queue: nil) { [weak self] note in
                 guard let controller = note.object as? GCController else { return }
                 self?.inputQueue.async { [weak self] in
-                    self?.attachController(controller, autoSwitch: true)
+                    self?.attachController(controller)
                 }
             },
             center.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: nil) { [weak self] note in
@@ -1198,15 +1188,9 @@ final nonisolated class InputSender: @unchecked Sendable {
         let stale = (extendedControllers + microControllers).filter { existing in
             !connected.contains(where: { $0 === existing })
         }
-        stale.forEach { detachController($0, updateMode: false) }
-        connected.forEach { attachController($0, autoSwitch: false) }
+        stale.forEach(detachController)
+        connected.forEach(attachController)
         GCMouse.mice().forEach(setupMouseHandlers)
-
-        if extendedControllers.isEmpty, remoteMode == .gamepad || remoteMode == .dualsense {
-            remoteMode = .mouse
-            applyRemoteMode()
-            notifyRemoteModeChanged()
-        }
     }
 
     private func setupMouseHandlers(for mouse: GCMouse) {
@@ -1276,7 +1260,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
-    private func attachController(_ controller: GCController, autoSwitch: Bool) {
+    private func attachController(_ controller: GCController) {
         controller.handlerQueue = inputQueue
         if let pad = controller.extendedGamepad {
             guard !extendedControllers.contains(where: { $0 === controller }),
@@ -1301,13 +1285,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                 }
             }
 
-            if autoSwitch, remoteMode == .mouse {
-                remoteMode = controllerTouchpad(for: controller) == nil ? .gamepad : .dualsense
-                applyRemoteMode()
-                notifyRemoteModeChanged()
-            } else if remoteMode.sendsControllerGamepad {
-                claimControllerInput(controller)
-            }
+            claimControllerInput(controller)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
             return
         }
@@ -1321,7 +1299,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
-    private func detachController(_ controller: GCController, updateMode: Bool = true) {
+    private func detachController(_ controller: GCController) {
         clearControllerHandlers(controller)
         controller.playerIndex = .indexUnset
         let id = ObjectIdentifier(controller)
@@ -1339,14 +1317,6 @@ final nonisolated class InputSender: @unchecked Sendable {
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)
-            // Revert an auto-selected controller mode back to mouse when the last controller
-            // leaves. gamepadMouse is a deliberate user choice (remote stays a mouse either
-            // way), so it's preserved so a reconnect keeps combined input.
-            if updateMode, extendedControllers.isEmpty, remoteMode == .gamepad || remoteMode == .dualsense {
-                remoteMode = .mouse
-                applyRemoteMode()
-                notifyRemoteModeChanged()
-            }
         } else {
             microControllers.removeAll { $0 === controller }
         }

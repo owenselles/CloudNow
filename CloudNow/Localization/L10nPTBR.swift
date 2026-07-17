@@ -181,7 +181,6 @@ enum L10nPTBR {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Perda",
-        "remote_mouse": "Mouse (Siri Remote)",
         "remote_gamepad": "Controle",
         "remote_touchpad": "Controle + touchpad",
         "remote_gamepad_mouse": "Controle + Mouse (Siri Remote)",

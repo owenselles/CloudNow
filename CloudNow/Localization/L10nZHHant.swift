@@ -181,7 +181,6 @@ enum L10nZHHant {
         "fps": "FPS",
         "bitrate": "位元率",
         "loss": "遺失",
-        "remote_mouse": "滑鼠 (Siri Remote)",
         "remote_gamepad": "手把",
         "remote_touchpad": "手把 + 觸控板",
         "remote_gamepad_mouse": "手把 + 滑鼠 (Siri Remote)",

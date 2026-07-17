@@ -301,10 +301,9 @@ struct SettingsView: View {
                         .padding(.vertical, 8)
                     }
                     Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
-                        Text(L10n.remoteInputModeLabel(.mouse)).tag(RemoteInputMode.mouse)
                         Text(L10n.remoteInputModeLabel(.gamepad)).tag(RemoteInputMode.gamepad)
-                        Text(L10n.remoteInputModeLabel(.gamepadMouse)).tag(RemoteInputMode.gamepadMouse)
                         Text(L10n.remoteInputModeLabel(.dualsense)).tag(RemoteInputMode.dualsense)
+                        Text(L10n.remoteInputModeLabel(.gamepadMouse)).tag(RemoteInputMode.gamepadMouse)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(L10n.text("default_input_mode"))
@@ -339,33 +338,35 @@ struct SettingsView: View {
                     }
                 }
 
-                Section(L10n.text("diagnostics")) {
-                    Toggle(isOn: $vm.streamSettings.diagnosticsEnabled) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("diagnostic"))
-                            Text(L10n.text("adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                #if DEBUG
+                    Section(L10n.text("diagnostics")) {
+                        Toggle(isOn: $vm.streamSettings.diagnosticsEnabled) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.text("diagnostic"))
+                                Text(L10n.text("adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 8)
                         }
-                        .padding(.vertical, 8)
-                    }
-                    .onChange(of: vm.streamSettings.diagnosticsEnabled) { _, enabled in
-                        if !enabled {
-                            vm.streamSettings.enableRtcEventLog = false
+                        .onChange(of: vm.streamSettings.diagnosticsEnabled) { _, enabled in
+                            if !enabled {
+                                vm.streamSettings.enableRtcEventLog = false
+                            }
                         }
-                    }
 
-                    Toggle(isOn: $vm.streamSettings.enableRtcEventLog) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("rtc_event_log"))
-                            Text(L10n.text("rtc_event_log_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        Toggle(isOn: $vm.streamSettings.enableRtcEventLog) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.text("rtc_event_log"))
+                                Text(L10n.text("rtc_event_log_description"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 8)
                         }
-                        .padding(.vertical, 8)
+                        .disabled(!vm.streamSettings.diagnosticsEnabled)
                     }
-                    .disabled(!vm.streamSettings.diagnosticsEnabled)
-                }
+                #endif
 
                 Section(L10n.text("account")) {
                     if let user = authManager.session?.user {

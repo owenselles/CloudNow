@@ -186,7 +186,6 @@ enum L10nTH {
         "fps": "FPS",
         "bitrate": "บิตเรต",
         "loss": "การสูญเสีย",
-        "remote_mouse": "เมาส์ (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + เมาส์ (Siri Remote)",

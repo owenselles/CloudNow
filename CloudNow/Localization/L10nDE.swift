@@ -181,7 +181,6 @@ enum L10nDE {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Verlust",
-        "remote_mouse": "Maus (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + Touchpad",
         "remote_gamepad_mouse": "Controller + Maus (Siri Remote)",

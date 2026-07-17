@@ -186,7 +186,6 @@ enum L10nVI {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Mất gói",
-        "remote_mouse": "Chuột (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Chuột (Siri Remote)",

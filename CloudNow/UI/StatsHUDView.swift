@@ -113,6 +113,7 @@ struct StatsHUDView: View {
             "\(Int(stats.jitterBufferDelayMs)) / \(Int(stats.jitterBufferTargetDelayMs)) ms"
         )
         row(L10n.text("decode_time"), StatsFormat.formatMs(stats.decodeTimeMs))
+        row(L10n.text("processing_delay"), StatsFormat.formatMs(stats.processingDelayMs))
         row(L10n.text("format"), videoFormatValue)
     }
 
@@ -154,7 +155,6 @@ struct StatsHUDView: View {
         header(L10n.text("debug"))
         row("NACK/PLI/FIR", "\(stats.nackCount)/\(stats.pliCount)/\(stats.firCount)")
         row(L10n.text("retransmits"), "\(stats.retransmittedPackets)")
-        row(L10n.text("processing_delay"), StatsFormat.formatMs(stats.processingDelayMs))
         row(
             L10n.text("input_queue"),
             String(
@@ -170,10 +170,10 @@ struct StatsHUDView: View {
             row(L10n.text("decoder"), stats.decoderImplementation + hardware)
         }
         if stats.inputDropped > 0 {
-            line(L10n.format("input_drops_status", stats.inputDropped), color: .orange)
+            line(L10n.format("input_drops_status", String(stats.inputDropped)), color: .orange)
         }
         if stats.inputSuperseded > 0 {
-            line(L10n.format("analog_snapshots_coalesced_status", stats.inputSuperseded))
+            line(L10n.format("analog_snapshots_coalesced_status", String(stats.inputSuperseded)))
         }
         if !stats.localCandidateType.isEmpty {
             row(

@@ -186,7 +186,6 @@ enum L10nPL {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Strata",
-        "remote_mouse": "Mysz (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Mysz (Siri Remote)",

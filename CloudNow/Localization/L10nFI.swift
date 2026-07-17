@@ -186,7 +186,6 @@ enum L10nFI {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Häviö",
-        "remote_mouse": "Hiiri (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + kosketuslevy",
         "remote_gamepad_mouse": "Controller + Hiiri (Siri Remote)",

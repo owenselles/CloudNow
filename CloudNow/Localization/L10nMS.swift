@@ -186,7 +186,6 @@ enum L10nMS {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Kehilangan",
-        "remote_mouse": "Tetikus (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Tetikus (Siri Remote)",

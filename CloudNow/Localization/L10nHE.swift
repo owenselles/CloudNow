@@ -186,7 +186,6 @@ enum L10nHE {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "אובדן",
-        "remote_mouse": "עכבר (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + עכבר (Siri Remote)",

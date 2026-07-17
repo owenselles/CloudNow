@@ -181,7 +181,6 @@ enum L10nFR {
         "fps": "IPS",
         "bitrate": "Débit",
         "loss": "Perte",
-        "remote_mouse": "Souris (Siri Remote)",
         "remote_gamepad": "Manette",
         "remote_touchpad": "Manette + pavé tactile",
         "remote_gamepad_mouse": "Manette + Souris (Siri Remote)",

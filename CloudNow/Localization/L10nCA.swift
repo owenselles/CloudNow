@@ -186,7 +186,6 @@ enum L10nCA {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Pèrdua",
-        "remote_mouse": "Ratolí (Siri Remote)",
         "remote_gamepad": "Comandament",
         "remote_touchpad": "Comandament + touchpad",
         "remote_gamepad_mouse": "Comandament + Ratolí (Siri Remote)",

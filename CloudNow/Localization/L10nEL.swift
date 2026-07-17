@@ -186,7 +186,6 @@ enum L10nEL {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Απώλεια",
-        "remote_mouse": "Ποντίκι (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Ποντίκι (Siri Remote)",

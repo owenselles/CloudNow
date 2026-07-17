@@ -186,7 +186,6 @@ enum L10nRU {
         "fps": "FPS",
         "bitrate": "Битрейт",
         "loss": "Потери",
-        "remote_mouse": "Мышь (Siri Remote)",
         "remote_gamepad": "Контроллер",
         "remote_touchpad": "Контроллер + тачпад",
         "remote_gamepad_mouse": "Контроллер + Мышь (Siri Remote)",

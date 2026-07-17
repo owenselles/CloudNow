@@ -186,7 +186,6 @@ enum L10nSV {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Förlust",
-        "remote_mouse": "Mus (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Mus (Siri Remote)",

@@ -186,7 +186,6 @@ enum L10nDA {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Tab",
-        "remote_mouse": "Mus (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Mus (Siri Remote)",

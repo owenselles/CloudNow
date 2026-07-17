@@ -186,7 +186,6 @@ enum L10nTR {
         "fps": "FPS",
         "bitrate": "Bit hızı",
         "loss": "Kayıp",
-        "remote_mouse": "Fare (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Fare (Siri Remote)",

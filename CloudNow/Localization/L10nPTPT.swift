@@ -186,7 +186,6 @@ enum L10nPTPT {
         "fps": "FPS",
         "bitrate": "Taxa de bits",
         "loss": "Perda",
-        "remote_mouse": "Rato (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Rato (Siri Remote)",

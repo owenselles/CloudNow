@@ -186,7 +186,6 @@ enum L10nHR {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Gubitak",
-        "remote_mouse": "Miš (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Miš (Siri Remote)",

@@ -186,7 +186,6 @@ enum L10nNL {
         "fps": "FPS",
         "bitrate": "Bitrate",
         "loss": "Verlies",
-        "remote_mouse": "Muis (Siri Remote)",
         "remote_gamepad": "Controller",
         "remote_touchpad": "Controller + touchpad",
         "remote_gamepad_mouse": "Controller + Muis (Siri Remote)",

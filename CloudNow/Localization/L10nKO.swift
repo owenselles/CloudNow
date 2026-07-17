@@ -181,7 +181,6 @@ enum L10nKO {
         "fps": "FPS",
         "bitrate": "비트레이트",
         "loss": "손실",
-        "remote_mouse": "마우스 (Siri Remote)",
         "remote_gamepad": "컨트롤러",
         "remote_touchpad": "컨트롤러 + 터치패드",
         "remote_gamepad_mouse": "컨트롤러 + 마우스 (Siri Remote)",

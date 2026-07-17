@@ -186,7 +186,6 @@ enum L10nHI {
         "fps": "FPS",
         "bitrate": "बिटरेट",
         "loss": "हानि",
-        "remote_mouse": "माउस (Siri Remote)",
         "remote_gamepad": "कंट्रोलर",
         "remote_touchpad": "कंट्रोलर + टचपैड",
         "remote_gamepad_mouse": "कंट्रोलर + माउस (Siri Remote)",
