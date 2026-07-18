@@ -19,7 +19,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
         didSet { maxBitrateKbps = min(maxBitrateKbps, Self.maxSelectableBitrateKbps) }
     }
 
-    var codec: VideoCodec = .h264
+    var codec: VideoCodec = .h265
     var colorPreference: ColorModePreference = .automatic
     var keyboardLayout: String = Self.defaultKeyboardLayout
     var gameLanguage: String = Self.defaultGameLanguage
