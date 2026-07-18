@@ -112,41 +112,15 @@ enum GameFilterEngine {
         favoriteIds: Set<String>,
         recentlyPlayedIds: [String]
     ) -> [GameInfo] {
-        var result = games
-
         let search = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !search.isEmpty {
-            result = result.filter { $0.title.localizedCaseInsensitiveContains(search) }
-        }
-
-        if !state.collections.isEmpty {
-            result = result.filter { game in
-                (state.collections.contains(.library) && game.isInLibrary)
-                    || (state.collections.contains(.favorites) && favoriteIds.contains(game.id))
-            }
-        }
-
-        if !state.genres.isEmpty {
-            result = result.filter { !state.genres.isDisjoint(with: $0.genreCodes) }
-        }
-
-        if !state.stores.isEmpty {
-            result = result.filter { game in
-                let gameStores: [String] = switch context {
-                case .store:
-                    game.variants.map(\.appStore)
-                case .library:
-                    game.ownedStores
-                }
-                let normalizedStores = Set(gameStores.map(GameStoreFilter.normalizedCode))
-                return !state.stores.isDisjoint(with: normalizedStores)
-            }
-        }
-
-        if !state.features.isEmpty {
-            result = result.filter { game in
-                !state.features.isDisjoint(with: game.supportedFeatures ?? [])
-            }
+        var result = games.filter { game in
+            matches(
+                game,
+                context: context,
+                state: state,
+                search: search,
+                favoriteIds: favoriteIds
+            )
         }
 
         switch sortOrder {
@@ -172,6 +146,75 @@ enum GameFilterEngine {
         }
 
         return result
+    }
+
+    static func count(
+        in games: [GameInfo],
+        context: GameFilterContext,
+        state: GameFilterState,
+        searchText: String,
+        favoriteIds: Set<String>
+    ) -> Int {
+        let search = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return games.count { game in
+            matches(
+                game,
+                context: context,
+                state: state,
+                search: search,
+                favoriteIds: favoriteIds
+            )
+        }
+    }
+
+    private static func matches(
+        _ game: GameInfo,
+        context: GameFilterContext,
+        state: GameFilterState,
+        search: String,
+        favoriteIds: Set<String>
+    ) -> Bool {
+        if !search.isEmpty,
+           !game.title.localizedCaseInsensitiveContains(search)
+        {
+            return false
+        }
+
+        if !state.collections.isEmpty {
+            let matchesCollection =
+                (state.collections.contains(.library) && game.isInLibrary)
+                    || (state.collections.contains(.favorites) && favoriteIds.contains(game.id))
+            if !matchesCollection {
+                return false
+            }
+        }
+
+        if !state.genres.isEmpty,
+           state.genres.isDisjoint(with: game.genreCodes)
+        {
+            return false
+        }
+
+        if !state.stores.isEmpty {
+            let gameStores: [String] = switch context {
+            case .store:
+                game.variants.map(\.appStore)
+            case .library:
+                game.ownedStores
+            }
+            let normalizedStores = Set(gameStores.map(GameStoreFilter.normalizedCode))
+            if state.stores.isDisjoint(with: normalizedStores) {
+                return false
+            }
+        }
+
+        if !state.features.isEmpty,
+           state.features.isDisjoint(with: game.supportedFeatures ?? [])
+        {
+            return false
+        }
+
+        return true
     }
 }
 
@@ -206,6 +249,7 @@ struct GameFilterBar: View {
     let context: GameFilterContext
     let options: GameFilterOptions
     let availableSortOrders: [LibrarySortOrder]
+    let previewBaseCount: Int
     let previewCount: (GameFilterState) -> Int
 
     @Binding var filterState: GameFilterState
@@ -272,6 +316,7 @@ struct GameFilterBar: View {
                 state: $filterState,
                 context: context,
                 options: options,
+                totalCount: previewBaseCount,
                 previewCount: previewCount,
                 onClose: { isShowingFilters = false }
             )
@@ -433,6 +478,7 @@ private struct GameFilterSheet: View {
 
     let context: GameFilterContext
     let options: GameFilterOptions
+    let totalCount: Int
     let previewCount: (GameFilterState) -> Int
     let onClose: () -> Void
 
@@ -498,6 +544,7 @@ private struct GameFilterSheet: View {
             }
         }
         .onExitCommand(perform: onClose)
+        .blocksGlobalControllerNavigation()
     }
 
     private var sheetBackgroundColors: [Color] {
@@ -510,7 +557,6 @@ private struct GameFilterSheet: View {
 
     private var header: some View {
         let resultCount = previewCount(state)
-        let totalCount = previewCount(GameFilterState())
 
         return HStack(spacing: 20) {
             Image(systemName: "line.3.horizontal.decrease.circle.fill")

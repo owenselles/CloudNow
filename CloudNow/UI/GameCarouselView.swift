@@ -16,18 +16,80 @@ struct GameCarouselView: View {
     let onDismiss: (String?) -> Void
 
     @Environment(GamesViewModel.self) var viewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var currentId: String?
     @State private var expandedGame: GameInfo?
     @FocusState private var focusedId: String?
 
-    private let expandAnimation = Animation.easeInOut(duration: 0.72)
+    private var expandAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.72)
+    }
+
+    private var navigationAnimation: Animation? {
+        reduceMotion ? nil : .interactiveSpring(response: 0.35, dampingFraction: 0.8)
+    }
+
+    private var positionedGames: [PositionedGame] {
+        guard let currentId,
+              let currentIndex = request.games.firstIndex(where: { $0.id == currentId })
+        else { return [] }
+
+        let lowerBound = max(request.games.startIndex, currentIndex - 1)
+        let upperBound = min(request.games.index(before: request.games.endIndex), currentIndex + 1)
+
+        return (lowerBound ... upperBound).map { index in
+            PositionedGame(
+                game: request.games[index],
+                distance: index - currentIndex
+            )
+        }
+    }
 
     private func collapseExpandedCard() {
         withAnimation(expandAnimation) {
             expandedGame = nil
         }
         Task { @MainActor in
+            await Task.yield()
             focusedId = currentId
+        }
+    }
+
+    private func moveCurrentCard(by offset: Int) {
+        guard !request.games.isEmpty,
+              expandedGame == nil,
+              let currentIndex = request.games.firstIndex(where: { $0.id == currentId })
+        else { return }
+
+        let destinationIndex = min(
+            max(currentIndex + offset, request.games.startIndex),
+            request.games.index(before: request.games.endIndex)
+        )
+        let destinationId = request.games[destinationIndex].id
+
+        guard destinationId != currentId else {
+            focusedId = currentId
+            return
+        }
+
+        withAnimation(navigationAnimation) {
+            currentId = destinationId
+        }
+        focusedId = destinationId
+    }
+
+    private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        guard expandedGame == nil else { return }
+
+        switch direction {
+        case .left:
+            moveCurrentCard(by: -1)
+        case .right:
+            moveCurrentCard(by: 1)
+        case .down:
+            expandedGame = request.games.first(where: { $0.id == currentId })
+        default:
+            break
         }
     }
 
@@ -46,38 +108,36 @@ struct GameCarouselView: View {
                 // Accordion layout : current 80%, neighbours 10% each side
                 // ZStack centres items → offset x = dist * (0.40W + 0.05W) = dist * 0.45W
                 ZStack(alignment: .center) {
-                    ForEach(request.games) { game in
-                        let dist = distanceFromCurrent(game.id)
+                    ForEach(positionedGames) { positionedGame in
+                        let game = positionedGame.game
+                        let dist = positionedGame.distance
                         let isExpanded = expandedGame?.id == game.id
-                        if abs(dist) <= 1 || isExpanded {
-                            CarouselCard(
-                                game: game,
-                                focusedId: $focusedId,
-                                onExpand: {
-                                    withAnimation(expandAnimation) {
-                                        expandedGame = game
-                                    }
-                                },
-                                onPlay: { g in onDismiss(currentId); onPlay(g) },
-                                onCollapseExpanded: collapseExpandedCard,
-                                isCurrent: game.id == currentId,
-                                isExpanded: isExpanded,
-                                containerWidth: geo.size.width,
-                                imageAlignment: dist < 0 ? .leading : (dist > 0 ? .trailing : .center)
-                            )
-                            .frame(
-                                width: isExpanded ? geo.size.width : (dist == 0 ? geo.size.width * 0.90 : geo.size.width * 0.10),
-                                height: isExpanded ? geo.size.height : geo.size.height * 0.92,
-                                alignment: dist < 0 ? .leading : (dist > 0 ? .trailing : .center)
-                            )
-                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: isExpanded ? 0 : 20, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: isExpanded ? 0 : 20))
-                            .offset(x: isExpanded ? 0 : CGFloat(dist) * (geo.size.width * 0.50 + 20))
-                            .zIndex(isExpanded ? 10 : (dist == 0 ? 1 : 0))
-                            .opacity(expandedGame == nil || isExpanded ? 1 : 0)
-                            .animation(expandAnimation, value: expandedGame?.id)
-                            .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.8), value: currentId)
-                            .transition(.opacity)
-                        }
+                        CarouselCard(
+                            game: game,
+                            focusedId: $focusedId,
+                            onExpand: {
+                                withAnimation(expandAnimation) {
+                                    expandedGame = game
+                                }
+                            },
+                            onPlay: { g in onDismiss(currentId); onPlay(g) },
+                            onCollapseExpanded: collapseExpandedCard,
+                            isCurrent: game.id == currentId,
+                            isExpanded: isExpanded,
+                            imageAlignment: dist < 0 ? .leading : (dist > 0 ? .trailing : .center)
+                        )
+                        .frame(
+                            width: isExpanded ? geo.size.width : (dist == 0 ? geo.size.width * 0.90 : geo.size.width * 0.10),
+                            height: isExpanded ? geo.size.height : geo.size.height * 0.92,
+                            alignment: dist < 0 ? .leading : (dist > 0 ? .trailing : .center)
+                        )
+                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: isExpanded ? 0 : 20, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: isExpanded ? 0 : 20))
+                        .offset(x: isExpanded ? 0 : CGFloat(dist) * (geo.size.width * 0.50 + 20))
+                        .zIndex(isExpanded ? 10 : (dist == 0 ? 1 : 0))
+                        .opacity(expandedGame == nil || isExpanded ? 1 : 0)
+                        .animation(expandAnimation, value: expandedGame?.id)
+                        .animation(navigationAnimation, value: currentId)
+                        .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -85,18 +145,13 @@ struct GameCarouselView: View {
             }
         }
         .ignoresSafeArea()
-        .onAppear {
-            Task { @MainActor in
-                focusedId = request.startId
-            }
-        }
-        .modifier(CarouselMoveCommandHandler(
+        .defaultFocus($focusedId, request.startId)
+        .onMoveCommand(perform: handleMoveCommand)
+        .handlesCarouselControllerNavigation(
             isEnabled: expandedGame == nil,
-            games: request.games,
-            currentId: $currentId,
-            focusedId: $focusedId,
-            expandedGame: $expandedGame
-        ))
+            onPrevious: { moveCurrentCard(by: -1) },
+            onNext: { moveCurrentCard(by: 1) }
+        )
         .onExitCommand {
             if expandedGame != nil {
                 collapseExpandedCard()
@@ -106,56 +161,12 @@ struct GameCarouselView: View {
         }
     }
 
-    private func distanceFromCurrent(_ gameId: String) -> Int {
-        guard let ci = request.games.firstIndex(where: { $0.id == currentId }),
-              let gi = request.games.firstIndex(where: { $0.id == gameId })
-        else { return Int.max }
-        return gi - ci
-    }
-}
+    private struct PositionedGame: Identifiable {
+        let game: GameInfo
+        let distance: Int
 
-// MARK: - CarouselCard
-
-private struct CarouselMoveCommandHandler: ViewModifier {
-    let isEnabled: Bool
-    let games: [GameInfo]
-    @Binding var currentId: String?
-    var focusedId: FocusState<String?>.Binding
-    @Binding var expandedGame: GameInfo?
-
-    func body(content: Content) -> some View {
-        if isEnabled {
-            content.onMoveCommand { dir in
-                guard let ci = games.firstIndex(where: { $0.id == currentId }) else { return }
-                switch dir {
-                case .left:
-                    if ci == 0 {
-                        focusedId.wrappedValue = currentId
-                    } else {
-                        let newId = games[ci - 1].id
-                        withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.8)) {
-                            currentId = newId
-                        }
-                        focusedId.wrappedValue = newId
-                    }
-                case .right:
-                    if ci == games.count - 1 {
-                        focusedId.wrappedValue = currentId
-                    } else {
-                        let newId = games[ci + 1].id
-                        withAnimation(.interactiveSpring(response: 0.35, dampingFraction: 0.8)) {
-                            currentId = newId
-                        }
-                        focusedId.wrappedValue = newId
-                    }
-                case .down:
-                    expandedGame = games.first(where: { $0.id == currentId })
-                default:
-                    break
-                }
-            }
-        } else {
-            content
+        var id: String {
+            game.id
         }
     }
 }
@@ -170,9 +181,9 @@ private struct CarouselCard: View {
     let onCollapseExpanded: () -> Void
     let isCurrent: Bool
     let isExpanded: Bool
-    let containerWidth: CGFloat
     let imageAlignment: HorizontalAlignment
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showContent = false
 
     var body: some View {
@@ -187,12 +198,18 @@ private struct CarouselCard: View {
                 .buttonStyle(PassthroughButtonStyle())
                 .focusEffectDisabled()
                 .focused(focusedId, equals: game.id)
+                .accessibilityLabel(game.title)
+                .accessibilityAddTraits(isCurrent ? .isSelected : [])
             }
         }
         .focusSection()
         .task(id: isCurrent) {
             showContent = false
             guard isCurrent else { return }
+            if reduceMotion {
+                showContent = true
+                return
+            }
             do {
                 try await Task.sleep(for: .milliseconds(360))
             } catch {
@@ -222,7 +239,7 @@ private struct CarouselCard: View {
 
                 GameDetailArtworkScrim()
                     .opacity(isCurrent ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.2), value: isCurrent)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isCurrent)
 
                 if isCurrent {
                     GameDetailView(
@@ -233,7 +250,7 @@ private struct CarouselCard: View {
                     )
                     .environment(viewModel)
                     .opacity(showContent ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.28), value: showContent)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: showContent)
                 }
             }
 

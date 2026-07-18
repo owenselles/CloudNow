@@ -134,7 +134,10 @@ class GamesViewModel {
     var topZones: [GFNZone] = []
 
     var librarySearchText = "" {
-        didSet { rebuildFilteredLibraryGames() }
+        didSet {
+            rebuildLibraryFilterBaseCount()
+            rebuildFilteredLibraryGames()
+        }
     }
 
     var librarySortOrder: LibrarySortOrder = .default {
@@ -146,7 +149,10 @@ class GamesViewModel {
     }
 
     var storeSearchText = "" {
-        didSet { rebuildFilteredStoreGames() }
+        didSet {
+            rebuildStoreFilterBaseCount()
+            rebuildFilteredStoreGames()
+        }
     }
 
     var storeSortOrder: LibrarySortOrder = .default {
@@ -161,10 +167,12 @@ class GamesViewModel {
         games: [], favoriteIds: [], context: .library
     )
     private(set) var filteredLibraryGames: [GameInfo] = []
+    private(set) var libraryFilterBaseCount = 0
     private(set) var storeFilterOptions = GameFilterOptions(
         games: [], favoriteIds: [], context: .store
     )
     private(set) var filteredStoreGames: [GameInfo] = []
+    private(set) var storeFilterBaseCount = 0
 
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
@@ -594,7 +602,18 @@ class GamesViewModel {
             favoriteIds: favoriteIds,
             context: .library
         )
+        rebuildLibraryFilterBaseCount()
         rebuildFilteredLibraryGames()
+    }
+
+    private func rebuildLibraryFilterBaseCount() {
+        libraryFilterBaseCount = GameFilterEngine.count(
+            in: libraryGames,
+            context: .library,
+            state: GameFilterState(),
+            searchText: librarySearchText,
+            favoriteIds: favoriteIds
+        )
     }
 
     private func rebuildFilteredLibraryGames() {
@@ -613,7 +632,18 @@ class GamesViewModel {
             favoriteIds: favoriteIds,
             context: .store
         )
+        rebuildStoreFilterBaseCount()
         rebuildFilteredStoreGames()
+    }
+
+    private func rebuildStoreFilterBaseCount() {
+        storeFilterBaseCount = GameFilterEngine.count(
+            in: mainGames,
+            context: .store,
+            state: GameFilterState(),
+            searchText: storeSearchText,
+            favoriteIds: favoriteIds
+        )
     }
 
     private func rebuildFilteredStoreGames() {
@@ -627,23 +657,23 @@ class GamesViewModel {
     }
 
     func libraryPreviewCount(for state: GameFilterState) -> Int {
-        filteredGames(
-            libraryGames,
+        GameFilterEngine.count(
+            in: libraryGames,
             context: .library,
             state: state,
             searchText: librarySearchText,
-            sortOrder: librarySortOrder
-        ).count
+            favoriteIds: favoriteIds
+        )
     }
 
     func storePreviewCount(for state: GameFilterState) -> Int {
-        filteredGames(
-            mainGames,
+        GameFilterEngine.count(
+            in: mainGames,
             context: .store,
             state: state,
             searchText: storeSearchText,
-            sortOrder: storeSortOrder
-        ).count
+            favoriteIds: favoriteIds
+        )
     }
 
     private func filteredGames(

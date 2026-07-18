@@ -665,6 +665,7 @@ private struct ZonePickerView: View {
                 await loadZones()
             }
         }
+        .blocksGlobalControllerNavigation()
     }
 
     private func select(_ url: String?) {

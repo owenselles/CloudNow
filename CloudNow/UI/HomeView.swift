@@ -5,8 +5,11 @@ struct HomeView: View {
     let onResume: (ResumableSession) -> Void
 
     @Environment(GamesViewModel.self) var viewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var carouselRequest: CarouselRequest?
-    @State private var restoreScrollId: String?
+    @State private var carouselSourceFocus: HomeGameFocus?
+    @State private var restoreScrollTarget: HomeGameFocus?
+    @FocusState private var focusedGame: HomeGameFocus?
 
     var body: some View {
         ZStack {
@@ -44,38 +47,64 @@ struct HomeView: View {
 
                             VStack(alignment: .leading, spacing: 48) {
                                 if !viewModel.continuePlaying.isEmpty {
-                                    gameRow(title: L10n.text("resume_stream"), games: viewModel.continuePlaying, badge: L10n.text("live"))
+                                    gameRow(
+                                        row: .continuePlaying,
+                                        title: L10n.text("resume_stream"),
+                                        games: viewModel.continuePlaying,
+                                        badge: L10n.text("live")
+                                    )
                                 }
                                 let recentWithoutHero = viewModel.recentlyPlayedGames.filter { $0.id != heroGame?.id }
                                 if !recentWithoutHero.isEmpty {
-                                    gameRow(title: L10n.text("recently_played"), games: recentWithoutHero)
+                                    gameRow(
+                                        row: .recent,
+                                        title: L10n.text("recently_played"),
+                                        games: recentWithoutHero
+                                    )
                                 }
                                 if !viewModel.favoriteGames.isEmpty {
-                                    gameRow(title: L10n.text("favorites"), games: viewModel.favoriteGames, isFavoritesRow: true)
+                                    gameRow(
+                                        row: .favorites,
+                                        title: L10n.text("favorites"),
+                                        games: viewModel.favoriteGames,
+                                        isFavoritesRow: true
+                                    )
                                 }
                             }
                             .padding(.top, 48)
                             .padding(.bottom, 60)
                         }
                     }
-                    .onChange(of: restoreScrollId) { _, newValue in
+                    .onChange(of: restoreScrollTarget) { _, newValue in
                         guard let newValue else { return }
-                        withAnimation {
+                        if reduceMotion {
                             proxy.scrollTo(newValue, anchor: .center)
+                        } else {
+                            withAnimation {
+                                proxy.scrollTo(newValue, anchor: .center)
+                            }
                         }
-                        restoreScrollId = nil
+                        restoreScrollTarget = nil
                     }
                 }
             }
         }
         .fullScreenCover(item: $carouselRequest) { req in
             GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
-                restoreScrollId = lastId
                 carouselRequest = nil
+                let source = carouselSourceFocus
+                carouselSourceFocus = nil
+                guard let lastId, let source else { return }
+                let target = HomeGameFocus(row: source.row, gameId: lastId)
+                restoreScrollTarget = target
+                Task { @MainActor in
+                    await Task.yield()
+                    focusedGame = target
+                }
             })
             .environment(viewModel)
         }
-        .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: carouselRequest?.id)
         .toolbar(.hidden, for: .navigationBar)
         .task(id: viewModel.resumableSession?.session.sessionId) {
             guard viewModel.resumableSession != nil else { return }
@@ -150,7 +179,13 @@ struct HomeView: View {
 
     // MARK: Game Row
 
-    private func gameRow(title: String, games: [GameInfo], badge: String? = nil, isFavoritesRow: Bool = false) -> some View {
+    private func gameRow(
+        row: HomeGameRow,
+        title: String,
+        games: [GameInfo],
+        badge: String? = nil,
+        isFavoritesRow: Bool = false
+    ) -> some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 10) {
                 Text(title)
@@ -170,11 +205,14 @@ struct HomeView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 24) {
                     ForEach(games) { game in
+                        let focus = HomeGameFocus(row: row, gameId: game.id)
                         GameCardView(game: game) { onPlay(game) }
                             .frame(width: 200)
-                            .id(game.id)
+                            .id(focus)
+                            .focused($focusedGame, equals: focus)
                             .contextMenu {
                                 Button {
+                                    carouselSourceFocus = focus
                                     carouselRequest = CarouselRequest(games: games, startId: game.id)
                                 } label: {
                                     Label("Info", systemImage: "info.circle")
@@ -195,6 +233,17 @@ struct HomeView: View {
             .focusSection()
             .scrollClipDisabled()
         }
+    }
+
+    private enum HomeGameRow: Hashable {
+        case continuePlaying
+        case recent
+        case favorites
+    }
+
+    private struct HomeGameFocus: Hashable {
+        let row: HomeGameRow
+        let gameId: String
     }
 
     // MARK: Skeleton Row

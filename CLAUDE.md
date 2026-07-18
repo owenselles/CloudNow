@@ -17,11 +17,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Open `CloudNow.xcodeproj` in Xcode and build/run via Xcode (no command-line build setup)
 - **Required SPM dependency**: Add [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) via Xcode → File → Add Package Dependencies before building
 - Distribution is sideload-only (no App Store target)
-- No test suite, no linter configured
+- No test suite; SwiftLint and SwiftFormat are configured and required by CI
 
 ## Linting
 
-Run lint after every Swift edit. CI fails PRs on violations.
+Run both non-mutating checks before completing every task that changes repository content. CI fails PRs on violations.
+
+First read the pinned versions from the `README.md` **Linting** section and verify the local executables match exactly. If a local tool has the wrong version, use the pinned CI/pre-commit environment instead.
 
 ```bash
 # Format check (no mutation)
@@ -44,7 +46,7 @@ Never use block `disable`/`enable` pairs and never omit the rationale.
 
 ### Pinned versions
 
-Tools pinned in `.pre-commit-config.yaml` and `.github/workflows/lint.yml`: SwiftLint 0.63.3, SwiftFormat 0.61.1.
+Tools pinned in `.pre-commit-config.yaml` and `.github/workflows/lint.yml`: SwiftLint 0.65.0, SwiftFormat 0.62.1.
 
 ## Architecture
 

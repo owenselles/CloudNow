@@ -16,6 +16,7 @@ struct LibraryView: View {
 
     @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var carouselRequest: CarouselRequest?
     @State private var expandedGame: GameInfo?
@@ -47,7 +48,10 @@ struct LibraryView: View {
         .fullScreenCover(item: $carouselRequest) { req in
             GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
                 carouselRequest = nil
-                Task { @MainActor in focusedGameId = lastId }
+                Task { @MainActor in
+                    await Task.yield()
+                    focusedGameId = lastId
+                }
             })
             .environment(viewModel)
         }
@@ -57,8 +61,9 @@ struct LibraryView: View {
                 onPlay(g)
             })
             .environment(viewModel)
+            .blocksGlobalControllerNavigation()
         }
-        .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: carouselRequest?.id)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
@@ -119,6 +124,7 @@ struct LibraryView: View {
                 context: .library,
                 options: viewModel.libraryFilterOptions,
                 availableSortOrders: LibrarySortOrder.allCases,
+                previewBaseCount: viewModel.libraryFilterBaseCount,
                 previewCount: viewModel.libraryPreviewCount,
                 filterState: $viewModel.libraryFilterState,
                 sortOrder: $viewModel.librarySortOrder

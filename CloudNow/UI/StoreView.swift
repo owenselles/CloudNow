@@ -4,6 +4,7 @@ struct StoreView: View {
     let onPlay: (GameInfo) -> Void
 
     @Environment(GamesViewModel.self) var viewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var carouselRequest: CarouselRequest?
     @FocusState private var focusedGameId: String?
@@ -37,7 +38,10 @@ struct StoreView: View {
         .fullScreenCover(item: $carouselRequest) { req in
             GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
                 carouselRequest = nil
-                Task { @MainActor in focusedGameId = lastId }
+                Task { @MainActor in
+                    await Task.yield()
+                    focusedGameId = lastId
+                }
             })
             .environment(viewModel)
         }
@@ -47,8 +51,9 @@ struct StoreView: View {
                 onPlay(g)
             })
             .environment(viewModel)
+            .blocksGlobalControllerNavigation()
         }
-        .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: carouselRequest?.id)
     }
 
     private var gameContent: some View {
@@ -84,6 +89,7 @@ struct StoreView: View {
             context: .store,
             options: viewModel.storeFilterOptions,
             availableSortOrders: LibrarySortOrder.allCases,
+            previewBaseCount: viewModel.storeFilterBaseCount,
             previewCount: viewModel.storePreviewCount,
             filterState: $viewModel.storeFilterState,
             sortOrder: $viewModel.storeSortOrder

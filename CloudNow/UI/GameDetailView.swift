@@ -17,15 +17,21 @@ struct GameDetailView: View {
 
     @Environment(GamesViewModel.self) var viewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showFullDescription = false
     @State private var showFullDetails = false
-    @FocusState private var heroFocused: Bool
-    @FocusState private var aboutFocused: Bool
-    @FocusState private var detailsFocused: Bool
+    @FocusState private var focusedElement: DetailFocus?
     @State private var backgroundBlurred = false
     @State private var appeared = false
     @State private var dismissing = false
-    @FocusState private var carouselExitCatcherFocused: Bool
+
+    private enum DetailFocus: Hashable {
+        case play
+        case favorite
+        case about
+        case details
+        case exitCatcher
+    }
 
     private var isEmbeddedCarousel: Bool {
         presentationStyle == .embeddedCarousel
@@ -33,6 +39,19 @@ struct GameDetailView: View {
 
     private var isCarouselExpanded: Bool {
         presentationStyle == .carouselExpanded
+    }
+
+    private var preferredFocusTarget: DetailFocus {
+        if game.isInLibrary {
+            return .play
+        }
+        if let description = game.longDescription, !description.isEmpty {
+            return .about
+        }
+        if !detailItems.isEmpty {
+            return .details
+        }
+        return .exitCatcher
     }
 
     private var detailItems: [(String, String)] {
@@ -59,46 +78,31 @@ struct GameDetailView: View {
     private var fullScreenBody: some View {
         ZStack {
             GameDetailBackground(game: game, blurred: backgroundBlurred)
+            exitFocusCatcher(action: dismissFullScreen)
 
             ScrollViewReader { proxy in
                 detailScrollContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
-                    .onChange(of: heroFocused) { _, focused in
-                        if focused {
-                            backgroundBlurred = false
-                            withAnimation(.smooth) { proxy.scrollTo("hero", anchor: .top) }
-                        }
-                    }
-                    .onChange(of: aboutFocused) { _, focused in
-                        if focused {
-                            backgroundBlurred = true
-                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
-                        }
-                    }
-                    .onChange(of: detailsFocused) { _, focused in
-                        if focused {
-                            backgroundBlurred = true
-                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
-                        }
+                    .onChange(of: focusedElement) { _, focus in
+                        handleFocusChange(focus, proxy: proxy)
                     }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opacity(appeared && !dismissing ? 1 : 0)
             .offset(y: appeared && !dismissing ? 0 : 40)
-            .animation(.easeOut(duration: 0.4), value: appeared)
-            .animation(.easeIn(duration: 0.28), value: dismissing)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.4), value: appeared)
+            .animation(reduceMotion ? nil : .easeIn(duration: 0.28), value: dismissing)
         }
         .ignoresSafeArea()
         .onAppear {
-            withAnimation { appeared = true }
-        }
-        .onExitCommand {
-            withAnimation { dismissing = true }
-            Task {
-                try? await Task.sleep(for: .milliseconds(280))
-                dismiss()
+            withAnimation(reduceMotion ? nil : .default) {
+                appeared = true
             }
+        }
+        .defaultFocus($focusedElement, preferredFocusTarget)
+        .onExitCommand {
+            dismissFullScreen()
         }
         .fullScreenCover(isPresented: $showFullDescription) {
             if let desc = game.longDescription {
@@ -131,47 +135,19 @@ struct GameDetailView: View {
             // a focused descendant on tvOS, so onExitCommand below always fires
             // (Menu/back), regardless of whether the hero buttons exist or are
             // laid out yet.
-            Button(action: { onCollapse?() }, label: {
-                Color.clear.frame(width: 1, height: 1)
-            })
-            .buttonStyle(.plain)
-            .focused($carouselExitCatcherFocused)
-            .focusEffectDisabled()
-            .opacity(0.001)
-            .accessibilityHidden(true)
+            exitFocusCatcher { onCollapse?() }
 
             ScrollViewReader { proxy in
                 detailScrollContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
-                    .onChange(of: heroFocused) { _, focused in
-                        if focused {
-                            backgroundBlurred = false
-                            withAnimation(.smooth) { proxy.scrollTo("hero", anchor: .top) }
-                        }
-                    }
-                    .onChange(of: aboutFocused) { _, focused in
-                        if focused {
-                            backgroundBlurred = true
-                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
-                        }
-                    }
-                    .onChange(of: detailsFocused) { _, focused in
-                        if focused {
-                            backgroundBlurred = true
-                            withAnimation(.smooth) { proxy.scrollTo("detail", anchor: .top) }
-                        }
+                    .onChange(of: focusedElement) { _, focus in
+                        handleFocusChange(focus, proxy: proxy)
                     }
             }
         }
         .ignoresSafeArea()
-        .onAppear {
-            carouselExitCatcherFocused = true
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(50))
-                heroFocused = true
-            }
-        }
+        .defaultFocus($focusedElement, preferredFocusTarget)
         .onExitCommand {
             onCollapse?()
         }
@@ -182,6 +158,47 @@ struct GameDetailView: View {
         }
         .fullScreenCover(isPresented: $showFullDetails) {
             FullDetailsView(title: game.title, items: detailItems)
+        }
+    }
+
+    private func exitFocusCatcher(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Color.clear.frame(width: 1, height: 1)
+        }
+        .buttonStyle(.plain)
+        .focused($focusedElement, equals: .exitCatcher)
+        .focusEffectDisabled()
+        .opacity(0.001)
+        .accessibilityHidden(true)
+    }
+
+    private func handleFocusChange(_ focus: DetailFocus?, proxy: ScrollViewProxy) {
+        switch focus {
+        case .play, .favorite:
+            backgroundBlurred = false
+            withAnimation(reduceMotion ? nil : .smooth) {
+                proxy.scrollTo("hero", anchor: .top)
+            }
+        case .about, .details:
+            backgroundBlurred = true
+            withAnimation(reduceMotion ? nil : .smooth) {
+                proxy.scrollTo("detail", anchor: .top)
+            }
+        case .exitCatcher, nil:
+            break
+        }
+    }
+
+    private func dismissFullScreen() {
+        guard !dismissing else { return }
+        if reduceMotion {
+            dismiss()
+            return
+        }
+        withAnimation { dismissing = true }
+        Task {
+            try? await Task.sleep(for: .milliseconds(280))
+            dismiss()
         }
     }
 
@@ -198,7 +215,10 @@ struct GameDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                         .opacity(backgroundBlurred ? 1 : 0)
                         .offset(y: backgroundBlurred ? 0 : 30)
-                        .animation(.easeOut(duration: 0.35).delay(0.1), value: backgroundBlurred)
+                        .animation(
+                            reduceMotion ? nil : .easeOut(duration: 0.35).delay(0.1),
+                            value: backgroundBlurred
+                        )
 
                     if !game.screenshots.isEmpty {
                         screenshotsRow
@@ -262,7 +282,7 @@ struct GameDetailView: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.green)
-                            .focused($heroFocused)
+                            .focused($focusedElement, equals: .play)
 
                             let isFav = viewModel.favoriteIds.contains(game.id)
                             Button {
@@ -274,7 +294,7 @@ struct GameDetailView: View {
                                 )
                             }
                             .buttonStyle(.bordered)
-                            .focused($heroFocused)
+                            .focused($focusedElement, equals: .favorite)
                         }
                         .allowsHitTesting(!isEmbeddedCarousel)
                     }
@@ -350,6 +370,7 @@ struct GameDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(PassthroughButtonStyle())
+                    .focused($focusedElement, equals: .details)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -382,7 +403,7 @@ struct GameDetailView: View {
                 .frame(maxWidth: 600, alignment: .leading)
             }
             .buttonStyle(.card)
-            .focused($aboutFocused)
+            .focused($focusedElement, equals: .about)
         }
     }
 
