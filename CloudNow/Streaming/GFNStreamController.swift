@@ -356,8 +356,9 @@ final class GFNStreamController: NSObject {
         videoView = view
         view.setDiagnosticsEnabled(diagnosticsEnabled)
         view.onDecodedVideoFormatChanged = { [weak self] format in
-            Task { @MainActor [weak self] in
-                self?.applyDecodedVideoFormat(format)
+            guard let controller = self else { return }
+            Task { @MainActor in
+                controller.applyDecodedVideoFormat(format)
             }
         }
         view.inputHandler = inputSender
@@ -627,7 +628,8 @@ final class GFNStreamController: NSObject {
             resolution: settings.resolution
         )
         client.onEvent = { [weak self] event in
-            Task { @MainActor [weak self] in self?.handleSignalingEvent(event) }
+            guard let controller = self else { return }
+            Task { @MainActor in controller.handleSignalingEvent(event) }
         }
         signaling = client
     }

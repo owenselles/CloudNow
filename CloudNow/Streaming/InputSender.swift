@@ -77,7 +77,7 @@ nonisolated enum RemoteInputMode: String, Codable, Equatable {
 
 extension RemoteInputMode {
     /// The Siri Remote drives the mouse pointer alongside the connected controller.
-    var remoteActsAsMouse: Bool {
+    nonisolated var remoteActsAsMouse: Bool {
         self == .gamepadMouse
     }
 }

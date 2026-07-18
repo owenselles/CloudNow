@@ -5,7 +5,6 @@
 //  Created by Owen Selles on 11/04/2026.
 //
 
-import BackgroundTasks
 import SwiftUI
 
 @main
@@ -17,16 +16,6 @@ struct CloudNowApp: App {
             memoryCapacity: 50 * 1024 * 1024,
             diskCapacity: 200 * 1024 * 1024
         )
-        BGTaskScheduler.shared.register(
-            forTaskWithIdentifier: "com.owenselles.CloudNow.tokenRefresh",
-            using: nil
-        ) { [authManager] task in
-            Task { @MainActor in
-                await authManager.refreshIfNeeded()
-                authManager.scheduleBackgroundRefresh()
-                task.setTaskCompleted(success: true)
-            }
-        }
     }
 
     var body: some Scene {
@@ -50,6 +39,10 @@ struct CloudNowApp: App {
                     MemoryLifecycleCoordinator.shared.releaseCachedArtwork()
                 }
             }
+        }
+        .backgroundTask(.appRefresh("com.owenselles.CloudNow.tokenRefresh")) {
+            await authManager.refreshIfNeeded()
+            await authManager.scheduleBackgroundRefresh()
         }
     }
 }
