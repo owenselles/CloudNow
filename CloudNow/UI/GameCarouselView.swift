@@ -98,6 +98,9 @@ struct GameCarouselView: View {
         self.onPlay = onPlay
         self.onDismiss = onDismiss
         _currentId = State(initialValue: request.startId)
+        // Open straight to the tapped game's expanded card so focus lands on Play,
+        // saving the extra controller press the collapsed browse state would need.
+        _expandedGame = State(initialValue: request.games.first { $0.id == request.startId })
     }
 
     var body: some View {
@@ -211,7 +214,7 @@ private struct CarouselCard: View {
                 return
             }
             do {
-                try await Task.sleep(for: .milliseconds(360))
+                try await Task.sleep(for: .milliseconds(180))
             } catch {
                 return
             }
