@@ -15,126 +15,94 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section(L10n.text("stream_quality")) {
-                    Picker(L10n.text("resolution"), selection: $vm.streamSettings.resolution) {
-                        let common = commonResolutions.filter { viewModel.availableResolutions.contains($0.res) }
-                        let other = viewModel.availableResolutions.filter { res in !commonResolutions.map(\.res).contains(res) }
-                        if !common.isEmpty {
-                            Section(L10n.text("tv_standards")) {
-                                ForEach(common, id: \.res) { item in
-                                    Label("\(item.res)  —  \(item.badge)", systemImage: item.symbol)
-                                        .tag(item.res)
-                                }
-                            }
-                        }
-                        if !other.isEmpty {
-                            Section(L10n.text("other")) {
-                                ForEach(other, id: \.self) { res in
-                                    Text(res).tag(res)
-                                }
-                            }
-                        }
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("resolution"),
+                        selection: $vm.streamSettings.resolution,
+                        groups: resolutionOptionGroups
+                    )
 
-                    Picker(L10n.text("frame_rate"), selection: $vm.streamSettings.fps) {
-                        ForEach(viewModel.availableFps, id: \.self) { fps in
-                            Text("\(fps) fps").tag(fps)
-                        }
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("frame_rate"),
+                        selection: $vm.streamSettings.fps,
+                        options: viewModel.availableFps.map { SettingOption(value: $0, label: "\($0) fps") }
+                    )
 
-                    Picker(L10n.text("codec"), selection: $vm.streamSettings.codec) {
-                        ForEach(VideoCodec.allCases, id: \.self) { codec in
-                            Text(codec.label).tag(codec)
-                        }
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("codec"),
+                        selection: $vm.streamSettings.codec,
+                        options: VideoCodec.allCases.map { SettingOption(value: $0, label: $0.label) }
+                    )
 
-                    Picker(selection: $vm.streamSettings.colorPreference) {
-                        ForEach(ColorModePreference.allCases, id: \.self) { preference in
-                            Text(preference.label).tag(preference)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("color_mode"))
-                            if vm.streamSettings.codec == .av1 {
-                                Text(L10n.text("av1_software_path_warning"))
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            } else {
-                                Text(vm.streamSettings.colorPreference.description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("color_mode"),
+                        description: vm.streamSettings.codec == .av1
+                            ? L10n.text("av1_software_path_warning")
+                            : vm.streamSettings.colorPreference.description,
+                        descriptionIsWarning: vm.streamSettings.codec == .av1,
+                        selection: $vm.streamSettings.colorPreference,
+                        options: ColorModePreference.allCases.map { SettingOption(value: $0, label: $0.label) }
+                    )
 
-                    Picker(selection: $vm.streamSettings.audioFormat) {
-                        ForEach(AudioFormatPreference.allCases, id: \.self) { format in
-                            Text(format.label).tag(format)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("audio_format"))
-                            Text(L10n.text("audio_format_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("audio_format"),
+                        description: L10n.text("audio_format_description"),
+                        selection: $vm.streamSettings.audioFormat,
+                        options: AudioFormatPreference.allCases.map { SettingOption(value: $0, label: $0.label) }
+                    )
 
-                    Picker(L10n.text("keyboard_layout"), selection: $vm.streamSettings.keyboardLayout) {
-                        ForEach(L10n.supportedLanguageCodes, id: \.self) { code in
-                            Text(L10n.localizedLanguageName(for: code)).tag(code)
+                    SettingSelectionRow(
+                        title: L10n.text("keyboard_layout"),
+                        selection: $vm.streamSettings.keyboardLayout,
+                        options: L10n.supportedLanguageCodes.map {
+                            SettingOption(value: $0, label: L10n.localizedLanguageName(for: $0))
                         }
-                    }
+                    )
 
-                    Picker(L10n.text("game_language"), selection: $vm.streamSettings.gameLanguage) {
-                        Text(L10n.text("automatic")).tag(StreamSettings.automaticGameLanguage)
-                        Text("English (US)").tag("en_US")
-                        Text("English (UK)").tag("en_GB")
-                        Text("French").tag("fr_FR")
-                        Text("German").tag("de_DE")
-                        Text("Spanish").tag("es_ES")
-                        Text("Italian").tag("it_IT")
-                        Text("Portuguese").tag("pt_BR")
-                        Text("Hindi").tag("hi_IN")
-                        Text("Japanese").tag("ja_JP")
-                        Text("Korean").tag("ko_KR")
-                        Text("Chinese (Simplified)").tag("zh_CN")
-                        Text("Chinese (Traditional)").tag("zh_TW")
-                        Text("Russian").tag("ru_RU")
-                        Text("Arabic").tag("ar_SA")
-                        Text("Dutch").tag("nl_NL")
-                        Text("Polish").tag("pl_PL")
-                        Text("Swedish").tag("sv_SE")
-                        Text("Finnish").tag("fi_FI")
-                        Text("Turkish").tag("tr_TR")
-                        Text("Greek").tag("el_GR")
-                        Text("Hebrew").tag("he_IL")
-                        Text("Czech").tag("cs_CZ")
-                        Text("Danish").tag("da_DK")
-                        Text("Croatian").tag("hr_HR")
-                        Text("Hungarian").tag("hu_HU")
-                        Text("Indonesian").tag("id_ID")
-                        Text("Malay").tag("ms_MY")
-                        Text("Romanian").tag("ro_RO")
-                        Text("Slovak").tag("sk_SK")
-                        Text("Vietnamese").tag("vi_VN")
-                        Text("Ukrainian").tag("uk_UA")
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("game_language"),
+                        selection: $vm.streamSettings.gameLanguage,
+                        options: [
+                            SettingOption(value: StreamSettings.automaticGameLanguage, label: L10n.text("automatic")),
+                            SettingOption(value: "en_US", label: "English (US)"),
+                            SettingOption(value: "en_GB", label: "English (UK)"),
+                            SettingOption(value: "fr_FR", label: "French"),
+                            SettingOption(value: "de_DE", label: "German"),
+                            SettingOption(value: "es_ES", label: "Spanish"),
+                            SettingOption(value: "it_IT", label: "Italian"),
+                            SettingOption(value: "pt_BR", label: "Portuguese"),
+                            SettingOption(value: "hi_IN", label: "Hindi"),
+                            SettingOption(value: "ja_JP", label: "Japanese"),
+                            SettingOption(value: "ko_KR", label: "Korean"),
+                            SettingOption(value: "zh_CN", label: "Chinese (Simplified)"),
+                            SettingOption(value: "zh_TW", label: "Chinese (Traditional)"),
+                            SettingOption(value: "ru_RU", label: "Russian"),
+                            SettingOption(value: "ar_SA", label: "Arabic"),
+                            SettingOption(value: "nl_NL", label: "Dutch"),
+                            SettingOption(value: "pl_PL", label: "Polish"),
+                            SettingOption(value: "sv_SE", label: "Swedish"),
+                            SettingOption(value: "fi_FI", label: "Finnish"),
+                            SettingOption(value: "tr_TR", label: "Turkish"),
+                            SettingOption(value: "el_GR", label: "Greek"),
+                            SettingOption(value: "he_IL", label: "Hebrew"),
+                            SettingOption(value: "cs_CZ", label: "Czech"),
+                            SettingOption(value: "da_DK", label: "Danish"),
+                            SettingOption(value: "hr_HR", label: "Croatian"),
+                            SettingOption(value: "hu_HU", label: "Hungarian"),
+                            SettingOption(value: "id_ID", label: "Indonesian"),
+                            SettingOption(value: "ms_MY", label: "Malay"),
+                            SettingOption(value: "ro_RO", label: "Romanian"),
+                            SettingOption(value: "sk_SK", label: "Slovak"),
+                            SettingOption(value: "vi_VN", label: "Vietnamese"),
+                            SettingOption(value: "uk_UA", label: "Ukrainian"),
+                        ]
+                    )
 
-                    Picker(selection: $vm.streamSettings.appLaunchMode) {
-                        ForEach(AppLaunchMode.allCases, id: \.self) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("game_launch_mode"))
-                            Text(L10n.text("game_launch_mode_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("game_launch_mode"),
+                        description: L10n.text("game_launch_mode_description"),
+                        selection: $vm.streamSettings.appLaunchMode,
+                        options: AppLaunchMode.allCases.map { SettingOption(value: $0, label: $0.label) }
+                    )
 
                     LabeledContent(L10n.text("max_bitrate")) {
                         HStack(spacing: 16) {
@@ -287,19 +255,12 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    Picker(selection: $vm.streamSettings.overlayTriggerButton) {
-                        ForEach(OverlayTriggerButton.allCases, id: \.self) { btn in
-                            Text(btn.label).tag(btn)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("overlay_button"))
-                            Text(L10n.text("overlay_button_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("overlay_button"),
+                        description: L10n.text("overlay_button_description"),
+                        selection: $vm.streamSettings.overlayTriggerButton,
+                        options: OverlayTriggerButton.allCases.map { SettingOption(value: $0, label: $0.label) }
+                    )
                     Toggle(isOn: $vm.streamSettings.enableSteamOverlayGesture) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(L10n.text("steam_overlay_gesture"))
@@ -309,19 +270,16 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
-                        Text(L10n.remoteInputModeLabel(.gamepad)).tag(RemoteInputMode.gamepad)
-                        Text(L10n.remoteInputModeLabel(.dualsense)).tag(RemoteInputMode.dualsense)
-                        Text(L10n.remoteInputModeLabel(.gamepadMouse)).tag(RemoteInputMode.gamepadMouse)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("default_input_mode"))
-                            Text(L10n.text("default_input_mode_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    SettingSelectionRow(
+                        title: L10n.text("default_input_mode"),
+                        description: L10n.text("default_input_mode_description"),
+                        selection: $vm.streamSettings.defaultRemoteInputMode,
+                        options: [
+                            SettingOption(value: RemoteInputMode.gamepad, label: L10n.remoteInputModeLabel(.gamepad)),
+                            SettingOption(value: RemoteInputMode.dualsense, label: L10n.remoteInputModeLabel(.dualsense)),
+                            SettingOption(value: RemoteInputMode.gamepadMouse, label: L10n.remoteInputModeLabel(.gamepadMouse)),
+                        ]
+                    )
                     LabeledContent(L10n.text("protocol"), value: "XInput over GFN v2/v3")
                 }
 
@@ -554,6 +512,27 @@ struct SettingsView: View {
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
 
+    /// Resolution options split into a "TV standards" group (with SF Symbols) and an
+    /// "Other" group, mirroring the grouping the previous resolution picker used.
+    private var resolutionOptionGroups: [SettingOptionGroup<String>] {
+        let common = commonResolutions.filter { viewModel.availableResolutions.contains($0.res) }
+        let other = viewModel.availableResolutions.filter { res in !commonResolutions.map(\.res).contains(res) }
+        var groups: [SettingOptionGroup<String>] = []
+        if !common.isEmpty {
+            groups.append(SettingOptionGroup(
+                title: L10n.text("tv_standards"),
+                options: common.map { SettingOption(value: $0.res, label: "\($0.res)  —  \($0.badge)", symbol: $0.symbol) }
+            ))
+        }
+        if !other.isEmpty {
+            groups.append(SettingOptionGroup(
+                title: L10n.text("other"),
+                options: other.map { SettingOption(value: $0, label: $0) }
+            ))
+        }
+        return groups
+    }
+
     private enum DataDialog: Equatable {
         case confirmClearCache
         case confirmResetAllData
@@ -580,6 +559,167 @@ struct SettingsView: View {
                 message
             }
         }
+    }
+}
+
+// MARK: - Reusable modal selection row
+
+/// One selectable option. `symbol` renders an SF Symbol label (used by TV-standard resolutions).
+private struct SettingOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let label: String
+    var symbol: String?
+
+    init(value: Value, label: String, symbol: String? = nil) {
+        self.value = value
+        self.label = label
+        self.symbol = symbol
+    }
+
+    var id: Value {
+        value
+    }
+}
+
+/// A group of options rendered as a `List` section. `title == nil` means a single ungrouped list.
+private struct SettingOptionGroup<Value: Hashable>: Identifiable {
+    let title: String?
+    let options: [SettingOption<Value>]
+    var id: String {
+        title ?? "__default"
+    }
+}
+
+/// A compact settings row that opens a modal list to pick a value. Replaces `Picker`, whose
+/// pushed-detail presentation renders blank and traps controller focus inside this Form on tvOS.
+private struct SettingSelectionRow<Value: Hashable>: View {
+    let title: String
+    var description: String?
+    var descriptionIsWarning: Bool
+    @Binding var selection: Value
+    let groups: [SettingOptionGroup<Value>]
+
+    @Environment(UIControllerNavigationCoordinator.self) private var controllerNavigation
+    @State private var showSheet = false
+
+    init(
+        title: String,
+        description: String? = nil,
+        descriptionIsWarning: Bool = false,
+        selection: Binding<Value>,
+        groups: [SettingOptionGroup<Value>]
+    ) {
+        self.title = title
+        self.description = description
+        self.descriptionIsWarning = descriptionIsWarning
+        _selection = selection
+        self.groups = groups
+    }
+
+    init(
+        title: String,
+        description: String? = nil,
+        descriptionIsWarning: Bool = false,
+        selection: Binding<Value>,
+        options: [SettingOption<Value>]
+    ) {
+        self.init(
+            title: title,
+            description: description,
+            descriptionIsWarning: descriptionIsWarning,
+            selection: selection,
+            groups: [SettingOptionGroup(title: nil, options: options)]
+        )
+    }
+
+    private var selectedLabel: String {
+        groups.lazy.flatMap(\.options).first { $0.value == selection }?.label ?? ""
+    }
+
+    var body: some View {
+        Button {
+            showSheet = true
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                    if let description {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(descriptionIsWarning ? .orange : .secondary)
+                    }
+                }
+                .padding(.vertical, 8)
+                Spacer()
+                Text(selectedLabel)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .foregroundStyle(.primary)
+        .sheet(isPresented: $showSheet) {
+            SettingSelectionSheet(title: title, selection: $selection, groups: groups)
+                .environment(controllerNavigation)
+        }
+    }
+}
+
+private struct SettingSelectionSheet<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let groups: [SettingOptionGroup<Value>]
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedValue: Value?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(groups) { group in
+                    Section {
+                        ForEach(group.options) { option in
+                            optionButton(option)
+                        }
+                    } header: {
+                        if let header = group.title {
+                            Text(header)
+                        }
+                    }
+                }
+            }
+            .contentMargins(.all, 32, for: .scrollContent)
+            .navigationTitle(title)
+        }
+        // Land controller focus on the currently selected value (matters for long lists).
+        .defaultFocus($focusedValue, selection)
+        // Shoulder buttons must not switch app tabs while this sheet is open.
+        .blocksGlobalControllerNavigation()
+    }
+
+    private func optionButton(_ option: SettingOption<Value>) -> some View {
+        Button {
+            selection = option.value
+            dismiss()
+        } label: {
+            HStack {
+                if let symbol = option.symbol {
+                    Label(option.label, systemImage: symbol)
+                        .font(.headline)
+                } else {
+                    Text(option.label)
+                        .font(.headline)
+                }
+                Spacer()
+                if option.value == selection {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 24)
+        }
+        .foregroundStyle(.primary)
+        .focused($focusedValue, equals: option.value)
     }
 }
 
