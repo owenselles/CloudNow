@@ -43,7 +43,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
     /// How the streaming server is chosen. Server automatic delegates routing to
     /// NVIDIA; client selection pins a dedicated zone; region pins an official region.
     var serverRoutingMode: ServerRoutingMode = .serverAuto
-    /// Dedicated zone selected by the user when `serverRoutingMode == .clientAuto`.
+    /// Dedicated zone selected by the user when `serverRoutingMode == .client`.
     var preferredZoneUrl: String? = nil
     /// Region display name from `/v2/serverInfo`, used verbatim in the UI.
     var preferredRegionName: String? = nil
@@ -80,6 +80,12 @@ nonisolated struct StreamSettings: Codable, Equatable {
         #endif
         if !normalized.diagnosticsEnabled {
             normalized.enableRtcEventLog = false
+        }
+        if normalized.serverRoutingMode == .client, normalized.preferredZoneUrl == nil {
+            normalized.serverRoutingMode = .serverAuto
+        }
+        if normalized.serverRoutingMode == .region, normalized.preferredRegionAddress == nil {
+            normalized.serverRoutingMode = .serverAuto
         }
         return normalized
     }
@@ -131,9 +137,12 @@ extension StreamSettings {
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
         preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)
         serverRoutingMode = try c.decodeIfPresent(ServerRoutingMode.self, forKey: .serverRoutingMode)
-            ?? (preferredZoneUrl == nil ? d.serverRoutingMode : .clientAuto)
+            ?? (preferredZoneUrl == nil ? d.serverRoutingMode : .client)
         preferredRegionName = try c.decodeIfPresent(String.self, forKey: .preferredRegionName)
         preferredRegionAddress = try c.decodeIfPresent(String.self, forKey: .preferredRegionAddress)
+        if serverRoutingMode == .client, preferredZoneUrl == nil {
+            serverRoutingMode = d.serverRoutingMode
+        }
         if serverRoutingMode == .region, preferredRegionAddress == nil {
             serverRoutingMode = d.serverRoutingMode
         }
@@ -186,11 +195,11 @@ extension StreamSettings {
     }
 }
 
-/// Server Location behavior. The raw values remain stable for settings persisted
-/// by PR #67 while the UI decides whether the client choice is automatic or pinned.
+/// Server Location behavior. The client case keeps PR #67's original raw value so
+/// settings saved by an earlier branch build continue to decode correctly.
 nonisolated enum ServerRoutingMode: String, Codable, CaseIterable {
     case serverAuto
-    case clientAuto
+    case client = "clientAuto"
     case region
 
     /// Unknown future values safely return to NVIDIA-managed routing instead of
@@ -202,9 +211,9 @@ nonisolated enum ServerRoutingMode: String, Codable, CaseIterable {
 
     @MainActor var label: String {
         switch self {
-        case .serverAuto: L10n.text("automatic_server_decides")
-        case .clientAuto: L10n.text("automatic_client_decides")
-        case .region: L10n.text("server_region")
+        case .serverAuto: L10n.text("automatic")
+        case .client: L10n.text("servers")
+        case .region: L10n.text("region")
         }
     }
 }

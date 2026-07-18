@@ -35,7 +35,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Renderer metadata preservation** — decoded color metadata is tracked through the render path and the format description cache is refreshed when color characteristics change, not just when resolution changes
 - **Session diagnostics** — diagnostic HUD can show color preference, requested mode, detected mode, display HDR support, fallback reason, decoder path, pixel format, transfer function, and bit depth
 - **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"); waits indefinitely in queue with position updates; 180-second setup timeout after queue clears; requires two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
-- **Server location** — Settings → Server Location mirrors the official client's picker: Automatic (server decides, default) lets the service route each session, Automatic (client decides) picks the best zone by weighted score (40% ping + 60% queue depth, powered by the PrintedWaste community API), or pin one of the official regions; includes a Test Network tool measuring ping, jitter, and packet loss to your streaming server
+- **Server location** — Settings → Server Location offers Automatic (default), Region, and Servers. Automatic lets NVIDIA route each session, Region pins one of the regions returned by NVIDIA, and Servers drills down through country → city → dedicated server with live ping and queue information; includes a Test Network tool measuring ping, jitter, and packet loss to the selected route
 - **Surround audio** — Audio Format setting with Automatic, Stereo, and 5.1 Surround; 5.1 uses the multichannel Opus stream the service offers and requires a receiver or soundbar; a custom WebRTC audio device keeps output latency low
 - **Microphone support** — voice chat via AirPods or any Bluetooth headset; toggle in Settings; permission requested on first use; if no valid input route exists, CloudNow falls back to playback-only audio instead of breaking session audio
 - **Favorites** — long-press any game card in Library or Store to add/remove from Favorites; persisted locally
@@ -242,7 +242,7 @@ CloudNow/
 │   ├── CloudMatchClient.swift      Session create/poll/stop/active-sessions, color-aware request fields
 │   ├── GamesClient.swift           Game catalog via GraphQL persisted query
 │   ├── MESClient.swift             Subscription tier + entitled resolutions/FPS from the MES API
-│   └── ZoneClient.swift            Zone list, ping probes, and queue-depth scoring (PrintedWaste API)
+│   └── ZoneClient.swift            Dedicated-server list, ping probes, and queue data (PrintedWaste API)
 ├── Streaming/
 │   ├── GFNStreamController.swift   WebRTC peer connection lifecycle, color negotiation state, audio session setup
 │   ├── SignalingClient.swift        WebSocket signaling — SDP offer/answer + ICE
@@ -314,7 +314,7 @@ This means an HDR request can legitimately fall back to SDR10 or SDR8, and the a
 
 - **No App Store.** NVIDIA has not published a public API for third-party GFN clients. Sideloading only.
 - **Queue ad playback.** During high demand GFN shows ads while in queue. The app plays them via AVPlayer and reports lifecycle events (start/pause/finish) back to CloudMatch.
-- **Server location.** Region names and addresses come from the service's own serverInfo endpoint. The Automatic (client decides) mode and its queue-depth data rely on the PrintedWaste community API, which may lag behind actual queue conditions. Previously pinned dedicated servers migrate to Automatic (server decides).
+- **Server location.** Region names and addresses come from NVIDIA's serverInfo endpoint. The manual Servers browser gets queue-depth and location metadata from the PrintedWaste community API, which may lag behind actual queue conditions; ping values are measured locally after opening a city. Dedicated servers pinned by older builds remain selected after upgrading.
 - **HDR depends on the full pipeline.** A selected HDR-capable mode does not guarantee the server will deliver HDR, and a 10-bit stream is not automatically HDR.
 - **AV1 currently uses the software I420 path.** On the current implementation this falls back to SDR 8-bit BT.709 rather than preserving SDR10 or HDR metadata.
 - **Color diagnostics are only as good as decoded metadata.** If the decoder or software conversion path strips metadata, CloudNow will conservatively report fallback or unknown modes instead of guessing.

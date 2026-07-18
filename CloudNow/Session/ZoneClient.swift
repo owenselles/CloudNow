@@ -1,14 +1,14 @@
 import Foundation
-import os.log
-
-private nonisolated let zoneLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Zones")
 
 // MARK: - Zone Model
 
 struct GFNZone: Identifiable, Equatable {
     let id: String // e.g. "NP-AWS-US-N-Virginia-1"
     let region: String // e.g. "US"
-    let regionSuffix: String // e.g. "AWS-N-Virginia-1"
+    /// ISO country code derived from the dedicated-server site code.
+    let countryCode: String
+    /// Human-readable city represented by the dedicated-server site code.
+    let city: String
     var queuePosition: Int
     let etaMs: Double?
     let zoneUrl: String
@@ -38,30 +38,44 @@ actor ZoneClient {
         var sessionMeasuredAt: Date?
     }
 
-    private struct AutoRouteRecord: Codable {
-        let zoneUrl: String
-        let selectedAt: Date
-    }
-
     private static let latencyCacheKey = "gfn.zoneLatencyCache"
-    private static let autoRouteCacheKey = "gfn.autoRouteCache"
     private static let headPingMaxAge: TimeInterval = 6 * 60 * 60
     private static let sessionRttMaxAge: TimeInterval = 7 * 24 * 60 * 60
-    private static let autoRouteMaxAge: TimeInterval = 30 * 60
-    private static let prewarmInterval: TimeInterval = 10 * 60
+
+    /// The live mapping title is not consistently a city (for example "Virginia",
+    /// "Germany", or "Japan"). NVIDIA's stable site code gives us the hierarchy
+    /// users expect while the API title remains available as a future-site fallback.
+    private static let locationBySiteCode: [String: (countryCode: String, city: String)] = [
+        "AMS": ("NL", "Amsterdam"),
+        "ASH": ("US", "Ashburn"),
+        "ATL": ("US", "Atlanta"),
+        "BOM": ("IN", "Mumbai"),
+        "CHI": ("US", "Chicago"),
+        "DAL": ("US", "Dallas"),
+        "FRK": ("DE", "Frankfurt"),
+        "LAX": ("US", "Los Angeles"),
+        "LON": ("GB", "London"),
+        "MIA": ("US", "Miami"),
+        "MON": ("CA", "Montreal"),
+        "NWK": ("US", "Newark"),
+        "PAR": ("FR", "Paris"),
+        "PDX": ("US", "Portland"),
+        "PHX": ("US", "Phoenix"),
+        "SJC6": ("US", "San Jose"),
+        "SOF": ("BG", "Sofia"),
+        "STH": ("SE", "Stockholm"),
+        "TYO": ("JP", "Tokyo"),
+        "WAW": ("PL", "Warsaw"),
+        "YYZ": ("CA", "Toronto"),
+    ]
 
     private var latencyCache: [String: LatencyRecord]
-    private var autoRouteCache: [String: AutoRouteRecord]
-    private var isPrewarming = false
-    private var lastPrewarmAt: Date?
     private var cacheGeneration = 0
 
     private init() {
         let defaults = UserDefaults.standard
         latencyCache = defaults.data(forKey: Self.latencyCacheKey)
             .flatMap { try? JSONDecoder().decode([String: LatencyRecord].self, from: $0) } ?? [:]
-        autoRouteCache = defaults.data(forKey: Self.autoRouteCacheKey)
-            .flatMap { try? JSONDecoder().decode([String: AutoRouteRecord].self, from: $0) } ?? [:]
     }
 
     // MARK: Public
@@ -78,14 +92,15 @@ actor ZoneClient {
         return queueData
             .filter { id, _ in id.hasPrefix("NP-") && !id.hasPrefix("NPA-") && !nukedIds.contains(id) }
             .map { zoneId, entry in
-                let parts = entry.Region.split(separator: "-", maxSplits: 1).map(String.init)
                 let url = zoneUrl(for: zoneId)
                 let record = latencyCache[cacheKey(for: url)]
                 let effectivePing = effectivePingMs(from: record, now: now)
+                let location = location(for: zoneId, queueRegion: entry.Region, mapping: mappingData[zoneId])
                 return GFNZone(
                     id: zoneId,
-                    region: parts.first ?? entry.Region,
-                    regionSuffix: parts.count > 1 ? parts[1] : entry.Region,
+                    region: entry.Region,
+                    countryCode: location.countryCode,
+                    city: location.city,
                     queuePosition: entry.QueuePosition,
                     etaMs: entry.eta,
                     zoneUrl: url,
@@ -117,66 +132,6 @@ actor ZoneClient {
         return Int(effectivePing.rounded())
     }
 
-    /// Refreshes zone queue data and stale latency probes without delaying game launch.
-    func prewarmAutomaticRouting() async -> [GFNZone] {
-        let generation = cacheGeneration
-        let now = Date()
-        guard !isPrewarming,
-              lastPrewarmAt.map({ now.timeIntervalSince($0) >= Self.prewarmInterval }) ?? true
-        else {
-            return await (try? fetchZones()) ?? []
-        }
-
-        isPrewarming = true
-        lastPrewarmAt = now
-        defer { isPrewarming = false }
-
-        do {
-            var zones = try await fetchZones()
-            guard generation == cacheGeneration else { return [] }
-            cacheAutomaticSelections(from: zones)
-
-            let staleZones = zones.filter(\.isMeasuring)
-            let batchSize = 6
-            for start in stride(from: 0, to: staleZones.count, by: batchSize) {
-                let end = min(start + batchSize, staleZones.count)
-                let batch = staleZones[start ..< end]
-                await withTaskGroup(of: (String, Int?).self) { group in
-                    for zone in batch {
-                        group.addTask { [zone] in
-                            await (zone.id, self.measurePing(to: zone.zoneUrl))
-                        }
-                    }
-                    for await (id, ping) in group {
-                        guard generation == cacheGeneration else { return }
-                        guard let index = zones.firstIndex(where: { $0.id == id }) else { continue }
-                        let record = latencyCache[cacheKey(for: zones[index].zoneUrl)]
-                        let effectivePing = effectivePingMs(from: record, now: Date())
-                        zones[index].pingMs = effectivePing.map { Int($0.rounded()) } ?? ping ?? zones[index].pingMs
-                        zones[index].isMeasuring = false
-                    }
-                }
-                guard generation == cacheGeneration else { return [] }
-                cacheAutomaticSelections(from: zones)
-            }
-            return zones
-        } catch {
-            zoneLog.warning("[Zone] Automatic routing prewarm failed: \(error, privacy: .private)")
-            return []
-        }
-    }
-
-    /// Returns immediately from the last background refresh; nil preserves NVIDIA routing.
-    func cachedAutomaticZoneUrl(isUnlimited: Bool) -> String? {
-        let key = isUnlimited ? "unlimited" : "standard"
-        guard let record = autoRouteCache[key],
-              Date().timeIntervalSince(record.selectedAt) <= Self.autoRouteMaxAge
-        else {
-            return nil
-        }
-        return record.zoneUrl
-    }
-
     /// Feeds the actual selected WebRTC path RTT back into future zone ranking.
     func recordSessionRtt(zoneUrl: String, rttMs: Double) {
         guard rttMs > 0, rttMs.isFinite, isZoneUrl(zoneUrl) else { return }
@@ -188,33 +143,37 @@ actor ZoneClient {
         persistLatencyCache()
     }
 
-    func cacheAutomaticSelections(from zones: [GFNZone]) {
-        let now = Date()
-        if let zone = zones.autoZone(isUnlimited: false), zone.pingMs != nil {
-            autoRouteCache["standard"] = AutoRouteRecord(zoneUrl: zone.zoneUrl, selectedAt: now)
-        }
-        if let zone = zones.autoZone(isUnlimited: true), zone.pingMs != nil {
-            autoRouteCache["unlimited"] = AutoRouteRecord(zoneUrl: zone.zoneUrl, selectedAt: now)
-        }
-        if let data = try? JSONEncoder().encode(autoRouteCache) {
-            UserDefaults.standard.set(data, forKey: Self.autoRouteCacheKey)
-        }
-    }
-
     func clearCachedRoutingData() {
         cacheGeneration &+= 1
         latencyCache.removeAll(keepingCapacity: false)
-        autoRouteCache.removeAll(keepingCapacity: false)
-        lastPrewarmAt = nil
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: Self.latencyCacheKey)
-        defaults.removeObject(forKey: Self.autoRouteCacheKey)
     }
 
     // MARK: Private
 
     private func zoneUrl(for zoneId: String) -> String {
         "https://\(zoneId.lowercased()).cloudmatchbeta.nvidiagrid.net/"
+    }
+
+    private func location(
+        for zoneId: String,
+        queueRegion: String,
+        mapping: MappingEntry?
+    ) -> (countryCode: String, city: String) {
+        let components = zoneId.split(separator: "-")
+        let siteCode = components.count > 1 ? String(components[1]) : zoneId
+        if let location = Self.locationBySiteCode[siteCode] {
+            return location
+        }
+
+        // Do not hide a newly-added site while this table catches up. Standard
+        // two-letter queue regions localize as countries; aggregate codes use the
+        // existing region fallback in the country picker.
+        if let title = mapping?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return (queueRegion.uppercased(), title)
+        }
+        return (queueRegion.uppercased(), siteCode)
     }
 
     private func cacheKey(for zoneUrl: String) -> String {
@@ -278,6 +237,7 @@ actor ZoneClient {
     }
 
     private struct MappingEntry: Decodable {
+        let title: String?
         let nuked: Bool?
     }
 
@@ -302,12 +262,12 @@ actor ZoneClient {
     }
 }
 
-// MARK: - Auto-routing
+// MARK: - Zone recommendation
 
 extension [GFNZone] {
-    /// Best zone by subscription tier. Ping dominates; queue depth is a bounded
-    /// secondary penalty so a distant empty zone cannot beat a nearby busy one.
-    nonisolated func autoZone(isUnlimited: Bool = false) -> GFNZone? {
+    /// Highlights a likely good manual choice. Ping dominates; queue depth is a
+    /// bounded secondary penalty so a distant empty zone cannot beat a nearby one.
+    nonisolated func recommendedZone(isUnlimited: Bool = false) -> GFNZone? {
         guard !isEmpty else { return nil }
         if isUnlimited {
             return closestZone

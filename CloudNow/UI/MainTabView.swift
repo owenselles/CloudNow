@@ -51,7 +51,6 @@ struct MainTabView: View {
             )
         }
         .task { await viewModel.load(authManager: authManager) }
-        .task { await viewModel.measureTopZones() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
