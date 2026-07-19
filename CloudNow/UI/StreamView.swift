@@ -964,13 +964,19 @@ struct StreamView: View {
     }
 
     private func createNewSession(appId: String, token: String, base: String) async throws -> SessionInfo {
-        let routeSelection: (base: String, routingZoneUrl: String?) = switch settings.serverRoutingMode {
-        case .region:
-            settings.preferredRegionAddress.map { ($0, $0) } ?? (base, nil)
-        case .client:
-            settings.preferredZoneUrl.map { ($0, $0) } ?? (base, nil)
-        case .serverAuto:
-            // Official-client behavior: the default endpoint routes the session server-side.
+        let isNvidiaProvider = authManager.session?.provider.idpId == NVIDIAAuth.defaultIdpId
+        let routeSelection: (base: String, routingZoneUrl: String?) = if isNvidiaProvider {
+            switch settings.serverRoutingMode {
+            case .region:
+                settings.preferredRegionAddress.map { ($0, $0) } ?? (base, nil)
+            case .client:
+                settings.preferredZoneUrl.map { ($0, $0) } ?? (base, nil)
+            case .serverAuto:
+                // Official-client behavior: the default endpoint routes the session server-side.
+                (base, nil)
+            }
+        } else {
+            // Partner providers manage their own routing; skip NVIDIA zone/region selection.
             (base, nil)
         }
         streamLog.info("[Session] creating new session, appId=\(appId, privacy: .public), sessionBase=\(routeSelection.base, privacy: .public), routingZoneUrl=\(routeSelection.routingZoneUrl ?? "nil", privacy: .public)")

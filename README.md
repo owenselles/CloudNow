@@ -42,6 +42,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Full GFN streaming** — WebRTC-based, up to 4K@60fps depending on your GFN plan (tvOS caps at 60 Hz; 120fps ready for when Apple raises the limit)
 - **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (0–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
 - **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
+- **Partner provider support** — GeForce NOW partner regions (Jio in India, Digevo in Latin America, bro.game in Brazil, and others) are detected automatically; when multiple providers are available a picker appears at login so you can select your regional partner; partner sessions route through the partner's own infrastructure without NVIDIA zone override
 - **Pause menu** — left-sidebar in-stream menu with Resume, input mode toggle, Statistics level, Leave Game, and End Session; open with Play/Pause or Menu on the Siri Remote, or hold the overlay trigger button (~2 s) on a controller (default: Start/≡, configurable in Settings)
 - **Statistics HUD** — in-stream statistics overlay styled after the official client, with Compact and Standard levels cycled from the pause menu; Compact shows game/stream FPS, RTT, bitrate, packet loss, and server location; Standard adds jitter, connection path, resolution, drops/freezes, decoder, jitter-buffer, audio, and session detail with live history graphs
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
@@ -50,7 +51,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 ## Requirements
 
 - Apple TV 4K (2nd generation or later) running tvOS 17+
-- Active GeForce NOW account (Free, Priority, or Ultimate)
+- Active GeForce NOW account (Free, Priority, or Ultimate) — or a partner-region account (Jio, Digevo, bro.game, etc.)
 - **Build from source only:** Xcode 16+ on a Mac, Apple Developer account (free tier works)
 
 ## Getting Started
