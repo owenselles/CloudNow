@@ -3,6 +3,8 @@ import SwiftUI
 struct LoginView: View {
     @Environment(AuthManager.self) var authManager
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+    @State private var providers: [LoginProvider]?
+    @FocusState private var focusedProvider: String?
 
     var body: some View {
         ZStack {
@@ -17,6 +19,9 @@ struct LoginView: View {
                 failedView(message: message)
             }
         }
+        .task {
+            providers = try? await NVIDIAAuthAPI().fetchProviders()
+        }
     }
 
     // MARK: Login Prompt
@@ -26,16 +31,44 @@ struct LoginView: View {
             CloudNowBrandHeader(subtitle: L10n.text("app_tagline"))
 
             VStack(spacing: 16) {
-                Button {
-                    authManager.login()
-                } label: {
-                    Label(L10n.text("sign_in_with_nvidia"), systemImage: "person.badge.key")
-                        .font(.title2.weight(.semibold))
-                        .padding(.horizontal, 40)
-                        .padding(.vertical, 16)
+                if let providers, providers.count > 1 {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 16) {
+                                ForEach(providers, id: \.idpId) { provider in
+                                    Button {
+                                        authManager.login(with: provider)
+                                    } label: {
+                                        Label(provider.displayName, systemImage: "person.badge.key")
+                                            .font(.title2.weight(.semibold))
+                                            .padding(.horizontal, 40)
+                                            .padding(.vertical, 16)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(.green)
+                                    .id(provider.idpId)
+                                    .focused($focusedProvider, equals: provider.idpId)
+                                }
+                            }
+                            .padding(.vertical, 8)
+                        }
+                        .onChange(of: focusedProvider) { _, id in
+                            guard let id else { return }
+                            withAnimation { proxy.scrollTo(id, anchor: .center) }
+                        }
+                    }
+                } else {
+                    Button {
+                        authManager.login()
+                    } label: {
+                        Label(L10n.text("sign_in_with_nvidia"), systemImage: "person.badge.key")
+                            .font(.title2.weight(.semibold))
+                            .padding(.horizontal, 40)
+                            .padding(.vertical, 16)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
                 }
-                .buttonStyle(.bordered)
-                .tint(.green)
 
                 Text(L10n.text("requires_geforce_now_account"))
                     .font(.caption)
