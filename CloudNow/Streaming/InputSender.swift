@@ -633,6 +633,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         let buttons: UInt16
         let suppressesOverlayGestures: Bool
         let suppressesSteamGestures: Bool
+        let replayMask: UInt16?
     }
 
     private struct GamepadSnapshot: Equatable {
@@ -708,6 +709,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var overlayPresses: [Int: OverlayPressState] = [:]
     private var overlayReplaySlots = Set<Int>()
     private var keyboardShortcutStates: [Int: KeyboardShortcutState] = [:]
+    private var keyboardShortcutReplayMasks: [Int: UInt16] = [:]
     private var steamHoldTicks: [Int: Int] = [:]
     private var steamTriggeredSlots = Set<Int>()
     private static let sampleInterval = 8_333_333
@@ -808,6 +810,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                 overlayPresses.removeAll()
                 overlayReplaySlots.removeAll()
                 keyboardShortcutStates.removeAll()
+                keyboardShortcutReplayMasks.removeAll()
                 steamHoldTicks.removeAll()
                 steamTriggeredSlots.removeAll()
                 releaseHeldDiscreteInputs()
@@ -854,6 +857,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         overlayPresses.removeAll()
         overlayReplaySlots.removeAll()
         keyboardShortcutStates.removeAll()
+        keyboardShortcutReplayMasks.removeAll()
         steamHoldTicks.removeAll()
         steamTriggeredSlots.removeAll()
         lastSnapshots.removeAll()
@@ -1023,6 +1027,10 @@ final nonisolated class InputSender: @unchecked Sendable {
         if changed & overlayButtonMask != 0 {
             if buttons & overlayButtonMask != 0 {
                 overlayPresses[slot] = OverlayPressState()
+            } else if keyboardShortcutStates[slot] != nil {
+                // The keyboard shortcut owns this gesture and will replay the complete chord
+                // if it was released before its hold delay.
+                overlayPresses[slot] = nil
             } else {
                 finishOverlayPress(for: controller, slot: slot)
             }
@@ -1047,6 +1055,9 @@ final nonisolated class InputSender: @unchecked Sendable {
             now: now
         )
         state.buttons = shortcutResolution.buttons
+        if let replayMask = shortcutResolution.replayMask {
+            sendKeyboardShortcutTap(for: controller, slot: slot, buttonMask: replayMask)
+        }
 
         if sampleOverlay {
             if shortcutResolution.suppressesOverlayGestures {
@@ -1089,6 +1100,9 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
         if steamTriggeredSlots.contains(slot) {
             state.buttons &= ~steamButtonMask
+        }
+        if let replayMask = keyboardShortcutReplayMasks[slot] {
+            state.buttons |= replayMask
         }
 
         sendGamepadSnapshot(
@@ -1226,23 +1240,26 @@ final nonisolated class InputSender: @unchecked Sendable {
                     return KeyboardShortcutResolution(
                         buttons: buttons,
                         suppressesOverlayGestures: false,
-                        suppressesSteamGestures: false
+                        suppressesSteamGestures: false,
+                        replayMask: nil
                     )
                 }
                 keyboardShortcutStates[slot] = state
                 return KeyboardShortcutResolution(
                     buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
                     suppressesOverlayGestures: true,
-                    suppressesSteamGestures: true
+                    suppressesSteamGestures: true,
+                    replayMask: nil
                 )
             }
 
             guard shortcutButtons == state.buttons else {
                 keyboardShortcutStates[slot] = nil
                 return KeyboardShortcutResolution(
-                    buttons: buttons,
+                    buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
                     suppressesOverlayGestures: false,
-                    suppressesSteamGestures: false
+                    suppressesSteamGestures: false,
+                    replayMask: keyboardShortcutMask(for: state.buttons)
                 )
             }
 
@@ -1253,15 +1270,17 @@ final nonisolated class InputSender: @unchecked Sendable {
                 return KeyboardShortcutResolution(
                     buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
                     suppressesOverlayGestures: true,
-                    suppressesSteamGestures: true
+                    suppressesSteamGestures: true,
+                    replayMask: nil
                 )
             }
 
             keyboardShortcutStates[slot] = state
             return KeyboardShortcutResolution(
-                buttons: buttons,
+                buttons: buttons & ~keyboardShortcutMask(for: shortcutButtons),
                 suppressesOverlayGestures: true,
-                suppressesSteamGestures: true
+                suppressesSteamGestures: true,
+                replayMask: nil
             )
         }
 
@@ -1269,20 +1288,75 @@ final nonisolated class InputSender: @unchecked Sendable {
             return KeyboardShortcutResolution(
                 buttons: buttons,
                 suppressesOverlayGestures: false,
-                suppressesSteamGestures: false
+                suppressesSteamGestures: false,
+                replayMask: nil
             )
         }
 
-        // Keep game input untouched until the full chord survives the configured hold delay.
+        // Withhold the full chord immediately. If released before the hold delay, replay it as
+        // a short gamepad tap; otherwise consume it for local text entry.
         keyboardShortcutStates[slot] = KeyboardShortcutState(
             buttons: targetButtons,
             deadline: now &+ shortcutGraceWindow
         )
         return KeyboardShortcutResolution(
-            buttons: buttons,
+            buttons: buttons & ~keyboardShortcutMask(for: targetButtons),
             suppressesOverlayGestures: true,
-            suppressesSteamGestures: true
+            suppressesSteamGestures: true,
+            replayMask: nil
         )
+    }
+
+    private func sendKeyboardShortcutTap(
+        for controller: GCController,
+        slot: Int,
+        buttonMask: UInt16
+    ) {
+        let state = mapGCControllerToXInput(controller, deadzone: deadzone)
+        let base = GamepadSnapshot(
+            buttons: state.buttons & ~buttonMask,
+            leftTrigger: state.leftTrigger,
+            rightTrigger: state.rightTrigger,
+            leftStickX: state.lx,
+            leftStickY: state.ly,
+            rightStickX: state.rx,
+            rightStickY: state.ry,
+            bitmap: gamepadBitmap
+        )
+        let down = GamepadSnapshot(
+            buttons: base.buttons | buttonMask,
+            leftTrigger: base.leftTrigger,
+            rightTrigger: base.rightTrigger,
+            leftStickX: base.leftStickX,
+            leftStickY: base.leftStickY,
+            rightStickX: base.rightStickX,
+            rightStickY: base.rightStickY,
+            bitmap: base.bitmap
+        )
+        keyboardShortcutReplayMasks[slot] = buttonMask
+        sendGamepadSnapshot(down, slot: slot, force: true)
+        inputQueue.asyncAfter(deadline: .now() + .milliseconds(17)) { [weak self, weak controller] in
+            guard let self,
+                  let controller,
+                  let replayMask = keyboardShortcutReplayMasks.removeValue(forKey: slot),
+                  controllerSlots[ObjectIdentifier(controller)] == slot
+            else { return }
+            let current = mapGCControllerToXInput(controller, deadzone: deadzone)
+            sendGamepadSnapshot(
+                GamepadSnapshot(
+                    buttons: current.buttons & ~replayMask,
+                    leftTrigger: current.leftTrigger,
+                    rightTrigger: current.rightTrigger,
+                    leftStickX: current.lx,
+                    leftStickY: current.ly,
+                    rightStickX: current.rx,
+                    rightStickY: current.ry,
+                    bitmap: gamepadBitmap
+                ),
+                slot: slot,
+                force: true
+            )
+        }
     }
 
     private func sendNeutralGamepads() {
@@ -1824,6 +1898,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             overlayPresses[slot] = nil
             overlayReplaySlots.remove(slot)
             keyboardShortcutStates[slot] = nil
+            keyboardShortcutReplayMasks[slot] = nil
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)

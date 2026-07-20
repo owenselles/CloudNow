@@ -1349,7 +1349,12 @@ struct StreamView: View {
     }
 
     private func presentControllerTextEntry() {
-        guard streamController.state == .streaming, overlayState == .none else { return }
+        guard streamController.state == .streaming, overlayState == .none else {
+            // Input is already paused for the accepted shortcut. Do not leave it paused when
+            // another overlay prevents the text-entry UI from being presented.
+            streamController.cancelControllerTextEntry()
+            return
+        }
         textEntryText = ""
         textEntryValidationMessage = nil
         overlayState = .textEntry
