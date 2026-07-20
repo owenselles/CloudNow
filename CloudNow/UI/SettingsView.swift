@@ -672,7 +672,14 @@ private struct SettingSelectionSheet<Value: Hashable>: View {
     @FocusState private var focusedValue: Value?
 
     var body: some View {
-        NavigationStack {
+        // Fixed header instead of NavigationStack + .navigationTitle: on tvOS the floating
+        // navigation title lets scrolled rows render through it and its deferred layout pass
+        // flashes the list at the wrong offset on first presentation.
+        VStack(spacing: 0) {
+            Text(title)
+                .font(.title2.bold())
+                .padding(.top, 40)
+                .padding(.bottom, 8)
             List {
                 ForEach(groups) { group in
                     Section {
@@ -686,8 +693,8 @@ private struct SettingSelectionSheet<Value: Hashable>: View {
                     }
                 }
             }
-            .contentMargins(.all, 32, for: .scrollContent)
-            .navigationTitle(title)
+            .contentMargins(.horizontal, 32, for: .scrollContent)
+            .contentMargins(.vertical, 24, for: .scrollContent)
         }
         // Land controller focus on the currently selected value (matters for long lists).
         .defaultFocus($focusedValue, selection)
@@ -700,14 +707,14 @@ private struct SettingSelectionSheet<Value: Hashable>: View {
             selection = option.value
             dismiss()
         } label: {
-            HStack {
+            HStack(spacing: 20) {
                 if let symbol = option.symbol {
-                    Label(option.label, systemImage: symbol)
+                    Image(systemName: symbol)
                         .font(.headline)
-                } else {
-                    Text(option.label)
-                        .font(.headline)
+                        .frame(width: 56, alignment: .center)
                 }
+                Text(option.label)
+                    .font(.headline)
                 Spacer()
                 if option.value == selection {
                     Image(systemName: "checkmark.circle.fill")
