@@ -672,29 +672,36 @@ private struct SettingSelectionSheet<Value: Hashable>: View {
     @FocusState private var focusedValue: Value?
 
     var body: some View {
-        // Fixed header instead of NavigationStack + .navigationTitle: on tvOS the floating
-        // navigation title lets scrolled rows render through it and its deferred layout pass
-        // flashes the list at the wrong offset on first presentation.
-        VStack(spacing: 0) {
-            Text(title)
-                .font(.title2.bold())
-                .padding(.top, 40)
-                .padding(.bottom, 8)
-            List {
-                ForEach(groups) { group in
-                    Section {
-                        ForEach(group.options) { option in
-                            optionButton(option)
-                        }
-                    } header: {
-                        if let header = group.title {
-                            Text(header)
+        NavigationStack {
+            // Fixed header with the floating navigation title suppressed (same pattern as
+            // ServerPickerScreen): on tvOS the floating title lets scrolled rows render
+            // through it and its deferred layout pass flickers on first presentation. The
+            // NavigationStack stays because the sheet sizes to its content's ideal height,
+            // and a bare List collapses without it.
+            VStack(spacing: 0) {
+                Text(title)
+                    .font(.title2.bold())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 64)
+                    .padding(.top, 36)
+                    .padding(.bottom, 20)
+                List {
+                    ForEach(groups) { group in
+                        Section {
+                            ForEach(group.options) { option in
+                                optionButton(option)
+                            }
+                        } header: {
+                            if let header = group.title {
+                                Text(header)
+                            }
                         }
                     }
                 }
+                .contentMargins(.horizontal, 32, for: .scrollContent)
+                .contentMargins(.bottom, 24, for: .scrollContent)
             }
-            .contentMargins(.horizontal, 32, for: .scrollContent)
-            .contentMargins(.vertical, 24, for: .scrollContent)
+            .navigationTitle("")
         }
         // Land controller focus on the currently selected value (matters for long lists).
         .defaultFocus($focusedValue, selection)
