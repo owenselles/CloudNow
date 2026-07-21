@@ -694,14 +694,23 @@ final class GFNStreamController: NSObject {
     private func configureAudioSession(microphoneRequested: Bool) -> Bool {
         let audioSession = AVAudioSession.sharedInstance()
         if microphoneRequested, audioSession.availableCategories.contains(.playAndRecord) {
+            logAudioSessionInputDiagnostics(audioSession, stage: "before microphone configuration")
+            var operation = "setCategory(playAndRecord/voiceChat)"
             do {
                 try audioSession.setCategory(
                     .playAndRecord,
                     mode: .voiceChat,
                     options: [.allowBluetoothHFP, .allowBluetoothA2DP]
                 )
+                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone category")
+
+                operation = "setPreferredIOBufferDuration(0.01)"
                 try audioSession.setPreferredIOBufferDuration(0.01)
+
+                operation = "setActive(true)"
                 try audioSession.setActive(true)
+                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone activation")
+
                 guard audioSession.isInputAvailable,
                       !audioSession.currentRoute.inputs.isEmpty,
                       audioSession.inputNumberOfChannels > 0
@@ -713,7 +722,7 @@ final class GFNStreamController: NSObject {
                 logAudioSessionConfiguration(audioSession)
                 return true
             } catch {
-                gfnLog.warning("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error, privacy: .private)")
+                logAudioSessionOperationFailure(operation, error: error, session: audioSession)
             }
         } else if microphoneRequested {
             gfnLog.warning("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
@@ -737,6 +746,40 @@ final class GFNStreamController: NSObject {
             gfnLog.error("[Stream] AVAudioSession playback configuration failed: \(error, privacy: .private)")
         }
         return false
+    }
+
+    private func logAudioSessionOperationFailure(
+        _ operation: String,
+        error: Error,
+        session: AVAudioSession
+    ) {
+        let nsError = error as NSError
+        let message = "[Stream] AVAudioSession \(operation) failed: " +
+            "domain=\(nsError.domain) code=\(nsError.code); falling back to playback"
+        gfnLog.warning("\(message, privacy: .public); error=\(error, privacy: .private)")
+        logAudioSessionInputDiagnostics(session, stage: "after \(operation) failure")
+    }
+
+    private func logAudioSessionInputDiagnostics(_ session: AVAudioSession, stage: String) {
+        let availableInputs = session.availableInputs?
+            .map(\.portType.rawValue)
+            .joined(separator: ", ") ?? "none"
+        let preferredInput = session.preferredInput
+            .map(\.portType.rawValue) ?? "none"
+        let routeInputs = session.currentRoute.inputs
+            .map(\.portType.rawValue)
+            .joined(separator: ", ")
+        let routeOutputs = session.currentRoute.outputs
+            .map(\.portType.rawValue)
+            .joined(separator: ", ")
+        let message = "audio input \(stage) | category \(session.category.rawValue) " +
+            "mode \(session.mode.rawValue) options \(session.categoryOptions.rawValue) | " +
+            "available \(session.isInputAvailable) " +
+            "channels \(session.inputNumberOfChannels) | preferred [\(preferredInput)] " +
+            "availableInputs [\(availableInputs)] | route inputs [\(routeInputs)] " +
+            "outputs [\(routeOutputs)] | sampleRate \(session.sampleRate) " +
+            "ioBuffer \(session.ioBufferDuration)"
+        audioSyncLog.info("\(message, privacy: .public)")
     }
 
     /// Logs the OS-level audio output configuration — the latency layer WebRTC stats can't see.

@@ -139,10 +139,34 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
             audioDeviceLog.info("capture unavailable: no input route")
             return false
         }
-        let hwFormat = engine.inputNode.inputFormat(forBus: 0)
+
+        // AVAudioEngine's I/O unit leaves hardware input disabled by default. Reading the
+        // input node before enabling it produces a 0 Hz format and poisons the shared
+        // playout/capture graph, so RemoteIO then fails to start playback as well.
+        let wasRunning = engine.isRunning
+        if wasRunning {
+            engine.stop()
+        }
+        let ioUnit = engine.outputNode.auAudioUnit
+        guard ioUnit.canPerformInput else {
+            audioDeviceLog.info("capture unavailable: I/O unit cannot perform input")
+            return false
+        }
+        ioUnit.isInputEnabled = true
+        var captureReady = false
+        defer {
+            if !captureReady {
+                ioUnit.isInputEnabled = false
+            }
+        }
+
+        let inputNode = engine.inputNode
+        let hwFormat = inputNode.inputFormat(forBus: 0)
         let channels = min(2, max(1, Int(hwFormat.channelCount)))
-        guard hwFormat.sampleRate > 0 else {
-            audioDeviceLog.info("capture unavailable: zero-rate input format")
+        guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+            audioDeviceLog.info(
+                "capture unavailable: invalid input format (\(hwFormat.channelCount)ch @\(hwFormat.sampleRate)Hz)"
+            )
             return false
         }
 
@@ -184,10 +208,18 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         }
 
         engine.attach(sink)
-        engine.connect(engine.inputNode, to: sink, format: hwFormat)
+        engine.connect(inputNode, to: sink, format: hwFormat)
+        if wasRunning, !startEngineIfNeeded() {
+            engine.detach(sink)
+            audioDeviceLog.error("capture initialization failed; restoring playout-only engine")
+            return false
+        }
         sinkNode = sink
         captureFormat = hwFormat
-        audioDeviceLog.info("capture: \(channels)ch @\(Int(hwFormat.sampleRate))Hz")
+        captureReady = true
+        audioDeviceLog.info(
+            "capture: \(channels)ch @\(Int(hwFormat.sampleRate))Hz (input enabled \(ioUnit.isInputEnabled))"
+        )
         return true
     }
 
@@ -232,6 +264,23 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         return true
     }
 
+    /// A failed duplex graph must never take game audio down with it. Recreate the
+    /// engine without its input node because a failed I/O engine may retain invalid
+    /// hardware formats even after capture is detached.
+    private func restorePlayoutOnlyAfterCaptureFailure(restart: Bool) -> Bool {
+        guard let delegate else { return false }
+        audioDeviceLog.error("microphone graph failed; rebuilding playout-only engine")
+        recordingInitializedFlag = false
+        recordingFlag = false
+        tearDownEngine()
+
+        if playoutInitializedFlag, !buildPlayoutGraph(on: activeEngine(), delegate: delegate) {
+            audioDeviceLog.error("playout-only recovery graph failed")
+            return false
+        }
+        return !restart || startEngineIfNeeded()
+    }
+
     /// Route changes (e.g. HDMI re-plug, receiver power) can alter the granted channel count
     /// and latency. Rebuild the graph and let the native ADM re-read our parameters.
     private func handleRouteChange() {
@@ -242,15 +291,22 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
             let wasRecording = recordingFlag
             tearDownEngine()
             let engine = activeEngine()
+            var captureRebuildFailed = false
             if playoutInitializedFlag, !buildPlayoutGraph(on: engine, delegate: delegate) {
                 audioDeviceLog.error("playout rebuild after route change failed")
             }
             if recordingInitializedFlag, !buildCaptureGraph(on: engine, delegate: delegate) {
+                captureRebuildFailed = true
                 recordingInitializedFlag = false
                 recordingFlag = false
+                _ = restorePlayoutOnlyAfterCaptureFailure(restart: wasPlaying)
             }
-            if wasPlaying || wasRecording {
-                _ = startEngineIfNeeded()
+            if !captureRebuildFailed,
+               wasPlaying || wasRecording,
+               !startEngineIfNeeded(),
+               recordingInitializedFlag
+            {
+                _ = restorePlayoutOnlyAfterCaptureFailure(restart: wasPlaying)
             }
             delegate.notifyAudioOutputParametersChange()
             if wasRecording {
@@ -352,7 +408,14 @@ extension GFNAudioDevice: LKRTCAudioDevice {
     }
 
     func startPlayout() -> Bool {
-        guard startEngineIfNeeded() else { return false }
+        if !startEngineIfNeeded() {
+            guard recordingInitializedFlag,
+                  restorePlayoutOnlyAfterCaptureFailure(restart: false),
+                  startEngineIfNeeded()
+            else {
+                return false
+            }
+        }
         playingFlag = true
         return true
     }
@@ -375,7 +438,10 @@ extension GFNAudioDevice: LKRTCAudioDevice {
             engine.detach(sinkNode)
             self.sinkNode = nil
         }
-        guard buildCaptureGraph(on: activeEngine(), delegate: delegate) else { return false }
+        guard buildCaptureGraph(on: activeEngine(), delegate: delegate) else {
+            _ = restorePlayoutOnlyAfterCaptureFailure(restart: playingFlag)
+            return false
+        }
         recordingInitializedFlag = true
         return true
     }
@@ -385,7 +451,14 @@ extension GFNAudioDevice: LKRTCAudioDevice {
     }
 
     func startRecording() -> Bool {
-        guard startEngineIfNeeded() else { return false }
+        guard recordingInitializedFlag else {
+            audioDeviceLog.info("recording start rejected: capture graph is unavailable")
+            return false
+        }
+        guard startEngineIfNeeded() else {
+            _ = restorePlayoutOnlyAfterCaptureFailure(restart: playingFlag)
+            return false
+        }
         recordingFlag = true
         return true
     }
