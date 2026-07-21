@@ -319,7 +319,7 @@ private nonisolated enum VideoPresentationMode: String {
     static var configured: VideoPresentationMode {
         let value = ProcessInfo.processInfo.environment["CLOUDNOW_VIDEO_PRESENTATION_MODE"]?
             .lowercased()
-        return value == immediate.rawValue ? .immediate : .paced
+        return value == paced.rawValue ? .paced : .immediate
     }
 }
 
