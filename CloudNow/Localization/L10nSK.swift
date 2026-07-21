@@ -110,6 +110,7 @@ enum L10nSK {
         "format": "Formát",
         "decode_time": "Čas dekódovania",
         "decoder": "Dekodér",
+        "input_latency": "Latencia vstupu",
         "output_latency": "Latencia výstupu",
         "output": "Výstup",
         "duration": "Trvanie",

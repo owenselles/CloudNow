@@ -108,6 +108,7 @@ enum L10nJA {
         "format": "フォーマット",
         "decode_time": "デコード時間",
         "decoder": "デコーダー",
+        "input_latency": "入力レイテンシ",
         "output_latency": "出力レイテンシ",
         "output": "出力",
         "duration": "経過時間",

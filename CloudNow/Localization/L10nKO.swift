@@ -108,6 +108,7 @@ enum L10nKO {
         "format": "형식",
         "decode_time": "디코딩 시간",
         "decoder": "디코더",
+        "input_latency": "입력 지연",
         "output_latency": "출력 지연",
         "output": "출력",
         "duration": "지속 시간",

@@ -108,6 +108,7 @@ enum L10nZHHant {
         "format": "格式",
         "decode_time": "解碼時間",
         "decoder": "解碼器",
+        "input_latency": "輸入延遲",
         "output_latency": "輸出延遲",
         "output": "輸出",
         "duration": "時長",

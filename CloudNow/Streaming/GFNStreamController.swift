@@ -104,6 +104,7 @@ nonisolated struct AudioStats: Equatable {
     var acceleratedMsPerSecond: Double = 0
     /// video − audio playout timestamp; positive = audio lags video. nil without RTCP SR.
     var avOffsetMs: Double?
+    var inputLatencyMs: Double?
     var outputLatencyMs: Double = 0
     var outputChannels: Int = 0
     var outputSampleRateHz: Double = 0
@@ -1678,6 +1679,10 @@ final class GFNStreamController: NSObject {
         // Live OS output latency: the media-playout stat can be absent depending on the active
         // audio unit (then device reads 0), so also sample the route's latency directly.
         let osOutputLatencyMs = AVAudioSession.sharedInstance().outputLatency * 1000
+        let microphoneSnapshot = GFNAudioDevice.shared.microphoneTelemetry.snapshot
+        let osInputLatencyMs = microphoneSnapshot.isCapturing
+            ? GFNAudioDevice.shared.inputLatency * 1000
+            : nil
 
         updateAudioStats {
             $0.jitterBufferCurrentMs = neteqMs
@@ -1689,6 +1694,7 @@ final class GFNStreamController: NSObject {
             $0.stretchedMsPerSecond = sloweddMs
             $0.acceleratedMsPerSecond = acceleratedMs
             $0.avOffsetMs = avOffsetMs
+            $0.inputLatencyMs = osInputLatencyMs
             $0.outputLatencyMs = osOutputLatencyMs
             $0.outputChannels = GFNAudioDevice.shared.outputNumberOfChannels
             $0.outputSampleRateHz = GFNAudioDevice.shared.deviceOutputSampleRate

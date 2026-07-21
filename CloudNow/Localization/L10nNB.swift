@@ -110,6 +110,7 @@ enum L10nNB {
         "format": "Format",
         "decode_time": "Dekodingstid",
         "decoder": "Dekoder",
+        "input_latency": "Inndatalatens",
         "output_latency": "Utgangslatens",
         "output": "Utgang",
         "duration": "Varighet",

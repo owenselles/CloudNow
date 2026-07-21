@@ -110,6 +110,7 @@ enum L10nEN {
         "format": "Format",
         "decode_time": "Decode time",
         "decoder": "Decoder",
+        "input_latency": "Input latency",
         "output_latency": "Output latency",
         "output": "Output",
         "duration": "Duration",

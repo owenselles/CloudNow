@@ -110,6 +110,7 @@ enum L10nID {
         "format": "Format",
         "decode_time": "Waktu dekode",
         "decoder": "Dekoder",
+        "input_latency": "Latensi masukan",
         "output_latency": "Latensi keluaran",
         "output": "Keluaran",
         "duration": "Durasi",

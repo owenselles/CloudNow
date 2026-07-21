@@ -108,6 +108,7 @@ enum L10nPTBR {
         "format": "Formato",
         "decode_time": "Tempo de decodificação",
         "decoder": "Decodificador",
+        "input_latency": "Latência de entrada",
         "output_latency": "Latência de saída",
         "output": "Saída",
         "duration": "Duração",

@@ -108,6 +108,7 @@ enum L10nZHHans {
         "format": "格式",
         "decode_time": "解码时间",
         "decoder": "解码器",
+        "input_latency": "输入延迟",
         "output_latency": "输出延迟",
         "output": "输出",
         "duration": "时长",

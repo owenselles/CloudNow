@@ -110,6 +110,7 @@ enum L10nHE {
         "format": "פורמט",
         "decode_time": "זמן פענוח",
         "decoder": "מפענח",
+        "input_latency": "השהיית קלט",
         "output_latency": "השהיית פלט",
         "output": "פלט",
         "duration": "משך",

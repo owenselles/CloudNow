@@ -110,6 +110,7 @@ enum L10nMS {
         "format": "Format",
         "decode_time": "Masa nyahkod",
         "decoder": "Penyahkod",
+        "input_latency": "Kependaman input",
         "output_latency": "Kependaman output",
         "output": "Output",
         "duration": "Tempoh",

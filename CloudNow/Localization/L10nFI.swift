@@ -110,6 +110,7 @@ enum L10nFI {
         "format": "Muoto",
         "decode_time": "Purkuaika",
         "decoder": "Dekooderi",
+        "input_latency": "Sisääntulon viive",
         "output_latency": "Ulostulon viive",
         "output": "Ulostulo",
         "duration": "Kesto",

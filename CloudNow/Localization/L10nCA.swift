@@ -110,6 +110,7 @@ enum L10nCA {
         "format": "Format",
         "decode_time": "Temps de descodificació",
         "decoder": "Descodificador",
+        "input_latency": "Latència d'entrada",
         "output_latency": "Latència de sortida",
         "output": "Sortida",
         "duration": "Durada",

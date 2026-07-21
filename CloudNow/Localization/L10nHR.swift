@@ -110,6 +110,7 @@ enum L10nHR {
         "format": "Format",
         "decode_time": "Vrijeme dekodiranja",
         "decoder": "Dekoder",
+        "input_latency": "Latencija ulaza",
         "output_latency": "Latencija izlaza",
         "output": "Izlaz",
         "duration": "Trajanje",

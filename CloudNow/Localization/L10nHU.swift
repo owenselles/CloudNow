@@ -110,6 +110,7 @@ enum L10nHU {
         "format": "Formátum",
         "decode_time": "Dekódolási idő",
         "decoder": "Dekóder",
+        "input_latency": "Bemeneti késleltetés",
         "output_latency": "Kimeneti késleltetés",
         "output": "Kimenet",
         "duration": "Időtartam",

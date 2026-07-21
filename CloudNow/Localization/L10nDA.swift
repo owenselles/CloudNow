@@ -110,6 +110,7 @@ enum L10nDA {
         "format": "Format",
         "decode_time": "Afkodningstid",
         "decoder": "Dekoder",
+        "input_latency": "Inputlatens",
         "output_latency": "Outputlatens",
         "output": "Output",
         "duration": "Varighed",

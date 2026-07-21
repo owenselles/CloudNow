@@ -162,35 +162,85 @@ private struct StatsPanelHeader: View {
 
             Spacer(minLength: 8)
 
-            MicrophoneStatusView(isEnabled: microphoneEnabled)
+            MicrophoneStatusView(isRequested: microphoneEnabled)
         }
         .frame(height: 36)
     }
 }
 
 private struct MicrophoneStatusView: View {
-    let isEnabled: Bool
+    let isRequested: Bool
+    @State private var activity = MicrophoneActivitySnapshot(isCapturing: false, level: 0)
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Image(systemName: isEnabled ? "mic.fill" : "mic.slash.fill")
-            .font(.system(size: 20, weight: .medium))
-            .foregroundStyle(StatsHUDPalette.primaryText)
-            .frame(width: 34, height: 34)
-            .background(
-                StatsHUDPalette.microphoneBackground(for: colorScheme),
-                ignoresSafeAreaEdges: []
+        HStack(spacing: 8) {
+            MicrophoneActivityBar(
+                level: isCapturing ? activity.level : 0,
+                isActive: isCapturing
             )
-            .overlay(alignment: .topTrailing) {
-                Circle()
-                    .fill(StatsHUDPalette.microphoneActive)
-                    .frame(width: 7, height: 7)
-                    .padding(3)
-                    .opacity(isEnabled ? 1 : 0)
+
+            Image(systemName: isCapturing ? "mic.fill" : "mic.slash.fill")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(StatsHUDPalette.primaryText)
+                .frame(width: 34, height: 34)
+                .background(
+                    StatsHUDPalette.microphoneBackground(for: colorScheme),
+                    ignoresSafeAreaEdges: []
+                )
+                .overlay(alignment: .topTrailing) {
+                    Circle()
+                        .fill(StatsHUDPalette.microphoneActive)
+                        .frame(width: 7, height: 7)
+                        .padding(3)
+                        .opacity(isCapturing ? 1 : 0)
+                }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(L10n.text("microphone"))
+        .accessibilityValue(L10n.text(isCapturing ? "on" : "off"))
+        .task(id: isRequested) {
+            guard isRequested else {
+                activity = MicrophoneActivitySnapshot(isCapturing: false, level: 0)
+                return
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(L10n.text("microphone"))
-            .accessibilityValue(L10n.text(isEnabled ? "on" : "off"))
+            while !Task.isCancelled {
+                let next = GFNAudioDevice.shared.microphoneTelemetry.snapshot
+                if shouldPresent(next) {
+                    activity = next
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+    }
+
+    private var isCapturing: Bool {
+        isRequested && activity.isCapturing
+    }
+
+    private func shouldPresent(_ next: MicrophoneActivitySnapshot) -> Bool {
+        next.isCapturing != activity.isCapturing
+            || abs(next.level - activity.level) >= 0.015
+            || next.level == 0 && activity.level != 0
+    }
+}
+
+private struct MicrophoneActivityBar: View {
+    let level: Double
+    let isActive: Bool
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(StatsHUDPalette.microphoneTrack)
+            Capsule()
+                .fill(StatsHUDPalette.microphoneActive)
+                .scaleEffect(x: min(1, max(0, level)), anchor: .leading)
+                .opacity(isActive ? 1 : 0)
+        }
+        .frame(width: 28, height: 4)
+        .animation(.linear(duration: 0.05), value: level)
+        .accessibilityHidden(true)
     }
 }
 
@@ -338,6 +388,10 @@ private struct CoreStatsColumn: View {
                         audioStats.stretchedMsPerSecond,
                         audioStats.acceleratedMsPerSecond
                     )
+                )
+                StatsRow(
+                    label: L10n.text("input_latency"),
+                    value: audioStats.inputLatencyMs.map { String(format: "%.0f ms", $0) } ?? "–"
                 )
                 StatsRow(
                     label: L10n.text("output_latency"),
@@ -568,6 +622,7 @@ private enum StatsHUDPalette {
     static let divider = Color.primary.opacity(0.22)
     static let accent = Color(red: 0.48, green: 0.78, blue: 0.00)
     static let microphoneActive = Color.green
+    static let microphoneTrack = Color.primary.opacity(0.18)
     static let warning = Color.orange
 
     static func panelBackground(for colorScheme: ColorScheme) -> Color {

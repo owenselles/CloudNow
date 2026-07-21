@@ -108,6 +108,7 @@ enum L10nDE {
         "format": "Format",
         "decode_time": "Dekodierzeit",
         "decoder": "Decoder",
+        "input_latency": "Eingabelatenz",
         "output_latency": "Ausgabelatenz",
         "output": "Ausgabe",
         "duration": "Dauer",

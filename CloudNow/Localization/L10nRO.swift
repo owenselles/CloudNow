@@ -110,6 +110,7 @@ enum L10nRO {
         "format": "Format",
         "decode_time": "Timp de decodare",
         "decoder": "Decodor",
+        "input_latency": "Latență de intrare",
         "output_latency": "Latență de ieșire",
         "output": "Ieșire",
         "duration": "Durată",

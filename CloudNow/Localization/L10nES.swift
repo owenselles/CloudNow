@@ -108,6 +108,7 @@ enum L10nES {
         "format": "Formato",
         "decode_time": "Tiempo de decodificación",
         "decoder": "Decodificador",
+        "input_latency": "Latencia de entrada",
         "output_latency": "Latencia de salida",
         "output": "Salida",
         "duration": "Duración",

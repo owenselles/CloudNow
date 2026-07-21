@@ -2,8 +2,133 @@ import AVFAudio
 import Foundation
 @preconcurrency import LiveKitWebRTC
 import os.log
+import Synchronization
 
 private nonisolated let audioDeviceLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "AudioDevice")
+
+nonisolated struct MicrophoneActivitySnapshot: Equatable, Sendable {
+    let isCapturing: Bool
+    let level: Double
+}
+
+/// Lock-free bridge from the realtime capture callback to the HUD. Each capture graph gets
+/// an immutable writer generation, so a callback from an engine being replaced cannot make
+/// stale microphone state visible after a route change.
+final nonisolated class MicrophoneTelemetry: Sendable {
+    struct Writer: Sendable {
+        fileprivate let telemetry: MicrophoneTelemetry
+        fileprivate let generation: UInt32
+
+        @inline(__always)
+        var isEnabled: Bool {
+            telemetry.isEnabled(generation: generation)
+        }
+
+        @inline(__always)
+        func publish(sumSquares: Float, sampleCount: Int) {
+            telemetry.publish(
+                generation: generation,
+                sumSquares: sumSquares,
+                sampleCount: sampleCount
+            )
+        }
+    }
+
+    private static let enabledBit: UInt64 = 1 << 16
+    private static let activeBit: UInt64 = 1 << 17
+    private static let levelMask: UInt64 = 0xFFFF
+    private static let generationShift: UInt64 = 32
+    private static let generationMask: UInt64 = 0xFFFF_FFFF << generationShift
+    private static let maximumLevel = Float(UInt16.max)
+    private static let activityTimeoutNanoseconds: UInt64 = 350_000_000
+
+    private let nextGeneration = Atomic<UInt32>(0)
+    private let state = Atomic<UInt64>(0)
+    private let lastActivityUptimeNanoseconds = Atomic<UInt64>(0)
+
+    var snapshot: MicrophoneActivitySnapshot {
+        let packed = state.load(ordering: .relaxed)
+        let lastActivity = lastActivityUptimeNanoseconds.load(ordering: .relaxed)
+        let now = DispatchTime.now().uptimeNanoseconds
+        let isFresh = lastActivity > 0
+            && now >= lastActivity
+            && now - lastActivity <= Self.activityTimeoutNanoseconds
+        let isCapturing = packed & Self.activeBit != 0 && isFresh
+        let encodedLevel = packed & Self.levelMask
+        return MicrophoneActivitySnapshot(
+            isCapturing: isCapturing,
+            level: isCapturing ? Double(encodedLevel) / Double(UInt16.max) : 0
+        )
+    }
+
+    func makeWriter() -> Writer {
+        let generation = nextGeneration.wrappingAdd(1, ordering: .relaxed).newValue
+        lastActivityUptimeNanoseconds.store(0, ordering: .relaxed)
+        state.store(Self.packedGeneration(generation), ordering: .relaxed)
+        return Writer(telemetry: self, generation: generation)
+    }
+
+    func setEnabled(_ enabled: Bool, for writer: Writer) {
+        let generation = Self.packedGeneration(writer.generation)
+        guard state.load(ordering: .relaxed) & Self.generationMask == generation else { return }
+        state.store(generation | (enabled ? Self.enabledBit : 0), ordering: .relaxed)
+    }
+
+    func invalidate() {
+        let generation = state.load(ordering: .relaxed) & Self.generationMask
+        lastActivityUptimeNanoseconds.store(0, ordering: .relaxed)
+        state.store(generation, ordering: .relaxed)
+    }
+
+    @inline(__always)
+    private func isEnabled(generation: UInt32) -> Bool {
+        let packed = state.load(ordering: .relaxed)
+        return packed & Self.generationMask == Self.packedGeneration(generation)
+            && packed & Self.enabledBit != 0
+    }
+
+    /// Publishes one envelope sample after WebRTC accepts the corresponding PCM buffer.
+    /// A bounded compare/exchange avoids unbounded work if start/stop races the callback.
+    @inline(__always)
+    private func publish(generation: UInt32, sumSquares: Float, sampleCount: Int) {
+        guard sampleCount > 0 else { return }
+
+        let rms = sqrt(max(sumSquares / Float(sampleCount), 0.000_000_01))
+        let decibels = 20 * log10(max(rms, 0.000_01))
+        let instantaneous = min(1, max(0, (decibels + 50) / 44))
+        let expectedGeneration = Self.packedGeneration(generation)
+        var current = state.load(ordering: .relaxed)
+
+        for _ in 0 ..< 2 {
+            guard current & Self.generationMask == expectedGeneration,
+                  current & Self.enabledBit != 0
+            else { return }
+
+            let previous = Float(current & Self.levelMask) / Self.maximumLevel
+            let smoothed = max(instantaneous, previous * 0.92)
+            let encoded = UInt64(min(Self.maximumLevel, max(0, smoothed * Self.maximumLevel)))
+            let desired = expectedGeneration | Self.enabledBit | Self.activeBit | encoded
+            let result = state.compareExchange(
+                expected: current,
+                desired: desired,
+                ordering: .relaxed
+            )
+            if result.exchanged {
+                lastActivityUptimeNanoseconds.store(
+                    DispatchTime.now().uptimeNanoseconds,
+                    ordering: .relaxed
+                )
+                return
+            }
+            current = result.original
+        }
+    }
+
+    @inline(__always)
+    private static func packedGeneration(_ generation: UInt32) -> UInt64 {
+        UInt64(generation) << generationShift
+    }
+}
 
 /// Owns a preallocated Int16 conversion buffer; deallocates when the capturing
 /// render closure (and thus the audio node) is released.
@@ -16,6 +141,66 @@ private final nonisolated class ScratchBuffer: @unchecked Sendable {
 
     deinit {
         pointer.deallocate()
+    }
+}
+
+private nonisolated struct AudioRouteFingerprint: Equatable, Sendable {
+    private struct Port: Equatable, Sendable {
+        let type: String
+        let uid: String
+        let channels: Int
+
+        init(_ port: AVAudioSessionPortDescription) {
+            type = port.portType.rawValue
+            uid = port.uid
+            channels = port.channels?.count ?? 0
+        }
+    }
+
+    private let category: String
+    private let mode: String
+    private let sampleRate: Int
+    private let inputChannels: Int
+    private let outputChannels: Int
+    private let ioBufferMicroseconds: Int
+    private let inputLatencyMicroseconds: Int
+    private let outputLatencyMicroseconds: Int
+    private let inputs: [Port]
+    private let outputs: [Port]
+
+    init(session: AVAudioSession) {
+        category = session.category.rawValue
+        mode = session.mode.rawValue
+        sampleRate = Int(session.sampleRate.rounded())
+        inputChannels = session.inputNumberOfChannels
+        outputChannels = session.outputNumberOfChannels
+        ioBufferMicroseconds = Self.microseconds(session.ioBufferDuration)
+        inputLatencyMicroseconds = Self.microseconds(session.inputLatency)
+        outputLatencyMicroseconds = Self.microseconds(session.outputLatency)
+        inputs = session.currentRoute.inputs.map(Port.init)
+        outputs = session.currentRoute.outputs.map(Port.init)
+    }
+
+    var logDescription: String {
+        let input = inputs.map { "\($0.type):\($0.channels)ch" }.joined(separator: ",")
+        let output = outputs.map { "\($0.type):\($0.channels)ch" }.joined(separator: ",")
+        return "\(category)/\(mode) \(sampleRate)Hz \(ioBufferMicroseconds)us "
+            + "latency \(inputLatencyMicroseconds)/\(outputLatencyMicroseconds)us "
+            + "in[\(input)] out[\(output)]"
+    }
+
+    func hasSameGraphIdentity(as other: Self) -> Bool {
+        category == other.category
+            && mode == other.mode
+            && sampleRate == other.sampleRate
+            && inputChannels == other.inputChannels
+            && outputChannels == other.outputChannels
+            && inputs == other.inputs
+            && outputs == other.outputs
+    }
+
+    private static func microseconds(_ duration: TimeInterval) -> Int {
+        Int((duration * 1_000_000).rounded())
     }
 }
 
@@ -36,6 +221,8 @@ private final nonisolated class ScratchBuffer: @unchecked Sendable {
 final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
     static let shared = GFNAudioDevice()
 
+    let microphoneTelemetry = MicrophoneTelemetry()
+
     /// Output channels the next stream wants (2 or 6), set from the negotiated offer before
     /// playout initializes. The effective count is capped by the active route's capability.
     var requestedOutputChannels = 2
@@ -44,13 +231,32 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
     private var engine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
     private var sinkNode: AVAudioSinkNode?
+    private var captureWriter: MicrophoneTelemetry.Writer?
     private var playoutFormat: AVAudioFormat?
     private var captureFormat: AVAudioFormat?
     private var playoutInitializedFlag = false
     private var recordingInitializedFlag = false
     private var playingFlag = false
+    /// Logical WebRTC start/stop intent. Operational capture is represented by the
+    /// current sink/writer and `microphoneTelemetry`, so route loss does not erase intent.
     private var recordingFlag = false
     private var routeChangeObserver: NSObjectProtocol?
+    private var engineConfigurationObserver: NSObjectProtocol?
+    private var activeRouteFingerprint: AudioRouteFingerprint?
+    private let deviceLifetimeGeneration = Atomic<UInt64>(0)
+    private let routeRecoveryGeneration = Atomic<UInt64>(0)
+    private let routeRecoveryQueue = DispatchQueue(
+        label: "com.owenselles.CloudNow2.audio-route-recovery",
+        qos: .userInitiated
+    )
+
+    private static let routeRecoveryDelays: [TimeInterval] = [0.1, 0.25, 0.5, 1.0]
+
+    private enum RouteRecoveryResult {
+        case restored
+        case awaitingInput
+        case failed
+    }
 
     // MARK: Playout graph
 
@@ -143,9 +349,9 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         // AVAudioEngine's I/O unit leaves hardware input disabled by default. Reading the
         // input node before enabling it produces a 0 Hz format and poisons the shared
         // playout/capture graph, so RemoteIO then fails to start playback as well.
-        let wasRunning = engine.isRunning
-        if wasRunning {
-            engine.stop()
+        guard !engine.isRunning else {
+            audioDeviceLog.error("capture graph mutation rejected while engine is running")
+            return false
         }
         let ioUnit = engine.outputNode.auAudioUnit
         guard ioUnit.canPerformInput else {
@@ -174,25 +380,36 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         let scratchBox = ScratchBuffer(capacity: maxFrames * channels)
         let scratch = scratchBox.pointer
         let deliver = delegate.deliverRecordedData
-        let sink = AVAudioSinkNode { [scratchBox] timestamp, frameCount, inputData -> OSStatus in
+        let writer = microphoneTelemetry.makeWriter()
+        let sink = AVAudioSinkNode { [scratchBox, writer] timestamp, frameCount, inputData -> OSStatus in
             _ = scratchBox // owns the scratch allocation for the node's lifetime
+            guard writer.isEnabled else { return noErr }
+
             let frames = min(Int(frameCount), maxFrames)
             let buffers = UnsafeMutableAudioBufferListPointer(
                 UnsafeMutablePointer(mutating: inputData)
             )
+            var sumSquares: Float = 0
+            var sampleCount = 0
             // Float32 (interleaved or deinterleaved) → interleaved Int16
             if buffers.count == 1, let data = buffers[0].mData {
                 let floats = data.assumingMemoryBound(to: Float.self)
                 for i in 0 ..< frames * channels {
-                    scratch[i] = Int16(max(-1, min(1, floats[i])) * 32767)
+                    let sample = max(-1, min(1, floats[i]))
+                    scratch[i] = Int16(sample * 32767)
+                    sumSquares += sample * sample
                 }
+                sampleCount = frames * channels
             } else {
                 for (channel, buffer) in buffers.enumerated() where channel < channels {
                     guard let data = buffer.mData else { continue }
                     let floats = data.assumingMemoryBound(to: Float.self)
                     for frame in 0 ..< frames {
-                        scratch[frame * channels + channel] = Int16(max(-1, min(1, floats[frame])) * 32767)
+                        let sample = max(-1, min(1, floats[frame]))
+                        scratch[frame * channels + channel] = Int16(sample * 32767)
+                        sumSquares += sample * sample
                     }
+                    sampleCount += frames
                 }
             }
             var outList = AudioBufferList(
@@ -204,17 +421,17 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
                 )
             )
             var flags = AudioUnitRenderActionFlags()
-            return deliver(&flags, timestamp, 1, UInt32(frames), &outList, nil, nil)
+            let status = deliver(&flags, timestamp, 1, UInt32(frames), &outList, nil, nil)
+            if status == noErr {
+                writer.publish(sumSquares: sumSquares, sampleCount: sampleCount)
+            }
+            return status
         }
 
         engine.attach(sink)
         engine.connect(inputNode, to: sink, format: hwFormat)
-        if wasRunning, !startEngineIfNeeded() {
-            engine.detach(sink)
-            audioDeviceLog.error("capture initialization failed; restoring playout-only engine")
-            return false
-        }
         sinkNode = sink
+        captureWriter = writer
         captureFormat = hwFormat
         captureReady = true
         audioDeviceLog.info(
@@ -235,6 +452,7 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
     }
 
     private func tearDownEngine() {
+        microphoneTelemetry.invalidate()
         engine?.stop()
         if let engine {
             if let sourceNode {
@@ -246,22 +464,36 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         }
         sourceNode = nil
         sinkNode = nil
+        captureWriter = nil
         engine = nil
         playoutFormat = nil
         captureFormat = nil
+        activeRouteFingerprint = nil
     }
 
     private func startEngineIfNeeded() -> Bool {
         guard let engine else { return false }
-        guard !engine.isRunning else { return true }
+        if engine.isRunning {
+            activeRouteFingerprint = AudioRouteFingerprint(session: .sharedInstance())
+            return true
+        }
         engine.prepare()
         do {
             try engine.start()
+            activeRouteFingerprint = AudioRouteFingerprint(session: .sharedInstance())
         } catch {
             audioDeviceLog.error("engine start failed: \(error, privacy: .private)")
             return false
         }
         return true
+    }
+
+    private func setCaptureEnabled(_ enabled: Bool) {
+        guard let captureWriter else {
+            microphoneTelemetry.invalidate()
+            return
+        }
+        microphoneTelemetry.setEnabled(enabled, for: captureWriter)
     }
 
     /// A failed duplex graph must never take game audio down with it. Recreate the
@@ -270,49 +502,243 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
     private func restorePlayoutOnlyAfterCaptureFailure(restart: Bool) -> Bool {
         guard let delegate else { return false }
         audioDeviceLog.error("microphone graph failed; rebuilding playout-only engine")
-        recordingInitializedFlag = false
-        recordingFlag = false
+
+        if sinkNode != nil {
+            delegate.notifyAudioInputInterrupted()
+        }
+        if sourceNode != nil {
+            delegate.notifyAudioOutputInterrupted()
+        }
         tearDownEngine()
 
-        if playoutInitializedFlag, !buildPlayoutGraph(on: activeEngine(), delegate: delegate) {
-            audioDeviceLog.error("playout-only recovery graph failed")
-            return false
-        }
-        return !restart || startEngineIfNeeded()
-    }
-
-    /// Route changes (e.g. HDMI re-plug, receiver power) can alter the granted channel count
-    /// and latency. Rebuild the graph and let the native ADM re-read our parameters.
-    private func handleRouteChange() {
-        guard let delegate else { return }
-        delegate.dispatchAsync { [weak self] in
-            guard let self, let delegate = self.delegate else { return }
-            let wasPlaying = playingFlag
-            let wasRecording = recordingFlag
-            tearDownEngine()
-            let engine = activeEngine()
-            var captureRebuildFailed = false
-            if playoutInitializedFlag, !buildPlayoutGraph(on: engine, delegate: delegate) {
-                audioDeviceLog.error("playout rebuild after route change failed")
-            }
-            if recordingInitializedFlag, !buildCaptureGraph(on: engine, delegate: delegate) {
-                captureRebuildFailed = true
-                recordingInitializedFlag = false
-                recordingFlag = false
-                _ = restorePlayoutOnlyAfterCaptureFailure(restart: wasPlaying)
-            }
-            if !captureRebuildFailed,
-               wasPlaying || wasRecording,
-               !startEngineIfNeeded(),
-               recordingInitializedFlag
-            {
-                _ = restorePlayoutOnlyAfterCaptureFailure(restart: wasPlaying)
+        if playoutInitializedFlag {
+            guard buildPlayoutGraph(on: activeEngine(), delegate: delegate) else {
+                audioDeviceLog.error("playout-only recovery graph failed")
+                return false
             }
             delegate.notifyAudioOutputParametersChange()
-            if wasRecording {
-                delegate.notifyAudioInputParametersChange()
+        }
+        if recordingInitializedFlag {
+            delegate.notifyAudioInputParametersChange()
+        }
+
+        guard restart else {
+            activeRouteFingerprint = AudioRouteFingerprint(session: .sharedInstance())
+            return true
+        }
+        return startEngineIfNeeded()
+    }
+
+    /// Route notifications may arrive after the engine already adopted that route. Coalesce
+    /// them off the ADM thread, then rebuild only when the settled hardware fingerprint differs
+    /// or the engine actually stopped. This avoids destroying a healthy HFP duplex graph in
+    /// response to its own delayed category/configuration notification.
+    private func scheduleRouteRecovery(
+        trigger: String,
+        delegate: LKRTCAudioDeviceDelegate,
+        lifetime: UInt64? = nil
+    ) {
+        let currentLifetime = deviceLifetimeGeneration.load(ordering: .relaxed)
+        guard lifetime == nil || lifetime == currentLifetime else { return }
+
+        let generation = routeRecoveryGeneration.wrappingAdd(1, ordering: .relaxed).newValue
+        enqueueRouteRecovery(
+            trigger: trigger,
+            delegate: delegate,
+            lifetime: currentLifetime,
+            generation: generation,
+            attempt: 0
+        )
+    }
+
+    private func enqueueRouteRecovery(
+        trigger: String,
+        delegate: LKRTCAudioDeviceDelegate,
+        lifetime: UInt64,
+        generation: UInt64,
+        attempt: Int
+    ) {
+        guard attempt < Self.routeRecoveryDelays.count else {
+            audioDeviceLog.error(
+                "route recovery paused after \(attempt) attempts; intent retained until the next route event (\(trigger, privacy: .public))"
+            )
+            return
+        }
+        let delay = Self.routeRecoveryDelays[attempt]
+        routeRecoveryQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self,
+                  deviceLifetimeGeneration.load(ordering: .relaxed) == lifetime,
+                  routeRecoveryGeneration.load(ordering: .relaxed) == generation
+            else { return }
+
+            delegate.dispatchAsync { [weak self] in
+                guard let self,
+                      deviceLifetimeGeneration.load(ordering: .relaxed) == lifetime,
+                      routeRecoveryGeneration.load(ordering: .relaxed) == generation,
+                      let activeDelegate = self.delegate,
+                      activeDelegate === delegate
+                else { return }
+
+                recoverRoute(
+                    trigger: trigger,
+                    delegate: activeDelegate,
+                    lifetime: lifetime,
+                    generation: generation,
+                    attempt: attempt
+                )
             }
         }
+    }
+
+    private func recoverRoute(
+        trigger: String,
+        delegate: LKRTCAudioDeviceDelegate,
+        lifetime: UInt64,
+        generation: UInt64,
+        attempt: Int
+    ) {
+        guard playoutInitializedFlag || recordingInitializedFlag else { return }
+
+        let session = AVAudioSession.sharedInstance()
+        let currentRoute = AudioRouteFingerprint(session: session)
+        let engineRunning = engine?.isRunning == true
+        let outputGraphMatches = !playoutInitializedFlag || sourceNode != nil && playoutFormat != nil
+        let inputGraphMatches = !recordingInitializedFlag || sinkNode != nil && captureFormat != nil
+        let engineShouldRun = playingFlag || recordingFlag && inputGraphMatches
+        var routeMatches = currentRoute == activeRouteFingerprint
+        let graphIdentityMatches = activeRouteFingerprint.map {
+            currentRoute.hasSameGraphIdentity(as: $0)
+        } ?? false
+
+        // A buffer-duration or latency notification changes WebRTC's parameters, but not
+        // the AVAudioEngine topology. Synchronize ADM without introducing an audible rebuild.
+        if !routeMatches,
+           graphIdentityMatches,
+           engineRunning == engineShouldRun,
+           outputGraphMatches,
+           inputGraphMatches || !hasUsableInputRoute(session)
+        {
+            if playoutInitializedFlag {
+                delegate.notifyAudioOutputParametersChange()
+            }
+            if recordingInitializedFlag {
+                delegate.notifyAudioInputParametersChange()
+            }
+            activeRouteFingerprint = currentRoute
+            routeMatches = true
+            audioDeviceLog.info(
+                "audio parameters refreshed without graph rebuild (\(trigger, privacy: .public)) | \(currentRoute.logDescription, privacy: .public)"
+            )
+        }
+
+        if routeMatches,
+           engineRunning == engineShouldRun,
+           outputGraphMatches,
+           inputGraphMatches
+        {
+            if recordingFlag {
+                setCaptureEnabled(true)
+            }
+            audioDeviceLog.info(
+                "route notification ignored; graph is current (\(trigger, privacy: .public)) | \(currentRoute.logDescription, privacy: .public)"
+            )
+            return
+        }
+
+        if routeMatches,
+           engineRunning == engineShouldRun,
+           outputGraphMatches,
+           recordingInitializedFlag,
+           !inputGraphMatches,
+           !hasUsableInputRoute(session)
+        {
+            setCaptureEnabled(false)
+            audioDeviceLog.info(
+                "route settled without microphone; waiting for input (\(trigger, privacy: .public)) | \(currentRoute.logDescription, privacy: .public)"
+            )
+            enqueueRouteRecovery(
+                trigger: trigger,
+                delegate: delegate,
+                lifetime: lifetime,
+                generation: generation,
+                attempt: attempt + 1
+            )
+            return
+        }
+
+        audioDeviceLog.info(
+            "route recovery attempt \(attempt + 1) (\(trigger, privacy: .public)) running=\(engineRunning) | \(currentRoute.logDescription, privacy: .public)"
+        )
+
+        let result = rebuildGraphsForCurrentRoute(delegate: delegate)
+        if result != .restored {
+            enqueueRouteRecovery(
+                trigger: trigger,
+                delegate: delegate,
+                lifetime: lifetime,
+                generation: generation,
+                attempt: attempt + 1
+            )
+        }
+    }
+
+    private func hasUsableInputRoute(_ session: AVAudioSession) -> Bool {
+        session.isInputAvailable
+            && !session.currentRoute.inputs.isEmpty
+            && session.inputNumberOfChannels > 0
+    }
+
+    private func rebuildGraphsForCurrentRoute(delegate: LKRTCAudioDeviceDelegate) -> RouteRecoveryResult {
+        let shouldPlay = playingFlag
+        let shouldRecord = recordingFlag
+
+        if sinkNode != nil || shouldRecord {
+            delegate.notifyAudioInputInterrupted()
+        }
+        if sourceNode != nil || shouldPlay {
+            delegate.notifyAudioOutputInterrupted()
+        }
+
+        tearDownEngine()
+        let newEngine = activeEngine()
+        if playoutInitializedFlag, !buildPlayoutGraph(on: newEngine, delegate: delegate) {
+            audioDeviceLog.error("playout rebuild after route change failed")
+            return .failed
+        }
+
+        var captureReady = false
+        if recordingInitializedFlag, hasUsableInputRoute(.sharedInstance()) {
+            if buildCaptureGraph(on: newEngine, delegate: delegate) {
+                captureReady = true
+            } else {
+                let restored = restorePlayoutOnlyAfterCaptureFailure(restart: shouldPlay)
+                return restored ? .awaitingInput : .failed
+            }
+        }
+
+        // Native ADM must re-read every changed parameter before either callback resumes.
+        if playoutInitializedFlag {
+            delegate.notifyAudioOutputParametersChange()
+        }
+        if recordingInitializedFlag {
+            delegate.notifyAudioInputParametersChange()
+        }
+
+        setCaptureEnabled(shouldRecord && captureReady)
+        let shouldRun = shouldPlay || shouldRecord && captureReady
+        if shouldRun, !startEngineIfNeeded() {
+            setCaptureEnabled(false)
+            if captureReady {
+                let restored = restorePlayoutOnlyAfterCaptureFailure(restart: shouldPlay)
+                return restored ? .awaitingInput : .failed
+            }
+            return .failed
+        }
+
+        if !shouldRun {
+            activeRouteFingerprint = AudioRouteFingerprint(session: .sharedInstance())
+        }
+        return recordingInitializedFlag && !captureReady ? .awaitingInput : .restored
     }
 }
 
@@ -363,21 +789,46 @@ extension GFNAudioDevice: LKRTCAudioDevice {
     }
 
     func initialize(with delegate: LKRTCAudioDeviceDelegate) -> Bool {
+        let lifetime = deviceLifetimeGeneration.wrappingAdd(1, ordering: .relaxed).newValue
+        _ = routeRecoveryGeneration.wrappingAdd(1, ordering: .relaxed)
         self.delegate = delegate
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
             queue: nil
+        ) { [weak self] notification in
+            let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let reason = rawReason.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ?? .unknown
+            self?.scheduleRouteRecovery(
+                trigger: "routeChange:\(reason.rawValue)",
+                delegate: delegate,
+                lifetime: lifetime
+            )
+        }
+        engineConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name.AVAudioEngineConfigurationChange,
+            object: nil,
+            queue: nil
         ) { [weak self] _ in
-            self?.handleRouteChange()
+            self?.scheduleRouteRecovery(
+                trigger: "engineConfigurationChange",
+                delegate: delegate,
+                lifetime: lifetime
+            )
         }
         return true
     }
 
     func terminateDevice() -> Bool {
+        _ = deviceLifetimeGeneration.wrappingAdd(1, ordering: .relaxed)
+        _ = routeRecoveryGeneration.wrappingAdd(1, ordering: .relaxed)
         if let routeChangeObserver {
             NotificationCenter.default.removeObserver(routeChangeObserver)
             self.routeChangeObserver = nil
+        }
+        if let engineConfigurationObserver {
+            NotificationCenter.default.removeObserver(engineConfigurationObserver)
+            self.engineConfigurationObserver = nil
         }
         tearDownEngine()
         playoutInitializedFlag = false
@@ -394,12 +845,48 @@ extension GFNAudioDevice: LKRTCAudioDevice {
 
     func initializePlayout() -> Bool {
         guard let delegate else { return false }
+        playoutInitializedFlag = false
+        let wasRunning = engine?.isRunning == true
+        if wasRunning {
+            if sinkNode != nil {
+                delegate.notifyAudioInputInterrupted()
+            }
+            if sourceNode != nil {
+                delegate.notifyAudioOutputInterrupted()
+            }
+            engine?.stop()
+        }
         if let sourceNode, let engine {
             engine.detach(sourceNode)
             self.sourceNode = nil
+            playoutFormat = nil
         }
-        guard buildPlayoutGraph(on: activeEngine(), delegate: delegate) else { return false }
+        guard buildPlayoutGraph(on: activeEngine(), delegate: delegate) else {
+            if recordingInitializedFlag {
+                delegate.notifyAudioInputParametersChange()
+                setCaptureEnabled(recordingFlag)
+            }
+            if wasRunning {
+                _ = startEngineIfNeeded()
+            }
+            return false
+        }
         playoutInitializedFlag = true
+
+        delegate.notifyAudioOutputParametersChange()
+        if recordingInitializedFlag {
+            delegate.notifyAudioInputParametersChange()
+        }
+        setCaptureEnabled(recordingFlag)
+        activeRouteFingerprint = AudioRouteFingerprint(session: .sharedInstance())
+
+        if wasRunning, !startEngineIfNeeded() {
+            let restored = restorePlayoutOnlyAfterCaptureFailure(restart: false)
+            if restored {
+                scheduleRouteRecovery(trigger: "playoutInitialization", delegate: delegate)
+            }
+            return restored
+        }
         return true
     }
 
@@ -434,15 +921,51 @@ extension GFNAudioDevice: LKRTCAudioDevice {
 
     func initializeRecording() -> Bool {
         guard let delegate else { return false }
+        recordingInitializedFlag = false
+        setCaptureEnabled(false)
+        let wasRunning = engine?.isRunning == true
+        if wasRunning {
+            if sinkNode != nil {
+                delegate.notifyAudioInputInterrupted()
+            }
+            if sourceNode != nil {
+                delegate.notifyAudioOutputInterrupted()
+            }
+            engine?.stop()
+        }
         if let sinkNode, let engine {
             engine.detach(sinkNode)
             self.sinkNode = nil
+            captureWriter = nil
+            captureFormat = nil
         }
         guard buildCaptureGraph(on: activeEngine(), delegate: delegate) else {
+            guard restorePlayoutOnlyAfterCaptureFailure(restart: playingFlag) else {
+                return false
+            }
+            // The controller only creates the mic track after AVAudioSession exposes an
+            // input route. A 0 Hz format here is therefore a transient HFP/engine race:
+            // accept initialization, keep playback alive, and recover capture asynchronously.
+            recordingInitializedFlag = true
+            delegate.notifyAudioInputParametersChange()
+            scheduleRouteRecovery(trigger: "recordingInitializationDeferred", delegate: delegate)
+            audioDeviceLog.info("recording initialization deferred until input route settles")
+            return true
+        }
+        recordingInitializedFlag = true
+        setCaptureEnabled(recordingFlag)
+
+        if playoutInitializedFlag {
+            delegate.notifyAudioOutputParametersChange()
+        }
+        delegate.notifyAudioInputParametersChange()
+        activeRouteFingerprint = AudioRouteFingerprint(session: .sharedInstance())
+
+        if wasRunning, !startEngineIfNeeded() {
+            recordingInitializedFlag = false
             _ = restorePlayoutOnlyAfterCaptureFailure(restart: playingFlag)
             return false
         }
-        recordingInitializedFlag = true
         return true
     }
 
@@ -455,16 +978,29 @@ extension GFNAudioDevice: LKRTCAudioDevice {
             audioDeviceLog.info("recording start rejected: capture graph is unavailable")
             return false
         }
-        guard startEngineIfNeeded() else {
-            _ = restorePlayoutOnlyAfterCaptureFailure(restart: playingFlag)
-            return false
-        }
         recordingFlag = true
+        if sinkNode == nil {
+            setCaptureEnabled(false)
+            if let delegate {
+                scheduleRouteRecovery(trigger: "recordingStart", delegate: delegate)
+            }
+            return true
+        }
+        setCaptureEnabled(true)
+        guard startEngineIfNeeded() else {
+            setCaptureEnabled(false)
+            _ = restorePlayoutOnlyAfterCaptureFailure(restart: playingFlag)
+            if let delegate {
+                scheduleRouteRecovery(trigger: "recordingStartFailure", delegate: delegate)
+            }
+            return true
+        }
         return true
     }
 
     func stopRecording() -> Bool {
         recordingFlag = false
+        setCaptureEnabled(false)
         if !playingFlag {
             engine?.stop()
         }

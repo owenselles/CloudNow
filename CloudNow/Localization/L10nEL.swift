@@ -110,6 +110,7 @@ enum L10nEL {
         "format": "Μορφή",
         "decode_time": "Χρόνος αποκωδικοποίησης",
         "decoder": "Αποκωδικοποιητής",
+        "input_latency": "Καθυστέρηση εισόδου",
         "output_latency": "Καθυστέρηση εξόδου",
         "output": "Έξοδος",
         "duration": "Διάρκεια",

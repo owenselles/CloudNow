@@ -110,6 +110,7 @@ enum L10nSV {
         "format": "Format",
         "decode_time": "Avkodningstid",
         "decoder": "Avkodare",
+        "input_latency": "Inmatningslatens",
         "output_latency": "Utgångslatens",
         "output": "Utgång",
         "duration": "Längd",

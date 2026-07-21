@@ -110,6 +110,7 @@ enum L10nPTPT {
         "format": "Formato",
         "decode_time": "Tempo de descodificação",
         "decoder": "Descodificador",
+        "input_latency": "Latência de entrada",
         "output_latency": "Latência de saída",
         "output": "Saída",
         "duration": "Duração",

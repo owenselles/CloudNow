@@ -110,6 +110,7 @@ enum L10nPL {
         "format": "Format",
         "decode_time": "Czas dekodowania",
         "decoder": "Dekoder",
+        "input_latency": "Opóźnienie wejścia",
         "output_latency": "Opóźnienie wyjścia",
         "output": "Wyjście",
         "duration": "Czas trwania",

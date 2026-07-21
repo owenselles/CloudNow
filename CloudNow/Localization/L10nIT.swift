@@ -108,6 +108,7 @@ enum L10nIT {
         "format": "Formato",
         "decode_time": "Tempo di decodifica",
         "decoder": "Decodificatore",
+        "input_latency": "Latenza di ingresso",
         "output_latency": "Latenza di uscita",
         "output": "Uscita",
         "duration": "Durata",

@@ -108,6 +108,7 @@ enum L10nFR {
         "format": "Format",
         "decode_time": "Temps de décodage",
         "decoder": "Décodeur",
+        "input_latency": "Latence d'entrée",
         "output_latency": "Latence de sortie",
         "output": "Sortie",
         "duration": "Durée",

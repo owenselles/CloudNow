@@ -110,6 +110,7 @@ enum L10nCS {
         "format": "Formát",
         "decode_time": "Doba dekódování",
         "decoder": "Dekodér",
+        "input_latency": "Latence vstupu",
         "output_latency": "Latence výstupu",
         "output": "Výstup",
         "duration": "Doba trvání",

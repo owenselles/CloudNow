@@ -110,6 +110,7 @@ enum L10nTH {
         "format": "รูปแบบ",
         "decode_time": "เวลาถอดรหัส",
         "decoder": "ตัวถอดรหัส",
+        "input_latency": "ความหน่วงอินพุต",
         "output_latency": "ความหน่วงเอาต์พุต",
         "output": "เอาต์พุต",
         "duration": "ระยะเวลา",

@@ -110,6 +110,7 @@ enum L10nRU {
         "format": "Формат",
         "decode_time": "Время декодирования",
         "decoder": "Декодер",
+        "input_latency": "Задержка ввода",
         "output_latency": "Задержка вывода",
         "output": "Вывод",
         "duration": "Длительность",

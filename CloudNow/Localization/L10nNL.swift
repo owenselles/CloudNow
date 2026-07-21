@@ -110,6 +110,7 @@ enum L10nNL {
         "format": "Formaat",
         "decode_time": "Decodeertijd",
         "decoder": "Decoder",
+        "input_latency": "Invoerlatentie",
         "output_latency": "Uitvoerlatentie",
         "output": "Uitvoer",
         "duration": "Duur",

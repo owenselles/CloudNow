@@ -110,6 +110,7 @@ enum L10nUK {
         "format": "Формат",
         "decode_time": "Час декодування",
         "decoder": "Декодер",
+        "input_latency": "Затримка вводу",
         "output_latency": "Затримка виводу",
         "output": "Вивід",
         "duration": "Тривалість",

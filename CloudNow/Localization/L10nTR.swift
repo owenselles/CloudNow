@@ -110,6 +110,7 @@ enum L10nTR {
         "format": "Biçim",
         "decode_time": "Kod çözme süresi",
         "decoder": "Kod çözücü",
+        "input_latency": "Giriş gecikmesi",
         "output_latency": "Çıkış gecikmesi",
         "output": "Çıkış",
         "duration": "Süre",

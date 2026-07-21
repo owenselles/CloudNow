@@ -110,6 +110,7 @@ enum L10nAR {
         "format": "التنسيق",
         "decode_time": "زمن فك الترميز",
         "decoder": "وحدة فك الترميز",
+        "input_latency": "زمن استجابة الإدخال",
         "output_latency": "زمن استجابة الإخراج",
         "output": "الإخراج",
         "duration": "المدة",

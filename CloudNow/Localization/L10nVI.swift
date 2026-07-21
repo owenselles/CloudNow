@@ -110,6 +110,7 @@ enum L10nVI {
         "format": "Định dạng",
         "decode_time": "Thời gian giải mã",
         "decoder": "Bộ giải mã",
+        "input_latency": "Độ trễ đầu vào",
         "output_latency": "Độ trễ đầu ra",
         "output": "Đầu ra",
         "duration": "Thời lượng",

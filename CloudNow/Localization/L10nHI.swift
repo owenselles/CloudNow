@@ -110,6 +110,7 @@ enum L10nHI {
         "format": "प्रारूप",
         "decode_time": "डिकोड समय",
         "decoder": "डिकोडर",
+        "input_latency": "इनपुट विलंबता",
         "output_latency": "आउटपुट विलंबता",
         "output": "आउटपुट",
         "duration": "अवधि",
