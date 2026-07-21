@@ -636,7 +636,8 @@ final class GFNStreamController: NSObject {
                 try await signaling.connect()
                 guard !Task.isCancelled,
                       connectionGeneration == generation,
-                      self.signaling === signaling else {
+                      self.signaling === signaling
+                else {
                     signaling.disconnect()
                     return
                 }
@@ -852,7 +853,8 @@ final class GFNStreamController: NSObject {
         }
         guard !Task.isCancelled,
               connectionGeneration == generation,
-              signaling === signalingClient else {
+              signaling === signalingClient
+        else {
             pc.close()
             return
         }
@@ -1027,7 +1029,8 @@ final class GFNStreamController: NSObject {
             }
             guard !Task.isCancelled,
                   isCurrentPeerConnection(pc, generation: generation),
-                  signaling === signalingClient else {
+                  signaling === signalingClient
+            else {
                 pc.close()
                 return
             }
@@ -1951,8 +1954,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         _ peerConnection: LKRTCPeerConnection,
         didAdd rtpReceiver: LKRTCRtpReceiver,
         streams _: [LKRTCMediaStream]
-    )
-    {
+    ) {
         gfnLog.debug("[Stream] Received RTP receiver: kind=\(rtpReceiver.track?.kind ?? "nil", privacy: .public)")
         guard let track = rtpReceiver.track as? LKRTCVideoTrack else { return }
         gfnLog.info("[Stream] Got video track")
