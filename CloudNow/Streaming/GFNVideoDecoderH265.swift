@@ -18,12 +18,13 @@ private nonisolated let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", 
 /// release this class can be deleted and `GFNVideoDecoderFactory` reverted to the default
 /// decoder.
 final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unchecked Sendable {
-    private var callback: RTCVideoDecoderCallback?
+    private let callbackState = Mutex<RTCVideoDecoderCallback?>(nil)
+    private let asynchronousDecodeFailed = Mutex(false)
     private var videoFormat: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
 
     func setCallback(_ callback: @escaping RTCVideoDecoderCallback) {
-        self.callback = callback
+        callbackState.withLock { $0 = callback }
     }
 
     func startDecode(withNumberOfCores _: Int32) -> NSInteger {
@@ -33,7 +34,7 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
     func release() -> NSInteger {
         destroySession()
         videoFormat = nil
-        callback = nil
+        callbackState.withLock { $0 = nil }
         return 0
     }
 
@@ -45,8 +46,17 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
         _ encodedImage: LKRTCEncodedImage,
         missingFrames _: Bool,
         codecSpecificInfo _: (any LKRTCCodecSpecificInfo)?,
-        renderTimeMs _: Int64
+        renderTimeMs: Int64
     ) -> NSInteger {
+        let previousDecodeFailed = asynchronousDecodeFailed.withLock { failed in
+            defer { failed = false }
+            return failed
+        }
+        if previousDecodeFailed {
+            destroySession()
+            return -1
+        }
+
         let data = encodedImage.buffer
         guard !data.isEmpty else { return -1 }
         let nalus = Self.annexBNALUnits(in: data)
@@ -68,36 +78,64 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
         if session == nil, !createSession(format: videoFormat) {
             return -1
         }
-        guard let session, let sampleBuffer = Self.makeSampleBuffer(data: data, nalus: nalus, format: videoFormat) else {
+        let frameTimestampNanoseconds = Self.frameTimestampNanoseconds(
+            renderTimeMs: renderTimeMs,
+            rtpTimestamp: encodedImage.timeStamp
+        )
+        let presentationTimeStamp = CMTime(
+            value: frameTimestampNanoseconds,
+            timescale: 1_000_000_000
+        )
+        guard let session,
+              let sampleBuffer = Self.makeSampleBuffer(
+                  data: data,
+                  nalus: nalus,
+                  format: videoFormat,
+                  presentationTimeStamp: presentationTimeStamp
+              )
+        else {
             return -1
         }
 
         let rtpTimestamp = Int32(bitPattern: encodedImage.timeStamp)
-        let decodeFailed = Mutex(false)
         let handler: VTDecompressionOutputHandler = { [weak self] status, _, imageBuffer, _, _ in
             guard status == noErr, let imageBuffer else {
                 h265Log.error("decode output failed: \(status)")
-                decodeFailed.withLock { $0 = true }
+                self?.asynchronousDecodeFailed.withLock { $0 = true }
                 return
             }
             let frame = LKRTCVideoFrame(
                 buffer: LKRTCCVPixelBuffer(pixelBuffer: imageBuffer),
                 rotation: ._0,
-                timeStampNs: 0
+                timeStampNs: frameTimestampNanoseconds
             )
             frame.timeStamp = rtpTimestamp
-            self?.callback?(frame)
+            let callback = self?.callbackState.withLock { $0 }
+            callback?(frame)
         }
-        // Synchronous decode: GFN streams have no B-frame reordering (zero-latency encode),
-        // so decode order is display order and no reorder queue is needed.
-        var status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sampleBuffer, flags: [], infoFlagsOut: nil, outputHandler: handler)
+        // GFN streams have no B-frame reordering. Asynchronous submission lets VideoToolbox
+        // overlap hardware decode without stalling WebRTC's decoder thread on large access units.
+        let decodeFlags = VTDecodeFrameFlags(rawValue: 1 << 0)
+        var status = VTDecompressionSessionDecodeFrame(
+            session,
+            sampleBuffer: sampleBuffer,
+            flags: decodeFlags,
+            infoFlagsOut: nil,
+            outputHandler: handler
+        )
         if status == kVTInvalidSessionErr {
             // Session dies when the app is backgrounded — recreate and retry once.
             destroySession()
             guard createSession(format: videoFormat), let retrySession = self.session else { return -1 }
-            status = VTDecompressionSessionDecodeFrame(retrySession, sampleBuffer: sampleBuffer, flags: [], infoFlagsOut: nil, outputHandler: handler)
+            status = VTDecompressionSessionDecodeFrame(
+                retrySession,
+                sampleBuffer: sampleBuffer,
+                flags: decodeFlags,
+                infoFlagsOut: nil,
+                outputHandler: handler
+            )
         }
-        if status != noErr || decodeFailed.withLock({ $0 }) {
+        if status != noErr {
             h265Log.error("decode failed: \(status)")
             return -1
         }
@@ -153,36 +191,43 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
     private static let ppsType: UInt8 = 34
 
     private static func annexBNALUnits(in data: Data) -> [NALUnit] {
-        var units: [NALUnit] = []
-        let bytes = [UInt8](data)
-        var payloadStarts: [Int] = []
-        var i = 0
-        while i + 3 < bytes.count {
-            if bytes[i] == 0, bytes[i + 1] == 0 {
-                if bytes[i + 2] == 1 {
-                    payloadStarts.append(i + 3)
-                    i += 3
-                    continue
+        data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            var units: [NALUnit] = []
+            var payloadStarts: [Int] = []
+            var i = 0
+            while i + 3 < bytes.count {
+                if bytes[i] == 0, bytes[i + 1] == 0 {
+                    if bytes[i + 2] == 1 {
+                        payloadStarts.append(i + 3)
+                        i += 3
+                        continue
+                    }
+                    if bytes[i + 2] == 0, bytes[i + 3] == 1 {
+                        payloadStarts.append(i + 4)
+                        i += 4
+                        continue
+                    }
                 }
-                if bytes[i + 2] == 0, bytes[i + 3] == 1 {
-                    payloadStarts.append(i + 4)
-                    i += 4
-                    continue
+                i += 1
+            }
+            for (index, start) in payloadStarts.enumerated() {
+                let nextStartCode: Int = if index + 1 < payloadStarts.count {
+                    // The next payload start minus its start code (3 or 4 bytes; detect the longer form).
+                    payloadStarts[index + 1] - (
+                        payloadStarts[index + 1] >= 4
+                            && bytes[payloadStarts[index + 1] - 4] == 0
+                            && bytes[payloadStarts[index + 1] - 3] == 0
+                            && bytes[payloadStarts[index + 1] - 2] == 0 ? 4 : 3
+                    )
+                } else {
+                    bytes.count
                 }
+                guard nextStartCode > start else { continue }
+                units.append(NALUnit(range: start ..< nextStartCode, type: (bytes[start] >> 1) & 0x3F))
             }
-            i += 1
+            return units
         }
-        for (index, start) in payloadStarts.enumerated() {
-            let nextStartCode: Int = if index + 1 < payloadStarts.count {
-                // The next payload start minus its start code (3 or 4 bytes; detect the longer form).
-                payloadStarts[index + 1] - (payloadStarts[index + 1] >= 4 && bytes[payloadStarts[index + 1] - 4] == 0 && bytes[payloadStarts[index + 1] - 3] == 0 && bytes[payloadStarts[index + 1] - 2] == 0 ? 4 : 3)
-            } else {
-                bytes.count
-            }
-            guard nextStartCode > start else { continue }
-            units.append(NALUnit(range: start ..< nextStartCode, type: (bytes[start] >> 1) & 0x3F))
-        }
-        return units
     }
 
     private static func makeFormatDescription(data: Data, nalus: [NALUnit]) -> CMVideoFormatDescription? {
@@ -191,64 +236,89 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
         let pps = nalus.filter { $0.type == ppsType }
         guard !vps.isEmpty, !sps.isEmpty, !pps.isEmpty else { return nil }
 
-        let sets = (vps + sps + pps).map { data.subdata(in: $0.range) }
-        var allocations: [UnsafeMutablePointer<UInt8>] = []
-        defer { allocations.forEach { $0.deallocate() } }
-        var pointers: [UnsafePointer<UInt8>] = []
-        var sizes: [Int] = []
-        for set in sets {
-            let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: set.count)
-            set.copyBytes(to: pointer, count: set.count)
-            allocations.append(pointer)
-            pointers.append(UnsafePointer(pointer))
-            sizes.append(set.count)
+        let parameterSets = vps + sps + pps
+        return data.withUnsafeBytes { rawBuffer in
+            guard let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            var pointers = parameterSets.map { UnsafePointer(bytes.advanced(by: $0.range.lowerBound)) }
+            var sizes = parameterSets.map(\.range.count)
+            var format: CMVideoFormatDescription?
+            let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                allocator: kCFAllocatorDefault,
+                parameterSetCount: parameterSets.count,
+                parameterSetPointers: &pointers,
+                parameterSetSizes: &sizes,
+                nalUnitHeaderLength: 4,
+                extensions: nil,
+                formatDescriptionOut: &format
+            )
+            guard status == noErr else {
+                h265Log.error("format description creation failed: \(status)")
+                return nil
+            }
+            return format
         }
-
-        var format: CMVideoFormatDescription?
-        let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-            allocator: kCFAllocatorDefault,
-            parameterSetCount: sets.count,
-            parameterSetPointers: &pointers,
-            parameterSetSizes: &sizes,
-            nalUnitHeaderLength: 4,
-            extensions: nil,
-            formatDescriptionOut: &format
-        )
-        guard status == noErr else {
-            h265Log.error("format description creation failed: \(status)")
-            return nil
-        }
-        return format
     }
 
     /// Converts the Annex-B access unit to a 4-byte-length-prefixed sample buffer.
-    private static func makeSampleBuffer(data: Data, nalus: [NALUnit], format: CMVideoFormatDescription) -> CMSampleBuffer? {
-        var avcc = Data(capacity: data.count + nalus.count * 4)
-        for nalu in nalus {
-            var length = UInt32(nalu.range.count).bigEndian
-            withUnsafeBytes(of: &length) { avcc.append(contentsOf: $0) }
-            avcc.append(data.subdata(in: nalu.range))
-        }
-
+    private static func makeSampleBuffer(
+        data: Data,
+        nalus: [NALUnit],
+        format: CMVideoFormatDescription,
+        presentationTimeStamp: CMTime
+    ) -> CMSampleBuffer? {
+        let blockLength = nalus.reduce(0) { $0 + 4 + $1.range.count }
+        guard blockLength > 0 else { return nil }
         var blockBuffer: CMBlockBuffer?
         var status = CMBlockBufferCreateWithMemoryBlock(
             allocator: kCFAllocatorDefault,
             memoryBlock: nil,
-            blockLength: avcc.count,
+            blockLength: blockLength,
             blockAllocator: kCFAllocatorDefault,
             customBlockSource: nil,
             offsetToData: 0,
-            dataLength: avcc.count,
+            dataLength: blockLength,
             flags: kCMBlockBufferAssureMemoryNowFlag,
             blockBufferOut: &blockBuffer
         )
         guard status == noErr, let blockBuffer else { return nil }
-        status = avcc.withUnsafeBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return OSStatus(kCMBlockBufferBadPointerParameterErr) }
-            return CMBlockBufferReplaceDataBytes(with: base, blockBuffer: blockBuffer, offsetIntoDestination: 0, dataLength: avcc.count)
+
+        status = data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return OSStatus(kCMBlockBufferBadPointerParameterErr)
+            }
+            var destinationOffset = 0
+            for nalu in nalus {
+                var length = UInt32(nalu.range.count).bigEndian
+                let lengthStatus = withUnsafeBytes(of: &length) { lengthBytes in
+                    CMBlockBufferReplaceDataBytes(
+                        with: lengthBytes.baseAddress!,
+                        blockBuffer: blockBuffer,
+                        offsetIntoDestination: destinationOffset,
+                        dataLength: lengthBytes.count
+                    )
+                }
+                guard lengthStatus == noErr else { return lengthStatus }
+                destinationOffset += 4
+
+                let payloadStatus = CMBlockBufferReplaceDataBytes(
+                    with: baseAddress.advanced(by: nalu.range.lowerBound),
+                    blockBuffer: blockBuffer,
+                    offsetIntoDestination: destinationOffset,
+                    dataLength: nalu.range.count
+                )
+                guard payloadStatus == noErr else { return payloadStatus }
+                destinationOffset += nalu.range.count
+            }
+            return noErr
         }
         guard status == noErr else { return nil }
 
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: presentationTimeStamp,
+            decodeTimeStamp: .invalid
+        )
+        var sampleSize = blockLength
         var sampleBuffer: CMSampleBuffer?
         status = CMSampleBufferCreate(
             allocator: kCFAllocatorDefault,
@@ -258,13 +328,20 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
             refcon: nil,
             formatDescription: format,
             sampleCount: 1,
-            sampleTimingEntryCount: 0,
-            sampleTimingArray: nil,
-            sampleSizeEntryCount: 0,
-            sampleSizeArray: nil,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing,
+            sampleSizeEntryCount: 1,
+            sampleSizeArray: &sampleSize,
             sampleBufferOut: &sampleBuffer
         )
         guard status == noErr else { return nil }
         return sampleBuffer
+    }
+
+    private static func frameTimestampNanoseconds(renderTimeMs: Int64, rtpTimestamp: UInt32) -> Int64 {
+        if renderTimeMs > 0 {
+            return renderTimeMs * 1_000_000
+        }
+        return Int64(rtpTimestamp) * 1_000_000_000 / 90_000
     }
 }
