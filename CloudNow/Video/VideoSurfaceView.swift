@@ -427,6 +427,11 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         }
     }
 
+    private struct AdmissionState {
+        var pendingFrame: PreparedFrame?
+        var drainScheduled = false
+    }
+
     /// AVSampleBufferVideoRenderer documents background-safe enqueueing. This box carries the
     /// fixed renderer identity onto its dedicated serial queue without weakening AVFoundation's
     /// concurrency checking for the rest of the file.
@@ -450,6 +455,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
     var onDecodedVideoFormatChanged: (@Sendable (DecodedVideoFormat) -> Void)?
     private let diagnostics: VideoPipelineDiagnostics
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let admissionState = OSAllocatedUnfairLock(initialState: AdmissionState())
     private let i420Converter = I420FrameConverter()
     private let presentationMode = VideoPresentationMode.configured
     private let enqueueQueue = DispatchQueue(
@@ -457,7 +463,6 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         qos: .userInteractive
     )
     private var sampleBufferRendererBox: SampleBufferRendererBox?
-    private var pendingFrame: PreparedFrame?
     private var isRequestingMediaData = false
 
     init(diagnostics: VideoPipelineDiagnostics) {
@@ -580,9 +585,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             generation: renderGeneration,
             trace: trace
         )
-        enqueueQueue.async { [weak self, rendererBox] in
-            self?.enqueueOrRetain(preparedFrame, with: rendererBox)
-        }
+        admit(preparedFrame, with: rendererBox)
     }
 
     func reset(preservingDisplayedImage: Bool) {
@@ -659,33 +662,28 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         }
     }
 
-    private func enqueueOrRetain(
+    private func admit(
         _ frame: PreparedFrame,
         with rendererBox: SampleBufferRendererBox
     ) {
-        let sampleBufferRenderer = rendererBox.renderer
-        if let pendingFrame {
-            if sampleBufferRenderer.isReadyForMoreMediaData {
-                self.pendingFrame = nil
-                diagnostics.updatePendingFrames(0)
-                enqueueIfCurrent(pendingFrame, with: sampleBufferRenderer)
-            } else {
-                diagnostics.recordBackpressure()
-                diagnostics.recordSupersededFrame(pendingFrame.trace)
-                self.pendingFrame = frame
-                diagnostics.updatePendingFrames(1)
-                startRequestingMediaData(with: rendererBox)
-                return
+        let (supersededFrame, shouldScheduleDrain) = admissionState.withLock { state in
+            let supersededFrame = state.pendingFrame
+            state.pendingFrame = frame
+            guard !state.drainScheduled else {
+                return (supersededFrame, false)
             }
+            state.drainScheduled = true
+            return (supersededFrame, true)
         }
 
-        if sampleBufferRenderer.isReadyForMoreMediaData {
-            enqueueIfCurrent(frame, with: sampleBufferRenderer)
-        } else {
-            diagnostics.recordBackpressure()
-            pendingFrame = frame
-            diagnostics.updatePendingFrames(1)
-            startRequestingMediaData(with: rendererBox)
+        if let supersededFrame {
+            diagnostics.recordSupersededFrame(supersededFrame.trace)
+        }
+        diagnostics.updatePendingFrames(1)
+
+        guard shouldScheduleDrain else { return }
+        enqueueQueue.async { [weak self, rendererBox] in
+            self?.drainLatestFrame(with: rendererBox)
         }
     }
 
@@ -694,19 +692,61 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         isRequestingMediaData = true
         rendererBox.renderer.requestMediaDataWhenReady(on: enqueueQueue) { [weak self, weak rendererBox] in
             guard let self, let rendererBox else { return }
-            drainPendingFrame(with: rendererBox.renderer)
-            if pendingFrame == nil {
-                rendererBox.renderer.stopRequestingMediaData()
-                isRequestingMediaData = false
-            }
+            drainLatestFrame(with: rendererBox)
         }
     }
 
-    private func drainPendingFrame(with sampleBufferRenderer: AVSampleBufferVideoRenderer) {
-        guard sampleBufferRenderer.isReadyForMoreMediaData, let pendingFrame else { return }
-        self.pendingFrame = nil
+    private func drainLatestFrame(with rendererBox: SampleBufferRendererBox) {
+        let sampleBufferRenderer = rendererBox.renderer
+        guard sampleBufferRenderer.isReadyForMoreMediaData else {
+            diagnostics.recordBackpressure()
+            startRequestingMediaData(with: rendererBox)
+            return
+        }
+
+        let pendingFrame = admissionState.withLock { state -> PreparedFrame? in
+            let pendingFrame = state.pendingFrame
+            state.pendingFrame = nil
+            return pendingFrame
+        }
+        guard let pendingFrame else {
+            finishDrainCycle(with: rendererBox)
+            return
+        }
+
         diagnostics.updatePendingFrames(0)
         enqueueIfCurrent(pendingFrame, with: sampleBufferRenderer)
+        finishDrainCycle(with: rendererBox)
+    }
+
+    private func finishDrainCycle(with rendererBox: SampleBufferRendererBox) {
+        let hasPendingFrame = admissionState.withLock { state in
+            guard state.pendingFrame == nil else { return true }
+            state.drainScheduled = false
+            return false
+        }
+        guard hasPendingFrame else {
+            stopRequestingMediaData(with: rendererBox)
+            return
+        }
+
+        if isRequestingMediaData {
+            return
+        }
+        if rendererBox.renderer.isReadyForMoreMediaData {
+            enqueueQueue.async { [weak self, rendererBox] in
+                self?.drainLatestFrame(with: rendererBox)
+            }
+        } else {
+            diagnostics.recordBackpressure()
+            startRequestingMediaData(with: rendererBox)
+        }
+    }
+
+    private func stopRequestingMediaData(with rendererBox: SampleBufferRendererBox) {
+        guard isRequestingMediaData else { return }
+        rendererBox.renderer.stopRequestingMediaData()
+        isRequestingMediaData = false
     }
 
     private func enqueueIfCurrent(
@@ -729,9 +769,14 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             sampleBufferRenderer?.stopRequestingMediaData()
             isRequestingMediaData = false
         }
-        guard let pendingFrame else { return }
-        self.pendingFrame = nil
+        let pendingFrame = admissionState.withLock { state -> PreparedFrame? in
+            let pendingFrame = state.pendingFrame
+            state.pendingFrame = nil
+            state.drainScheduled = false
+            return pendingFrame
+        }
         diagnostics.updatePendingFrames(0)
+        guard let pendingFrame else { return }
         diagnostics.recordDrop(pendingFrame.trace)
     }
 
