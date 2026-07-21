@@ -388,7 +388,7 @@ private nonisolated struct VideoPresentationTimeline {
             unwrappedRTPTicks = Int64(rawTimestamp)
         }
         lastRawRTPTimestamp = rawTimestamp
-        return unwrappedRTPTicks * 1_000_000_000 / 90_000
+        return unwrappedRTPTicks * 1_000_000_000 / 90000
     }
 
     private mutating func rebase(sourceNanoseconds: Int64, hostTime: CMTime) {
@@ -446,6 +446,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             sampleBufferRendererBox = SampleBufferRendererBox(sampleBufferRenderer)
         }
     }
+
     var onDecodedVideoFormatChanged: (@Sendable (DecodedVideoFormat) -> Void)?
     private let diagnostics: VideoPipelineDiagnostics
     private let state = OSAllocatedUnfairLock(initialState: State())

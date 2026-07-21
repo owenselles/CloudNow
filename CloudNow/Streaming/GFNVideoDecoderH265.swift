@@ -342,6 +342,6 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
         if renderTimeMs > 0 {
             return renderTimeMs * 1_000_000
         }
-        return Int64(rtpTimestamp) * 1_000_000_000 / 90_000
+        return Int64(rtpTimestamp) * 1_000_000_000 / 90000
     }
 }
