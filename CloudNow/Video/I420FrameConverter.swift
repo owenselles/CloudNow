@@ -21,6 +21,13 @@ final nonisolated class I420FrameConverter: @unchecked Sendable {
     private static let allocationThreshold = 6
     private let poolState = OSAllocatedUnfairLock(initialState: PoolState())
 
+    func flushExcessBuffers() {
+        poolState.withLock { state in
+            guard let pool = state.poolBox?.pool else { return }
+            CVPixelBufferPoolFlush(pool, .excessBuffers)
+        }
+    }
+
     func convert(_ i420: LKRTCI420Buffer) -> CVPixelBuffer? {
         let width = Int(i420.width)
         let height = Int(i420.height)

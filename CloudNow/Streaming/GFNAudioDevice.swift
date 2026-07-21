@@ -307,6 +307,7 @@ extension GFNAudioDevice: LKRTCAudioDevice {
     }
 
     func initialize(with delegate: LKRTCAudioDeviceDelegate) -> Bool {
+        removeRouteChangeObserver()
         self.delegate = delegate
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
@@ -319,10 +320,7 @@ extension GFNAudioDevice: LKRTCAudioDevice {
     }
 
     func terminateDevice() -> Bool {
-        if let routeChangeObserver {
-            NotificationCenter.default.removeObserver(routeChangeObserver)
-            self.routeChangeObserver = nil
-        }
+        removeRouteChangeObserver()
         tearDownEngine()
         playoutInitializedFlag = false
         recordingInitializedFlag = false
@@ -330,6 +328,12 @@ extension GFNAudioDevice: LKRTCAudioDevice {
         recordingFlag = false
         delegate = nil
         return true
+    }
+
+    private func removeRouteChangeObserver() {
+        guard let routeChangeObserver else { return }
+        NotificationCenter.default.removeObserver(routeChangeObserver)
+        self.routeChangeObserver = nil
     }
 
     var isPlayoutInitialized: Bool {

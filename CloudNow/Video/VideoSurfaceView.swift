@@ -137,6 +137,13 @@ final class VideoSurfaceView: UIView {
             ) { [weak renderer] _ in
                 renderer?.recoverIfRequired()
             },
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didReceiveMemoryWarningNotification,
+                object: nil,
+                queue: nil
+            ) { [weak renderer] _ in
+                renderer?.releaseUnusedBuffers()
+            },
         ]
     }
 
@@ -589,7 +596,12 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
     }
 
     func reset(preservingDisplayedImage: Bool) {
+        i420Converter.flushExcessBuffers()
         flush(preservingDisplayedImage: preservingDisplayedImage, recordFailure: false)
+    }
+
+    func releaseUnusedBuffers() {
+        i420Converter.flushExcessBuffers()
     }
 
     func recoverAfterFailure() {
