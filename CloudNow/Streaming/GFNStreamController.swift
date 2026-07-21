@@ -262,6 +262,9 @@ final class GFNStreamController: NSObject {
     private var connectionStatsRequestInFlight = false
     private var wasStreaming = false
     private var reconnectAttempt = 0
+    private var reconnectTask: Task<Void, Never>?
+    private var offerTask: Task<Void, Never>?
+    private var connectionGeneration: UInt64 = 0
     private static let maxReconnectAttempts = 3
     /// Set when the server sends an `exitMessage` (game closed, session ended, kicked). The
     /// subsequent ICE disconnect is then treated as a normal end — not a reconnect candidate.
@@ -292,11 +295,14 @@ final class GFNStreamController: NSObject {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
         let currentState = state
         switch currentState {
-        case .connecting, .streaming:
+        case .connecting, .streaming, .reconnecting:
             gfnLog.info("connect: already \(String(describing: currentState)), ignoring")
             return
         default: break
         }
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        tearDownTransport()
         let settings = settings.normalizedForClient
         let localCapabilities = LocalVideoCapabilities.detect(codec: settings.codec)
         let colorRequest = settings.colorRequest(localCapabilities: localCapabilities, accountAllowsHDR: accountAllowsHDR)
@@ -338,11 +344,17 @@ final class GFNStreamController: NSObject {
         }
 
         setupSignaling(session: session)
+        guard let signaling else {
+            state = .failed(message: "Failed to create signaling client")
+            return
+        }
         do {
             gfnLog.info("connect: opening signaling WebSocket")
-            try await signaling?.connect()
+            try await signaling.connect()
+            guard self.signaling === signaling else { return }
             gfnLog.info("connect: signaling connected")
         } catch {
+            guard self.signaling === signaling else { return }
             gfnLog.error("connect: signaling FAILED: \(error)")
             state = .failed(message: error.localizedDescription)
         }
@@ -482,48 +494,18 @@ final class GFNStreamController: NSObject {
 
     func disconnect() {
         onReconnectNeeded = nil
-        stopRtcEventLog()
-        stopStatsTimer()
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        tearDownTransport()
         wasStreaming = false
         reconnectAttempt = 0
         serverStopped = false
-        inputSender?.stop()
-        signaling?.disconnect()
-        videoView?.videoTrack = nil
-        peerConnection?.close()
-        peerConnection = nil
-        inputDataChannel = nil
-        inputSendQueue.sync {
-            reliableSendChannel = nil
-            rumbleSink = nil
-            inputLatencySamplingEnabled = false
-            inputQueueWaitsNs.removeAll(keepingCapacity: true)
-            inputQueueWaitWriteIndex = 0
-            inputQueueMaxNs = 0
-            let pending = Array(pendingGamepadSnapshots.values)
-            pendingGamepadSnapshots.removeAll()
-            inputDropped &+= UInt64(pending.count)
-            pending.forEach { $0.completion(.channelUnavailable) }
-        }
-        inputSender = nil
-        partiallyReliableDataChannel = nil
-        statsChannel = nil
-        controlChannel = nil
-        videoTrack = nil
-        videoReceiver = nil
-        micAudioTrack = nil
-        micAudioSource = nil
         pingHistory = []
         fpsHistory = []
         bitrateHistory = []
         streamingStartedAt = nil
-        signalingComplete = false
-        inputReady = false
-        previousVideoStats = nil
-        statsTick = 0
         previousSelectedCandidatePairId = ""
         lastZoneRttFeedbackAt = nil
-        videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
         videoView?.onDecodedVideoFormatChanged = nil
         videoView = nil
@@ -542,33 +524,31 @@ final class GFNStreamController: NSObject {
         state = .idle
     }
 
-    // MARK: Auto-Reconnect
+    private func tearDownTransport() {
+        stopRtcEventLog()
+        stopStatsTimer()
+        connectionGeneration &+= 1
+        offerTask?.cancel()
+        offerTask = nil
 
-    private func attemptReconnect() {
-        reconnectAttempt += 1
-        let attempt = reconnectAttempt
-        gfnLog.info("attemptReconnect: attempt \(attempt)/\(Self.maxReconnectAttempts)")
-
-        guard attempt <= Self.maxReconnectAttempts, onReconnectNeeded != nil else {
-            gfnLog.info("attemptReconnect: giving up, showing sessionEnded")
-            state = .sessionEnded
-            return
-        }
-
-        state = .reconnecting(attempt: attempt)
-
-        // Tear down current peer connection before reconnecting
         inputSender?.stop()
         videoView?.inputHandler = nil
-        signaling?.disconnect()
+        videoView?.videoTrack = nil
+        inputDataChannel?.delegate = nil
+        statsChannel?.delegate = nil
+        controlChannel?.delegate = nil
+        stopSignaling()
         peerConnection?.close()
         peerConnection = nil
+
         inputDataChannel = nil
         partiallyReliableDataChannel = nil
         statsChannel = nil
+        controlChannel = nil
         inputSendQueue.sync {
             reliableSendChannel = nil
             rumbleSink = nil
+            inputLatencySamplingEnabled = false
             inputQueueWaitsNs.removeAll(keepingCapacity: true)
             inputQueueWaitWriteIndex = 0
             inputQueueMaxNs = 0
@@ -578,71 +558,148 @@ final class GFNStreamController: NSObject {
             pending.forEach { $0.completion(.channelUnavailable) }
         }
         inputSender = nil
-        controlChannel = nil
         videoTrack = nil
+        videoReceiver = nil
         micAudioTrack = nil
         micAudioSource = nil
         signalingComplete = false
         inputReady = false
+        previousVideoStats = nil
+        previousAudioSyncStats = nil
+        statsTick = 0
+    }
+
+    private func stopSignaling() {
+        signaling?.onEvent = nil
+        signaling?.disconnect()
+        signaling = nil
+    }
+
+    // MARK: Auto-Reconnect
+
+    private func attemptReconnect() {
+        guard reconnectTask == nil else {
+            gfnLog.debug("attemptReconnect: reconnect already scheduled")
+            return
+        }
+
+        let attempt = reconnectAttempt + 1
+        gfnLog.info("attemptReconnect: attempt \(attempt)/\(Self.maxReconnectAttempts)")
+
+        guard attempt <= Self.maxReconnectAttempts, onReconnectNeeded != nil else {
+            gfnLog.info("attemptReconnect: giving up, showing sessionEnded")
+            state = .sessionEnded
+            return
+        }
+
+        reconnectAttempt = attempt
+        state = .reconnecting(attempt: attempt)
+        tearDownTransport()
+        let generation = connectionGeneration
 
         let delays: [TimeInterval] = [0.5, 1.0, 2.0]
         let delay = delays[min(attempt - 1, delays.count - 1)]
 
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self else { return }
-            guard case .reconnecting = state else { return }
-
-            guard let reclaim = onReconnectNeeded,
-                  let session = await reclaim()
-            else {
-                gfnLog.info("attemptReconnect: reclaim failed on attempt \(attempt)")
-                if attempt >= Self.maxReconnectAttempts {
-                    state = .sessionEnded
-                }
+        reconnectTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
                 return
             }
+            guard let self, !Task.isCancelled,
+                  connectionGeneration == generation,
+                  case let .reconnecting(activeAttempt) = state,
+                  activeAttempt == attempt else { return }
+
+            guard let reclaim = onReconnectNeeded else {
+                finishReconnectAttempt(attempt: attempt, generation: generation, shouldRetry: false)
+                return
+            }
+            guard let session = await reclaim() else {
+                gfnLog.info("attemptReconnect: reclaim failed on attempt \(attempt)")
+                finishReconnectAttempt(attempt: attempt, generation: generation, shouldRetry: true)
+                return
+            }
+            guard !Task.isCancelled,
+                  connectionGeneration == generation,
+                  case let .reconnecting(activeAttempt) = state,
+                  activeAttempt == attempt else { return }
 
             gfnLog.info("attemptReconnect: reclaimed session, reconnecting WebRTC")
             sessionInfo = session
             setupSignaling(session: session)
+            guard let signaling else {
+                finishReconnectAttempt(attempt: attempt, generation: generation, shouldRetry: true)
+                return
+            }
             do {
-                try await signaling?.connect()
-            } catch {
-                gfnLog.error("attemptReconnect: signaling failed: \(error)")
-                if attempt >= Self.maxReconnectAttempts {
-                    state = .sessionEnded
+                try await signaling.connect()
+                guard !Task.isCancelled,
+                      connectionGeneration == generation,
+                      self.signaling === signaling else {
+                    signaling.disconnect()
+                    return
                 }
+                reconnectTask = nil
+            } catch {
+                guard connectionGeneration == generation, self.signaling === signaling else { return }
+                gfnLog.error("attemptReconnect: signaling failed: \(error)")
+                finishReconnectAttempt(attempt: attempt, generation: generation, shouldRetry: true)
             }
         }
+    }
+
+    private func finishReconnectAttempt(attempt: Int, generation: UInt64, shouldRetry: Bool) {
+        guard connectionGeneration == generation else { return }
+        reconnectTask = nil
+        guard shouldRetry, attempt < Self.maxReconnectAttempts, onReconnectNeeded != nil else {
+            state = .sessionEnded
+            return
+        }
+        attemptReconnect()
     }
 
     // MARK: Private — Signaling Setup
 
     private func setupSignaling(session: SessionInfo) {
+        stopSignaling()
+        let generation = connectionGeneration
         let client = GFNSignalingClient(
             signalingUrl: session.signalingUrl,
             sessionId: session.sessionId,
             serverIp: session.serverIp,
             resolution: settings.resolution
         )
-        client.onEvent = { [weak self] event in
-            Task { @MainActor [weak self] in self?.handleSignalingEvent(event) }
+        client.onEvent = { [weak self, weak client] event in
+            Task { @MainActor [weak self, weak client] in
+                guard let self, let client,
+                      connectionGeneration == generation,
+                      signaling === client else { return }
+                handleSignalingEvent(event, from: client, generation: generation)
+            }
         }
         signaling = client
     }
 
-    private func handleSignalingEvent(_ event: SignalingEvent) {
+    private func handleSignalingEvent(
+        _ event: SignalingEvent,
+        from client: GFNSignalingClient,
+        generation: UInt64
+    ) {
         switch event {
         case .connected:
             break
         case let .offer(sdp):
-            Task { await handleOffer(sdp: sdp) }
+            offerTask?.cancel()
+            offerTask = Task { @MainActor [weak self, weak client] in
+                guard let self, let client else { return }
+                await handleOffer(sdp: sdp, signalingClient: client, generation: generation)
+            }
         case let .remoteICE(candidate, sdpMid, sdpMLineIndex):
             addRemoteICE(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
         case let .disconnected(reason):
             // Always stop the signaling client — kills heartbeat and releases the connection.
-            signaling?.disconnect()
+            stopSignaling()
             let establishing = switch state {
             case .connecting, .reconnecting: true
             default: false
@@ -663,6 +720,7 @@ final class GFNStreamController: NSObject {
                 state = .disconnected(reason: reason)
             }
         case let .error(msg):
+            stopSignaling()
             state = .failed(message: msg)
         case .log:
             break
@@ -735,8 +793,15 @@ final class GFNStreamController: NSObject {
         audioSyncLog.info("\(message, privacy: .public)")
     }
 
-    private func handleOffer(sdp: String) async {
-        guard let session = sessionInfo else { return }
+    private func handleOffer(
+        sdp: String,
+        signalingClient: GFNSignalingClient,
+        generation: UInt64
+    ) async {
+        guard !Task.isCancelled,
+              connectionGeneration == generation,
+              signaling === signalingClient,
+              let session = sessionInfo else { return }
         #if DEBUG
             gfnLog.debug("[Stream] Offer SDP (\(sdp.count, privacy: .public) chars):\n\(sdp, privacy: .private)")
         #endif
@@ -785,6 +850,18 @@ final class GFNStreamController: NSObject {
             state = .failed(message: "Failed to create LKRTCPeerConnection")
             return
         }
+        guard !Task.isCancelled,
+              connectionGeneration == generation,
+              signaling === signalingClient else {
+            pc.close()
+            return
+        }
+        if let previousPeerConnection = peerConnection {
+            previousPeerConnection.close()
+            videoView?.videoTrack = nil
+            videoTrack = nil
+            videoReceiver = nil
+        }
         peerConnection = pc
         if settings.enableRtcEventLog {
             if let url = startRtcEventLog() {
@@ -829,6 +906,10 @@ final class GFNStreamController: NSObject {
         // so the m=audio sendrecv line is included in the SDP)
         if microphoneEnabledForConnection {
             await attachMicrophone(to: pc)
+            guard !Task.isCancelled, isCurrentPeerConnection(pc, generation: generation) else {
+                pc.close()
+                return
+            }
         }
 
         // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers)
@@ -841,7 +922,7 @@ final class GFNStreamController: NSObject {
         // the offer leaves orphaned a=ssrc-group:FEC-FR lines that cause WebRTC to reject
         // the video m-line (port 0) when generating the answer.
         let serverMediaIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
-            ?? Self.extractIpFromHost(signaling?.connectedHost ?? "")
+            ?? Self.extractIpFromHost(signalingClient.connectedHost)
         let fixedSdp = serverMediaIp.map { ip in
             Self.rewriteOfferConnectionAddresses(sdp, serverIp: ip)
         } ?? sdp
@@ -865,7 +946,14 @@ final class GFNStreamController: NSObject {
                 }
             }
         } catch {
+            guard isCurrentPeerConnection(pc, generation: generation) else { return }
             gfnLog.error("[Stream] setRemoteDescription failed: \(error, privacy: .private)")
+            state = .failed(message: "Remote description failed: \(error.localizedDescription)")
+            return
+        }
+        guard !Task.isCancelled, isCurrentPeerConnection(pc, generation: generation) else {
+            pc.close()
+            return
         }
 
         // Create answer
@@ -885,6 +973,10 @@ final class GFNStreamController: NSObject {
                         cont.resume(throwing: StreamError.noSDP)
                     }
                 }
+            }
+            guard !Task.isCancelled, isCurrentPeerConnection(pc, generation: generation) else {
+                pc.close()
+                return
             }
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
@@ -928,10 +1020,26 @@ final class GFNStreamController: NSObject {
                     }
                 }
             } catch {
+                guard isCurrentPeerConnection(pc, generation: generation) else { return }
                 gfnLog.error("[Stream] setLocalDescription failed: \(error, privacy: .private)")
+                state = .failed(message: "Local description failed: \(error.localizedDescription)")
+                return
+            }
+            guard !Task.isCancelled,
+                  isCurrentPeerConnection(pc, generation: generation),
+                  signaling === signalingClient else {
+                pc.close()
+                return
             }
             let (iceUfrag, icePwd, dtlsFingerprint) = Self.extractIceCredentials(from: mangledAnswerSdp)
-            signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp(iceUfrag: iceUfrag, icePwd: icePwd, dtlsFingerprint: dtlsFingerprint))
+            signalingClient.sendAnswer(
+                sdp: mangledAnswerSdp,
+                nvstSdp: buildNvstSdp(
+                    iceUfrag: iceUfrag,
+                    icePwd: icePwd,
+                    dtlsFingerprint: dtlsFingerprint
+                )
+            )
             signalingComplete = true
 
             // Inject the server's ICE host candidate AFTER sending the answer.
@@ -952,8 +1060,8 @@ final class GFNStreamController: NSObject {
             // We don't know which port carries UDP media (usage=2 is absent for this zone),
             // so we inject candidates for ALL combinations of known IPs × known ports.
             // ICE probes them all simultaneously and succeeds on the first STUN reply.
-            let resolvedIps = signaling?.resolvedIPs ?? []
-            let connectedHost = signaling?.connectedHost ?? ""
+            let resolvedIps = signalingClient.resolvedIPs
+            let connectedHost = signalingClient.connectedHost
             var allIps: [String] = []
             if let ip = mciIp {
                 allIps.append(ip)
@@ -973,6 +1081,10 @@ final class GFNStreamController: NSObject {
             } else {
                 gfnLog.debug("[ICE] Injecting \(pairs.count, privacy: .public) candidate(s) (mciIp=\(mciIp ?? "nil", privacy: .private) mciPort=\(mciPort, privacy: .public) sdpPort=\(sdpPort, privacy: .public))")
                 for (i, (ip, port)) in pairs.enumerated() {
+                    guard !Task.isCancelled, isCurrentPeerConnection(pc, generation: generation) else {
+                        pc.close()
+                        return
+                    }
                     let cand = LKRTCIceCandidate(
                         sdp: "candidate:\(i + 1) 1 UDP 2130706431 \(ip) \(port) typ host",
                         sdpMLineIndex: 0, sdpMid: "0"
@@ -982,8 +1094,13 @@ final class GFNStreamController: NSObject {
                 }
             }
         } catch {
+            guard isCurrentPeerConnection(pc, generation: generation) else { return }
             state = .failed(message: "Answer creation failed: \(error.localizedDescription)")
         }
+    }
+
+    private func isCurrentPeerConnection(_ candidate: LKRTCPeerConnection, generation: UInt64) -> Bool {
+        connectionGeneration == generation && peerConnection === candidate
     }
 
     // MARK: Private — NVST SDP
@@ -1736,7 +1853,10 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didRemove _: LKRTCMediaStream) {}
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {
+    nonisolated func peerConnection(
+        _ peerConnection: LKRTCPeerConnection,
+        didChange newState: LKRTCIceConnectionState
+    ) {
         let name = switch newState {
         case .new: "new"
         case .checking: "checking"
@@ -1750,7 +1870,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         }
         gfnLog.debug("[ICE] State → \(name, privacy: .public)")
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peerConnection === peerConnection else { return }
             switch newState {
             case .connected, .completed:
                 wasStreaming = true
@@ -1794,9 +1914,13 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         gfnLog.debug("[ICE] Gathering → \(name, privacy: .public)")
     }
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {
+    nonisolated func peerConnection(
+        _ peerConnection: LKRTCPeerConnection,
+        didGenerate candidate: LKRTCIceCandidate
+    ) {
         Task { @MainActor [weak self] in
-            self?.signaling?.sendICECandidate(
+            guard let self, self.peerConnection === peerConnection else { return }
+            signaling?.sendICECandidate(
                 candidate: candidate.sdp,
                 sdpMid: candidate.sdpMid,
                 sdpMLineIndex: Int(candidate.sdpMLineIndex)
@@ -1806,26 +1930,36 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didRemove _: [LKRTCIceCandidate]) {}
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {
+    nonisolated func peerConnection(
+        _ peerConnection: LKRTCPeerConnection,
+        didOpen dataChannel: LKRTCDataChannel
+    ) {
         gfnLog.debug("[DataChannel] Server opened channel: label=\(dataChannel.label, privacy: .public)")
         if dataChannel.label == "control_channel" {
             dataChannel.delegate = self
             Task { @MainActor [weak self] in
-                self?.controlChannel = dataChannel
+                guard let self, self.peerConnection === peerConnection else {
+                    dataChannel.delegate = nil
+                    return
+                }
+                controlChannel = dataChannel
             }
         }
     }
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection,
-                                    didAdd rtpReceiver: LKRTCRtpReceiver,
-                                    streams _: [LKRTCMediaStream])
+    nonisolated func peerConnection(
+        _ peerConnection: LKRTCPeerConnection,
+        didAdd rtpReceiver: LKRTCRtpReceiver,
+        streams _: [LKRTCMediaStream]
+    )
     {
         gfnLog.debug("[Stream] Received RTP receiver: kind=\(rtpReceiver.track?.kind ?? "nil", privacy: .public)")
         guard let track = rtpReceiver.track as? LKRTCVideoTrack else { return }
         gfnLog.info("[Stream] Got video track")
         Task { @MainActor [weak self] in
-            self?.videoReceiver = rtpReceiver
-            self?.videoTrack = track
+            guard let self, self.peerConnection === peerConnection else { return }
+            videoReceiver = rtpReceiver
+            videoTrack = track
         }
     }
 }
@@ -1844,7 +1978,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             @unknown default: "unknown"
             }
             inputSendQueue.async { [weak self] in
-                guard let self else { return }
+                guard let self, reliableSendChannel === dataChannel else { return }
                 inputChannelState = state
                 inputBufferedBytes = dataChannel.bufferedAmount
                 if state == "closing" || state == "closed" {
@@ -1862,7 +1996,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didChangeBufferedAmount amount: UInt64) {
         guard dataChannel.label == "input_channel_v1" else { return }
         inputSendQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self, reliableSendChannel === dataChannel else { return }
             inputBufferedBytes = amount
             drainPendingGamepadSnapshotsIfPossible(on: dataChannel)
         }
@@ -1872,7 +2006,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
         if dataChannel.label == "stats_channel" {
             if let gameFps = Self.parseStatsChannelGameFps(buffer.data) {
                 Task { @MainActor [weak self] in
-                    self?.updateStats { $0.gameFps = gameFps }
+                    guard let self, statsChannel === dataChannel else { return }
+                    updateStats { $0.gameFps = gameFps }
                 }
             }
             return
@@ -1897,7 +2032,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 if let code = mappedCode {
                     let secondsLeft = notification["secondsLeft"] as? Int
                     Task { @MainActor [weak self] in
-                        self?.timeWarning = StreamTimeWarning(code: code, secondsLeft: secondsLeft)
+                        guard let self, controlChannel === dataChannel else { return }
+                        timeWarning = StreamTimeWarning(code: code, secondsLeft: secondsLeft)
                     }
                 }
             }
@@ -1906,7 +2042,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                let rawMode = hdrMode["hdrMode"] as? Int
             {
                 Task { @MainActor [weak self] in
-                    self?.applyNegotiatedHDRMode(rawMode)
+                    guard let self, controlChannel === dataChannel else { return }
+                    applyNegotiatedHDRMode(rawMode)
                 }
             }
             // The server sends an `exitMessage` when it deliberately ends the stream — the user
@@ -1918,7 +2055,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             {
                 gfnLog.info("control channel exitMessage received — server ended stream, not reconnecting")
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
+                    guard let self, controlChannel === dataChannel else { return }
                     serverStopped = true
                     state = .sessionEnded
                 }
@@ -1944,7 +2081,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
         } else {
             if let cmd = GFNHapticsDecoder.decode(buffer.data) {
                 inputSendQueue.async { [weak self] in
-                    self?.rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
+                    guard let self, reliableSendChannel === dataChannel else { return }
+                    rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
                 }
                 return
             }
@@ -1954,7 +2092,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 
         let negotiatedVersion = version
         Task { @MainActor [weak self] in
-            guard let self, !self.inputReady else { return }
+            guard let self, inputDataChannel === dataChannel, !inputReady else { return }
             inputReady = true
             protocolVersion = negotiatedVersion
             gfnLog.info("[DataChannel] Input ready — starting InputSender (protocol v\(negotiatedVersion, privacy: .public))")

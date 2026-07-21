@@ -77,14 +77,15 @@ final class GFNSignalingClient {
         peerName = "peer-\(Int.random(in: 0 ..< 10_000_000_000))"
     }
 
+    isolated deinit {
+        stopTransport(clearEventHandler: true)
+    }
+
     // MARK: Connect
 
     func connect() async throws {
         // Cancel any zombie tasks / previous connection before starting fresh.
-        heartbeatTask?.cancel()
-        receiveTask?.cancel()
-        connection?.cancel()
-        connection = nil
+        stopTransport(clearEventHandler: false)
 
         guard let url = URL(string: signalingUrl), let host = url.host else {
             throw SignalingError.invalidUrl(signalingUrl)
@@ -225,10 +226,7 @@ final class GFNSignalingClient {
     // MARK: Disconnect
 
     func disconnect() {
-        heartbeatTask?.cancel()
-        receiveTask?.cancel()
-        connection?.cancel()
-        connection = nil
+        stopTransport(clearEventHandler: true)
     }
 
     // MARK: Private — Peer Info / Heartbeat
@@ -250,11 +248,11 @@ final class GFNSignalingClient {
     }
 
     private func startHeartbeat() {
-        heartbeatTask = Task {
+        heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { return }
-                sendJson(["hb": 1])
+                self?.sendJson(["hb": 1])
             }
         }
     }
@@ -262,17 +260,18 @@ final class GFNSignalingClient {
     // MARK: Private — WebSocket Receive Loop
 
     private func startReceiving() {
-        receiveTask = Task { [weak self] in
-            guard let self else { return }
+        let activeConnection = connection
+        receiveTask = Task { [weak self, activeConnection] in
+            guard let activeConnection else { return }
             while !Task.isCancelled {
                 do {
-                    if let text = try await receiveTextMessage() {
-                        handleMessage(text)
+                    if let text = try await Self.receiveTextMessage(from: activeConnection) {
+                        self?.handleMessage(text)
                     }
                 } catch {
                     if !Task.isCancelled {
                         signalingLog.error("[Signaling] Receive error: \(error, privacy: .private)")
-                        onEvent?(.disconnected(reason: error.localizedDescription))
+                        self?.onEvent?(.disconnected(reason: error.localizedDescription))
                     }
                     return
                 }
@@ -284,15 +283,14 @@ final class GFNSignalingClient {
     /// multiple receive() callbacks until isComplete=true (NWConnection delivers large
     /// messages in partial deliveries). Returns the UTF-8 text payload for text frames,
     /// nil for control frames (ping is handled automatically by autoReplyPing).
-    private func receiveTextMessage() async throws -> String? {
-        guard let conn = connection else { throw SignalingError.cancelled }
+    private static func receiveTextMessage(from connection: NWConnection) async throws -> String? {
         var buffer = Data()
         var messageOpcode: NWProtocolWebSocket.Opcode? = nil
 
         while true {
             let (chunk, opcode, isComplete) = try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<(Data?, NWProtocolWebSocket.Opcode?, Bool), Error>) in
-                conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { content, context, isComplete, error in
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { content, context, isComplete, error in
                     if let error {
                         cont.resume(throwing: error); return
                     }
@@ -331,6 +329,21 @@ final class GFNSignalingClient {
                 // Binary, ping (handled by autoReplyPing), pong — skip
                 return nil
             }
+        }
+    }
+
+    private func stopTransport(clearEventHandler: Bool) {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        receiveTask?.cancel()
+        receiveTask = nil
+        connection?.stateUpdateHandler = nil
+        connection?.cancel()
+        connection = nil
+        connectedHost = ""
+        resolvedIPs = []
+        if clearEventHandler {
+            onEvent = nil
         }
     }
 
