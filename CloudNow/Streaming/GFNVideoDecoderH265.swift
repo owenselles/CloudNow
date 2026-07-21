@@ -18,12 +18,12 @@ private nonisolated let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", 
 /// release this class can be deleted and `GFNVideoDecoderFactory` reverted to the default
 /// decoder.
 final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unchecked Sendable {
-    private let callbackState = Mutex<RTCVideoDecoderCallback?>(nil)
+    private var callback: RTCVideoDecoderCallback?
     private var videoFormat: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
 
     func setCallback(_ callback: @escaping RTCVideoDecoderCallback) {
-        callbackState.withLock { $0 = callback }
+        self.callback = callback
     }
 
     func startDecode(withNumberOfCores _: Int32) -> NSInteger {
@@ -33,7 +33,7 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
     func release() -> NSInteger {
         destroySession()
         videoFormat = nil
-        callbackState.withLock { $0 = nil }
+        callback = nil
         return 0
     }
 
@@ -101,8 +101,7 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
                 timeStampNs: frameTimestampNanoseconds
             )
             frame.timeStamp = rtpTimestamp
-            let callback = self?.callbackState.withLock { $0 }
-            callback?(frame)
+            self?.callback?(frame)
         }
         // Keep one frame in flight. With no flags, VideoToolbox guarantees that the output
         // callback completes before this call returns, preventing complexity spikes from
