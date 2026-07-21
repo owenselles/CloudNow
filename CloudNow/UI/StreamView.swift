@@ -1143,7 +1143,7 @@ struct StreamView: View {
         orchestrationAttempt: SessionAttemptToken
     ) async throws -> SessionInfo {
         try requireCurrentSessionAttempt(generation)
-        let isNvidiaProvider = authManager.session?.provider.idpId == NVIDIAAuth.defaultIdpId
+        let isNvidiaProvider = authManager.session?.provider.isNvidiaDirect ?? true
         let routeSelection: (base: String, routingZoneUrl: String?) = if isNvidiaProvider {
             switch settings.serverRoutingMode {
             case .region:

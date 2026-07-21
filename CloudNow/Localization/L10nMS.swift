@@ -406,5 +406,6 @@ enum L10nMS {
         "accessibility": "Kebolehcapaian",
         "controller_changes_next_session": "Perubahan pengawal digunakan pada sesi awan seterusnya.",
         "ending_session": "Menamatkan sesi awan…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

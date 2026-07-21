@@ -406,5 +406,6 @@ enum L10nHU {
         "accessibility": "Kisegítő lehetőségek",
         "controller_changes_next_session": "A kontroller módosításai a következő felhőalapú munkamenetben lépnek életbe.",
         "ending_session": "Felhőalapú munkamenet befejezése…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

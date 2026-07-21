@@ -406,5 +406,6 @@ enum L10nIT {
         "accessibility": "Accessibilità",
         "controller_changes_next_session": "Le modifiche al controller si applicano alla prossima sessione cloud.",
         "ending_session": "Chiusura della sessione cloud…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

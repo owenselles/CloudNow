@@ -1,9 +1,14 @@
 import SwiftUI
 
+private enum ProvidersState {
+    case loading
+    case loaded([LoginProvider])
+}
+
 struct LoginView: View {
     @Environment(AuthManager.self) var authManager
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
-    @State private var providers: [LoginProvider]?
+    @State private var providersState: ProvidersState = .loading
     @FocusState private var focusedProvider: String?
 
     var body: some View {
@@ -20,7 +25,11 @@ struct LoginView: View {
             }
         }
         .task {
-            providers = try? await NVIDIAAuthAPI().fetchProviders()
+            let fetched = (try? await NVIDIAAuthAPI().fetchProviders()) ?? []
+            providersState = .loaded(fetched)
+            if let first = fetched.first, focusedProvider == nil {
+                focusedProvider = first.idpId
+            }
         }
     }
 
@@ -31,7 +40,12 @@ struct LoginView: View {
             CloudNowBrandHeader(subtitle: L10n.text("app_tagline"))
 
             VStack(spacing: 16) {
-                if let providers, providers.count > 1 {
+                switch providersState {
+                case .loading:
+                    ProgressView()
+                        .tint(.white)
+                        .padding(.vertical, 16)
+                case .loaded(let providers) where providers.count > 1:
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(spacing: 16) {
@@ -57,7 +71,7 @@ struct LoginView: View {
                             withAnimation { proxy.scrollTo(id, anchor: .center) }
                         }
                     }
-                } else {
+                case .loaded:
                     Button {
                         authManager.login()
                     } label: {

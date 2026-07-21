@@ -406,5 +406,6 @@ enum L10nPL {
         "accessibility": "Ułatwienia dostępu",
         "controller_changes_next_session": "Zmiany kontrolera zostaną zastosowane w następnej sesji w chmurze.",
         "ending_session": "Kończenie sesji w chmurze…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

@@ -406,5 +406,6 @@ enum L10nFI {
         "accessibility": "Käyttöapu",
         "controller_changes_next_session": "Ohjaimen muutokset tulevat käyttöön seuraavassa pilvi-istunnossa.",
         "ending_session": "Pilvi-istuntoa lopetetaan…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

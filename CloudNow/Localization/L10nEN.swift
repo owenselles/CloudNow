@@ -406,5 +406,6 @@ enum L10nEN {
         "accessibility": "Accessibility",
         "controller_changes_next_session": "Controller changes apply to the next cloud session.",
         "ending_session": "Ending cloud session…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

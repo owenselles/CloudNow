@@ -406,5 +406,6 @@ enum L10nES {
         "accessibility": "Accesibilidad",
         "controller_changes_next_session": "Los cambios del mando se aplican a la siguiente sesión en la nube.",
         "ending_session": "Finalizando sesión en la nube…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

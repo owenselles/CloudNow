@@ -406,5 +406,6 @@ enum L10nFR {
         "accessibility": "Accessibilité",
         "controller_changes_next_session": "Les modifications de la manette s’appliquent à la prochaine session cloud.",
         "ending_session": "Fin de la session cloud…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

@@ -114,6 +114,10 @@ nonisolated struct LoginProvider: Codable {
     let displayName: String
     var streamingServiceUrl: String
     let priority: Int
+
+    var isNvidiaDirect: Bool {
+        idpId == NVIDIAAuth.defaultIdpId
+    }
 }
 
 // MARK: - NVIDIA OAuth API

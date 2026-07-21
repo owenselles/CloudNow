@@ -406,5 +406,6 @@ enum L10nPTBR {
         "accessibility": "Acessibilidade",
         "controller_changes_next_session": "As alterações do controle serão aplicadas à próxima sessão na nuvem.",
         "ending_session": "Encerrando sessão na nuvem…",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }
