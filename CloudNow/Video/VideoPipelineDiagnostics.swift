@@ -7,13 +7,19 @@ nonisolated struct VideoPipelineSnapshot {
     var enqueuedFrames: Int = 0
     var droppedFrames: Int = 0
     var backpressureEvents: Int = 0
+    var supersededFrames: Int = 0
+    var pendingFrames: Int = 0
     var rendererFailures: Int = 0
     var rendererFlushes: Int = 0
+    var callbackFramesPerSecond: Double = 0
+    var enqueuedFramesPerSecond: Double = 0
+    var presentedFramesPerSecond: Double = 0
     var averageConversionMs: Double = 0
     var averageSampleCreationMs: Double = 0
     var avTotalFrames: Int = 0
     var avDroppedFrames: Int = 0
     var avCorruptedFrames: Int = 0
+    var avOptimizedFrames: Int = 0
     var avAccumulatedFrameDelayMs: Double = 0
     var decodedVideoFormat: DecodedVideoFormat?
 }
@@ -30,12 +36,14 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
         var sampleCreationNanoseconds: UInt64 = 0
         var sampleCreationCount = 0
         var previousAVMetrics: AVMetrics?
+        var lastSnapshotUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
     }
 
     private struct AVMetrics {
         var totalFrames: Int
         var droppedFrames: Int
         var corruptedFrames: Int
+        var optimizedFrames: Int
         var accumulatedFrameDelaySeconds: Double
     }
 
@@ -136,6 +144,23 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
         }
     }
 
+    func recordSupersededFrame(_ trace: VideoFrameTrace?) {
+        state.withLock { state in
+            guard state.isEnabled else { return }
+            state.snapshot.supersededFrames += 1
+            state.snapshot.droppedFrames += 1
+        }
+        guard let trace else { return }
+        os_signpost(.end, log: Self.log, name: "DecodedFrame", signpostID: trace.signpostID)
+    }
+
+    func updatePendingFrames(_ count: Int) {
+        state.withLock { state in
+            guard state.isEnabled else { return }
+            state.snapshot.pendingFrames = count
+        }
+    }
+
     func recordRendererFailure() {
         state.withLock { state in
             guard state.isEnabled else { return }
@@ -156,6 +181,7 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
         totalFrames: Int,
         droppedFrames: Int,
         corruptedFrames: Int,
+        optimizedFrames: Int,
         accumulatedFrameDelaySeconds: Double
     ) {
         state.withLock { state in
@@ -164,12 +190,14 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
                 totalFrames: totalFrames,
                 droppedFrames: droppedFrames,
                 corruptedFrames: corruptedFrames,
+                optimizedFrames: optimizedFrames,
                 accumulatedFrameDelaySeconds: accumulatedFrameDelaySeconds
             )
             if let previous = state.previousAVMetrics {
                 state.snapshot.avTotalFrames = max(0, current.totalFrames - previous.totalFrames)
                 state.snapshot.avDroppedFrames = max(0, current.droppedFrames - previous.droppedFrames)
                 state.snapshot.avCorruptedFrames = max(0, current.corruptedFrames - previous.corruptedFrames)
+                state.snapshot.avOptimizedFrames = max(0, current.optimizedFrames - previous.optimizedFrames)
                 state.snapshot.avAccumulatedFrameDelayMs = max(
                     0,
                     current.accumulatedFrameDelaySeconds - previous.accumulatedFrameDelaySeconds
@@ -178,6 +206,7 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
                 state.snapshot.avTotalFrames = 0
                 state.snapshot.avDroppedFrames = 0
                 state.snapshot.avCorruptedFrames = 0
+                state.snapshot.avOptimizedFrames = 0
                 state.snapshot.avAccumulatedFrameDelayMs = 0
             }
             state.previousAVMetrics = current
@@ -191,7 +220,31 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
     }
 
     func snapshot() -> VideoPipelineSnapshot {
-        state.withLock { $0.snapshot }
+        state.withLock { state in
+            let now = DispatchTime.now().uptimeNanoseconds
+            let elapsedSeconds = max(
+                Double(now - state.lastSnapshotUptimeNanoseconds) / 1_000_000_000,
+                0.001
+            )
+            var snapshot = state.snapshot
+            snapshot.callbackFramesPerSecond = Double(snapshot.callbackFrames) / elapsedSeconds
+            snapshot.enqueuedFramesPerSecond = Double(snapshot.enqueuedFrames) / elapsedSeconds
+            snapshot.presentedFramesPerSecond = Double(
+                max(0, snapshot.avTotalFrames - snapshot.avDroppedFrames)
+            ) / elapsedSeconds
+
+            let retainedFormat = snapshot.decodedVideoFormat
+            let pendingFrames = snapshot.pendingFrames
+            state.snapshot = VideoPipelineSnapshot(
+                pendingFrames: pendingFrames,
+                decodedVideoFormat: retainedFormat
+            )
+            state.conversionNanoseconds = 0
+            state.sampleCreationNanoseconds = 0
+            state.sampleCreationCount = 0
+            state.lastSnapshotUptimeNanoseconds = now
+            return snapshot
+        }
     }
 
     private nonisolated static func averageMilliseconds(totalNanoseconds: UInt64, count: Int) -> Double {

@@ -490,6 +490,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
                     totalFrames: metrics.totalNumberOfFrames,
                     droppedFrames: metrics.numberOfDroppedFrames,
                     corruptedFrames: metrics.numberOfCorruptedFrames,
+                    optimizedFrames: metrics.numberOfFramesDisplayedUsingOptimizedCompositing,
                     accumulatedFrameDelaySeconds: metrics.totalAccumulatedFrameDelay
                 )
             }

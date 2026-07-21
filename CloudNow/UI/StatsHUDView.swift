@@ -162,7 +162,37 @@ struct StatsHUDView: View {
 
     @ViewBuilder private var debugSection: some View {
         let stats = streamController.stats
+        let pipeline = streamController.videoDiagnostics
         header(L10n.text("debug"))
+        row(
+            "Callback / enqueue / display",
+            String(
+                format: "%.0f / %.0f / %.0f fps",
+                pipeline.callbackFramesPerSecond,
+                pipeline.enqueuedFramesPerSecond,
+                pipeline.presentedFramesPerSecond
+            )
+        )
+        row(
+            "App drops / superseded",
+            "\(pipeline.droppedFrames) / \(pipeline.supersededFrames)"
+        )
+        row(
+            "Backpressure / pending",
+            "\(pipeline.backpressureEvents) / \(pipeline.pendingFrames)"
+        )
+        row(
+            "AV drops / delay",
+            String(
+                format: "%d / %.1f ms",
+                pipeline.avDroppedFrames,
+                pipeline.avAccumulatedFrameDelayMs
+            )
+        )
+        row(
+            "Optimized compositing",
+            "\(pipeline.avOptimizedFrames) / \(max(0, pipeline.avTotalFrames - pipeline.avDroppedFrames))"
+        )
         row("NACK/PLI/FIR", "\(stats.nackCount)/\(stats.pliCount)/\(stats.firCount)")
         row(L10n.text("retransmits"), "\(stats.retransmittedPackets)")
         row(
