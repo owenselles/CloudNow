@@ -21,6 +21,7 @@ nonisolated struct VideoPipelineSnapshot {
     var avCorruptedFrames: Int = 0
     var avOptimizedFrames: Int = 0
     var avAccumulatedFrameDelayMs: Double = 0
+    var presentationMode = ""
     var decodedVideoFormat: DecodedVideoFormat?
 }
 
@@ -57,8 +58,14 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
     func setEnabled(_ enabled: Bool) {
         state.withLock { state in
             guard state.isEnabled != enabled else { return }
+            let presentationMode = state.snapshot.presentationMode
             state = State(isEnabled: enabled)
+            state.snapshot.presentationMode = presentationMode
         }
+    }
+
+    func updatePresentationMode(_ mode: String) {
+        state.withLock { $0.snapshot.presentationMode = mode }
     }
 
     func beginFrame() -> VideoFrameTrace? {
@@ -235,8 +242,10 @@ final nonisolated class VideoPipelineDiagnostics: @unchecked Sendable {
 
             let retainedFormat = snapshot.decodedVideoFormat
             let pendingFrames = snapshot.pendingFrames
+            let presentationMode = snapshot.presentationMode
             state.snapshot = VideoPipelineSnapshot(
                 pendingFrames: pendingFrames,
+                presentationMode: presentationMode,
                 decodedVideoFormat: retainedFormat
             )
             state.conversionNanoseconds = 0

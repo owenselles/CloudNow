@@ -312,6 +312,91 @@ final class VideoSurfaceView: UIView {
 
 // MARK: - WebRTC Video Renderer
 
+private nonisolated enum VideoPresentationMode: String {
+    case paced
+    case immediate
+
+    static var configured: VideoPresentationMode {
+        let value = ProcessInfo.processInfo.environment["CLOUDNOW_VIDEO_PRESENTATION_MODE"]?
+            .lowercased()
+        return value == immediate.rawValue ? .immediate : .paced
+    }
+}
+
+private nonisolated struct VideoPresentationTimeline {
+    private static let nominalFrameDurationNanoseconds: Int64 = 16_666_667
+    private static let lateRebaseThreshold = CMTime(value: 40_000_000, timescale: 1_000_000_000)
+    private static let futureRebaseThreshold = CMTime(value: 100_000_000, timescale: 1_000_000_000)
+
+    private var anchorSourceNanoseconds: Int64?
+    private var anchorHostTime = CMTime.invalid
+    private var lastSourceNanoseconds: Int64?
+    private var lastRawRTPTimestamp: UInt32?
+    private var unwrappedRTPTicks: Int64 = 0
+
+    mutating func presentationTime(
+        frameTimestampNanoseconds: Int64,
+        rtpTimestamp: Int32,
+        hostTime: CMTime
+    ) -> CMTime {
+        var sourceNanoseconds = sourceTimestampNanoseconds(
+            frameTimestampNanoseconds: frameTimestampNanoseconds,
+            rtpTimestamp: rtpTimestamp
+        )
+        if let lastSourceNanoseconds, sourceNanoseconds <= lastSourceNanoseconds {
+            sourceNanoseconds = lastSourceNanoseconds + Self.nominalFrameDurationNanoseconds
+        }
+        lastSourceNanoseconds = sourceNanoseconds
+
+        guard let anchorSourceNanoseconds else {
+            rebase(sourceNanoseconds: sourceNanoseconds, hostTime: hostTime)
+            return hostTime
+        }
+
+        let sourceDelta = CMTime(
+            value: sourceNanoseconds - anchorSourceNanoseconds,
+            timescale: 1_000_000_000
+        )
+        let desiredTime = CMTimeAdd(anchorHostTime, sourceDelta)
+        let earliestUsefulTime = CMTimeSubtract(hostTime, Self.lateRebaseThreshold)
+        let latestUsefulTime = CMTimeAdd(hostTime, Self.futureRebaseThreshold)
+        guard CMTimeCompare(desiredTime, earliestUsefulTime) >= 0,
+              CMTimeCompare(desiredTime, latestUsefulTime) <= 0
+        else {
+            rebase(sourceNanoseconds: sourceNanoseconds, hostTime: hostTime)
+            return hostTime
+        }
+        return desiredTime
+    }
+
+    mutating func reset() {
+        self = Self()
+    }
+
+    private mutating func sourceTimestampNanoseconds(
+        frameTimestampNanoseconds: Int64,
+        rtpTimestamp: Int32
+    ) -> Int64 {
+        if frameTimestampNanoseconds > 0 {
+            return frameTimestampNanoseconds
+        }
+
+        let rawTimestamp = UInt32(bitPattern: rtpTimestamp)
+        if let lastRawRTPTimestamp {
+            unwrappedRTPTicks += Int64(Int32(bitPattern: rawTimestamp &- lastRawRTPTimestamp))
+        } else {
+            unwrappedRTPTicks = Int64(rawTimestamp)
+        }
+        lastRawRTPTimestamp = rawTimestamp
+        return unwrappedRTPTicks * 1_000_000_000 / 90_000
+    }
+
+    private mutating func rebase(sourceNanoseconds: Int64, hostTime: CMTime) {
+        anchorSourceNanoseconds = sourceNanoseconds
+        anchorHostTime = hostTime
+    }
+}
+
 /// Implements LKRTCVideoRenderer to receive decoded WebRTC frames and feed them
 /// to the display layer's background-safe AVSampleBufferVideoRenderer.
 private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer, @unchecked Sendable {
@@ -327,24 +412,67 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         var isFlushing = false
         var generation: UInt64 = 0
         var metricsRequestInFlight = false
-        var activeEnqueues = 0
-        var pendingFlush: FlushRequest?
+        var presentationTimeline = VideoPresentationTimeline()
     }
 
-    var sampleBufferRenderer: AVSampleBufferVideoRenderer?
+    private final nonisolated class PreparedFrame: @unchecked Sendable {
+        let sampleBuffer: CMSampleBuffer
+        let generation: UInt64
+        let trace: VideoFrameTrace?
+
+        init(sampleBuffer: CMSampleBuffer, generation: UInt64, trace: VideoFrameTrace?) {
+            self.sampleBuffer = sampleBuffer
+            self.generation = generation
+            self.trace = trace
+        }
+    }
+
+    /// AVSampleBufferVideoRenderer documents background-safe enqueueing. This box carries the
+    /// fixed renderer identity onto its dedicated serial queue without weakening AVFoundation's
+    /// concurrency checking for the rest of the file.
+    private final nonisolated class SampleBufferRendererBox: @unchecked Sendable {
+        let renderer: AVSampleBufferVideoRenderer
+
+        init(_ renderer: AVSampleBufferVideoRenderer) {
+            self.renderer = renderer
+        }
+    }
+
+    var sampleBufferRenderer: AVSampleBufferVideoRenderer? {
+        didSet {
+            oldValue?.stopRequestingMediaData()
+            sampleBufferRendererBox = nil
+            guard let sampleBufferRenderer else { return }
+            sampleBufferRendererBox = SampleBufferRendererBox(sampleBufferRenderer)
+        }
+    }
     var onDecodedVideoFormatChanged: (@Sendable (DecodedVideoFormat) -> Void)?
     private let diagnostics: VideoPipelineDiagnostics
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let i420Converter = I420FrameConverter()
+    private let presentationMode = VideoPresentationMode.configured
+    private let enqueueQueue = DispatchQueue(
+        label: "com.cloudnow.video.enqueue",
+        qos: .userInteractive
+    )
+    private var sampleBufferRendererBox: SampleBufferRendererBox?
+    private var pendingFrame: PreparedFrame?
+    private var isRequestingMediaData = false
 
     init(diagnostics: VideoPipelineDiagnostics) {
         self.diagnostics = diagnostics
+        diagnostics.updatePresentationMode(presentationMode.rawValue)
+    }
+
+    deinit {
+        sampleBufferRenderer?.stopRequestingMediaData()
     }
 
     func setSize(_: CGSize) {}
 
     func renderFrame(_ frame: LKRTCVideoFrame?) {
-        guard let frame, let sampleBufferRenderer else { return }
+        guard let frame, let rendererBox = sampleBufferRendererBox else { return }
+        let sampleBufferRenderer = rendererBox.renderer
         let trace = diagnostics.beginFrame()
 
         if sampleBufferRenderer.status == .failed || sampleBufferRenderer.requiresFlushToResumeDecoding {
@@ -403,10 +531,27 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             return
         }
 
-        // DisplayImmediately makes the timestamp irrelevant and replaces queued stale images.
+        let hostTime = CMClockGetTime(CMClockGetHostTimeClock())
+        guard let presentationTime = state.withLock({ state -> CMTime? in
+            guard !state.isFlushing, state.generation == renderGeneration else { return nil }
+            switch presentationMode {
+            case .paced:
+                return state.presentationTimeline.presentationTime(
+                    frameTimestampNanoseconds: frame.timeStampNs,
+                    rtpTimestamp: frame.timeStamp,
+                    hostTime: hostTime
+                )
+            case .immediate:
+                return .zero
+            }
+        }) else {
+            diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
+            diagnostics.recordDrop(trace)
+            return
+        }
         var timing = CMSampleTimingInfo(
             duration: .invalid,
-            presentationTimeStamp: .zero,
+            presentationTimeStamp: presentationTime,
             decodeTimeStamp: .invalid
         )
         var sampleBuffer: CMSampleBuffer?
@@ -425,32 +570,17 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             diagnostics.recordDrop(trace)
             return
         }
-        markForImmediatePresentation(sampleBuffer)
+        if presentationMode == .immediate {
+            markForImmediatePresentation(sampleBuffer)
+        }
         diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
-        let didBeginEnqueue = state.withLock { state -> Bool in
-            guard !state.isFlushing, state.generation == renderGeneration else { return false }
-            state.activeEnqueues += 1
-            return true
-        }
-        guard didBeginEnqueue else {
-            diagnostics.recordDrop(trace)
-            return
-        }
-
-        let backpressured = !sampleBufferRenderer.isReadyForMoreMediaData
-        sampleBufferRenderer.enqueue(sampleBuffer)
-        let pendingFlush = state.withLock { state -> FlushRequest? in
-            state.activeEnqueues -= 1
-            guard state.activeEnqueues == 0, let request = state.pendingFlush else { return nil }
-            state.pendingFlush = nil
-            return request
-        }
-        if backpressured {
-            diagnostics.recordBackpressure()
-        }
-        diagnostics.recordEnqueue(trace)
-        if let pendingFlush {
-            performFlush(pendingFlush)
+        let preparedFrame = PreparedFrame(
+            sampleBuffer: sampleBuffer,
+            generation: renderGeneration,
+            trace: trace
+        )
+        enqueueQueue.async { [weak self, rendererBox] in
+            self?.enqueueOrRetain(preparedFrame, with: rendererBox)
         }
     }
 
@@ -482,6 +612,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             return true
         }
         guard shouldRequest else {
+            completion()
             return
         }
         sampleBufferRenderer.loadVideoPerformanceMetrics { [weak self, weak diagnostics] metrics in
@@ -508,25 +639,99 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             state.formatDescription = nil
             state.formatSignature = nil
             state.decodedFormatSignature = nil
+            state.presentationTimeline.reset()
             let request = FlushRequest(
                 generation: state.generation,
                 removeDisplayedImage: !preservingDisplayedImage
             )
-            if state.activeEnqueues == 0 {
-                return (true, request)
-            } else {
-                state.pendingFlush = request
-                return (true, nil)
-            }
+            return (true, request)
         }
         guard didBeginFlush else { return }
 
         if recordFailure {
             diagnostics.recordRendererFailure()
         }
-        if let requestToRun {
-            performFlush(requestToRun)
+        guard let requestToRun else { return }
+        enqueueQueue.async { [weak self] in
+            self?.discardPendingFrame()
+            self?.performFlush(requestToRun)
         }
+    }
+
+    private func enqueueOrRetain(
+        _ frame: PreparedFrame,
+        with rendererBox: SampleBufferRendererBox
+    ) {
+        let sampleBufferRenderer = rendererBox.renderer
+        if let pendingFrame {
+            if sampleBufferRenderer.isReadyForMoreMediaData {
+                self.pendingFrame = nil
+                diagnostics.updatePendingFrames(0)
+                enqueueIfCurrent(pendingFrame, with: sampleBufferRenderer)
+            } else {
+                diagnostics.recordBackpressure()
+                diagnostics.recordSupersededFrame(pendingFrame.trace)
+                self.pendingFrame = frame
+                diagnostics.updatePendingFrames(1)
+                startRequestingMediaData(with: rendererBox)
+                return
+            }
+        }
+
+        if sampleBufferRenderer.isReadyForMoreMediaData {
+            enqueueIfCurrent(frame, with: sampleBufferRenderer)
+        } else {
+            diagnostics.recordBackpressure()
+            pendingFrame = frame
+            diagnostics.updatePendingFrames(1)
+            startRequestingMediaData(with: rendererBox)
+        }
+    }
+
+    private func startRequestingMediaData(with rendererBox: SampleBufferRendererBox) {
+        guard !isRequestingMediaData else { return }
+        isRequestingMediaData = true
+        rendererBox.renderer.requestMediaDataWhenReady(on: enqueueQueue) { [weak self, weak rendererBox] in
+            guard let self, let rendererBox else { return }
+            drainPendingFrame(with: rendererBox.renderer)
+            if pendingFrame == nil {
+                rendererBox.renderer.stopRequestingMediaData()
+                isRequestingMediaData = false
+            }
+        }
+    }
+
+    private func drainPendingFrame(with sampleBufferRenderer: AVSampleBufferVideoRenderer) {
+        guard sampleBufferRenderer.isReadyForMoreMediaData, let pendingFrame else { return }
+        self.pendingFrame = nil
+        diagnostics.updatePendingFrames(0)
+        enqueueIfCurrent(pendingFrame, with: sampleBufferRenderer)
+    }
+
+    private func enqueueIfCurrent(
+        _ frame: PreparedFrame,
+        with sampleBufferRenderer: AVSampleBufferVideoRenderer
+    ) {
+        let isCurrent = state.withLock {
+            !$0.isFlushing && $0.generation == frame.generation
+        }
+        guard isCurrent else {
+            diagnostics.recordDrop(frame.trace)
+            return
+        }
+        sampleBufferRenderer.enqueue(frame.sampleBuffer)
+        diagnostics.recordEnqueue(frame.trace)
+    }
+
+    private func discardPendingFrame() {
+        if isRequestingMediaData {
+            sampleBufferRenderer?.stopRequestingMediaData()
+            isRequestingMediaData = false
+        }
+        guard let pendingFrame else { return }
+        self.pendingFrame = nil
+        diagnostics.updatePendingFrames(0)
+        diagnostics.recordDrop(pendingFrame.trace)
     }
 
     private func performFlush(_ request: FlushRequest) {

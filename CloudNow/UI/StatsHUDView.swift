@@ -164,6 +164,7 @@ struct StatsHUDView: View {
         let stats = streamController.stats
         let pipeline = streamController.videoDiagnostics
         header(L10n.text("debug"))
+        row("Presentation", pipeline.presentationMode)
         row(
             "Callback / enqueue / display",
             String(
