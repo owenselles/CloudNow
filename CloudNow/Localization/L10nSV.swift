@@ -287,5 +287,6 @@ enum L10nSV {
         "routed_to": "Dirigerad till",
         "test_running": "Testar…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

@@ -287,5 +287,6 @@ enum L10nUK {
         "routed_to": "Спрямовано до",
         "test_running": "Тестування…",
         "jitter": "Джитер",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

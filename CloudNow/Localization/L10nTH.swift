@@ -287,5 +287,6 @@ enum L10nTH {
         "routed_to": "กำหนดเส้นทางไปยัง",
         "test_running": "กำลังทดสอบ…",
         "jitter": "จิตเตอร์",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

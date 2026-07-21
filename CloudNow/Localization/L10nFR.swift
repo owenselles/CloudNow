@@ -287,5 +287,6 @@ enum L10nFR {
         "routed_to": "Acheminé vers",
         "test_running": "Test en cours…",
         "jitter": "Gigue",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

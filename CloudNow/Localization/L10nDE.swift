@@ -287,5 +287,6 @@ enum L10nDE {
         "routed_to": "Weitergeleitet an",
         "test_running": "Wird getestet…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

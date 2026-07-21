@@ -287,5 +287,6 @@ enum L10nES {
         "routed_to": "Enrutado a",
         "test_running": "Probando…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

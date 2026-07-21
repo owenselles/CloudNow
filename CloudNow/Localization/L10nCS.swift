@@ -287,5 +287,6 @@ enum L10nCS {
         "routed_to": "Směrováno na",
         "test_running": "Testování…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

@@ -287,5 +287,6 @@ enum L10nVI {
         "routed_to": "Định tuyến đến",
         "test_running": "Đang kiểm tra…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

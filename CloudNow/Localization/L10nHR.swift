@@ -287,5 +287,6 @@ enum L10nHR {
         "routed_to": "Usmjereno na",
         "test_running": "Testiranje…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

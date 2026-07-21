@@ -287,5 +287,6 @@ enum L10nNL {
         "routed_to": "Gerouteerd naar",
         "test_running": "Testen…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

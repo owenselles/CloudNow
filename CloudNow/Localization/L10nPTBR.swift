@@ -287,5 +287,6 @@ enum L10nPTBR {
         "routed_to": "Roteado para",
         "test_running": "Testando…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

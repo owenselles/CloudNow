@@ -287,5 +287,6 @@ enum L10nZHHant {
         "routed_to": "路由至",
         "test_running": "測試中…",
         "jitter": "抖動",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

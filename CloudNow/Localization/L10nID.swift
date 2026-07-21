@@ -287,5 +287,6 @@ enum L10nID {
         "routed_to": "Dirutekan ke",
         "test_running": "Menguji…",
         "jitter": "Jitter",
+        "managed_by_partner": "Managed by partner provider",
     ]
 }

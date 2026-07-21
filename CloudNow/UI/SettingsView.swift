@@ -169,23 +169,35 @@ struct SettingsView: View {
                 }
 
                 Section(L10n.text("server_location")) {
-                    Button {
-                        showServerLocationPicker = true
-                    } label: {
+                    if isNvidiaDirectSession {
+                        Button {
+                            showServerLocationPicker = true
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(L10n.text("server_location"))
+                                    Text(serverLocationDescription)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 8)
+                                Spacer()
+                                Text(serverLocationValue)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                    } else {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(L10n.text("server_location"))
-                                Text(serverLocationDescription)
+                                Text(L10n.text("managed_by_partner"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 8)
-                            Spacer()
-                            Text(serverLocationValue)
-                                .foregroundStyle(.secondary)
                         }
                     }
-                    .foregroundStyle(.primary)
 
                     Button {
                         showNetworkTest = true
@@ -510,6 +522,10 @@ struct SettingsView: View {
             isPerformingDataAction = false
             authManager.logout()
         }
+    }
+
+    private var isNvidiaDirectSession: Bool {
+        authManager.session?.provider.isNvidiaDirect ?? true
     }
 
     private var serverLocationValue: String {
