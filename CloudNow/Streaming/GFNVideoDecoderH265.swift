@@ -19,7 +19,6 @@ private nonisolated let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", 
 /// decoder.
 final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unchecked Sendable {
     private let callbackState = Mutex<RTCVideoDecoderCallback?>(nil)
-    private let asynchronousDecodeFailed = Mutex(false)
     private var videoFormat: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
 
@@ -48,15 +47,6 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
         codecSpecificInfo _: (any LKRTCCodecSpecificInfo)?,
         renderTimeMs: Int64
     ) -> NSInteger {
-        let previousDecodeFailed = asynchronousDecodeFailed.withLock { failed in
-            defer { failed = false }
-            return failed
-        }
-        if previousDecodeFailed {
-            destroySession()
-            return -1
-        }
-
         let data = encodedImage.buffer
         guard !data.isEmpty else { return -1 }
         let nalus = Self.annexBNALUnits(in: data)
@@ -98,10 +88,11 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
         }
 
         let rtpTimestamp = Int32(bitPattern: encodedImage.timeStamp)
+        let decodeFailed = Mutex(false)
         let handler: VTDecompressionOutputHandler = { [weak self] status, _, imageBuffer, _, _ in
             guard status == noErr, let imageBuffer else {
                 h265Log.error("decode output failed: \(status)")
-                self?.asynchronousDecodeFailed.withLock { $0 = true }
+                decodeFailed.withLock { $0 = true }
                 return
             }
             let frame = LKRTCVideoFrame(
@@ -113,9 +104,10 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
             let callback = self?.callbackState.withLock { $0 }
             callback?(frame)
         }
-        // GFN streams have no B-frame reordering. Asynchronous submission lets VideoToolbox
-        // overlap hardware decode without stalling WebRTC's decoder thread on large access units.
-        let decodeFlags = VTDecodeFrameFlags(rawValue: 1 << 0)
+        // Keep one frame in flight. With no flags, VideoToolbox guarantees that the output
+        // callback completes before this call returns, preventing complexity spikes from
+        // accumulating an unbounded decoder queue and stale CVPixelBuffers.
+        let decodeFlags: VTDecodeFrameFlags = []
         var status = VTDecompressionSessionDecodeFrame(
             session,
             sampleBuffer: sampleBuffer,
@@ -135,7 +127,7 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
                 outputHandler: handler
             )
         }
-        if status != noErr {
+        if status != noErr || decodeFailed.withLock({ $0 }) {
             h265Log.error("decode failed: \(status)")
             return -1
         }
