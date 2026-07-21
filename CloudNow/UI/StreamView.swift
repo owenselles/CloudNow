@@ -362,7 +362,7 @@ struct StreamView: View {
                     if streamController.statsMode != .off {
                         StatsHUDView(
                             streamController: streamController,
-                            microphoneEnabled: settings.micEnabled,
+                            microphoneEnabled: streamController.microphoneEnabledForConnection,
                             automaticServerId: viewModel.currentVpcId
                         )
                         .fixedSize()

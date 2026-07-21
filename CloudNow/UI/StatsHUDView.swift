@@ -2,8 +2,7 @@ import SwiftUI
 
 /// In-game statistics HUD mirroring the official GeForce NOW overlay. Compact shows
 /// the three headline metrics and server, while Standard adds the release statistics
-/// in one narrow column. Developer diagnostics add a second column without making
-/// the release presentation taller.
+/// in one narrow column. Developer diagnostics append a final section to that column.
 struct StatsHUDView: View {
     let streamController: GFNStreamController
     let microphoneEnabled: Bool
@@ -88,10 +87,10 @@ private struct StandardStatsPanel: View {
     let rtcEventLogActive: Bool
 
     var body: some View {
-        StatsPanel(contentWidth: contentWidth) {
+        StatsPanel(contentWidth: StatsHUDLayout.columnWidth) {
             StatsPanelHeader(gpuName: gpuName, microphoneEnabled: microphoneEnabled)
-            HeadlineMetricsView(stats: stats, contentWidth: contentWidth)
-            HStack(alignment: .top, spacing: StatsHUDLayout.columnSpacing) {
+            HeadlineMetricsView(stats: stats, contentWidth: StatsHUDLayout.columnWidth)
+            VStack(alignment: .leading, spacing: 0) {
                 CoreStatsColumn(
                     stats: stats,
                     audioStats: audioStats,
@@ -114,12 +113,6 @@ private struct StandardStatsPanel: View {
                 }
             }
         }
-    }
-
-    private var contentWidth: CGFloat {
-        showsDebugColumn
-            ? StatsHUDLayout.columnWidth * 2 + StatsHUDLayout.columnSpacing * 2 + 1
-            : StatsHUDLayout.columnWidth
     }
 
     private var showsDebugColumn: Bool {
@@ -551,7 +544,6 @@ private enum StatsHUDLayout {
     static let panelPadding: CGFloat = 12
     static let panelSpacing: CGFloat = 8
     static let metricSpacing: CGFloat = 8
-    static let columnSpacing: CGFloat = 10
 }
 
 private enum StatsFormat {
