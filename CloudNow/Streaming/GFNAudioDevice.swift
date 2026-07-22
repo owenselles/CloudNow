@@ -904,6 +904,9 @@ extension GFNAudioDevice: LKRTCAudioDevice {
             }
         }
         playingFlag = true
+        if recordingFlag, sinkNode == nil, let delegate {
+            scheduleRouteRecovery(trigger: "playoutStart", delegate: delegate)
+        }
         return true
     }
 
