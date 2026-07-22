@@ -18,6 +18,11 @@ private nonisolated let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", 
 /// release this class can be deleted and `GFNVideoDecoderFactory` reverted to the default
 /// decoder.
 final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unchecked Sendable {
+    // HOT PATH INVARIANT: keep this imported Objective-C block in its concrete type and invoke
+    // it directly. A generic Mutex read here previously accumulated callback reabstraction
+    // thunks until the decoder thread overflowed its stack. WebRTC currently serializes the
+    // decoder lifecycle and decode remains synchronous below. Re-profile and device-stress any
+    // change that adds concurrency or a per-frame bridge around this callback.
     private var callback: RTCVideoDecoderCallback?
     private var videoFormat: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
@@ -103,9 +108,10 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
             frame.timeStamp = rtpTimestamp
             self?.callback?(frame)
         }
-        // Keep one frame in flight. With no flags, VideoToolbox guarantees that the output
-        // callback completes before this call returns, preventing complexity spikes from
-        // accumulating an unbounded decoder queue and stale CVPixelBuffers.
+        // HOT PATH INVARIANT: keep one frame in flight. With no asynchronous flag,
+        // VideoToolbox completes the output callback before this call returns. Enabling async
+        // decode without a measured, bounded admission policy lets complexity spikes build a
+        // stale decoder queue and retain multiple 4K CVPixelBuffers.
         let decodeFlags: VTDecodeFrameFlags = []
         var status = VTDecompressionSessionDecodeFrame(
             session,

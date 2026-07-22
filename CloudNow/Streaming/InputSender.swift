@@ -468,6 +468,10 @@ nonisolated protocol DataChannelSender: AnyObject {
 // MARK: - InputSender
 
 /// Owns all mutable input state on one latency-sensitive serial queue.
+///
+/// INPUT HOT PATH: controller samples must remain queue-confined, allocation-conscious, and
+/// latest-state oriented. Do not add actor hops, blocking work, per-sample logs, or independent
+/// retry tasks; replaceable snapshots are intentionally coalesced downstream during backpressure.
 final nonisolated class InputSender: @unchecked Sendable {
     static let remoteSensitivity: Float = 250
 

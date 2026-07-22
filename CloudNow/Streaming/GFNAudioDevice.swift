@@ -96,7 +96,9 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
             return false
         }
 
-        // Capture the pull block once; the render closure must not touch `self` state.
+        // REAL-TIME AUDIO HOT PATH: capture the pull block once so the render closure does not
+        // touch `self`. Never add allocation, locks, logging, actor hops, or format conversion
+        // here; any setup belongs outside the AVAudioSourceNode callback.
         let pullPlayoutData = delegate.getPlayoutData
         let source = AVAudioSourceNode(format: format) { _, timestamp, frameCount, outputData -> OSStatus in
             var flags = AudioUnitRenderActionFlags()
@@ -150,6 +152,9 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         let scratchBox = ScratchBuffer(capacity: maxFrames * channels)
         let scratch = scratchBox.pointer
         let deliver = delegate.deliverRecordedData
+        // REAL-TIME AUDIO HOT PATH: scratch storage and the delegate block are prepared before
+        // installing the node. Keep this callback bounded and free of allocation, locks,
+        // logging, and actor scheduling to avoid capture underruns.
         let sink = AVAudioSinkNode { [scratchBox] timestamp, frameCount, inputData -> OSStatus in
             _ = scratchBox // owns the scratch allocation for the node's lifetime
             let frames = min(Int(frameCount), maxFrames)

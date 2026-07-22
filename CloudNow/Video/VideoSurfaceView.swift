@@ -435,6 +435,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
     }
 
     private struct AdmissionState {
+        // This is the complete application-side frame backlog. `drainScheduled` covers both a
+        // queued drain closure and AVFoundation's readiness callback, so producers can retain
+        // neither a second frame nor one closure per frame.
         var pendingFrame: PreparedFrame?
         var drainScheduled = false
     }
@@ -483,6 +486,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
 
     func setSize(_: CGSize) {}
 
+    /// VIDEO HOT PATH: WebRTC calls this once per decoded frame, commonly 60 times per second
+    /// with a 4K pixel buffer. Keep it off MainActor and do not add per-frame Tasks, logging,
+    /// blocking work, or frame-retaining dispatch closures without device profiling.
     func renderFrame(_ frame: LKRTCVideoFrame?) {
         guard let frame, let rendererBox = sampleBufferRendererBox else { return }
         let sampleBufferRenderer = rendererBox.renderer
@@ -592,6 +598,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             generation: renderGeneration,
             trace: trace
         )
+        // Admission deliberately happens before dispatch. Moving the frame into an async
+        // closure first defeats latest-frame-wins: every queued closure then retains its own
+        // CMSampleBuffer/CVPixelBuffer and both latency and memory grow during scene bursts.
         admit(preparedFrame, with: rendererBox)
     }
 
@@ -678,6 +687,8 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         _ frame: PreparedFrame,
         with rendererBox: SampleBufferRendererBox
     ) {
+        // Replace the one mailbox entry synchronously. The scheduled closure captures only the
+        // renderer identity; it must never capture `frame` or another pixel-buffer owner.
         let (supersededFrame, shouldScheduleDrain) = admissionState.withLock { state in
             let supersededFrame = state.pendingFrame
             state.pendingFrame = frame
@@ -743,6 +754,8 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         }
 
         if isRequestingMediaData {
+            // AVFoundation already owns the next callback. Scheduling another drain here would
+            // violate the single-drain invariant and can enqueue the same readiness cycle twice.
             return
         }
         if rendererBox.renderer.isReadyForMoreMediaData {

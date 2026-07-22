@@ -28,6 +28,9 @@ final nonisolated class I420FrameConverter: @unchecked Sendable {
         }
     }
 
+    /// SOFTWARE VIDEO HOT PATH: this runs for every software-decoded frame. Keep the bounded
+    /// CVPixelBufferPool and vectorized plane conversion; do not introduce full-frame Data
+    /// copies, temporary images, or an unbounded pool without profiling the fallback path.
     func convert(_ i420: LKRTCI420Buffer) -> CVPixelBuffer? {
         let width = Int(i420.width)
         let height = Int(i420.height)

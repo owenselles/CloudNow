@@ -2129,6 +2129,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 // MARK: - DataChannelSender conformance
 
 extension GFNStreamController: DataChannelSender {
+    /// INPUT HOT PATH: preserve one queue hop and bounded latest-snapshot coalescing per gamepad
+    /// slot. WebRTC backpressure must supersede replaceable state, never create a retry backlog.
     nonisolated func sendData(
         _ packet: EncodedInputPacket,
         completion: @escaping @Sendable (InputSendDisposition) -> Void
