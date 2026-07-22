@@ -287,6 +287,6 @@ enum L10nRU {
         "routed_to": "Маршрут на",
         "test_running": "Тестирование…",
         "jitter": "Джиттер",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Управляется партнёрским провайдером",
     ]
 }

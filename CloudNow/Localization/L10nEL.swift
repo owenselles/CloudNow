@@ -287,6 +287,6 @@ enum L10nEL {
         "routed_to": "Δρομολογήθηκε προς",
         "test_running": "Δοκιμή…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Διαχειρίζεται από τον συνεργάτη πάροχο",
     ]
 }

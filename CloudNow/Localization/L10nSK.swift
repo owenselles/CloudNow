@@ -287,6 +287,6 @@ enum L10nSK {
         "routed_to": "Smerované na",
         "test_running": "Testuje sa…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Spravuje partnerský poskytovateľ",
     ]
 }

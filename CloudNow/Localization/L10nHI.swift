@@ -287,6 +287,6 @@ enum L10nHI {
         "routed_to": "यहाँ भेजा गया",
         "test_running": "परीक्षण जारी…",
         "jitter": "जिटर",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "भागीदार प्रदाता द्वारा प्रबंधित",
     ]
 }

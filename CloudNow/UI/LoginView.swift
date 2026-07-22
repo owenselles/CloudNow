@@ -10,6 +10,7 @@ private enum ProvidersState {
 struct LoginView: View {
     @Environment(AuthManager.self) var authManager
     @State private var providersState: ProvidersState = .loading
+    @State private var selectedProvider: LoginProvider?
     @FocusState private var focusedProvider: String?
 
     var body: some View {
@@ -62,6 +63,7 @@ struct LoginView: View {
                             VStack(spacing: 16) {
                                 ForEach(providers, id: \.idpId) { provider in
                                     Button {
+                                        selectedProvider = provider
                                         authManager.login(with: provider)
                                     } label: {
                                         Label(provider.displayName, systemImage: "person.badge.key")
@@ -82,8 +84,22 @@ struct LoginView: View {
                             withAnimation { proxy.scrollTo(id, anchor: .center) }
                         }
                     }
+                case .loaded(let providers) where !providers.isEmpty:
+                    let provider = providers[0]
+                    Button {
+                        selectedProvider = provider
+                        authManager.login(with: provider)
+                    } label: {
+                        Label(provider.displayName, systemImage: "person.badge.key")
+                            .font(.title2.weight(.semibold))
+                            .padding(.horizontal, 40)
+                            .padding(.vertical, 16)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
                 case .loaded:
                     Button {
+                        selectedProvider = nil
                         authManager.login()
                     } label: {
                         Label(L10n.text("sign_in_with_nvidia"), systemImage: "person.badge.key")
@@ -189,7 +205,7 @@ struct LoginView: View {
 
             HStack(spacing: 24) {
                 Button(L10n.text("try_again")) {
-                    authManager.login()
+                    authManager.login(with: selectedProvider)
                 }
                 .buttonStyle(.bordered)
                 .tint(.green)

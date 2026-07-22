@@ -826,7 +826,8 @@ struct StreamView: View {
                     routingZoneUrl: sessionInfo.zone.isEmpty ? nil : sessionInfo.zone,
                     clientId: sessionInfo.clientId,
                     deviceId: sessionInfo.deviceId,
-                    createdAt: Date()
+                    createdAt: Date(),
+                    idpId: authManager.session?.provider.idpId ?? NVIDIAAuth.defaultIdpId
                 ))
             }
 
@@ -990,7 +991,8 @@ struct StreamView: View {
             settings: settings,
             localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec),
             accountLinked: true,
-            accountAllowsHDR: viewModel.subscription?.allowsHDR
+            accountAllowsHDR: viewModel.subscription?.allowsHDR,
+            skipNvidiaFallback: !isNvidiaProvider
         )
 
         do {

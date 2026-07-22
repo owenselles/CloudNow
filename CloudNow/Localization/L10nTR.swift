@@ -287,6 +287,6 @@ enum L10nTR {
         "routed_to": "Yönlendirildi",
         "test_running": "Test ediliyor…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Ortak sağlayıcı tarafından yönetilir",
     ]
 }

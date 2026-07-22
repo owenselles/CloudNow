@@ -287,6 +287,6 @@ enum L10nNB {
         "routed_to": "Rutet til",
         "test_running": "Tester…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Administreres av partnerleverandør",
     ]
 }

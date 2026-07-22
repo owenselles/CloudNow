@@ -287,6 +287,6 @@ enum L10nJA {
         "routed_to": "ルーティング先",
         "test_running": "テスト中…",
         "jitter": "ジッター",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "パートナープロバイダーが管理",
     ]
 }

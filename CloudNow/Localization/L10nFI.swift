@@ -287,6 +287,6 @@ enum L10nFI {
         "routed_to": "Reititetty kohteeseen",
         "test_running": "Testataan…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Kumppanipalveluntarjoaja hallinnoi",
     ]
 }

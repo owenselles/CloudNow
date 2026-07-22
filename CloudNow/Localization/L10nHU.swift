@@ -287,6 +287,6 @@ enum L10nHU {
         "routed_to": "Irányítva ide",
         "test_running": "Tesztelés…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "A partnerforgalmazó kezeli",
     ]
 }

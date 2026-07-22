@@ -287,6 +287,6 @@ enum L10nAR {
         "routed_to": "تم التوجيه إلى",
         "test_running": "جارٍ الاختبار…",
         "jitter": "الارتجاج",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "يُدار من قِبل مزود الشريك",
     ]
 }

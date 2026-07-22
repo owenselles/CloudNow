@@ -287,6 +287,6 @@ enum L10nCA {
         "routed_to": "Encaminat a",
         "test_running": "S'està provant…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Gestionat pel proveïdor associat",
     ]
 }

@@ -287,6 +287,6 @@ enum L10nMS {
         "routed_to": "Dihalakan ke",
         "test_running": "Menguji…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Diurus oleh penyedia rakan kongsi",
     ]
 }

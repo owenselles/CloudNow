@@ -287,6 +287,6 @@ enum L10nIT {
         "routed_to": "Instradato verso",
         "test_running": "Test in corso…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Gestito dal provider partner",
     ]
 }

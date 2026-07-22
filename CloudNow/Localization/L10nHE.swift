@@ -287,6 +287,6 @@ enum L10nHE {
         "routed_to": "נותב אל",
         "test_running": "בודק…",
         "jitter": "ג'יטר",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "מנוהל על ידי הספק השותף",
     ]
 }

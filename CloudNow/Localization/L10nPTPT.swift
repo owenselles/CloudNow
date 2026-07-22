@@ -287,6 +287,6 @@ enum L10nPTPT {
         "routed_to": "Encaminhado para",
         "test_running": "A testar…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Gerido pelo fornecedor parceiro",
     ]
 }

@@ -32,6 +32,15 @@ final class ServerInfoClient {
 
     /// Last successful fetch, kept for the app run (region lists change rarely).
     private(set) var cached: GFNServerInfo?
+    private var cachedBase: String?
+
+    func cachedForBase(_ url: String) -> GFNServerInfo? {
+        guard let base = cachedBase else { return nil }
+        let normalize: (String) -> String = { s in
+            s.hasSuffix("/") ? String(s.dropLast()).lowercased() : s.lowercased()
+        }
+        return normalize(base) == normalize(url) ? cached : nil
+    }
 
     func fetch(baseUrl: String, token: String) async throws -> GFNServerInfo {
         let base = baseUrl.hasSuffix("/") ? String(baseUrl.dropLast()) : baseUrl
@@ -56,6 +65,7 @@ final class ServerInfoClient {
         let info = try Self.parse(data)
         serverInfoLog.info("serverInfo: \(info.regions.count) regions, local=\(info.localRegionName ?? "nil", privacy: .public)")
         cached = info
+        cachedBase = baseUrl
         return info
     }
 

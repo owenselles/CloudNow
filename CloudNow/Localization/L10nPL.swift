@@ -287,6 +287,6 @@ enum L10nPL {
         "routed_to": "Kierowano do",
         "test_running": "Testowanie…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Zarządzane przez dostawcę partnerskiego",
     ]
 }

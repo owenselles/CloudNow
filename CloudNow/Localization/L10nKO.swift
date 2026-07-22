@@ -287,6 +287,6 @@ enum L10nKO {
         "routed_to": "라우팅 대상",
         "test_running": "테스트 중…",
         "jitter": "지터",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "파트너 제공업체에서 관리",
     ]
 }

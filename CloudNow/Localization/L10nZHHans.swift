@@ -287,6 +287,6 @@ enum L10nZHHans {
         "routed_to": "路由至",
         "test_running": "测试中…",
         "jitter": "抖动",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "由合作提供商管理",
     ]
 }

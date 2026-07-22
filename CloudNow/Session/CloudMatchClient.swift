@@ -438,7 +438,11 @@ actor CloudMatchClient {
             URLQueryItem(name: "languageCode", value: input.settings.effectiveGameLanguage),
         ]
 
-        let bases = preferredBase == fallbackBase ? [preferredBase] : [preferredBase, fallbackBase]
+        let bases: [String] = if input.skipNvidiaFallback {
+            [preferredBase]
+        } else {
+            preferredBase == fallbackBase ? [preferredBase] : [preferredBase, fallbackBase]
+        }
         var lastError: Error?
 
         for base in bases {

@@ -287,6 +287,6 @@ enum L10nRO {
         "routed_to": "Direcționat către",
         "test_running": "Se testează…",
         "jitter": "Jitter",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Gestionat de furnizorul partener",
     ]
 }
