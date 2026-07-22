@@ -27,7 +27,7 @@ struct LoginView: View {
             }
         }
         .task {
-            let fetched = (try? await NVIDIAAuthAPI().fetchProviders()) ?? []
+            let fetched = await (try? NVIDIAAuthAPI().fetchProviders()) ?? []
             providersState = .loaded(fetched)
             if let first = fetched.first, focusedProvider == nil {
                 focusedProvider = first.idpId
@@ -57,7 +57,7 @@ struct LoginView: View {
                     ProgressView()
                         .tint(.white)
                         .padding(.vertical, 16)
-                case .loaded(let providers) where providers.count > 1:
+                case let .loaded(providers) where providers.count > 1:
                     ScrollViewReader { proxy in
                         ScrollView {
                             VStack(spacing: 16) {
@@ -84,7 +84,7 @@ struct LoginView: View {
                             withAnimation { proxy.scrollTo(id, anchor: .center) }
                         }
                     }
-                case .loaded(let providers) where !providers.isEmpty:
+                case let .loaded(providers) where !providers.isEmpty:
                     let provider = providers[0]
                     Button {
                         selectedProvider = provider
