@@ -174,7 +174,9 @@ class GamesViewModel {
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
     private let persistence = AppPersistenceStore.shared
-    private var currentVpcId: String?
+    /// Server identifier discovered from NVIDIA's `/v2/serverInfo` response.
+    /// Exposed read-only so the in-stream HUD can label server-routed sessions.
+    private(set) var currentVpcId: String?
     private var activeSessionsTask: Task<[ActiveSessionInfo], Never>?
     private var vpcIdRefreshTask: Task<String?, Never>?
     private var latestNetworkLibraryGames: [GameInfo]?

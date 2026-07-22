@@ -360,11 +360,14 @@ struct StreamView: View {
                     // Stays visible while the pause menu is open (the menu is a left sidebar)
                     // so cycling the Statistics level takes effect on screen immediately.
                     if streamController.statsMode != .off {
-                        StatsHUDView(streamController: streamController)
-                            .padding(.top, 60)
-                            .padding(.trailing, 60)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                            .transition(.opacity)
+                        StatsHUDView(
+                            streamController: streamController,
+                            microphoneEnabled: streamController.microphoneEnabledForConnection,
+                            automaticServerId: viewModel.currentVpcId
+                        )
+                        .fixedSize()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .transition(.opacity)
                     }
 
                     if let warning = streamController.timeWarning, !showOverlay {

@@ -104,6 +104,7 @@ nonisolated struct AudioStats: Equatable {
     var acceleratedMsPerSecond: Double = 0
     /// video − audio playout timestamp; positive = audio lags video. nil without RTCP SR.
     var avOffsetMs: Double?
+    var inputLatencyMs: Double?
     var outputLatencyMs: Double = 0
     var outputChannels: Int = 0
     var outputSampleRateHz: Double = 0
@@ -185,6 +186,7 @@ final class GFNStreamController: NSObject {
     private(set) var videoTrack: LKRTCVideoTrack?
     private(set) var statsMode: StreamStatsMode = .off
     private(set) var diagnosticsEnabled = false
+    private(set) var microphoneEnabledForConnection = false
     private(set) var videoDiagnostics = VideoPipelineSnapshot()
     /// Wall-clock start of the current stream, for the HUD's session duration row.
     private(set) var streamingStartedAt: Date?
@@ -249,6 +251,7 @@ final class GFNStreamController: NSObject {
     private var accountAllowsHDR: Bool?
     private var micAudioSource: LKRTCAudioSource?
     private var micAudioTrack: LKRTCAudioTrack?
+    private var microphoneAuthorizedForConnection = false
     private var signalingComplete = false
     private var partiallyReliableDataChannel: LKRTCDataChannel?
     private var statsChannel: LKRTCDataChannel?
@@ -303,6 +306,7 @@ final class GFNStreamController: NSObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         tearDownTransport()
+        let generation = connectionGeneration
         let settings = settings.normalizedForClient
         let localCapabilities = LocalVideoCapabilities.detect(codec: settings.codec)
         let colorRequest = settings.colorRequest(localCapabilities: localCapabilities, accountAllowsHDR: accountAllowsHDR)
@@ -323,6 +327,8 @@ final class GFNStreamController: NSObject {
         )
         setStatsMode(settings.statsMode)
         setDiagnosticsEnabled(settings.diagnosticsEnabled)
+        microphoneEnabledForConnection = false
+        microphoneAuthorizedForConnection = false
         var initialStats = StreamStats()
         initialStats.gpuType = session.gpuType ?? ""
         initialStats.serverZone = Self.zoneShortName(from: session.zone)
@@ -343,6 +349,13 @@ final class GFNStreamController: NSObject {
             inputChannelState = "closed"
         }
 
+        let microphoneAuthorized = await requestMicrophonePermissionIfNeeded()
+        guard connectionGeneration == generation,
+              sessionInfo?.sessionId == session.sessionId,
+              case .connecting = state
+        else { return }
+        microphoneAuthorizedForConnection = microphoneAuthorized
+
         setupSignaling(session: session)
         guard let signaling else {
             state = .failed(message: "Failed to create signaling client")
@@ -351,10 +364,10 @@ final class GFNStreamController: NSObject {
         do {
             gfnLog.info("connect: opening signaling WebSocket")
             try await signaling.connect()
-            guard self.signaling === signaling else { return }
+            guard connectionGeneration == generation, self.signaling === signaling else { return }
             gfnLog.info("connect: signaling connected")
         } catch {
-            guard self.signaling === signaling else { return }
+            guard connectionGeneration == generation, self.signaling === signaling else { return }
             gfnLog.error("connect: signaling FAILED: \(error)")
             state = .failed(message: error.localizedDescription)
         }
@@ -493,6 +506,7 @@ final class GFNStreamController: NSObject {
     // MARK: Disconnect
 
     func disconnect() {
+        connectionGeneration &+= 1
         onReconnectNeeded = nil
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -500,6 +514,7 @@ final class GFNStreamController: NSObject {
         wasStreaming = false
         reconnectAttempt = 0
         serverStopped = false
+        microphoneAuthorizedForConnection = false
         pingHistory = []
         fpsHistory = []
         bitrateHistory = []
@@ -562,6 +577,7 @@ final class GFNStreamController: NSObject {
         videoReceiver = nil
         micAudioTrack = nil
         micAudioSource = nil
+        microphoneEnabledForConnection = false
         signalingComplete = false
         inputReady = false
         previousVideoStats = nil
@@ -733,23 +749,35 @@ final class GFNStreamController: NSObject {
     private func configureAudioSession(microphoneRequested: Bool) -> Bool {
         let audioSession = AVAudioSession.sharedInstance()
         if microphoneRequested, audioSession.availableCategories.contains(.playAndRecord) {
+            logAudioSessionInputDiagnostics(audioSession, stage: "before microphone configuration")
+            var operation = "setCategory(playAndRecord/voiceChat)"
             do {
                 try audioSession.setCategory(
                     .playAndRecord,
                     mode: .voiceChat,
                     options: [.allowBluetoothHFP, .allowBluetoothA2DP]
                 )
+                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone category")
+
+                operation = "setPreferredIOBufferDuration(0.01)"
                 try audioSession.setPreferredIOBufferDuration(0.01)
+
+                operation = "setActive(true)"
                 try audioSession.setActive(true)
-                guard audioSession.isInputAvailable else {
-                    gfnLog.warning("[Stream] AVAudioSession has no input route, falling back to playback")
+                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone activation")
+
+                guard audioSession.isInputAvailable,
+                      !audioSession.currentRoute.inputs.isEmpty,
+                      audioSession.inputNumberOfChannels > 0
+                else {
+                    gfnLog.warning("[Stream] AVAudioSession has no usable input route, falling back to playback")
                     return configurePlaybackAudioSession(audioSession)
                 }
                 gfnLog.info("[Stream] AVAudioSession configured for playback + microphone")
                 logAudioSessionConfiguration(audioSession)
                 return true
             } catch {
-                gfnLog.warning("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error, privacy: .private)")
+                logAudioSessionOperationFailure(operation, error: error, session: audioSession)
             }
         } else if microphoneRequested {
             gfnLog.warning("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
@@ -773,6 +801,40 @@ final class GFNStreamController: NSObject {
             gfnLog.error("[Stream] AVAudioSession playback configuration failed: \(error, privacy: .private)")
         }
         return false
+    }
+
+    private func logAudioSessionOperationFailure(
+        _ operation: String,
+        error: Error,
+        session: AVAudioSession
+    ) {
+        let nsError = error as NSError
+        let message = "[Stream] AVAudioSession \(operation) failed: " +
+            "domain=\(nsError.domain) code=\(nsError.code); falling back to playback"
+        gfnLog.warning("\(message, privacy: .public); error=\(error, privacy: .private)")
+        logAudioSessionInputDiagnostics(session, stage: "after \(operation) failure")
+    }
+
+    private func logAudioSessionInputDiagnostics(_ session: AVAudioSession, stage: String) {
+        let availableInputs = session.availableInputs?
+            .map(\.portType.rawValue)
+            .joined(separator: ", ") ?? "none"
+        let preferredInput = session.preferredInput
+            .map(\.portType.rawValue) ?? "none"
+        let routeInputs = session.currentRoute.inputs
+            .map(\.portType.rawValue)
+            .joined(separator: ", ")
+        let routeOutputs = session.currentRoute.outputs
+            .map(\.portType.rawValue)
+            .joined(separator: ", ")
+        let message = "audio input \(stage) | category \(session.category.rawValue) " +
+            "mode \(session.mode.rawValue) options \(session.categoryOptions.rawValue) | " +
+            "available \(session.isInputAvailable) " +
+            "channels \(session.inputNumberOfChannels) | preferred [\(preferredInput)] " +
+            "availableInputs [\(availableInputs)] | route inputs [\(routeInputs)] " +
+            "outputs [\(routeOutputs)] | sampleRate \(session.sampleRate) " +
+            "ioBuffer \(session.ioBufferDuration)"
+        audioSyncLog.info("\(message, privacy: .public)")
     }
 
     /// Logs the OS-level audio output configuration — the latency layer WebRTC stats can't see.
@@ -819,7 +881,9 @@ final class GFNStreamController: NSObject {
         }
         audioSyncLog.info("offer audio: \(surroundOffered ? "multiopus 5.1" : "opus stereo", privacy: .public)")
 
-        let microphoneEnabledForConnection = configureAudioSession(microphoneRequested: settings.micEnabled)
+        var effectiveMicrophoneEnabled = configureAudioSession(
+            microphoneRequested: microphoneAuthorizedForConnection
+        )
 
         // The lifetime is immutable after channel creation, so resolve the server's value first.
         if let match = sdp.range(of: #"ri\.partialReliableThresholdMs[: ]+(\d+)"#, options: .regularExpression),
@@ -906,13 +970,17 @@ final class GFNStreamController: NSObject {
 
         // Attach microphone audio track if enabled (must happen before answer creation
         // so the m=audio sendrecv line is included in the SDP)
-        if microphoneEnabledForConnection {
-            await attachMicrophone(to: pc)
-            guard !Task.isCancelled, isCurrentPeerConnection(pc, generation: generation) else {
-                pc.close()
-                return
+        if effectiveMicrophoneEnabled {
+            effectiveMicrophoneEnabled = attachMicrophone(to: pc)
+            if !effectiveMicrophoneEnabled {
+                _ = configurePlaybackAudioSession(AVAudioSession.sharedInstance())
             }
         }
+        guard !Task.isCancelled, isCurrentPeerConnection(pc, generation: generation) else {
+            pc.close()
+            return
+        }
+        microphoneEnabledForConnection = effectiveMicrophoneEnabled
 
         // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers)
         if settings.codec == .av1 {
@@ -1040,7 +1108,8 @@ final class GFNStreamController: NSObject {
                 nvstSdp: buildNvstSdp(
                     iceUfrag: iceUfrag,
                     icePwd: icePwd,
-                    dtlsFingerprint: dtlsFingerprint
+                    dtlsFingerprint: dtlsFingerprint,
+                    microphoneEnabled: effectiveMicrophoneEnabled
                 )
             )
             signalingComplete = true
@@ -1124,7 +1193,12 @@ final class GFNStreamController: NSObject {
     /// Builds the NVIDIA streaming protocol capability descriptor sent alongside the WebRTC answer.
     /// Builds the NVST SDP capability descriptor — critically includes the client's ICE credentials so the
     /// GFN server can validate STUN MESSAGE-INTEGRITY on incoming binding requests.
-    private func buildNvstSdp(iceUfrag: String, icePwd: String, dtlsFingerprint: String) -> String {
+    private func buildNvstSdp(
+        iceUfrag: String,
+        icePwd: String,
+        dtlsFingerprint: String,
+        microphoneEnabled: Bool
+    ) -> String {
         let resolutionParts = settings.resolution.split(separator: "x")
         let width = Int(resolutionParts.first ?? "1920") ?? 1920
         let height = Int(resolutionParts.last ?? "1080") ?? 1080
@@ -1164,7 +1238,7 @@ final class GFNStreamController: NSObject {
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
         ]
-        if settings.micEnabled {
+        if microphoneEnabled {
             lines += [
                 "m=mic 0 RTP/AVP",
                 "a=msid:mic",
@@ -1185,14 +1259,21 @@ final class GFNStreamController: NSObject {
 
     // MARK: Private — Microphone
 
-    private func attachMicrophone(to pc: LKRTCPeerConnection) async {
-        #if !os(tvOS)
-            let granted = await withCheckedContinuation { cont in
-                AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
-            }
-            guard granted else { return }
-        #endif
+    private func requestMicrophonePermissionIfNeeded() async -> Bool {
+        guard settings.micEnabled else { return false }
 
+        let granted = await withCheckedContinuation { continuation in
+            AVAudioApplication.requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+        if !granted {
+            gfnLog.warning("[Stream] Microphone permission denied, using playback-only audio")
+        }
+        return granted
+    }
+
+    private func attachMicrophone(to pc: LKRTCPeerConnection) -> Bool {
         let audioConstraints = LKRTCMediaConstraints(
             mandatoryConstraints: nil,
             optionalConstraints: [
@@ -1203,9 +1284,13 @@ final class GFNStreamController: NSObject {
         )
         let source = GFNStreamController.factory.audioSource(with: audioConstraints)
         let track = GFNStreamController.factory.audioTrack(with: source, trackId: "mic")
+        guard pc.add(track, streamIds: ["mic"]) != nil else {
+            gfnLog.warning("[Stream] Unable to attach microphone track, continuing without microphone")
+            return false
+        }
         micAudioSource = source
         micAudioTrack = track
-        pc.add(track, streamIds: ["mic"])
+        return true
     }
 
     /// Extracts a dotted-decimal IP from a hostname that encodes it as dashes,
@@ -1702,6 +1787,10 @@ final class GFNStreamController: NSObject {
         // Live OS output latency: the media-playout stat can be absent depending on the active
         // audio unit (then device reads 0), so also sample the route's latency directly.
         let osOutputLatencyMs = AVAudioSession.sharedInstance().outputLatency * 1000
+        let microphoneSnapshot = GFNAudioDevice.shared.microphoneTelemetry.snapshot
+        let osInputLatencyMs = microphoneSnapshot.isCapturing
+            ? GFNAudioDevice.shared.inputLatency * 1000
+            : nil
 
         updateAudioStats {
             $0.jitterBufferCurrentMs = neteqMs
@@ -1713,6 +1802,7 @@ final class GFNStreamController: NSObject {
             $0.stretchedMsPerSecond = sloweddMs
             $0.acceleratedMsPerSecond = acceleratedMs
             $0.avOffsetMs = avOffsetMs
+            $0.inputLatencyMs = osInputLatencyMs
             $0.outputLatencyMs = osOutputLatencyMs
             $0.outputChannels = GFNAudioDevice.shared.outputNumberOfChannels
             $0.outputSampleRateHz = GFNAudioDevice.shared.deviceOutputSampleRate
