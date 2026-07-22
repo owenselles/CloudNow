@@ -406,6 +406,6 @@ enum L10nAR {
         "accessibility": "تسهيلات الاستخدام",
         "controller_changes_next_session": "ستُطبّق تغييرات وحدة التحكم في جلسة السحابة التالية.",
         "ending_session": "جارٍ إنهاء جلسة السحابة…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "يُدار من قِبل مزود الشريك",
     ]
 }

@@ -1835,21 +1835,26 @@ private struct NetworkTestView: View {
 
     private func resolveTarget() async -> (address: String, name: String?) {
         let settings = viewModel.streamSettings
-        switch settings.serverRoutingMode {
-        case .client:
-            if let address = settings.preferredZoneUrl {
-                return (address, displayZone(address))
+        // Routing-mode pins only apply to NVIDIA-direct sessions; partner providers
+        // manage their own routing and do not expose zone/region selection.
+        let isNvidiaSession = authManager.session?.provider.isNvidiaDirect ?? true
+        if isNvidiaSession {
+            switch settings.serverRoutingMode {
+            case .client:
+                if let address = settings.preferredZoneUrl {
+                    return (address, displayZone(address))
+                }
+            case .region:
+                if let address = settings.preferredRegionAddress {
+                    return (address, settings.preferredRegionName)
+                }
+            case .serverAuto:
+                break
             }
-        case .region:
-            if let address = settings.preferredRegionAddress {
-                return (address, settings.preferredRegionName)
-            }
-        case .serverAuto:
-            break
         }
 
         let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
-        let cached = ServerInfoClient.shared.cached
+        let cached = ServerInfoClient.shared.cachedForBase(base)
         let info: GFNServerInfo? = if let token = try? await authManager.resolveToken() {
             await (try? ServerInfoClient.shared.fetch(baseUrl: base, token: token)) ?? cached
         } else {

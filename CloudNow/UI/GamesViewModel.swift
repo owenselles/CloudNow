@@ -42,9 +42,12 @@ nonisolated struct LastSessionRecord: Codable {
     let clientId: String?
     let deviceId: String?
     let createdAt: Date
+    /// Provider that created this session. Records written before this field was
+    /// added decode to NVIDIAAuth.defaultIdpId so they are treated as NVIDIA sessions.
+    let idpId: String
 
     enum CodingKeys: String, CodingKey {
-        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt
+        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, idpId
     }
 
     init(
@@ -55,7 +58,8 @@ nonisolated struct LastSessionRecord: Codable {
         routingZoneUrl: String?,
         clientId: String?,
         deviceId: String?,
-        createdAt: Date
+        createdAt: Date,
+        idpId: String
     ) {
         self.sessionId = sessionId
         self.serverIp = serverIp
@@ -65,6 +69,7 @@ nonisolated struct LastSessionRecord: Codable {
         self.clientId = clientId
         self.deviceId = deviceId
         self.createdAt = createdAt
+        self.idpId = idpId
     }
 
     init(from decoder: Decoder) throws {
@@ -77,6 +82,7 @@ nonisolated struct LastSessionRecord: Codable {
         clientId = try c.decodeIfPresent(String.self, forKey: .clientId)
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
+        idpId = try c.decodeIfPresent(String.self, forKey: .idpId) ?? NVIDIAAuth.defaultIdpId
     }
 }
 
@@ -422,6 +428,14 @@ class GamesViewModel {
         streamSettings = (snapshot.streamSettings ?? StreamSettings()).normalizedForClient
         lastSession = snapshot.lastSession
         currentVpcId = snapshot.vpcId
+
+        // Discard a persisted session that belongs to a different provider — its base
+        // URL and token are incompatible with the currently signed-in provider.
+        let currentIdpId = authManager.session?.provider.idpId ?? NVIDIAAuth.defaultIdpId
+        if let saved = lastSession, saved.idpId != currentIdpId {
+            lastSession = nil
+            Task { [weak self] in await self?.persistence.saveLastSession(nil) }
+        }
 
         // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
         // If Apple raises the cap in a future tvOS release this will automatically unlock.

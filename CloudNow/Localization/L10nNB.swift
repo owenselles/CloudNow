@@ -406,6 +406,6 @@ enum L10nNB {
         "accessibility": "Tilgjengelighet",
         "controller_changes_next_session": "Kontrollerendringer tas i bruk i neste skyøkt.",
         "ending_session": "Avslutter skyøkten…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Administreres av partnerleverandør",
     ]
 }

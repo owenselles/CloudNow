@@ -406,6 +406,6 @@ enum L10nRO {
         "accessibility": "Accesibilitate",
         "controller_changes_next_session": "Modificările controlerului se aplică următoarei sesiuni cloud.",
         "ending_session": "Se încheie sesiunea cloud…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Gestionat de furnizorul partener",
     ]
 }

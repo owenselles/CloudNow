@@ -406,6 +406,6 @@ enum L10nVI {
         "accessibility": "Trợ năng",
         "controller_changes_next_session": "Các thay đổi đối với tay cầm sẽ áp dụng cho phiên đám mây tiếp theo.",
         "ending_session": "Đang kết thúc phiên đám mây…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Được quản lý bởi nhà cung cấp đối tác",
     ]
 }

@@ -406,6 +406,6 @@ enum L10nDA {
         "accessibility": "Tilgængelighed",
         "controller_changes_next_session": "Controllerændringer anvendes på den næste cloudsession.",
         "ending_session": "Afslutter cloudsession…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Administreres af partnerleverandør",
     ]
 }

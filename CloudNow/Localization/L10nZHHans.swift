@@ -406,6 +406,6 @@ enum L10nZHHans {
         "accessibility": "辅助功能",
         "controller_changes_next_session": "控制器更改将在下一次云会话中生效。",
         "ending_session": "正在结束云会话…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "由合作提供商管理",
     ]
 }

@@ -406,6 +406,6 @@ enum L10nUK {
         "accessibility": "Доступність",
         "controller_changes_next_session": "Зміни контролера набудуть чинності в наступному хмарному сеансі.",
         "ending_session": "Завершення хмарного сеансу…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Керується партнерським провайдером",
     ]
 }

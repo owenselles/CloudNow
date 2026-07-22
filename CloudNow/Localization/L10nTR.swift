@@ -406,6 +406,6 @@ enum L10nTR {
         "accessibility": "Erişilebilirlik",
         "controller_changes_next_session": "Kumanda değişiklikleri bir sonraki bulut oturumunda uygulanır.",
         "ending_session": "Bulut oturumu sonlandırılıyor…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Ortak sağlayıcı tarafından yönetilir",
     ]
 }

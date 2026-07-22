@@ -406,6 +406,6 @@ enum L10nJA {
         "accessibility": "アクセシビリティ",
         "controller_changes_next_session": "コントローラの変更は次のクラウドセッションから適用されます。",
         "ending_session": "クラウドセッションを終了中…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "パートナープロバイダーが管理",
     ]
 }

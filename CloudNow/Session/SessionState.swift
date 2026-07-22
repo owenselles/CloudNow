@@ -894,4 +894,7 @@ nonisolated struct SessionCreateRequest {
     let localVideoCapabilities: LocalVideoCapabilities
     let accountLinked: Bool
     let accountAllowsHDR: Bool?
+    /// When true, CloudMatchClient will not fall back to the NVIDIA global endpoint
+    /// on failure — partner sessions must only reach their own streaming service.
+    let skipNvidiaFallback: Bool
 }

@@ -406,6 +406,6 @@ enum L10nHE {
         "accessibility": "נגישות",
         "controller_changes_next_session": "שינויים בבקר יחולו בהפעלת הענן הבאה.",
         "ending_session": "הפעלת הענן מסתיימת…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "מנוהל על ידי הספק השותף",
     ]
 }

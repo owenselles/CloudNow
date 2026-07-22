@@ -406,6 +406,6 @@ enum L10nHI {
         "accessibility": "सुगम्यता",
         "controller_changes_next_session": "कंट्रोलर में किए गए बदलाव अगले क्लाउड सत्र में लागू होंगे।",
         "ending_session": "क्लाउड सत्र समाप्त किया जा रहा है…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "भागीदार प्रदाता द्वारा प्रबंधित",
     ]
 }

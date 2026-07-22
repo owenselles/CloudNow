@@ -406,6 +406,6 @@ enum L10nPTPT {
         "accessibility": "Acessibilidade",
         "controller_changes_next_session": "As alterações do comando aplicam-se à próxima sessão na nuvem.",
         "ending_session": "A terminar a sessão na nuvem…",
-        "managed_by_partner": "Managed by partner provider",
+        "managed_by_partner": "Gerido pelo fornecedor parceiro",
     ]
 }
