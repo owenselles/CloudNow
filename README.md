@@ -32,6 +32,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
 - **Library & Store** — browse your linked games separately from the full public catalog; search and sort by default order, recently played, A→Z, or Z→A; filter by collection, genre, game store, RTX, HDR, and Reflex with live result counts; long-press any card to add/remove from Favorites
 - **Instant startup** — catalog, library, and subscription data are cached on device and shown immediately on launch while fresh data loads in the background
+- **Bounded performance pipelines** — artwork requests are coalesced and downsampled through shared cost-bounded caches; input-latency sampling uses bounded storage and remains disabled unless statistics or diagnostics need it
 - **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), color mode, keyboard layout, game language, and Low Latency Mode (L4S) from the Settings tab
 - **Color mode preferences** — Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR. CloudNow separates user preference, requested stream mode, negotiated server mode, and actual detected decoded format instead of assuming HDR from bit depth or Apple TV output mode
 - **Decoded video format detection** — inspects the actual decoded pixel buffer for bit depth, transfer function, color primaries, matrix, and range. HDR is only treated as active when the decoded stream metadata supports it
@@ -41,15 +42,16 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Renderer metadata preservation** — decoded color metadata is tracked through the render path and the format description cache is refreshed when color characteristics change, not just when resolution changes
 - **Session diagnostics** — diagnostic HUD can show color preference, requested mode, detected mode, display HDR support, fallback reason, decoder path, pixel format, transfer function, and bit depth
 - **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"); waits indefinitely in queue with position updates; 180-second setup timeout after queue clears; requires two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
-- **Server location** — Settings → Server Location offers Automatic (default), Region, and Servers. Automatic lets NVIDIA route each session, Region pins one of the regions returned by NVIDIA, and Servers drills down through country → city → dedicated server with live ping and queue information; includes a Test Network tool measuring ping, jitter, and packet loss to the selected route
-- **Surround audio** — Audio Format setting with Automatic, Stereo, and 5.1 Surround; 5.1 uses the multichannel Opus stream the service offers and requires a receiver or soundbar; a custom WebRTC audio device keeps output latency low
-- **Microphone support** — voice chat via AirPods or any Bluetooth headset; toggle in Settings; permission requested on first use; if no valid input route exists, CloudNow falls back to playback-only audio instead of breaking session audio
+- **Resilient session lifecycle** — session creation, Retry, polling, reconnect, and teardown are single-flight and cancellable; stale work cannot update a newer session, late-created server sessions are cleaned up, and signaling uses a bounded staggered endpoint race instead of serial timeout accumulation
+- **Server location** — Settings → Server Location offers Automatic (default), Region, and Servers. Automatic lets NVIDIA route each session, Region pins one of the regions returned by NVIDIA, and Servers drills down through country → city → dedicated server with live ping and queue information; cached ping results appear immediately while stale entries refresh with bounded concurrency; includes a Test Network tool measuring ping, jitter, and packet loss to the selected route
+- **Surround audio** — Audio Format setting with Automatic, Stereo, and 5.1 Surround; the selected source format is preserved when resuming a session. The diagnostics HUD reports the negotiated stream format separately from the active output route, so a 5.1 stream may correctly use stereo output while Bluetooth headphones are connected; removing them restores HDMI playback and surround where supported
+- **Microphone support** — voice chat via AirPods or compatible Bluetooth HFP headsets; toggle in Settings with permission requested on first use. When a stream starts on speakers, microphone intent remains negotiated while capture waits for an input route. Connecting a compatible headset midstream activates capture and HUD activity; removing it restores playback-only audio without restarting the stream
 - **Favorites** — long-press any game card in Library or Store to add/remove from Favorites; persisted locally
 - **Full GFN streaming** — WebRTC-based, up to 4K@60fps depending on your GFN plan (tvOS caps at 60 Hz; 120fps ready for when Apple raises the limit)
-- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (0–30%) and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
+- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (0–30%), rumble multiplier (`0.00×`–`2.00×` in `0.05×` steps), and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
 - **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
 - **Pause menu** — left-sidebar in-stream menu with Resume, input mode toggle, Statistics level, Leave Game, and End Session; open with Play/Pause or Menu on the Siri Remote, or hold the overlay trigger button (~2 s) on a controller (default: Start/≡, configurable in Settings)
-- **Statistics HUD** — in-stream statistics overlay styled after the official client, with Compact and Standard levels cycled from the pause menu; Compact shows game/stream FPS, RTT, bitrate, packet loss, and server location; Standard adds jitter, connection path, resolution, drops/freezes, decoder, jitter-buffer, audio, and session detail with live history graphs
+- **Statistics HUD** — in-stream statistics overlay styled after the official client, with Compact and Standard levels cycled from the pause menu; Compact shows game/stream FPS, RTT, bitrate, packet loss, server location, and microphone state/activity; Standard adds jitter, connection path, resolution, drops/freezes, decoder, jitter-buffer, negotiated audio format, active output route, measured input/output latency, and session detail with live history graphs
 - **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
 - **tvOS localization** — UI text follows the device language automatically using `Bundle.main.preferredLocalizations` with English fallback; translations live in one file per locale under `CloudNow/Localization`, and every locale table must contain the complete English key set
 
@@ -234,27 +236,34 @@ swiftlint version      # expected: 0.65.0
 
 When Homebrew provides a newer release, use the pinned pre-commit environments or the same release artifacts referenced in `.github/workflows/lint.yml`.
 
+### Swift concurrency checking
+
+Both Debug and Release targets use complete Swift concurrency checking (`SWIFT_STRICT_CONCURRENCY = complete`) while remaining in Swift 5 language mode. Concurrency-sensitive streaming changes should be built in both configurations before merging.
+
 ---
 
 ## Architecture
 
+Shared real-time streaming state uses explicit lock or queue ownership, while stale peer, signaling, and data-channel callbacks are rejected by connection identity.
+
 ```
 CloudNow/
+├── PersistenceStore.swift          Actor-serialized Keychain, UserDefaults, JSON, and catalog-cache I/O
 ├── Auth/
 │   ├── AuthManager.swift           @Observable auth state, Keychain persistence
 │   └── NVIDIAAuthAPI.swift         OAuth 2.0 PKCE, token refresh, user info
 ├── Session/
 │   ├── SessionState.swift          Models: GameInfo, SessionInfo, StreamSettings, color-mode state
-│   ├── CloudMatchClient.swift      Session create/poll/stop/active-sessions, color-aware request fields
+│   ├── CloudMatchClient.swift      Session create/poll/resume/stop, active sessions, audio/color request fields
 │   ├── GamesClient.swift           Game catalog via GraphQL persisted query
 │   ├── MESClient.swift             Subscription tier + entitled resolutions/FPS from the MES API
-│   └── ZoneClient.swift            Dedicated-server list, ping probes, and queue data (PrintedWaste API)
+│   └── ZoneClient.swift            Dedicated-server list, cancellation-safe ping cache, and queue data
 ├── Streaming/
-│   ├── GFNStreamController.swift   WebRTC peer connection lifecycle, color negotiation state, audio session setup
-│   ├── SignalingClient.swift        WebSocket signaling — SDP offer/answer + ICE
+│   ├── GFNStreamController.swift   Generation-bound WebRTC lifecycle, reconnect, input, microphone, and audio state
+│   ├── SignalingClient.swift        WebSocket signaling with bounded staggered endpoint racing
 │   ├── SDPMunger.swift             Codec filtering + bandwidth injection for WebRTC SDP
 │   ├── InputSender.swift           GCController/keyboard/mouse/Siri Remote → XInput + GFN protocol (v2/v3) → data channel
-│   ├── GFNAudioDevice.swift        Custom WebRTC audio device — low-latency stereo/5.1 output path
+│   ├── GFNAudioDevice.swift        Low-latency stereo/5.1 output, deferred Bluetooth capture, route recovery
 │   ├── GFNVideoDecoderFactory.swift Advertises H.265 Main10 so the 10-bit payload survives negotiation
 │   ├── GFNVideoDecoderH265.swift   VideoToolbox H.265 decoder preserving bit depth + VUI colorimetry
 │   ├── ControllerHaptics.swift     Controller rumble output via CoreHaptics
@@ -272,14 +281,15 @@ CloudNow/
     ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings
     ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings) with controller tab cycling
     ├── GameFilters.swift           Shared catalog filtering, sorting, filter sheet, and result bar
+    ├── HeroArtPrefetcher.swift     Shared downsampling artwork pipeline with bounded LRU caches
     ├── HomeView.swift              Hero banner + Continue Playing + Favorites rows
     ├── LibraryView.swift           LIBRARY panel grid with favorite toggles
     ├── StoreView.swift             MAIN catalog grid with "In Library" badges
     ├── SettingsView.swift          Stream quality pickers + account info + sign out
     ├── LoginView.swift             Sign-in screen with QR code + PIN display
     ├── QueueAdPlayerView.swift     AVPlayer queue-ad playback with CloudMatch lifecycle reporting
-    ├── StatsHUDView.swift          Statistics overlay (Compact/Standard) with history graphs
-    └── StreamView.swift            Full-screen player + pause menu sidebar
+    ├── StatsHUDView.swift          Statistics, audio/microphone telemetry, and live history graphs
+    └── StreamView.swift            Single-flight session orchestration, full-screen player, and pause menu
 ```
 
 ### Protocol
