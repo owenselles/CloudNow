@@ -7,6 +7,12 @@ private nonisolated let signalingLog = Logger(subsystem: "com.owenselles.CloudNo
 /// outgoing-message serialization is skipped unless debug logging is on.
 private nonisolated let signalingOSLog = OSLog(subsystem: "com.owenselles.CloudNow2", category: "Signaling")
 
+private nonisolated enum SignalingRacePolicy {
+    static let maximumCandidates = 8
+    static let maximumConcurrentAttempts = 3
+    static let staggerMilliseconds = 250
+}
+
 // MARK: - Signaling Events
 
 nonisolated enum SignalingEvent {
@@ -109,62 +115,26 @@ final class GFNSignalingClient {
         // same "preferred" address — explicit enumeration bypasses that.
         let resolvedIPs = await resolveIPs(hostname: host)
         self.resolvedIPs = resolvedIPs // expose for ICE injection
-        // Append the hostname itself as a final fallback in case direct IP connections fail.
-        let candidates: [String] = resolvedIPs.isEmpty ? [host] : (resolvedIPs + [host])
+        // Preserve all eight direct-IP slots used by the previous bounded policy. Add
+        // the hostname fallback only when fewer than eight addresses resolved, so the
+        // total remains bounded without dropping a reachable eighth address.
+        var candidates = Array(resolvedIPs
+            .filter { $0 != host }
+            .prefix(SignalingRacePolicy.maximumCandidates))
+        if candidates.count < SignalingRacePolicy.maximumCandidates {
+            candidates.append(host)
+        }
         signalingLog.debug("[Signaling] Resolved \(resolvedIPs.count, privacy: .public) IPs for '\(host, privacy: .private)': \(resolvedIPs.joined(separator: ", "), privacy: .private)")
 
-        let boundedCandidates = Array(candidates.prefix(8))
-        var winner: ConnectedCandidate?
-        var lastError: Error?
-
-        let firstWave = Array(boundedCandidates.prefix(2))
-        if firstWave.count > 1 {
-            do {
-                winner = try await raceCandidates(
-                    firstWave,
-                    originalHost: host,
-                    components: comps,
-                    useTLS: useTLS,
-                    totalCount: boundedCandidates.count
-                )
-            } catch {
-                lastError = error
-            }
-        } else if let candidate = firstWave.first {
-            do {
-                winner = try await connectCandidate(
-                    candidate,
-                    originalHost: host,
-                    components: comps,
-                    useTLS: useTLS,
-                    index: 0,
-                    totalCount: boundedCandidates.count
-                )
-            } catch {
-                lastError = error
-            }
-        }
-
-        if winner == nil {
-            for (offset, candidate) in boundedCandidates.dropFirst(firstWave.count).enumerated() {
-                do {
-                    winner = try await connectCandidate(
-                        candidate,
-                        originalHost: host,
-                        components: comps,
-                        useTLS: useTLS,
-                        index: firstWave.count + offset,
-                        totalCount: boundedCandidates.count
-                    )
-                    break
-                } catch {
-                    lastError = error
-                }
-            }
-        }
-
-        guard let winner else {
-            throw lastError ?? SignalingError.handshakeFailed("No signaling endpoint connected")
+        let winner = try await raceCandidates(
+            candidates,
+            originalHost: host,
+            components: comps,
+            useTLS: useTLS
+        )
+        if Task.isCancelled {
+            winner.connection.cancel()
+            throw CancellationError()
         }
         connection = winner.connection
         connectedHost = winner.host
@@ -435,14 +405,28 @@ final class GFNSignalingClient {
         _ candidates: [String],
         originalHost: String,
         components: URLComponents,
-        useTLS: Bool,
-        totalCount: Int
+        useTLS: Bool
     ) async throws -> ConnectedCandidate {
+        try Task.checkCancellation()
+
+        let totalCount = candidates.count
+        let initialAttemptCount = min(SignalingRacePolicy.maximumConcurrentAttempts, totalCount)
+        var nextCandidateIndex = 0
         var lastError: Error?
+        var winner: ConnectedCandidate?
+        let raceClock = ContinuousClock()
+        let raceStart = raceClock.now
+
         return try await withThrowingTaskGroup(of: ConnectedCandidate.self) { group in
-            for (index, candidate) in candidates.enumerated() {
+            while nextCandidateIndex < initialAttemptCount {
+                let index = nextCandidateIndex
+                let candidate = candidates[index]
+                let delayMilliseconds = SignalingRacePolicy.staggerMilliseconds * index
+                let launchDeadline = raceStart.advanced(by: .milliseconds(delayMilliseconds))
                 group.addTask {
-                    try await self.connectCandidate(
+                    try await raceClock.sleep(until: launchDeadline)
+                    try Task.checkCancellation()
+                    return try await self.connectCandidate(
                         candidate,
                         originalHost: originalHost,
                         components: components,
@@ -451,19 +435,60 @@ final class GFNSignalingClient {
                         totalCount: totalCount
                     )
                 }
+                nextCandidateIndex += 1
             }
 
             while !group.isEmpty {
                 do {
-                    if let winner = try await group.next() {
+                    guard let connectedCandidate = try await group.next() else { break }
+                    if winner == nil {
+                        winner = connectedCandidate
                         group.cancelAll()
-                        return winner
+                    } else {
+                        // A second connection may have reached ready before cancellation
+                        // was observed. Explicitly close every completed non-winner.
+                        connectedCandidate.connection.cancel()
                     }
                 } catch {
-                    lastError = error
+                    if Task.isCancelled {
+                        winner?.connection.cancel()
+                        throw CancellationError()
+                    }
+                    if winner == nil, !(error is CancellationError) {
+                        lastError = error
+                    }
                 }
+
+                guard winner == nil, nextCandidateIndex < totalCount else { continue }
+
+                let index = nextCandidateIndex
+                let candidate = candidates[index]
+                let delayMilliseconds = SignalingRacePolicy.staggerMilliseconds * index
+                let launchDeadline = raceStart.advanced(by: .milliseconds(delayMilliseconds))
+                group.addTask {
+                    try await raceClock.sleep(until: launchDeadline)
+                    try Task.checkCancellation()
+                    return try await self.connectCandidate(
+                        candidate,
+                        originalHost: originalHost,
+                        components: components,
+                        useTLS: useTLS,
+                        index: index,
+                        totalCount: totalCount
+                    )
+                }
+                nextCandidateIndex += 1
             }
-            throw lastError ?? SignalingError.handshakeFailed("Candidate race produced no winner")
+
+            if Task.isCancelled {
+                winner?.connection.cancel()
+                throw CancellationError()
+            }
+
+            guard let winner else {
+                throw lastError ?? SignalingError.handshakeFailed("Candidate race produced no winner")
+            }
+            return winner
         }
     }
 
@@ -543,6 +568,7 @@ final class GFNSignalingClient {
                 }
                 connection.start(queue: DispatchQueue(label: "com.cloudnow.signaling.connect"))
             }
+            try Task.checkCancellation()
             return ConnectedCandidate(host: candidateHost, connection: connection)
         } onCancel: {
             connection.cancel()

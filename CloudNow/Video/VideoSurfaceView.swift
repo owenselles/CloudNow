@@ -98,6 +98,20 @@ final class VideoSurfaceView: UIView {
         pipelineDiagnostics.setEnabled(enabled)
     }
 
+    /// Clears renderer and input ownership when SwiftUI dismantles the representable. The stream
+    /// controller may temporarily retain this view while reconnecting, so teardown must not rely
+    /// solely on UIKit deallocation.
+    func prepareForDismantle() {
+        resignFirstResponder()
+        cancelRemoteMouseTracking()
+        videoTrack = nil
+        notificationTokens.forEach(NotificationCenter.default.removeObserver)
+        notificationTokens.removeAll()
+        inputHandler = nil
+        menuPressHandler = nil
+        onDecodedVideoFormatChanged = nil
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setup()
@@ -633,5 +647,9 @@ struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
         // while the overlay is visible so SwiftUI focus navigation works there.
         vc.controllerUserInteractionEnabled = showOverlay
         vc.videoSurface.overlayVisible = showOverlay
+    }
+
+    static func dismantleUIViewController(_ vc: StreamingViewController, coordinator _: ()) {
+        vc.videoSurface.prepareForDismantle()
     }
 }

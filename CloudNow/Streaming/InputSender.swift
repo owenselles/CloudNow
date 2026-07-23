@@ -77,7 +77,7 @@ nonisolated enum RemoteInputMode: String, Codable, Equatable {
 
 extension RemoteInputMode {
     /// The Siri Remote drives the mouse pointer alongside the connected controller.
-    var remoteActsAsMouse: Bool {
+    nonisolated var remoteActsAsMouse: Bool {
         self == .gamepadMouse
     }
 }
@@ -94,7 +94,7 @@ nonisolated protocol InputEventHandler: AnyObject {
 
 // MARK: - Encoded Packet
 
-nonisolated enum InputPacketCategory: String {
+nonisolated enum InputPacketCategory: String, Sendable {
     case heartbeat
     case gamepadSnapshot
     case keyboard
@@ -104,7 +104,7 @@ nonisolated enum InputPacketCategory: String {
     case hapticsEnabled
 }
 
-nonisolated enum InputSendDisposition {
+nonisolated enum InputSendDisposition: Sendable {
     case accepted
     case channelUnavailable
     case rejected

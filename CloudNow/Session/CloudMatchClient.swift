@@ -268,8 +268,9 @@ private nonisolated func buildResumeSessionRequestData(appId: String?, settings:
     // the server reject the claim (INTERNAL_ERROR 8A8C0000). Mirror the official client /
     // OpenNOW minimal resume body — identity, audio, timezone, launch mode only; no monitor
     // settings, requestedStreamingFeatures, HDR capabilities, or physical-resolution metadata.
+    let audioChannels = settings.audioFormat.resolvedChannelCount
     var requestData: [String: Any] = [
-        "audioMode": 2,
+        "audioMode": audioChannels,
         "remoteControllersBitmap": 0,
         "sdrHdrMode": 0,
         "networkTestSessionId": NSNull(),
@@ -284,9 +285,9 @@ private nonisolated func buildResumeSessionRequestData(appId: String?, settings:
             ["key": "GSStreamerType", "value": "WebRTC"],
             ["key": "networkType", "value": "Unknown"],
             ["key": "ClientImeSupport", "value": "0"],
-            ["key": "surroundAudioInfo", "value": "2"],
+            ["key": "surroundAudioInfo", "value": "\(audioChannels)"],
         ],
-        "surroundAudioInfo": 0,
+        "surroundAudioInfo": audioChannels >= 6 ? 4_128_774 : 0,
         "clientTimezoneOffset": TimeZone.current.secondsFromGMT() * 1000,
         "clientIdentification": "GFN-PC",
         "parentSessionId": NSNull(),

@@ -121,7 +121,10 @@ actor ZoneClient {
                 samples.append(ms)
             }
         }
-        guard generation == cacheGeneration, !samples.isEmpty else { return nil }
+        guard !Task.isCancelled,
+              generation == cacheGeneration,
+              !samples.isEmpty
+        else { return nil }
         let ping = samples.reduce(0, +) / Double(samples.count)
         var record = latencyCache[cacheKey(for: url)] ?? LatencyRecord()
         record.headPingMs = ping

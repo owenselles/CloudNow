@@ -1016,6 +1016,8 @@ private struct ServerCityPickerView: View {
 }
 
 private struct DedicatedServerPickerView: View {
+    private static let maximumConcurrentPingMeasurements = 6
+
     let city: String
     let onSelect: (GFNZone) -> Void
 
@@ -1130,17 +1132,28 @@ private struct DedicatedServerPickerView: View {
     private func measurePings() async {
         let staleZones = zones.filter(\.isMeasuring)
         await withTaskGroup(of: (String, Int?).self) { group in
-            for zone in staleZones {
+            var pendingZones = staleZones.makeIterator()
+
+            for _ in 0 ..< min(Self.maximumConcurrentPingMeasurements, staleZones.count) {
+                guard let zone = pendingZones.next() else { break }
                 group.addTask {
                     let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
                     return (zone.id, ping)
                 }
             }
+
             for await (id, ping) in group {
                 guard !Task.isCancelled else { return }
                 if let index = zones.firstIndex(where: { $0.id == id }) {
                     zones[index].pingMs = ping
                     zones[index].isMeasuring = false
+                }
+
+                if let zone = pendingZones.next() {
+                    group.addTask {
+                        let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
+                        return (zone.id, ping)
+                    }
                 }
             }
         }

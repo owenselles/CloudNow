@@ -30,6 +30,8 @@ struct StreamView: View {
     @State private var loadingPhase: LoadingPhase = .finding
     @State private var createdSession: SessionInfo?
     @State private var sessionToken: String?
+    @State private var sessionAttemptGeneration: UInt64 = 0
+    @State private var sessionAttemptsEnabled = true
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
@@ -67,11 +69,14 @@ struct StreamView: View {
             }
         }
         .ignoresSafeArea()
-        .task {
+        .task(id: sessionAttemptGeneration) {
             computeLoadingBadges()
-            await startSession()
+            guard sessionAttemptsEnabled else { return }
+            let generation = sessionAttemptGeneration
+            await startSession(generation: generation)
         }
         .onDisappear {
+            cancelSessionAttempt()
             streamController.disconnect()
             MemoryLifecycleCoordinator.shared.streamDidClose()
         }
@@ -159,7 +164,7 @@ struct StreamView: View {
 
                 HStack(spacing: 24) {
                     if case .timedOut = loadingPhase {
-                        Button(L10n.text("retry")) { Task { await startSession() } }
+                        Button(L10n.text("retry")) { retrySessionAttempt() }
                             .buttonStyle(.bordered)
                             .tint(.blue)
                     }
@@ -595,7 +600,7 @@ struct StreamView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             HStack(spacing: 24) {
-                Button(L10n.text("retry")) { Task { await startSession() } }
+                Button(L10n.text("retry")) { retrySessionAttempt() }
                     .buttonStyle(.bordered)
                     .tint(.blue)
                 Button(L10n.text("exit")) { disconnect() }
@@ -639,12 +644,32 @@ struct StreamView: View {
 
     // MARK: Actions
 
-    private func startSession() async {
+    private func retrySessionAttempt() {
+        sessionAttemptsEnabled = true
+        sessionAttemptGeneration &+= 1
+    }
+
+    private func cancelSessionAttempt() {
+        sessionAttemptsEnabled = false
+        sessionAttemptGeneration &+= 1
+    }
+
+    private func isCurrentSessionAttempt(_ generation: UInt64) -> Bool {
+        sessionAttemptsEnabled && !Task.isCancelled && sessionAttemptGeneration == generation
+    }
+
+    private func requireCurrentSessionAttempt(_ generation: UInt64) throws {
+        try Task.checkCancellation()
+        guard sessionAttemptGeneration == generation else { throw CancellationError() }
+    }
+
+    private func startSession(generation: UInt64) async {
+        guard isCurrentSessionAttempt(generation) else { return }
         let settings = settings.normalizedForClient
         streamLog.info("startSession: game=\(game.title), existingSession=\(existingSession != nil), directSession=\(directSession != nil)")
         // Reset stream controller (handles retry from failed/disconnected state)
         streamController.disconnect()
-        installReconnectHandler()
+        installReconnectHandler(generation: generation)
 
         // Reconnect path — RESUME PUT tells the server to rebuild its media endpoint,
         // then connect WebRTC as soon as we get a single status 2/3 (no double-poll wait).
@@ -653,6 +678,7 @@ struct StreamView: View {
             loadingPhase = .preparing
             do {
                 let token = try await authManager.resolveToken()
+                try requireCurrentSessionAttempt(generation)
                 streamLog.info("startSession: token resolved")
                 sessionToken = token
                 let provider = authManager.session?.provider
@@ -671,6 +697,7 @@ struct StreamView: View {
                     settings: settings,
                     accountAllowsHDR: viewModel.subscription?.allowsHDR
                 )
+                try requireCurrentSessionAttempt(generation)
                 streamLog.info("startSession: claimed session, status=\(sessionInfo.status)")
                 createdSession = sessionInfo
 
@@ -683,6 +710,7 @@ struct StreamView: View {
                         return
                     }
                     try await Task.sleep(for: .seconds(2))
+                    try requireCurrentSessionAttempt(generation)
                     sessionInfo = try await cloudMatchClient.pollSession(
                         sessionId: sessionInfo.sessionId,
                         token: token,
@@ -692,6 +720,7 @@ struct StreamView: View {
                         clientId: sessionInfo.clientId,
                         deviceId: sessionInfo.deviceId
                     )
+                    try requireCurrentSessionAttempt(generation)
                     createdSession = sessionInfo
                 }
 
@@ -699,7 +728,10 @@ struct StreamView: View {
                 viewModel.recordPlayed(game)
                 await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
                 return
+            } catch is CancellationError {
+                return
             } catch {
+                guard isCurrentSessionAttempt(generation) else { return }
                 // Resume/claim failed — the saved session has almost certainly expired
                 // server-side. Drop the stale resume offer and fall through to create a
                 // fresh session rather than dead-ending on a raw server error.
@@ -721,6 +753,7 @@ struct StreamView: View {
                 clientId: session.clientId,
                 deviceId: session.deviceId
             )
+            guard isCurrentSessionAttempt(generation) else { return }
         }
         createdSession = nil
         loadingPhase = .finding
@@ -731,6 +764,7 @@ struct StreamView: View {
         prepareEtaAt = nil
         do {
             let token = try await authManager.resolveToken()
+            try requireCurrentSessionAttempt(generation)
             streamLog.info("startSession: token resolved")
             sessionToken = token
             let provider = authManager.session?.provider
@@ -761,6 +795,7 @@ struct StreamView: View {
                     settings: settings,
                     accountAllowsHDR: viewModel.subscription?.allowsHDR
                 )
+                try requireCurrentSessionAttempt(generation)
                 streamLog.info("startSession: claimed, status=\(sessionInfo.status)")
             } else {
                 // New session path
@@ -785,9 +820,13 @@ struct StreamView: View {
                             settings: settings,
                             accountAllowsHDR: viewModel.subscription?.allowsHDR
                         )
+                        try requireCurrentSessionAttempt(generation)
                         streamLog.info("[Resume] claimed session, status=\(sessionInfo.status, privacy: .public)")
                         createdSession = sessionInfo
+                    } catch is CancellationError {
+                        throw CancellationError()
                     } catch {
+                        try requireCurrentSessionAttempt(generation)
                         streamLog.warning("[Resume] claim failed: \(error, privacy: .private), stopping old session and creating new")
                         try? await cloudMatchClient.stopSession(
                             sessionId: last.sessionId,
@@ -797,9 +836,15 @@ struct StreamView: View {
                             clientId: last.clientId,
                             deviceId: last.deviceId
                         )
+                        try requireCurrentSessionAttempt(generation)
                         viewModel.clearLastSession()
                         // Fall through to create new session below
-                        sessionInfo = try await createNewSession(appId: appId, token: token, base: base)
+                        sessionInfo = try await createNewSession(
+                            appId: appId,
+                            token: token,
+                            base: base,
+                            generation: generation
+                        )
                     }
                 } else {
                     if let last = viewModel.lastSession {
@@ -812,9 +857,15 @@ struct StreamView: View {
                             clientId: last.clientId,
                             deviceId: last.deviceId
                         )
+                        try requireCurrentSessionAttempt(generation)
                         viewModel.clearLastSession()
                     }
-                    sessionInfo = try await createNewSession(appId: appId, token: token, base: base)
+                    sessionInfo = try await createNewSession(
+                        appId: appId,
+                        token: token,
+                        base: base,
+                        generation: generation
+                    )
                 }
             }
             createdSession = sessionInfo
@@ -867,6 +918,7 @@ struct StreamView: View {
                 }
 
                 try await Task.sleep(for: .seconds(2))
+                try requireCurrentSessionAttempt(generation)
                 sessionInfo = try await cloudMatchClient.pollSession(
                     sessionId: sessionInfo.sessionId,
                     token: token,
@@ -876,6 +928,7 @@ struct StreamView: View {
                     clientId: sessionInfo.clientId,
                     deviceId: sessionInfo.deviceId
                 )
+                try requireCurrentSessionAttempt(generation)
                 createdSession = sessionInfo
             }
 
@@ -883,15 +936,19 @@ struct StreamView: View {
             streamLog.info("startSession: serverIp=\(sessionInfo.serverIp), signalingUrl=\(sessionInfo.signalingUrl)")
             viewModel.recordPlayed(game)
             await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
+        } catch is CancellationError {
+            return
         } catch {
+            guard isCurrentSessionAttempt(generation) else { return }
             streamLog.error("startSession: FAILED: \(error)")
             streamController.fail(with: error.localizedDescription)
         }
     }
 
-    private func installReconnectHandler() {
+    private func installReconnectHandler(generation: UInt64) {
         let createdSession = $createdSession
         let sessionToken = $sessionToken
+        let sessionAttemptGeneration = $sessionAttemptGeneration
         let client = cloudMatchClient
         let appId = game.variants.first?.appId ?? game.variants.first?.id
         let reconnectSettings = settings.normalizedForClient
@@ -900,7 +957,9 @@ struct StreamView: View {
         // Capture only the reconnect inputs. Capturing StreamView here also captures its
         // @State-held controller, creating controller -> callback -> controller ownership.
         streamController.onReconnectNeeded = {
-            guard let session = createdSession.wrappedValue,
+            guard !Task.isCancelled,
+                  sessionAttemptGeneration.wrappedValue == generation,
+                  let session = createdSession.wrappedValue,
                   let token = sessionToken.wrappedValue else { return nil }
             streamLog.info("reclaimSession: attempting to reclaim \(session.sessionId)")
             do {
@@ -916,10 +975,15 @@ struct StreamView: View {
                     settings: reconnectSettings,
                     accountAllowsHDR: accountAllowsHDR
                 )
+                guard !Task.isCancelled,
+                      sessionAttemptGeneration.wrappedValue == generation else { return nil }
                 createdSession.wrappedValue = reclaimed
                 streamLog.info("reclaimSession: success, status=\(reclaimed.status)")
                 return reclaimed
+            } catch is CancellationError {
+                return nil
             } catch {
+                guard sessionAttemptGeneration.wrappedValue == generation else { return nil }
                 streamLog.error("reclaimSession: failed: \(error)")
                 return nil
             }
@@ -929,6 +993,7 @@ struct StreamView: View {
     /// Leaves the stream locally without stopping the server session.
     /// GFN keeps the session alive for ~1–2 minutes so it can be resumed from home.
     private func leave() {
+        cancelSessionAttempt()
         if let session = createdSession {
             onLeave?(game, session)
         }
@@ -937,6 +1002,7 @@ struct StreamView: View {
     }
 
     private func disconnect() {
+        cancelSessionAttempt()
         // Intentional end — clear any pending resumable session
         viewModel.resumableSession = nil
         viewModel.clearLastSession()
@@ -966,7 +1032,13 @@ struct StreamView: View {
         onDismiss()
     }
 
-    private func createNewSession(appId: String, token: String, base: String) async throws -> SessionInfo {
+    private func createNewSession(
+        appId: String,
+        token: String,
+        base: String,
+        generation: UInt64
+    ) async throws -> SessionInfo {
+        try requireCurrentSessionAttempt(generation)
         let routeSelection: (base: String, routingZoneUrl: String?) = switch settings.serverRoutingMode {
         case .region:
             settings.preferredRegionAddress.map { ($0, $0) } ?? (base, nil)
@@ -992,17 +1064,55 @@ struct StreamView: View {
 
         do {
             let sessionInfo = try await cloudMatchClient.createSession(request)
+            try requireCurrentSessionAttempt(
+                generation,
+                cleaningUpIfInvalid: sessionInfo,
+                token: token
+            )
             streamLog.info("[Session] created, sessionId=\(sessionInfo.sessionId, privacy: .private), status=\(sessionInfo.status, privacy: .public)")
             return sessionInfo
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            try requireCurrentSessionAttempt(generation)
             guard shouldForceStopExistingSession(error) else { throw error }
 
             streamLog.warning("[Session] active session conflict detected for appId=\(appId, privacy: .public), stopping matches and retrying once")
             await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
+            try requireCurrentSessionAttempt(generation)
 
             let sessionInfo = try await cloudMatchClient.createSession(request)
+            try requireCurrentSessionAttempt(
+                generation,
+                cleaningUpIfInvalid: sessionInfo,
+                token: token
+            )
             streamLog.info("[Session] created after conflict cleanup, sessionId=\(sessionInfo.sessionId, privacy: .private), status=\(sessionInfo.status, privacy: .public)")
             return sessionInfo
+        }
+    }
+
+    /// A successful CREATE allocates a server seat even if the owning view task was
+    /// cancelled while the response was in flight. Stop that newly-created session
+    /// from an independent task before discarding it, so retry/dismiss cannot leak it.
+    private func requireCurrentSessionAttempt(
+        _ generation: UInt64,
+        cleaningUpIfInvalid session: SessionInfo,
+        token: String
+    ) throws {
+        guard isCurrentSessionAttempt(generation) else {
+            let client = cloudMatchClient
+            Task {
+                try? await client.stopSession(
+                    sessionId: session.sessionId,
+                    token: token,
+                    base: session.streamingBaseUrl,
+                    serverIp: session.serverIp.isEmpty ? nil : session.serverIp,
+                    clientId: session.clientId,
+                    deviceId: session.deviceId
+                )
+            }
+            throw CancellationError()
         }
     }
 
