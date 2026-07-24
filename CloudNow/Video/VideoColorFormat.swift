@@ -92,33 +92,56 @@ nonisolated struct VideoFormatSignature: Hashable {
 }
 
 nonisolated enum DecodedVideoFormatInspector {
+    struct PixelFormatDescription: Equatable {
+        let mode: DetectedColorMode
+        let pixelFormatName: String
+        let bitDepth: Int?
+        let colorRange: String?
+    }
+
     static func inspect(pixelBuffer: CVPixelBuffer, decoderPath: VideoDecoderPath) -> DecodedVideoFormat {
         let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
-        let bitDepth = bitDepth(for: pixelFormat)
         let transferFunction = propagatedAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey)
         let colorPrimaries = propagatedAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey)
         let yCbCrMatrix = propagatedAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey)
-        let colorRange = colorRange(for: pixelFormat)
-        let mode = classify(
-            bitDepth: bitDepth,
+        let description = describe(
+            pixelFormat: pixelFormat,
             transferFunction: transferFunction,
             colorPrimaries: colorPrimaries
         )
 
         return DecodedVideoFormat(
-            mode: decoderPath == .softwareI420 ? .sdr8 : mode,
+            mode: decoderPath == .softwareI420 ? .sdr8 : description.mode,
             width: CVPixelBufferGetWidth(pixelBuffer),
             height: CVPixelBufferGetHeight(pixelBuffer),
             pixelFormat: pixelFormat,
-            pixelFormatName: fourCC(pixelFormat),
-            bitDepth: bitDepth,
+            pixelFormatName: description.pixelFormatName,
+            bitDepth: description.bitDepth,
             transferFunction: transferFunction,
             colorPrimaries: colorPrimaries,
             yCbCrMatrix: yCbCrMatrix,
-            colorRange: colorRange,
+            colorRange: description.colorRange,
             hasDisplayColorVolumeMetadata: attachmentExists(pixelBuffer, kCVImageBufferMasteringDisplayColorVolumeKey),
             hasContentLightLevelMetadata: attachmentExists(pixelBuffer, kCVImageBufferContentLightLevelInfoKey),
             decoderPath: decoderPath
+        )
+    }
+
+    static func describe(
+        pixelFormat: OSType,
+        transferFunction: String?,
+        colorPrimaries: String?
+    ) -> PixelFormatDescription {
+        let bitDepth = bitDepth(for: pixelFormat)
+        return PixelFormatDescription(
+            mode: classify(
+                bitDepth: bitDepth,
+                transferFunction: transferFunction,
+                colorPrimaries: colorPrimaries
+            ),
+            pixelFormatName: fourCC(pixelFormat),
+            bitDepth: bitDepth,
+            colorRange: colorRange(for: pixelFormat)
         )
     }
 

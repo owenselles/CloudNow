@@ -62,24 +62,18 @@ struct VideoColorFormatTests {
     }
 
     @Test("Packed p420 is recognized as ten-bit video range")
-    func packedTenBitFourCC() throws {
+    func packedTenBitFourCC() {
         let packedP420: OSType = 0x7034_3230
-        let buffer = try makeBuffer(pixelFormat: packedP420)
-        setAttachment(
-            kCVImageBufferTransferFunctionKey,
-            value: kCVImageBufferTransferFunction_ITU_R_709_2,
-            on: buffer
+        let description = DecodedVideoFormatInspector.describe(
+            pixelFormat: packedP420,
+            transferFunction: String(describing: kCVImageBufferTransferFunction_ITU_R_709_2),
+            colorPrimaries: nil
         )
 
-        let format = DecodedVideoFormatInspector.inspect(
-            pixelBuffer: buffer,
-            decoderPath: .hardware
-        )
-
-        #expect(format.pixelFormatName == "p420")
-        #expect(format.bitDepth == 10)
-        #expect(format.colorRange == "Video")
-        #expect(format.mode == .sdr10)
+        #expect(description.pixelFormatName == "p420")
+        #expect(description.bitDepth == 10)
+        #expect(description.colorRange == "Video")
+        #expect(description.mode == .sdr10)
     }
 
     @Test("All known SDR transfer functions classify by bit depth")
