@@ -1,0 +1,8 @@
+{
+  "user_code": "ABCD-EFGH",
+  "device_code": "fixture-device-code",
+  "verification_uri": "https://login.example.invalid/device",
+  "verification_uri_complete": "https://login.example.invalid/device?code=ABCD-EFGH",
+  "expires_in": 900,
+  "interval": 5
+}

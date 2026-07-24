@@ -1,14 +1,12 @@
-# Configured for SwiftLint 0.63.3 — pin in .pre-commit-config.yaml and .github/workflows/lint.yml
+# Configured for SwiftLint 0.65.0 — pin in .pre-commit-config.yaml and .github/workflows/lint.yml
 # Day-1 ruleset: tuned to current CloudNow source so this config yields ZERO violations on commit.
 # Tighten progressively in follow-up PRs.
-
-included:
-  - CloudNow
 
 excluded:
   - .build
   - .swiftpm
   - DerivedData
+  - TestArtifacts
   - .spm-packages
   - Local.xcconfig
 

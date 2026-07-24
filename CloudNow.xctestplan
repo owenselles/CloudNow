@@ -1,0 +1,52 @@
+{
+  "configurations" : [
+    {
+      "id" : "1F1DE349-BF16-4A42-B6C6-E8D8A0D4B158",
+      "name" : "Deterministic",
+      "options" : {
+        "environmentVariableEntries" : [
+          {
+            "key" : "CLOUDNOW_TESTING",
+            "value" : "1"
+          },
+          {
+            "key" : "CLOUDNOW_DISABLE_LIVE_SERVICES",
+            "value" : "1"
+          },
+          {
+            "key" : "TZ",
+            "value" : "UTC"
+          }
+        ],
+        "language" : "en",
+        "region" : "US"
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:CloudNow.xcodeproj",
+      "identifier" : "5A6F3F302F8A5B1C00C9DB31",
+      "name" : "CloudNow"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:CloudNow.xcodeproj",
+        "identifier" : "C1000000000000000000000B",
+        "name" : "CloudNowTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:CloudNow.xcodeproj",
+        "identifier" : "C1000000000000000000000C",
+        "name" : "CloudNowUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

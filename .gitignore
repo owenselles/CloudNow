@@ -17,12 +17,14 @@ xcuserdata/
 *.dSYM
 DerivedData/
 build/
+TestArtifacts/
 
 # Swift Package Manager
 .build/
 .swiftpm/
 Packages/
 Package.resolved
+!CloudNow.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 # CocoaPods (not used but just in case)
 Pods/
@@ -47,7 +49,6 @@ Local.xcconfig
 # Local Apple TV/Xcode overrides (tracked files also use skip-worktree locally)
 CloudNow/Info.plist
 CloudNow.xcodeproj/project.pbxproj
-CloudNow.xcodeproj/xcshareddata/xcschemes/CloudNow.xcscheme
 
 # Opencode / AI workflow (local-only)
 .omo/

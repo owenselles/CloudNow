@@ -1,0 +1,8 @@
+{
+  "access_token": "fixture-access-token",
+  "refresh_token": "fixture-refresh-token",
+  "id_token": "fixture-id-token",
+  "expires_in": 3600,
+  "client_token": "fixture-client-token",
+  "client_token_expires_in": 7200
+}

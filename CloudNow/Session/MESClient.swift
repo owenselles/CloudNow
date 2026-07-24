@@ -6,14 +6,21 @@ import Foundation
 /// Requires a VPC ID obtained from the streaming server's /v2/serverInfo endpoint.
 actor MESClient {
     static let shared = MESClient()
-    private let urlSession = URLSession.shared
+    private let transport: any HTTPTransport
+
+    init(transport: any HTTPTransport = URLSessionHTTPTransport()) {
+        self.transport = transport
+    }
 
     // MARK: VPC ID Discovery
 
     /// Fetches the VPC/server region ID from the streaming base URL.
     /// Returns nil on failure — caller should fall back to an empty vpcId.
     func fetchVpcId(token: String, base: String) async throws -> String? {
-        let url = URL(string: "\(base)/v2/serverInfo")!
+        let normalizedBase = base.hasSuffix("/") ? String(base.dropLast()) : base
+        guard let url = URL(string: "\(normalizedBase)/v2/serverInfo") else {
+            throw MESError.invalidURL
+        }
         var request = URLRequest(url: url)
         request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -29,7 +36,12 @@ actor MESClient {
         request.setValue("UNKNOWN", forHTTPHeaderField: "nv-device-model")
         request.setValue("CHROME", forHTTPHeaderField: "nv-browser-type")
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
-        let (data, _) = try await urlSession.data(for: request)
+        let (data, response) = try await transport.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw MESError.fetchFailed(
+                "serverInfo HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1): \(redactedHTTPBody(data))"
+            )
+        }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let status = root["requestStatus"] as? [String: Any],
               let serverId = status["serverId"] as? String
@@ -61,9 +73,11 @@ actor MESClient {
         request.setValue("WINDOWS", forHTTPHeaderField: "nv-device-os")
         request.setValue("DESKTOP", forHTTPHeaderField: "nv-device-type")
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
-        let (data, resp) = try await urlSession.data(for: request)
+        let (data, resp) = try await transport.data(for: request)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            throw MESError.fetchFailed(String(data: data, encoding: .utf8) ?? "HTTP error")
+            throw MESError.fetchFailed(
+                "HTTP \((resp as? HTTPURLResponse)?.statusCode ?? -1): \(redactedHTTPBody(data))"
+            )
         }
         return try parseMESResponse(data)
     }
@@ -83,13 +97,15 @@ actor MESClient {
         let tier = raw.membershipTier ?? raw.type ?? "FREE"
         let isUnlimited = raw.subType?.uppercased() == "UNLIMITED"
 
-        let resolutions: [EntitledResolution] = (raw.features?.resolutions ?? []).map {
-            EntitledResolution(
-                widthInPixels: $0.widthInPixels,
-                heightInPixels: $0.heightInPixels,
-                framesPerSecond: $0.framesPerSecond
-            )
-        }
+        let resolutions: [EntitledResolution] = (raw.features?.resolutions ?? [])
+            .filter { $0.isEntitled != false }
+            .map {
+                EntitledResolution(
+                    widthInPixels: $0.widthInPixels,
+                    heightInPixels: $0.heightInPixels,
+                    framesPerSecond: $0.framesPerSecond
+                )
+            }
 
         return SubscriptionInfo(
             membershipTier: tier.uppercased() == "FREE" ? "Free" : tier,

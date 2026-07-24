@@ -175,6 +175,8 @@ private nonisolated let streamStatsParsingQueue = DispatchQueue(
     qos: .utility
 )
 
+private nonisolated let maximumInputLatencySamples = 4096
+
 /// Mutable state shared by WebRTC delegate callbacks and the latency-sensitive input sender.
 /// Every access is protected by `inputSendState`; the dispatch queue preserves packet ordering,
 /// while the lock makes the ownership boundary visible to Swift's strict-concurrency checker.
@@ -187,8 +189,7 @@ private nonisolated struct InputSendState {
     var dropped: UInt64 = 0
     var superseded: UInt64 = 0
     var bufferedBytes: UInt64 = 0
-    var queueWaitsNs: [UInt64] = []
-    var queueWaitWriteIndex = 0
+    var queueWaitsNs = BoundedSampleHistory<UInt64>(capacity: maximumInputLatencySamples)
     var queueMaxNs: UInt64 = 0
     var latencySamplingEnabled = false
     var newestGamepadGeneratedAt: UInt64 = 0
@@ -254,6 +255,9 @@ final class GFNStreamController: NSObject {
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
     private(set) var bitrateHistory: [Double] = []
+    @ObservationIgnored private var pingSamples = BoundedSampleHistory<Double>(capacity: 30)
+    @ObservationIgnored private var fpsSamples = BoundedSampleHistory<Double>(capacity: 30)
+    @ObservationIgnored private var bitrateSamples = BoundedSampleHistory<Double>(capacity: 30)
     /// Active time-limit warning from the GFN server (nil when no warning is in effect).
     private(set) var timeWarning: StreamTimeWarning?
     /// Incremented each time the user presses Menu while VideoSurfaceView is first responder.
@@ -268,7 +272,6 @@ final class GFNStreamController: NSObject {
     @ObservationIgnored private nonisolated let peerCallbackState = OSAllocatedUnfairLock(
         initialState: PeerCallbackState()
     )
-    private nonisolated static let maximumInputLatencySamples = 4096
     private nonisolated let inputBackpressureHighWaterBytes: UInt64 = 512
     private nonisolated let inputBackpressureLowWaterBytes: UInt64 = 128
     private let inputSendQueue = DispatchQueue(
@@ -380,8 +383,7 @@ final class GFNStreamController: NSObject {
                 state.dropped = 0
                 state.superseded = 0
                 state.bufferedBytes = 0
-                state.queueWaitsNs.removeAll(keepingCapacity: true)
-                state.queueWaitWriteIndex = 0
+                state.queueWaitsNs.reset()
                 state.queueMaxNs = 0
                 state.newestGamepadGeneratedAt = 0
                 state.channelState = "closed"
@@ -464,8 +466,7 @@ final class GFNStreamController: NSObject {
             inputSendState.withLock { state in
                 state.latencySamplingEnabled = enabled
                 guard resetSamples || !enabled else { return }
-                state.queueWaitsNs.removeAll(keepingCapacity: true)
-                state.queueWaitWriteIndex = 0
+                state.queueWaitsNs.reset()
                 state.queueMaxNs = 0
             }
         }
@@ -562,8 +563,7 @@ final class GFNStreamController: NSObject {
                 }
                 state.bufferedBytes = 0
                 state.channelState = "closed"
-                state.queueWaitsNs.removeAll(keepingCapacity: true)
-                state.queueWaitWriteIndex = 0
+                state.queueWaitsNs.reset()
                 state.queueMaxNs = 0
                 let pending = Array(state.pendingGamepadSnapshots.values)
                 state.pendingGamepadSnapshots.removeAll()
@@ -632,6 +632,9 @@ final class GFNStreamController: NSObject {
         micAudioSource = nil
         microphoneEnabledForConnection = false
         microphoneAuthorizedForConnection = false
+        pingSamples.reset()
+        fpsSamples.reset()
+        bitrateSamples.reset()
         pingHistory = []
         fpsHistory = []
         bitrateHistory = []
@@ -1501,7 +1504,7 @@ final class GFNStreamController: NSObject {
             guard let self else { return }
             let capture = inputSendState.withLock { state in
                 let capture = (
-                    waits: state.queueWaitsNs,
+                    waits: state.queueWaitsNs.elements,
                     newestGamepadGeneratedAt: state.newestGamepadGeneratedAt,
                     generated: state.generated,
                     submitted: state.submitted,
@@ -1512,8 +1515,7 @@ final class GFNStreamController: NSObject {
                     maxNs: state.queueMaxNs,
                     channelState: state.channelState
                 )
-                state.queueWaitsNs.removeAll(keepingCapacity: true)
-                state.queueWaitWriteIndex = 0
+                state.queueWaitsNs.reset()
                 state.queueMaxNs = 0
                 return capture
             }
@@ -1777,9 +1779,12 @@ final class GFNStreamController: NSObject {
         if next != stats {
             stats = next
         }
-        appendHistory(&pingHistory, value: next.rttMs)
-        appendHistory(&fpsHistory, value: next.fps)
-        appendHistory(&bitrateHistory, value: Double(next.bitrateKbps) / 1000.0)
+        pingSamples.append(next.rttMs)
+        fpsSamples.append(next.fps)
+        bitrateSamples.append(Double(next.bitrateKbps) / 1000.0)
+        pingHistory = pingSamples.elements
+        fpsHistory = fpsSamples.elements
+        bitrateHistory = bitrateSamples.elements
     }
 
     private func applyDecodedVideoFormat(_ format: DecodedVideoFormat) {
@@ -1913,13 +1918,6 @@ final class GFNStreamController: NSObject {
         for url in sorted.dropFirst(max(0, count)) {
             try FileManager.default.removeItem(at: url)
         }
-    }
-
-    private func appendHistory(_ history: inout [Double], value: Double) {
-        if history.count >= 30 {
-            history.removeFirst()
-        }
-        history.append(value)
     }
 
     private func parseSelectedConnectionStats(_ report: LKRTCStatisticsReport) {
@@ -2371,12 +2369,7 @@ extension GFNStreamController: DataChannelSender {
     ) -> InputSendDisposition {
         let waitNs = DispatchTime.now().uptimeNanoseconds &- packet.generatedAt
         if state.latencySamplingEnabled {
-            if state.queueWaitsNs.count < Self.maximumInputLatencySamples {
-                state.queueWaitsNs.append(waitNs)
-            } else {
-                state.queueWaitsNs[state.queueWaitWriteIndex] = waitNs
-                state.queueWaitWriteIndex = (state.queueWaitWriteIndex + 1) % Self.maximumInputLatencySamples
-            }
+            state.queueWaitsNs.append(waitNs)
             state.queueMaxNs = max(state.queueMaxNs, waitNs)
         }
         if packet.category == .gamepadSnapshot {

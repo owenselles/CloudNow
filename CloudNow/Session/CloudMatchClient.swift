@@ -13,6 +13,7 @@ nonisolated func gfnHeaders(token: String, clientId: String, deviceId: String, i
     var h: [String: String] = [
         "User-Agent": NVIDIAAuth.userAgent,
         "Authorization": "GFNJWT \(token)",
+        "Accept": "application/json",
         "Content-Type": "application/json",
         "nv-browser-type": "CHROME",
         "nv-client-id": clientId,
@@ -151,6 +152,30 @@ private nonisolated struct AnyCodableStringArray: Decodable {
     }
 }
 
+/// CloudMatch returns application IDs as either JSON strings or integers. Unlike
+/// `AnyCodableString`, numeric values here are identifiers, not packed IPv4 addresses.
+private nonisolated struct AnyCodableIdentifier: Decodable {
+    let value: String?
+
+    init(from decoder: Decoder) throws {
+        struct Nested: Decodable {
+            let value: AnyCodableIdentifier?
+        }
+
+        if let nested = try? Nested(from: decoder), let nestedValue = nested.value?.value {
+            value = nestedValue
+        } else if let stringValue = try? String(from: decoder) {
+            value = stringValue
+        } else if let integerValue = try? UInt64(from: decoder) {
+            value = String(integerValue)
+        } else if let integerValue = try? Int64(from: decoder) {
+            value = String(integerValue)
+        } else {
+            value = nil
+        }
+    }
+}
+
 private nonisolated struct GetSessionsResponse: Decodable {
     let requestStatus: RequestStatus
     let sessions: [SessionEntry]?
@@ -166,7 +191,7 @@ private nonisolated struct GetSessionsResponse: Decodable {
         let connectionInfo: [ConnEntry]?
         let sessionControlInfo: CtrlEntry?
 
-        struct SessionRequestData: Decodable { let appId: AnyCodableString? }
+        struct SessionRequestData: Decodable { let appId: AnyCodableIdentifier? }
         struct ConnEntry: Decodable { let ip: AnyCodableString?; let port: Int?; let usage: Int?; let resourcePath: String? }
         struct CtrlEntry: Decodable { let ip: AnyCodableString? }
     }
@@ -181,9 +206,13 @@ private nonisolated func resolutionPixels(for settings: StreamSettings) -> (widt
     return (width, height)
 }
 
-private nonisolated func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: String) -> [String: Any] {
+private nonisolated func buildSessionRequestBody(
+    _ input: SessionCreateRequest,
+    deviceId: String,
+    subSessionId: String,
+    timezoneOffsetMilliseconds: Int
+) -> [String: Any] {
     let (width, height) = resolutionPixels(for: input.settings)
-    let tzOffset = TimeZone.current.secondsFromGMT() * 1000
     let audioChannels = input.settings.audioFormat.resolvedChannelCount
     let color = input.settings.colorRequest(
         localCapabilities: input.localVideoCapabilities,
@@ -222,7 +251,7 @@ private nonisolated func buildSessionRequestBody(_ input: SessionCreateRequest, 
             // stereo, so the rear channels of a negotiated 5.1 stream stay silent.
             "audioMode": audioChannels,
             "metaData": [
-                ["key": "SubSessionId", "value": UUID().uuidString],
+                ["key": "SubSessionId", "value": subSessionId],
                 ["key": "wssignaling", "value": "1"],
                 ["key": "GSStreamerType", "value": "WebRTC"],
                 ["key": "networkType", "value": "Unknown"],
@@ -237,7 +266,7 @@ private nonisolated func buildSessionRequestBody(_ input: SessionCreateRequest, 
             // server offers multiopus/48000/6 instead of stereo opus.
             "surroundAudioInfo": audioChannels >= 6 ? 4_128_774 : 0,
             "remoteControllersBitmap": 0,
-            "clientTimezoneOffset": tzOffset,
+            "clientTimezoneOffset": timezoneOffsetMilliseconds,
             "enhancedStreamMode": 1,
             "appLaunchMode": input.settings.appLaunchMode.cloudMatchValue,
             "secureRTSPSupported": false,
@@ -245,6 +274,9 @@ private nonisolated func buildSessionRequestBody(_ input: SessionCreateRequest, 
             "accountLinked": input.accountLinked,
             "enablePersistingInGameSettings": input.settings.persistInGameSettings,
             "userAge": 26,
+            // Codec preference and max bitrate deliberately stay out of CloudMatch
+            // session JSON. SDP answer munging owns both through SDPMunger so there
+            // is one negotiation source of truth.
             "requestedStreamingFeatures": [
                 "reflex": input.settings.fps >= 120,
                 "bitDepth": cloudMatchBitDepth(color),
@@ -262,7 +294,13 @@ private nonisolated func buildSessionRequestBody(_ input: SessionCreateRequest, 
     ]
 }
 
-private nonisolated func buildResumeSessionRequestData(appId: String?, settings: StreamSettings, deviceId: String) -> [String: Any] {
+private nonisolated func buildResumeSessionRequestData(
+    appId: String?,
+    settings: StreamSettings,
+    deviceId: String,
+    subSessionId: String,
+    timezoneOffsetMilliseconds: Int
+) -> [String: Any] {
     // A RESUME (action 2) must NOT renegotiate streaming parameters: the session is already
     // configured server-side, and resending fps/resolution/codec/HDR/monitor settings makes
     // the server reject the claim (INTERNAL_ERROR 8A8C0000). Mirror the official client /
@@ -280,7 +318,7 @@ private nonisolated func buildResumeSessionRequestData(appId: String?, settings:
         "internalTitle": NSNull(),
         "clientPlatformName": "windows",
         "metaData": [
-            ["key": "SubSessionId", "value": UUID().uuidString],
+            ["key": "SubSessionId", "value": subSessionId],
             ["key": "wssignaling", "value": "1"],
             ["key": "GSStreamerType", "value": "WebRTC"],
             ["key": "networkType", "value": "Unknown"],
@@ -288,7 +326,7 @@ private nonisolated func buildResumeSessionRequestData(appId: String?, settings:
             ["key": "surroundAudioInfo", "value": "\(audioChannels)"],
         ],
         "surroundAudioInfo": audioChannels >= 6 ? 4_128_774 : 0,
-        "clientTimezoneOffset": TimeZone.current.secondsFromGMT() * 1000,
+        "clientTimezoneOffset": timezoneOffsetMilliseconds,
         "clientIdentification": "GFN-PC",
         "parentSessionId": NSNull(),
         "streamerVersion": 1,
@@ -373,16 +411,32 @@ private nonisolated func hostFromResourcePath(_ resourcePath: String?) -> String
 actor CloudMatchClient {
     private static let defaultBase = "https://prod.cloudmatchbeta.nvidiagrid.net"
 
-    private let urlSession: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.httpAdditionalHeaders = ["Accept": "application/json"]
-        return URLSession(configuration: config)
-    }()
+    private let transport: any HTTPTransport
+    private let uuid: @Sendable () -> UUID
+    private let deviceId: @Sendable () -> String
+    private let now: @Sendable () -> Date
+    private let timezoneOffsetMilliseconds: @Sendable () -> Int
+
+    init(
+        transport: any HTTPTransport = URLSessionHTTPTransport(configuration: .ephemeral),
+        uuid: @escaping @Sendable () -> UUID = UUID.init,
+        deviceId: @escaping @Sendable () -> String = GFNDeviceIdentity.stableDeviceId,
+        now: @escaping @Sendable () -> Date = Date.init,
+        timezoneOffsetMilliseconds: @escaping @Sendable () -> Int = {
+            TimeZone.current.secondsFromGMT() * 1000
+        }
+    ) {
+        self.transport = transport
+        self.uuid = uuid
+        self.deviceId = deviceId
+        self.now = now
+        self.timezoneOffsetMilliseconds = timezoneOffsetMilliseconds
+    }
 
     private func validateHTTPStatus(_ response: URLResponse, data: Data, context: String) throws {
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard statusCode == 200 else {
-            let raw = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
+            let raw = redactedHTTPBody(data)
             throw CloudMatchError.requestFailed(context: context, message: raw)
         }
     }
@@ -421,15 +475,20 @@ actor CloudMatchClient {
     // MARK: Create Session
 
     func createSession(_ input: SessionCreateRequest) async throws -> SessionInfo {
-        let clientId = UUID().uuidString
-        let deviceId = GFNDeviceIdentity.stableDeviceId()
+        let clientId = uuid().uuidString
+        let deviceId = deviceId()
         let preferredBase = input.streamingBaseUrl.map {
             $0.hasSuffix("/") ? String($0.dropLast()) : $0
         } ?? Self.defaultBase
         let fallbackBase = Self.defaultBase
         let requestedRoutingZoneUrl = normalizedRoutingZoneUrl(input.routingZoneUrl)
 
-        let body = buildSessionRequestBody(input, deviceId: deviceId)
+        let body = buildSessionRequestBody(
+            input,
+            deviceId: deviceId,
+            subSessionId: uuid().uuidString,
+            timezoneOffsetMilliseconds: timezoneOffsetMilliseconds()
+        )
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         cloudMatchLog.debug("[CloudMatch] bodySize: \(bodyData.count, privacy: .public) bytes")
         cloudMatchLog.debug("[CloudMatch] createSession languageCode=\(input.settings.effectiveGameLanguage, privacy: .public) keyboardLayout=\(input.settings.keyboardLayout, privacy: .public)")
@@ -454,7 +513,7 @@ actor CloudMatchClient {
             request.httpBody = bodyData
             cloudMatchLog.debug("[CloudMatch] createSession POST \(params, privacy: .private), appId=\(input.appId, privacy: .public)")
 
-            let (data, resp) = try await urlSession.data(for: request)
+            let (data, resp) = try await transport.data(for: request)
             let statusCode = (resp as? HTTPURLResponse)?.statusCode ?? -1
             cloudMatchLog.debug("[CloudMatch] createSession response: HTTP \(statusCode, privacy: .public)")
             if statusCode == 200 {
@@ -474,7 +533,7 @@ actor CloudMatchClient {
                     deviceId: deviceId
                 )
             }
-            let raw = String(data: data, encoding: .utf8) ?? ""
+            let raw = redactedHTTPBody(data)
             cloudMatchLog.warning("[CloudMatch] createSession failed: HTTP \(statusCode, privacy: .public) body: \(raw.prefix(500), privacy: .private)")
             // Clean up phantom session the server allocated despite the error
             if let errPayload = try? JSONDecoder().decode(CloudMatchResponse.self, from: data),
@@ -493,7 +552,7 @@ actor CloudMatchClient {
             }
             lastError = CloudMatchError.sessionCreateFailed(raw)
         }
-        throw lastError!
+        throw lastError ?? CloudMatchError.sessionCreateFailed("No CloudMatch endpoint was available.")
     }
 
     // MARK: Poll Session
@@ -513,7 +572,7 @@ actor CloudMatchClient {
         for (k, v) in gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: false) {
             request.setValue(v, forHTTPHeaderField: k)
         }
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         try validateHTTPStatus(response, data: data, context: "pollSession")
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
         try validateAPIStatus(payload, context: "pollSession")
@@ -556,8 +615,8 @@ actor CloudMatchClient {
         let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        let lifecycleClientId = clientId ?? UUID().uuidString
-        let stableDeviceId = deviceId ?? GFNDeviceIdentity.stableDeviceId()
+        let lifecycleClientId = clientId ?? uuid().uuidString
+        let stableDeviceId = deviceId ?? self.deviceId()
         for (k, v) in gfnHeaders(
             token: token,
             clientId: lifecycleClientId,
@@ -566,7 +625,14 @@ actor CloudMatchClient {
         ) {
             request.setValue(v, forHTTPHeaderField: k)
         }
-        _ = try await urlSession.data(for: request)
+        let (data, response) = try await transport.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard (200 ..< 300).contains(statusCode) else {
+            throw CloudMatchError.requestFailed(
+                context: "stopSession",
+                message: "HTTP \(statusCode): \(redactedHTTPBody(data))"
+            )
+        }
     }
 
     // MARK: Active Sessions
@@ -574,13 +640,13 @@ actor CloudMatchClient {
     func getActiveSessions(token: String, base: String) async throws -> [ActiveSessionInfo] {
         let url = URL(string: "\(base)/v2/session")!
         var request = URLRequest(url: url)
-        let clientId = UUID().uuidString
-        let deviceId = GFNDeviceIdentity.stableDeviceId()
+        let clientId = uuid().uuidString
+        let deviceId = deviceId()
         let headers = gfnHeaders(token: token, clientId: clientId, deviceId: deviceId, includeOrigin: false)
         for (k, v) in headers {
             request.setValue(v, forHTTPHeaderField: k)
         }
-        let (data, resp) = try await urlSession.data(for: request)
+        let (data, resp) = try await transport.data(for: request)
         let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1
         cloudMatchLog.debug("[CloudMatch] getActiveSessions HTTP \(httpStatus, privacy: .public), \(data.count, privacy: .public) bytes")
         if cloudMatchOSLog.isEnabled(type: .debug), let raw = String(data: data, encoding: .utf8) {
@@ -642,8 +708,8 @@ actor CloudMatchClient {
         settings: StreamSettings,
         accountAllowsHDR _: Bool? = nil
     ) async throws -> SessionInfo {
-        let clientId = existingClientId ?? UUID().uuidString
-        let deviceId = existingDeviceId ?? GFNDeviceIdentity.stableDeviceId()
+        let clientId = existingClientId ?? uuid().uuidString
+        let deviceId = existingDeviceId ?? deviceId()
         let initialBase = "https://\(serverIp)"
         let preservedRoutingZoneUrl = normalizedRoutingZoneUrl(routingZoneUrl) ?? normalizedRoutingZoneUrl(base)
 
@@ -675,7 +741,13 @@ actor CloudMatchClient {
         let body: [String: Any] = [
             "action": 2,
             "data": "RESUME",
-            "sessionRequestData": buildResumeSessionRequestData(appId: appId, settings: settings, deviceId: deviceId),
+            "sessionRequestData": buildResumeSessionRequestData(
+                appId: appId,
+                settings: settings,
+                deviceId: deviceId,
+                subSessionId: uuid().uuidString,
+                timezoneOffsetMilliseconds: timezoneOffsetMilliseconds()
+            ),
             "metaData": [],
         ]
         var request = URLRequest(url: url)
@@ -684,7 +756,7 @@ actor CloudMatchClient {
             request.setValue(v, forHTTPHeaderField: k)
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, resp) = try await urlSession.data(for: request)
+        let (data, resp) = try await transport.data(for: request)
         try validateHTTPStatus(resp, data: data, context: "claimSession")
         let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
         try validateAPIStatus(payload, context: "claimSession")
@@ -904,7 +976,7 @@ actor CloudMatchClient {
         var adUpdate: [String: Any] = [
             "adId": adId,
             "adAction": action.rawValue,
-            "clientTimestamp": Int(Date().timeIntervalSince1970),
+            "clientTimestamp": Int(now().timeIntervalSince1970),
         ]
         if let ms = watchedTimeMs {
             adUpdate["watchedTimeInMs"] = max(0, ms)
@@ -920,7 +992,7 @@ actor CloudMatchClient {
             request.setValue(v, forHTTPHeaderField: k)
         }
         request.httpBody = bodyData
-        _ = try? await urlSession.data(for: request)
+        _ = try? await transport.data(for: request)
     }
 
     private func serverHost(from conn: CloudMatchResponse.SessionPayload.ConnectionInfo) -> String? {

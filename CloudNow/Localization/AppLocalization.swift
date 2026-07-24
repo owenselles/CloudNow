@@ -82,6 +82,35 @@ enum L10n {
         activeTable[key] ?? fallbackTable[key] ?? key
     }
 
+    /// Resolves a key against an explicit tvOS locale. This keeps localization validation
+    /// deterministic without changing the process-wide language used by the running app.
+    static func text(_ key: String, localeIdentifier: String) -> String {
+        let table = translationTable(for: localeIdentifier)
+        return table[key] ?? fallbackTable[key] ?? key
+    }
+
+    /// Returns the table selected for a tvOS locale, including alias canonicalization and
+    /// English fallback. Internal visibility intentionally limits this inspection seam to
+    /// the app module and its test bundle.
+    static func translationTable(for localeIdentifier: String) -> [String: String] {
+        let canonical = canonicalTVOSLanguageIdentifier(for: localeIdentifier)
+        if let provider = tableProvidersByLocale[canonical] {
+            return provider()
+        }
+
+        let locale = Locale(identifier: localeIdentifier.replacingOccurrences(of: "_", with: "-"))
+        let language = locale.language.languageCode?.identifier.lowercased()
+        return language.flatMap { tableProvidersByLocale[$0]?() } ?? fallbackTable
+    }
+
+    /// Materializes every supported table for integrity checks. Production lookup remains
+    /// lazy and only uses the active table.
+    static var supportedTranslationTables: [String: [String: String]] {
+        Dictionary(uniqueKeysWithValues: supportedLanguageCodes.map {
+            ($0, translationTable(for: $0))
+        })
+    }
+
     static func format(_ key: String, _ args: CVarArg...) -> String {
         String(format: text(key), locale: Locale.autoupdatingCurrent, arguments: args)
     }

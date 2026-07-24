@@ -149,8 +149,17 @@ final nonisolated class EncodedInputPacket: @unchecked Sendable {
 
 /// Encodes controller and HID input into reusable GFN protocol packet buffers.
 final nonisolated class InputEncoder {
+    private let timestampProvider: @Sendable () -> UInt64
     private var protocolVersion = 2
     private var gamepadSequence = [Int: UInt16]()
+
+    init(
+        timestampProvider: @escaping @Sendable () -> UInt64 = {
+            UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        }
+    ) {
+        self.timestampProvider = timestampProvider
+    }
 
     func setProtocolVersion(_ v: Int) {
         protocolVersion = v
@@ -363,7 +372,7 @@ final nonisolated class InputEncoder {
     }
 
     private func currentTimestamp() -> UInt64 {
-        UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        timestampProvider()
     }
 }
 

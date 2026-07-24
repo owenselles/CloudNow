@@ -1381,12 +1381,11 @@ private struct NetworkTestView: View {
         }
 
         let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
-        let info: GFNServerInfo? = if let cached = ServerInfoClient.shared.cached {
-            cached
-        } else if let token = try? await authManager.resolveToken() {
-            try? await ServerInfoClient.shared.fetch(baseUrl: base, token: token)
+        let cached = ServerInfoClient.shared.cached
+        let info: GFNServerInfo? = if let token = try? await authManager.resolveToken() {
+            await (try? ServerInfoClient.shared.fetch(baseUrl: base, token: token)) ?? cached
         } else {
-            nil
+            cached
         }
         if let local = info?.localRegionName,
            let region = info?.regions.first(where: { $0.name == local })

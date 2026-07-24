@@ -13,6 +13,57 @@ nonisolated struct AuthSession: Codable {
     var user: AuthUser
 }
 
+nonisolated protocol NVIDIAAuthAPIClient: Sendable {
+    func fetchProviders() async throws -> [LoginProvider]
+    func refreshTokens(_ refreshToken: String) async throws -> AuthTokens
+    func fetchClientToken(accessToken: String) async throws -> (
+        token: String,
+        expiresAt: Date
+    )
+    func refreshWithClientToken(
+        _ clientToken: String,
+        userId: String
+    ) async throws -> AuthTokens
+    func requestDeviceAuthorization(idpId: String?) async throws -> DeviceFlowResponse
+    func pollForDeviceToken(
+        deviceCode: String,
+        interval: Int,
+        expiresIn: Int
+    ) async throws -> AuthTokens
+    func fetchUserInfo(tokens: AuthTokens) async throws -> AuthUser
+}
+
+extension NVIDIAAuthAPI: NVIDIAAuthAPIClient {}
+
+nonisolated protocol AuthSessionPersistence: Sendable {
+    func loadAuthSession() async throws -> AuthSession
+    func saveAuthSession(_ session: AuthSession) async throws
+    func deleteAuthSession() async throws
+}
+
+extension AppPersistenceStore: AuthSessionPersistence {}
+
+nonisolated struct AuthBackgroundScheduler: Sendable {
+    let cancel: @MainActor @Sendable (String) -> Void
+    let submit: @MainActor @Sendable (String, Date) -> Void
+
+    static let live = AuthBackgroundScheduler(
+        cancel: { identifier in
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
+        },
+        submit: { identifier, earliestBeginDate in
+            let request = BGAppRefreshTaskRequest(identifier: identifier)
+            request.earliestBeginDate = earliestBeginDate
+            try? BGTaskScheduler.shared.submit(request)
+        }
+    )
+
+    static let disabled = AuthBackgroundScheduler(
+        cancel: { _ in },
+        submit: { _, _ in }
+    )
+}
+
 // MARK: - Login Phase
 
 enum LoginPhase: Equatable {
@@ -41,14 +92,29 @@ final class AuthManager {
         session != nil
     }
 
-    private let api = NVIDIAAuthAPI()
-    private let persistence = AppPersistenceStore.shared
+    private let api: any NVIDIAAuthAPIClient
+    private let persistence: any AuthSessionPersistence
+    private let backgroundScheduler: AuthBackgroundScheduler
+    private let schedulesAutomaticRefresh: Bool
     private var loginTask: Task<Void, Never>?
     private var activeRefreshTask: Task<AuthSession, Error>?
+    private var refreshTaskGeneration: UInt64 = 0
     private var refreshTimer: Task<Void, Never>?
     private var credentialGeneration = 0
 
     private static let bgTaskID = "com.owenselles.CloudNow.tokenRefresh"
+
+    init(
+        api: any NVIDIAAuthAPIClient = NVIDIAAuthAPI(),
+        persistence: any AuthSessionPersistence = AppPersistenceStore.shared,
+        backgroundScheduler: AuthBackgroundScheduler = .live,
+        schedulesAutomaticRefresh: Bool = true
+    ) {
+        self.api = api
+        self.persistence = persistence
+        self.backgroundScheduler = backgroundScheduler
+        self.schedulesAutomaticRefresh = schedulesAutomaticRefresh
+    }
 
     // MARK: Lifecycle
 
@@ -70,11 +136,12 @@ final class AuthManager {
 
     // MARK: Login (Device Flow)
 
-    func login(with provider: LoginProvider? = nil) {
+    @discardableResult
+    func login(with provider: LoginProvider? = nil) -> Task<Void, Never> {
         loginTask?.cancel()
         credentialGeneration &+= 1
         let generation = credentialGeneration
-        loginTask = Task {
+        let task = Task {
             loginPhase = .idle
             do {
                 let providers: [LoginProvider] = if let provider {
@@ -109,7 +176,7 @@ final class AuthManager {
                             expiresIn: deviceAuth.expiresIn
                         )
                         break
-                    } catch AuthError.deviceFlowExpired, AuthError.deviceFlowDenied {
+                    } catch AuthError.deviceFlowExpired {
                         continue
                     }
                 }
@@ -162,6 +229,8 @@ final class AuthManager {
                 }
             }
         }
+        loginTask = task
+        return task
     }
 
     func cancelLogin() {
@@ -176,7 +245,7 @@ final class AuthManager {
         invalidateAuthenticationWork()
         session = nil
         loginPhase = .idle
-        Task { await persistence.deleteAuthSession() }
+        Task { try? await persistence.deleteAuthSession() }
     }
 
     /// Stops authentication work before Reset All Data removes credentials.
@@ -198,7 +267,7 @@ final class AuthManager {
         activeRefreshTask = nil
         refreshTimer?.cancel()
         refreshTimer = nil
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.bgTaskID)
+        backgroundScheduler.cancel(Self.bgTaskID)
     }
 
     // MARK: Token Refresh
@@ -243,7 +312,7 @@ final class AuthManager {
                 authLog.error("[Auth] Token expired and refresh failed: \(error, privacy: .private) — clearing session, re-login required")
                 refreshTimer?.cancel()
                 session = nil
-                await persistence.deleteAuthSession()
+                try? await persistence.deleteAuthSession()
             } else {
                 authLog.warning("[Auth] Refresh failed but token still valid (\(Int(s.tokens.expiresAt.timeIntervalSinceNow), privacy: .public)s left) — keeping session")
             }
@@ -257,9 +326,15 @@ final class AuthManager {
             return try await existing.value
         }
         let generation = credentialGeneration
+        refreshTaskGeneration &+= 1
+        let taskGeneration = refreshTaskGeneration
         let task = Task<AuthSession, Error> { @MainActor [weak self] in
             guard let self else { throw AuthError.noSession }
-            defer { self.activeRefreshTask = nil }
+            defer {
+                if self.refreshTaskGeneration == taskGeneration {
+                    self.activeRefreshTask = nil
+                }
+            }
             return try await performRefresh(session: s, generation: generation)
         }
         activeRefreshTask = task
@@ -365,6 +440,7 @@ final class AuthManager {
 
     private func scheduleProactiveRefresh() {
         refreshTimer?.cancel()
+        guard schedulesAutomaticRefresh else { return }
         guard let s = session else { return }
         let delay = s.tokens.expiresAt.timeIntervalSinceNow - (5 * 60)
         guard delay > 0 else {
@@ -379,10 +455,12 @@ final class AuthManager {
     }
 
     func scheduleBackgroundRefresh() {
+        guard schedulesAutomaticRefresh else { return }
         guard let s = session else { return }
-        let request = BGAppRefreshTaskRequest(identifier: Self.bgTaskID)
-        request.earliestBeginDate = s.tokens.expiresAt.addingTimeInterval(-(5 * 60))
-        try? BGTaskScheduler.shared.submit(request)
+        backgroundScheduler.submit(
+            Self.bgTaskID,
+            s.tokens.expiresAt.addingTimeInterval(-(5 * 60))
+        )
     }
 
     private func persist(_ s: AuthSession) async throws {

@@ -13,11 +13,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Building
 
-- **Xcode 16+**, targeting tvOS 17+
-- Open `CloudNow.xcodeproj` in Xcode and build/run via Xcode (no command-line build setup)
-- **Required SPM dependency**: Add [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) via Xcode → File → Add Package Dependencies before building
+- **Xcode 26.2+**, targeting tvOS 26.2+
+- Open `CloudNow.xcodeproj` in Xcode, or use `Scripts/test.sh` for command-line simulator testing
+- **Required SPM dependency**: [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework), resolved automatically from the shared project and tracked `Package.resolved`
 - Distribution is sideload-only (no App Store target)
-- No test suite; SwiftLint and SwiftFormat are configured and required by CI
+- `CloudNowTests` uses Swift Testing for unit/integration coverage; `CloudNowUITests` uses XCTest for deterministic tvOS UI automation
+- SwiftLint, SwiftFormat, and the simulator test suite are required by CI
 
 ## Linting
 
@@ -27,11 +28,12 @@ First read the pinned versions from the `README.md` **Linting** section and veri
 
 ```bash
 # Format check (no mutation)
-swiftformat --lint --config .swiftformat CloudNow
+swiftformat --lint --config .swiftformat CloudNow CloudNowTests CloudNowUITests
 # Lint check
-swiftlint --strict --config .swiftlint.yml CloudNow
+swiftlint --strict --config .swiftlint.yml CloudNow CloudNowTests CloudNowUITests
 # Auto-fix everything fixable
-swiftformat --config .swiftformat CloudNow && swiftlint --fix --config .swiftlint.yml CloudNow
+swiftformat --config .swiftformat CloudNow CloudNowTests CloudNowUITests
+swiftlint --fix --config .swiftlint.yml CloudNow CloudNowTests CloudNowUITests
 ```
 
 ### Escape-hatch convention
@@ -47,6 +49,16 @@ Never use block `disable`/`enable` pairs and never omit the rationale.
 ### Pinned versions
 
 Tools pinned in `.pre-commit-config.yaml` and `.github/workflows/lint.yml`: SwiftLint 0.65.0, SwiftFormat 0.62.1.
+
+## Testing
+
+Run the complete deterministic tvOS simulator suite from any current directory:
+
+```bash
+/path/to/CloudNow/Scripts/test.sh
+```
+
+Use `--unit`, `--ui`, or `--full` to select a mode. The runner discovers and boots a compatible simulator, resolves packages, disables code signing, enables coverage, and writes ignored results under `TestArtifacts/`. Tests must use injected fakes and fixtures; they must never contact live NVIDIA, PrintedWaste, authentication, catalog, signaling, image, or media services. See the README **Testing** section for fixture conventions and hardware-only exclusions.
 
 ## Architecture
 

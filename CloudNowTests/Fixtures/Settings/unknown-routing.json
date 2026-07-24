@@ -1,0 +1,4 @@
+{
+  "serverRoutingMode": "future-routing-mode",
+  "preferredZoneUrl": "https://np-test.example.invalid/"
+}

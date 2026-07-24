@@ -1,0 +1,29 @@
+{
+  "requestStatus": {
+    "statusCode": 1,
+    "statusDescription": "SUCCESS"
+  },
+  "sessions": [
+    {
+      "sessionId": "active-session",
+      "status": 2,
+      "sessionRequestData": {"appId": 12345},
+      "connectionInfo": [
+        {
+          "ip": "203.0.113.20",
+          "port": 443,
+          "usage": 14,
+          "resourcePath": "rtsps://signaling.example.invalid:322/nvst/"
+        }
+      ],
+      "sessionControlInfo": {"ip": "203.0.113.21"}
+    },
+    {
+      "sessionId": "ended-session",
+      "status": 4,
+      "sessionRequestData": {"appId": "999"},
+      "connectionInfo": [],
+      "sessionControlInfo": null
+    }
+  ]
+}

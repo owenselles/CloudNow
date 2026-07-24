@@ -40,8 +40,8 @@ jobs:
 
       - name: SwiftFormat (format check)
         run: |
-          "$RUNNER_TEMP/pinned-tools/swiftformat" --lint --config .swiftformat --reporter github-actions-log CloudNow
+          "$RUNNER_TEMP/pinned-tools/swiftformat" --lint --config .swiftformat --reporter github-actions-log CloudNow CloudNowTests CloudNowUITests
 
       - name: SwiftLint (strict)
         run: |
-          "$RUNNER_TEMP/pinned-tools/swiftlint" --strict --config .swiftlint.yml --reporter github-actions-logging CloudNow
+          "$RUNNER_TEMP/pinned-tools/swiftlint" --strict --config .swiftlint.yml --reporter github-actions-logging CloudNow CloudNowTests CloudNowUITests

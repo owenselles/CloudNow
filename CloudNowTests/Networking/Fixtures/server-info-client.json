@@ -1,0 +1,9 @@
+{
+  "vpcId": "fixture-vpc",
+  "metaData": [
+    {"key": "gfn-regions", "value": "EU Central, US West"},
+    {"key": "EU Central", "value": "eu.example.invalid"},
+    {"key": "US West", "value": "https://us.example.invalid/base"},
+    {"key": "local-region", "value": "EU Central"}
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "requestStatus": {
+    "statusCode": 1,
+    "statusDescription": "SUCCESS"
+  },
+  "session": {
+    "sessionId": "fixture-session",
+    "status": 2,
+    "gpuType": "RTX 4080",
+    "queuePosition": 0,
+    "seatSetupStep": 7,
+    "connectionInfo": [
+      {
+        "usage": 14,
+        "ip": "203.0.113.10",
+        "port": 443,
+        "resourcePath": "/nvst/"
+      },
+      {
+        "usage": 2,
+        "ip": "203.0.113.11",
+        "port": 49005,
+        "resourcePath": null
+      }
+    ],
+    "iceServerConfiguration": {
+      "iceServers": [
+        {
+          "urls": ["stun:stun.example.invalid:3478"],
+          "username": "fixture-user",
+          "credential": "fixture-credential"
+        }
+      ]
+    },
+    "sessionControlInfo": {
+      "ip": "203.0.113.10"
+    }
+  }
+}

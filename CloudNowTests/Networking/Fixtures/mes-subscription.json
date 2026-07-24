@@ -1,0 +1,24 @@
+[
+  {
+    "membershipTier": "ULTIMATE",
+    "subType": "UNLIMITED",
+    "remainingTimeInMinutes": 120,
+    "totalTimeInMinutes": 360,
+    "features": {
+      "resolutions": [
+        {
+          "widthInPixels": 1920,
+          "heightInPixels": 1080,
+          "framesPerSecond": 60,
+          "isEntitled": true
+        },
+        {
+          "widthInPixels": 3840,
+          "heightInPixels": 2160,
+          "framesPerSecond": 120,
+          "isEntitled": false
+        }
+      ]
+    }
+  }
+]

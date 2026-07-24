@@ -118,12 +118,11 @@ final class GFNSignalingClient {
         // Preserve all eight direct-IP slots used by the previous bounded policy. Add
         // the hostname fallback only when fewer than eight addresses resolved, so the
         // total remains bounded without dropping a reachable eighth address.
-        var candidates = Array(resolvedIPs
-            .filter { $0 != host }
-            .prefix(SignalingRacePolicy.maximumCandidates))
-        if candidates.count < SignalingRacePolicy.maximumCandidates {
-            candidates.append(host)
-        }
+        let candidates = SignalingEndpointRace.candidates(
+            resolvedAddresses: resolvedIPs,
+            originalHost: host,
+            maximumCandidates: SignalingRacePolicy.maximumCandidates
+        )
         signalingLog.debug("[Signaling] Resolved \(resolvedIPs.count, privacy: .public) IPs for '\(host, privacy: .private)': \(resolvedIPs.joined(separator: ", "), privacy: .private)")
 
         let winner = try await raceCandidates(
@@ -148,48 +147,46 @@ final class GFNSignalingClient {
     // MARK: Send Answer
 
     func sendAnswer(sdp: String, nvstSdp: String? = nil) {
-        var payload: [String: Any] = ["type": "answer", "sdp": sdp]
-        if let nvstSdp {
-            payload["nvstSdp"] = nvstSdp
-        }
-        sendJson([
-            "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString(payload)],
-            "ackid": nextAckId(),
-        ])
+        guard let data = try? SignalingMessageCodec.encodeAnswer(
+            sdp: sdp,
+            nvstSdp: nvstSdp,
+            from: localPeerId,
+            to: remotePeerId,
+            acknowledgementId: nextAckId()
+        ) else { return }
+        sendData(data)
     }
 
     // MARK: Send ICE Candidate
 
     func sendICECandidate(candidate: String, sdpMid: String?, sdpMLineIndex: Int?) {
-        guard !isTCPIceCandidate(candidate) else {
+        guard !SignalingMessageCodec.isTCPIceCandidate(candidate) else {
             signalingLog.debug("[Signaling] Dropping local TCP ICE candidate")
             return
         }
-        var payload: [String: Any] = ["candidate": candidate]
-        if let sdpMid {
-            payload["sdpMid"] = sdpMid
-        }
-        if let sdpMLineIndex {
-            payload["sdpMLineIndex"] = sdpMLineIndex
-        }
-        sendJson([
-            "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString(payload)],
-            "ackid": nextAckId(),
-        ])
+        guard let data = try? SignalingMessageCodec.encodeICECandidate(
+            candidate: candidate,
+            sdpMid: sdpMid,
+            sdpMLineIndex: sdpMLineIndex,
+            from: localPeerId,
+            to: remotePeerId,
+            acknowledgementId: nextAckId()
+        ) else { return }
+        sendData(data)
     }
 
     // MARK: Request Keyframe
 
     func requestKeyframe(reason: String = "decoder_recovery", backlogFrames: Int = 0, attempt: Int = 1) {
-        sendJson([
-            "peer_msg": ["from": localPeerId, "to": remotePeerId, "msg": jsonString([
-                "type": "request_keyframe",
-                "reason": reason,
-                "backlogFrames": backlogFrames,
-                "attempt": attempt,
-            ])],
-            "ackid": nextAckId(),
-        ])
+        guard let data = try? SignalingMessageCodec.encodeKeyframeRequest(
+            reason: reason,
+            backlogFrames: backlogFrames,
+            attempt: attempt,
+            from: localPeerId,
+            to: remotePeerId,
+            acknowledgementId: nextAckId()
+        ) else { return }
+        sendData(data)
     }
 
     // MARK: Disconnect
@@ -307,8 +304,12 @@ final class GFNSignalingClient {
     // MARK: Private — Send
 
     private func sendJson(_ obj: [String: Any]) {
-        guard let conn = connection,
-              let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        sendData(data)
+    }
+
+    private func sendData(_ data: Data) {
+        guard let conn = connection else { return }
         if signalingOSLog.isEnabled(type: .debug), let str = String(data: data, encoding: .utf8) {
             signalingLog.debug("[Signaling] → \(str.prefix(300), privacy: .private)")
         }
@@ -326,65 +327,48 @@ final class GFNSignalingClient {
 
     private func handleMessage(_ text: String) {
         signalingLog.debug("[Signaling] ← \(text.prefix(300), privacy: .private)")
-        guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
+        guard let message = try? SignalingMessageCodec.decode(text) else { return }
 
-        if let peerInfo = obj["peer_info"] as? [String: Any],
-           let id = peerInfo["id"] as? Int
-        {
-            if peerInfo["name"] as? String == peerName {
-                localPeerId = id
-            } else if id != localPeerId {
-                remotePeerId = id
+        if let peerInfo = message.peerInfo {
+            if peerInfo.name == peerName {
+                localPeerId = peerInfo.id
+            } else if peerInfo.id != localPeerId {
+                remotePeerId = peerInfo.id
             }
         }
 
         // ACK
-        if let ackId = obj["ackid"] as? Int {
-            let shouldAck = (obj["peer_info"] as? [String: Any])?["id"] as? Int != localPeerId
+        if let ackId = message.acknowledgementId {
+            let shouldAck = message.peerInfo?.id != localPeerId
             if shouldAck {
                 sendJson(["ack": ackId])
             }
         }
 
         // Heartbeat
-        if obj["hb"] != nil {
+        if message.heartbeat {
             sendJson(["hb": 1])
             return
         }
 
-        // Peer message
-        guard let peerMsg = obj["peer_msg"] as? [String: Any],
-              let msgStr = peerMsg["msg"] as? String,
-              let msgData = msgStr.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: msgData) as? [String: Any]
-        else { return }
-        if let from = peerMsg["from"] as? Int, from != localPeerId {
+        if let from = message.peerFrom, from != localPeerId {
             remotePeerId = from
         }
 
-        // SDP offer
-        if payload["type"] as? String == "offer", let sdp = payload["sdp"] as? String {
+        switch message.payload {
+        case let .offer(sdp):
             onEvent?(.offer(sdp: sdp))
-            return
+        case let .ice(candidate, sdpMid, sdpMLineIndex):
+            onEvent?(.remoteICE(
+                candidate: candidate,
+                sdpMid: sdpMid,
+                sdpMLineIndex: sdpMLineIndex
+            ))
+        case let .unknown(_, keys):
+            onEvent?(.log("Unhandled peer message keys: \(keys.joined(separator: ", "))"))
+        case nil:
+            break
         }
-
-        // ICE candidate
-        if let candidate = payload["candidate"] as? String {
-            let mid = payload["sdpMid"] as? String
-            let mLineIndex = payload["sdpMLineIndex"] as? Int
-            onEvent?(.remoteICE(candidate: candidate, sdpMid: mid, sdpMLineIndex: mLineIndex))
-            return
-        }
-
-        onEvent?(.log("Unhandled peer message keys: \(payload.keys.joined(separator: ", "))"))
-    }
-
-    private func jsonString(_ obj: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj),
-              let str = String(data: data, encoding: .utf8) else { return "{}" }
-        return str
     }
 
     private func nextAckId() -> Int {
@@ -392,11 +376,7 @@ final class GFNSignalingClient {
         return ackCounter
     }
 
-    private func isTCPIceCandidate(_ candidate: String) -> Bool {
-        candidate.lowercased().components(separatedBy: " ").contains("tcp")
-    }
-
-    private struct ConnectedCandidate {
+    private struct ConnectedCandidate: @unchecked Sendable {
         let host: String
         let connection: NWConnection
     }
@@ -410,21 +390,19 @@ final class GFNSignalingClient {
         try Task.checkCancellation()
 
         let totalCount = candidates.count
-        let initialAttemptCount = min(SignalingRacePolicy.maximumConcurrentAttempts, totalCount)
-        var nextCandidateIndex = 0
-        var lastError: Error?
-        var winner: ConnectedCandidate?
         let raceClock = ContinuousClock()
         let raceStart = raceClock.now
 
-        return try await withThrowingTaskGroup(of: ConnectedCandidate.self) { group in
-            while nextCandidateIndex < initialAttemptCount {
-                let index = nextCandidateIndex
-                let candidate = candidates[index]
-                let delayMilliseconds = SignalingRacePolicy.staggerMilliseconds * index
-                let launchDeadline = raceStart.advanced(by: .milliseconds(delayMilliseconds))
-                group.addTask {
+        do {
+            return try await SignalingEndpointRace.firstSuccess(
+                candidates: candidates,
+                maximumConcurrentAttempts: SignalingRacePolicy.maximumConcurrentAttempts,
+                stagger: { index in
+                    let delayMilliseconds = SignalingRacePolicy.staggerMilliseconds * index
+                    let launchDeadline = raceStart.advanced(by: .milliseconds(delayMilliseconds))
                     try await raceClock.sleep(until: launchDeadline)
+                },
+                attempt: { candidate, index in
                     try Task.checkCancellation()
                     return try await self.connectCandidate(
                         candidate,
@@ -434,61 +412,21 @@ final class GFNSignalingClient {
                         index: index,
                         totalCount: totalCount
                     )
+                },
+                discard: { connectedCandidate in
+                    connectedCandidate.connection.cancel()
                 }
-                nextCandidateIndex += 1
+            )
+        } catch let error as SignalingEndpointRaceError {
+            switch error {
+            case .noCandidates:
+                throw SignalingError.handshakeFailed("Candidate race had no endpoints")
+            case let .allFailed(failures):
+                let summary = failures
+                    .map { "\($0.candidate): \($0.reason)" }
+                    .joined(separator: "; ")
+                throw SignalingError.handshakeFailed("Candidate race failed: \(summary)")
             }
-
-            while !group.isEmpty {
-                do {
-                    guard let connectedCandidate = try await group.next() else { break }
-                    if winner == nil {
-                        winner = connectedCandidate
-                        group.cancelAll()
-                    } else {
-                        // A second connection may have reached ready before cancellation
-                        // was observed. Explicitly close every completed non-winner.
-                        connectedCandidate.connection.cancel()
-                    }
-                } catch {
-                    if Task.isCancelled {
-                        winner?.connection.cancel()
-                        throw CancellationError()
-                    }
-                    if winner == nil, !(error is CancellationError) {
-                        lastError = error
-                    }
-                }
-
-                guard winner == nil, nextCandidateIndex < totalCount else { continue }
-
-                let index = nextCandidateIndex
-                let candidate = candidates[index]
-                let delayMilliseconds = SignalingRacePolicy.staggerMilliseconds * index
-                let launchDeadline = raceStart.advanced(by: .milliseconds(delayMilliseconds))
-                group.addTask {
-                    try await raceClock.sleep(until: launchDeadline)
-                    try Task.checkCancellation()
-                    return try await self.connectCandidate(
-                        candidate,
-                        originalHost: originalHost,
-                        components: components,
-                        useTLS: useTLS,
-                        index: index,
-                        totalCount: totalCount
-                    )
-                }
-                nextCandidateIndex += 1
-            }
-
-            if Task.isCancelled {
-                winner?.connection.cancel()
-                throw CancellationError()
-            }
-
-            guard let winner else {
-                throw lastError ?? SignalingError.handshakeFailed("Candidate race produced no winner")
-            }
-            return winner
         }
     }
 

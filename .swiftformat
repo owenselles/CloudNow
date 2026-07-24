@@ -1,8 +1,8 @@
-# Configured for SwiftFormat 0.61.1 — pin in .pre-commit-config.yaml and .github/workflows/lint.yml
+# Configured for SwiftFormat 0.62.1 — pin in .pre-commit-config.yaml and .github/workflows/lint.yml
 # Day-1 ruleset: defaults tuned for CloudNow's existing style (zero tabs, 4-space indent).
-# Run "swiftformat --config .swiftformat CloudNow" to apply; "--lint" to verify.
+# Run "swiftformat --config .swiftformat CloudNow CloudNowTests CloudNowUITests" to apply; "--lint" to verify.
 
-# Targets Swift 5.10 (tvOS 17 / Xcode 16 baseline; bump when project moves to Swift 6).
+# Targets Swift 5.10 syntax conventions while the Xcode 26 project remains in Swift 5 mode.
 --swiftversion 5.10
 
 # CloudNow uses 4-space indentation throughout (zero tabs detected).
@@ -15,5 +15,5 @@
 # Do NOT touch file headers — CloudNow has none today; don't inject copyright noise.
 --header ignore
 
-# Skip build artifacts and SPM checkout dirs (mirrors .swiftlint.yml's excluded list).
---exclude .build,.swiftpm,DerivedData,Packages,.spm-packages
+# Skip build, test-artifact, and SPM checkout dirs (mirrors .swiftlint.yml's excluded list).
+--exclude .build,.swiftpm,DerivedData,Packages,TestArtifacts,.spm-packages

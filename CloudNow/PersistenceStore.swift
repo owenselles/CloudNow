@@ -1,5 +1,69 @@
 import Foundation
 
+nonisolated protocol SecureCredentialStore: Sendable {
+    func load() throws -> Data
+    func save(_ data: Data) throws
+    func delete() throws
+}
+
+nonisolated struct KeychainCredentialStore: SecureCredentialStore {
+    func load() throws -> Data {
+        try KeychainService.load()
+    }
+
+    func save(_ data: Data) throws {
+        try KeychainService.save(data)
+    }
+
+    func delete() throws {
+        KeychainService.delete()
+    }
+}
+
+nonisolated protocol PreferencesStore: Sendable {
+    func data(forKey key: String) -> Data?
+    func string(forKey key: String) -> String?
+    func setData(_ data: Data, forKey key: String)
+    func setString(_ value: String, forKey key: String)
+    func removeObject(forKey key: String)
+    func keys() -> [String]
+}
+
+/// `UserDefaults` is documented as thread-safe but is not annotated `Sendable`.
+/// This narrow adapter keeps the unchecked boundary in one place and exposes
+/// only the value types used by persistence.
+final nonisolated class UserDefaultsPreferencesStore: PreferencesStore, @unchecked Sendable {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func data(forKey key: String) -> Data? {
+        defaults.data(forKey: key)
+    }
+
+    func string(forKey key: String) -> String? {
+        defaults.string(forKey: key)
+    }
+
+    func setData(_ data: Data, forKey key: String) {
+        defaults.set(data, forKey: key)
+    }
+
+    func setString(_ value: String, forKey key: String) {
+        defaults.set(value, forKey: key)
+    }
+
+    func removeObject(forKey key: String) {
+        defaults.removeObject(forKey: key)
+    }
+
+    func keys() -> [String] {
+        Array(defaults.dictionaryRepresentation().keys)
+    }
+}
+
 /// Serializes disk, UserDefaults, JSON, and Keychain work away from the UI actor.
 actor AppPersistenceStore {
     static let shared = AppPersistenceStore()
@@ -33,12 +97,30 @@ actor AppPersistenceStore {
         static let vpcId = "gfn.cache.vpcId"
     }
 
-    private let defaults = UserDefaults.standard
+    private let preferences: any PreferencesStore
+    private let cacheDirectory: URL?
+    private let fileManager: FileManager
+    private let credentialStore: any SecureCredentialStore
+
+    init(
+        preferences: any PreferencesStore = UserDefaultsPreferencesStore(),
+        cacheDirectory: URL? = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first,
+        fileManager: FileManager = .default,
+        credentialStore: any SecureCredentialStore = KeychainCredentialStore()
+    ) {
+        self.preferences = preferences
+        self.cacheDirectory = cacheDirectory
+        self.fileManager = fileManager
+        self.credentialStore = credentialStore
+    }
 
     func loadGamesSnapshot() -> GamesSnapshot {
         // Library metadata can exceed tvOS's per-value UserDefaults limit.
         // Remove the retired preference before reading the file-backed cache.
-        defaults.removeObject(forKey: Key.legacyLibraryGames)
+        preferences.removeObject(forKey: Key.legacyLibraryGames)
 
         var snapshot = GamesSnapshot()
         snapshot.favoriteIds = Set(decode([String].self, forKey: Key.favoriteIds) ?? [])
@@ -48,11 +130,11 @@ actor AppPersistenceStore {
         snapshot.lastSession = decode(LastSessionRecord.self, forKey: Key.lastSession)
         snapshot.libraryGames = loadLibraryGames()
         snapshot.subscription = decode(SubscriptionInfo.self, forKey: Key.subscription)
-        snapshot.vpcId = defaults.string(forKey: Key.vpcId)
+        snapshot.vpcId = preferences.string(forKey: Key.vpcId)
 
         // Remove caches written by the retired panels API.
-        defaults.removeObject(forKey: "gfn.cache.mainGames")
-        defaults.removeObject(forKey: "gfn.cache.libraryGames")
+        preferences.removeObject(forKey: "gfn.cache.mainGames")
+        preferences.removeObject(forKey: "gfn.cache.libraryGames")
         return snapshot
     }
 
@@ -74,7 +156,7 @@ actor AppPersistenceStore {
 
     func saveLastSession(_ session: LastSessionRecord?) {
         guard let session else {
-            defaults.removeObject(forKey: Key.lastSession)
+            preferences.removeObject(forKey: Key.lastSession)
             return
         }
         encode(session, forKey: Key.lastSession)
@@ -94,7 +176,7 @@ actor AppPersistenceStore {
     }
 
     func saveVpcId(_ vpcId: String) {
-        defaults.set(vpcId, forKey: Key.vpcId)
+        preferences.setString(vpcId, forKey: Key.vpcId)
     }
 
     func loadCatalog(localeCode: String, vpcId: String?) -> [GameInfo]? {
@@ -127,18 +209,18 @@ actor AppPersistenceStore {
         try? data.write(to: url, options: .atomic)
     }
 
-    func loadAuthSession() throws -> AuthSession {
-        let data = try KeychainService.load()
+    func loadAuthSession() async throws -> AuthSession {
+        let data = try credentialStore.load()
         return try JSONDecoder().decode(AuthSession.self, from: data)
     }
 
-    func saveAuthSession(_ session: AuthSession) throws {
+    func saveAuthSession(_ session: AuthSession) async throws {
         let data = try JSONEncoder().encode(session)
-        try KeychainService.save(data)
+        try credentialStore.save(data)
     }
 
-    func deleteAuthSession() {
-        KeychainService.delete()
+    func deleteAuthSession() async throws {
+        try credentialStore.delete()
     }
 
     /// Removes cache-backed preferences and files after callers have invalidated
@@ -151,14 +233,11 @@ actor AppPersistenceStore {
             Key.legacyLibraryGames,
             Key.subscription,
             Key.vpcId,
-        ].forEach(defaults.removeObject(forKey:))
+        ].forEach(preferences.removeObject(forKey:))
 
-        guard let cachesURL = FileManager.default.urls(
-            for: .cachesDirectory,
-            in: .userDomainMask
-        ).first else { return [] }
+        guard let cacheDirectory else { return [] }
 
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: cachesURL.path)) ?? []
+        let names = (try? fileManager.contentsOfDirectory(atPath: cacheDirectory.path)) ?? []
         let cacheFiles = names.filter {
             ($0.hasPrefix("gfn.catalog.") || $0.hasPrefix("gfn.library."))
                 && $0.hasSuffix(".json")
@@ -166,7 +245,7 @@ actor AppPersistenceStore {
         var failures: [String] = []
         for name in cacheFiles {
             do {
-                try FileManager.default.removeItem(at: cachesURL.appendingPathComponent(name))
+                try fileManager.removeItem(at: cacheDirectory.appendingPathComponent(name))
             } catch CocoaError.fileNoSuchFile {
                 continue
             } catch {
@@ -180,24 +259,20 @@ actor AppPersistenceStore {
     /// invalidated. Actor serialization prevents an earlier queued write from
     /// restoring data after this deletion completes.
     func clearPersistentData() {
-        if let bundleIdentifier = Bundle.main.bundleIdentifier {
-            defaults.removePersistentDomain(forName: bundleIdentifier)
-        } else {
-            for key in defaults.dictionaryRepresentation().keys {
-                defaults.removeObject(forKey: key)
-            }
+        for key in preferences.keys() {
+            preferences.removeObject(forKey: key)
         }
-        KeychainService.delete()
+        try? credentialStore.delete()
     }
 
     private func decode<T: Decodable>(_ type: T.Type, forKey key: String) -> T? {
-        guard let data = defaults.data(forKey: key) else { return nil }
+        guard let data = preferences.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
 
     private func encode(_ value: some Encodable, forKey key: String) {
         guard let data = try? JSONEncoder().encode(value) else { return }
-        defaults.set(data, forKey: key)
+        preferences.setData(data, forKey: key)
     }
 
     private func catalogCacheURL(localeCode: String, vpcId: String?) -> URL? {
@@ -206,13 +281,11 @@ actor AppPersistenceStore {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("gfn.catalog.v2.\(safeKey).json")
+        return cacheDirectory?.appendingPathComponent("gfn.catalog.v2.\(safeKey).json")
     }
 
     private var libraryCacheURL: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("gfn.library.v1.json")
+        cacheDirectory?.appendingPathComponent("gfn.library.v1.json")
     }
 
     private func loadLibraryGames() -> [GameInfo] {
@@ -226,11 +299,11 @@ actor AppPersistenceStore {
     }
 
     private func removeLegacyCatalogCache() {
-        guard let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        guard let url = cacheDirectory?
             .appendingPathComponent("gfn.catalog.v1.json")
         else {
             return
         }
-        try? FileManager.default.removeItem(at: url)
+        try? fileManager.removeItem(at: url)
     }
 }

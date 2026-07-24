@@ -4,12 +4,21 @@ import UIKit
 struct MainTabView: View {
     @Environment(AuthManager.self) var authManager
     @Environment(\.scenePhase) private var scenePhase
-    @State private var viewModel = GamesViewModel()
+    @State private var viewModel: GamesViewModel
     @State private var gameToPlay: GameInfo?
     @State private var sessionToResume: ActiveSessionInfo? = nil
     @State private var directSessionToResume: SessionInfo? = nil
     @State private var selectedTab: AppTab = .home
     @State private var controllerNavigation = UIControllerNavigationCoordinator()
+    private let loadsRemoteData: Bool
+
+    init(
+        viewModel: GamesViewModel = GamesViewModel(),
+        loadsRemoteData: Bool = true
+    ) {
+        _viewModel = State(initialValue: viewModel)
+        self.loadsRemoteData = loadsRemoteData
+    }
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -31,17 +40,22 @@ struct MainTabView: View {
                         gameToPlay = rs.game
                     }
                 )
+                .accessibilityIdentifier("home-screen")
             }
             Tab(L10n.text("library"), systemImage: "books.vertical.fill", value: AppTab.library) {
                 LibraryView(onPlay: { gameToPlay = $0 })
+                    .accessibilityIdentifier("library-screen")
             }
             Tab(L10n.text("store"), systemImage: "bag.fill", value: AppTab.store) {
                 StoreView(onPlay: { gameToPlay = $0 })
+                    .accessibilityIdentifier("store-screen")
             }
             Tab(L10n.text("settings"), systemImage: "gearshape.fill", value: AppTab.settings) {
                 SettingsView()
+                    .accessibilityIdentifier("settings-screen")
             }
         }
+        .accessibilityIdentifier("main-navigation")
         .environment(viewModel)
         .environment(controllerNavigation)
         .onAppear {
@@ -50,12 +64,17 @@ struct MainTabView: View {
                 onNextTab: { selectedTab = selectedTab.next }
             )
         }
-        .task { await viewModel.load(authManager: authManager) }
+        .task {
+            guard loadsRemoteData else { return }
+            await viewModel.load(authManager: authManager)
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
                 MemoryLifecycleCoordinator.shared.appDidBecomeActive()
-                Task { await viewModel.refreshLibrary(authManager: authManager) }
+                if loadsRemoteData {
+                    Task { await viewModel.refreshLibrary(authManager: authManager) }
+                }
             case .background:
                 MemoryLifecycleCoordinator.shared.appDidEnterBackground()
             case .inactive:

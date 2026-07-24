@@ -57,9 +57,9 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 
 ## Requirements
 
-- Apple TV 4K (2nd generation or later) running tvOS 17+
+- Apple TV 4K (2nd generation or later) running tvOS 26.2+
 - Active GeForce NOW account (Free, Priority, or Ultimate)
-- **Build from source only:** Xcode 16+ on a Mac, Apple Developer account (free tier works)
+- **Build from source only:** Xcode 26.2+ on a Mac, Apple Developer account (free tier works)
 
 ## Getting Started
 
@@ -98,8 +98,8 @@ Then attach it to the project in Xcode:
 Run both lint checks before building or opening a PR:
 
 ```bash
-swiftformat --lint --config .swiftformat CloudNow
-swiftlint --strict --config .swiftlint.yml CloudNow
+swiftformat --lint --config .swiftformat CloudNow CloudNowTests CloudNowUITests
+swiftlint --strict --config .swiftlint.yml CloudNow CloudNowTests CloudNowUITests
 ```
 
 These commands require the exact tool versions pinned by CI: SwiftFormat 0.62.1 and SwiftLint 0.65.0. See [Linting](#linting) for installation and version details.
@@ -210,11 +210,12 @@ Run these checks before every build and before opening a PR:
 
 ```bash
 # Format check (no mutation)
-swiftformat --lint --config .swiftformat CloudNow
+swiftformat --lint --config .swiftformat CloudNow CloudNowTests CloudNowUITests
 # Lint check
-swiftlint --strict --config .swiftlint.yml CloudNow
+swiftlint --strict --config .swiftlint.yml CloudNow CloudNowTests CloudNowUITests
 # Auto-fix everything fixable
-swiftformat --config .swiftformat CloudNow && swiftlint --fix --config .swiftlint.yml CloudNow
+swiftformat --config .swiftformat CloudNow CloudNowTests CloudNowUITests && \
+  swiftlint --fix --config .swiftlint.yml CloudNow CloudNowTests CloudNowUITests
 ```
 
 ### Optional pre-commit hook
@@ -238,7 +239,59 @@ When Homebrew provides a newer release, use the pinned pre-commit environments o
 
 ### Swift concurrency checking
 
-Both Debug and Release targets use complete Swift concurrency checking (`SWIFT_STRICT_CONCURRENCY = complete`) while remaining in Swift 5 language mode. Concurrency-sensitive streaming changes should be built in both configurations before merging.
+The app and both test bundles use complete Swift concurrency checking (`SWIFT_STRICT_CONCURRENCY = complete`) while remaining in Swift 5 language mode. Concurrency-sensitive streaming changes should be built in both Debug and Release configurations before merging.
+
+---
+
+## Testing
+
+The automated suite runs without NVIDIA credentials, an account, external application services, or physical Apple TV hardware. It requires Xcode with a compatible tvOS simulator runtime and `python3` for deterministic simulator discovery.
+
+Run the complete shared test plan from any directory:
+
+```bash
+/path/to/CloudNow/Scripts/test.sh
+```
+
+From the repository root, focused runs are:
+
+```bash
+# Unit and integration tests only
+Scripts/test.sh --unit
+
+# UI automation only
+Scripts/test.sh --ui
+
+# Explicit full-suite form; equivalent to no argument
+Scripts/test.sh --full
+```
+
+The runner selects the newest installed tvOS runtime, prefers the newest available Apple TV device generation and native resolution, then breaks ties deterministically by device name and identifier. It boots the selected device when necessary, resolves Swift package dependencies, disables code signing, runs the shared `CloudNow` test plan with coverage enabled, and prints the exact `xcodebuild` commands.
+
+Before launching the simulator, the runner performs a host-side duplicate-key scan of every localization source table. Runtime completeness, placeholder, alias, and fallback behavior remains covered by Swift Testing inside `CloudNowTests`.
+
+Each run writes a timestamped result bundle and compact coverage summaries under:
+
+```text
+TestArtifacts/<timestamp>-<mode>/CloudNow-<mode>.xcresult
+TestArtifacts/<timestamp>-<mode>/Coverage/targets.txt
+TestArtifacts/<timestamp>-<mode>/Coverage/targets.json
+```
+
+`TestArtifacts/` is gitignored. Unit and integration tests use Swift Testing (`import Testing`, `@Suite`, `@Test`, `#expect`, and `#require`). XCTest is reserved for `XCUIApplication` UI automation.
+
+Add anonymized JSON, SDP, and binary samples under `CloudNowTests/Fixtures/`, group them by subsystem, and include them in the `CloudNowTests` target. Fixtures must not contain credentials, tokens, personal data, or production endpoint dependencies. Tests must use injected transports and deterministic fakes; live NVIDIA, PrintedWaste, authentication, catalog, signaling, image, and media service calls are prohibited.
+
+Some behavior remains hardware- or Apple-framework-bound. The nearest automated protection is:
+
+| Excluded behavior | Automated seam |
+|---|---|
+| Real Apple TV HDR output switching | Synthetic pixel-buffer color inspection and video diagnostics tests |
+| Physical controller focus and controller-motor output | Input packet encoder, navigation-state, and haptics decoder tests |
+| Bluetooth microphone route transitions | SDP audio-format and session-request coverage; framework route transitions remain uncovered |
+| Actual VideoToolbox hardware decoding | SDP codec/profile tests and synthetic pixel-buffer format inspection |
+| Live WebRTC media transport | Session state-machine, signaling codec, endpoint-race, and cancellation tests using fakes |
+| Apple TLS and certificate-stack behavior | Transport-independent signaling parsing and endpoint-selection tests |
 
 ---
 

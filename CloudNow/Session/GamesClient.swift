@@ -18,9 +18,21 @@ actor GamesClient {
     private static let clientId = NVIDIAAuth.gfnClientId
     private static let clientVersion = NVIDIAAuth.gfnClientVersion
 
-    private let urlSession = URLSession.shared
+    private let transport: any HTTPTransport
+    private let now: @Sendable () -> Date
+    private let uuid: @Sendable () -> UUID
     private var localeCode: String {
         L10n.nvidiaLocaleCode()
+    }
+
+    init(
+        transport: any HTTPTransport = URLSessionHTTPTransport(),
+        now: @escaping @Sendable () -> Date = Date.init,
+        uuid: @escaping @Sendable () -> UUID = UUID.init
+    ) {
+        self.transport = transport
+        self.now = now
+        self.uuid = uuid
     }
 
     private static let browseQuery = """
@@ -74,6 +86,16 @@ actor GamesClient {
         let libraryFilter: [String: Any] = ["variants": ["gfn": ["library": ["status": ["notEquals": "NOT_OWNED"]]]]]
         let games = try await browseCatalog(token: token, vpcId: vpcId, filters: libraryFilter, maxPages: 10)
         return await (try? enrich(token: token, vpcId: vpcId, games: games)) ?? games
+    }
+
+    func search(token: String, query: String, vpcId: String) async throws -> [GameInfo] {
+        try await browseCatalog(
+            token: token,
+            vpcId: vpcId,
+            filters: [:],
+            searchString: query.trimmingCharacters(in: .whitespacesAndNewlines),
+            maxPages: 3
+        )
     }
 
     /// Callers that load catalog, library, and subscription together fetch the vpcId
@@ -167,13 +189,13 @@ actor GamesClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = bodyData
 
-            let (data, response) = try await urlSession.data(for: request)
+            let (data, response) = try await transport.data(for: request)
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard statusCode == 200 else {
                 if statusCode == 401 {
                     throw GamesError.unauthorized
                 }
-                throw GamesError.httpStatus(statusCode, String(data: data, encoding: .utf8) ?? "")
+                throw GamesError.httpStatus(statusCode, redactedHTTPBody(data))
             }
 
             let payload = try JSONDecoder().decode(BrowseResponse.self, from: data)
@@ -278,7 +300,7 @@ actor GamesClient {
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         try validateHTTPResponse(response, data: data)
         let root = try JSONSerialization.jsonObject(with: data)
         return publicCatalogEntries(in: root).compactMap { publicCatalogGame(from: $0) }
@@ -489,7 +511,7 @@ actor GamesClient {
     private func fetchMetadataChunk(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
         let variables: [String: Any] = ["vpcId": vpcId, "locale": localeCode, "appIds": appIds]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.metadataQueryHash]]
-        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0 ..< Int.max), radix: 16))"
+        let huId = requestId()
 
         var comps = URLComponents(string: GamesClient.graphqlURL)!
         comps.queryItems = [
@@ -501,7 +523,7 @@ actor GamesClient {
         var request = URLRequest(url: comps.url!)
         setGFNHeaders(on: &request, token: token)
 
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         try validateHTTPResponse(response, data: data)
         let payload = try JSONDecoder().decode(MetadataResponse.self, from: data)
         try validateGraphQL(errors: payload.errors)
@@ -579,7 +601,7 @@ actor GamesClient {
             ],
         ]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.ownedAppsQueryHash]]
-        let huId = "\(String(Int(Date().timeIntervalSince1970 * 1000), radix: 16))\(String(Int.random(in: 0 ..< Int.max), radix: 16))"
+        let huId = requestId()
 
         var comps = URLComponents(string: GamesClient.graphqlURL)!
         comps.queryItems = [
@@ -591,7 +613,7 @@ actor GamesClient {
         var request = URLRequest(url: comps.url!)
         setGFNHeaders(on: &request, token: token)
 
-        let (data, response) = try await urlSession.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         try validateHTTPResponse(response, data: data)
         let payload = try JSONDecoder().decode(OwnedAppsResponse.self, from: data)
         try validateGraphQL(errors: payload.errors)
@@ -608,7 +630,8 @@ actor GamesClient {
         let url = URL(string: "\(base)v2/serverInfo")!
         var request = URLRequest(url: url)
         setServerInfoHeaders(on: &request, token: token)
-        let (data, _) = try await urlSession.data(for: request)
+        let (data, response) = try await transport.data(for: request)
+        try validateHTTPResponse(response, data: data)
         let payload = try JSONDecoder().decode(ServerInfoResponse.self, from: data)
         return payload.requestStatus?.serverId ?? "GFN-PC"
     }
@@ -746,6 +769,12 @@ actor GamesClient {
         return str
     }
 
+    private func requestId() -> String {
+        let timestamp = String(Int(now().timeIntervalSince1970 * 1000), radix: 16)
+        let nonce = uuid().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        return timestamp + nonce
+    }
+
     private func validateGraphQL(errors: [GQLError]?) throws {
         guard let errors, !errors.isEmpty else { return }
         throw GamesError.graphql(errors.map(\.message).joined(separator: "; "))
@@ -757,7 +786,7 @@ actor GamesClient {
             throw GamesError.unauthorized
         }
         guard statusCode == 200 else {
-            let body = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
+            let body = redactedHTTPBody(data)
             throw GamesError.fetchFailed(body)
         }
     }

@@ -1,0 +1,51 @@
+{
+  "data": {
+    "apps": {
+      "numberReturned": 2,
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "",
+        "totalCount": 2
+      },
+      "items": [
+        {
+          "id": 101,
+          "title": "Fixture Racer",
+          "genres": ["RACING"],
+          "images": {
+            "GAME_BOX_ART": "https://img.nvidiagrid.net/box",
+            "TV_BANNER": "https://img.nvidiagrid.net/banner",
+            "HERO_IMAGE": "https://img.nvidiagrid.net/hero"
+          },
+          "variants": [
+            {
+              "id": "202",
+              "appStore": "STEAM",
+              "gfn": {
+                "library": {"status": "NOT_OWNED", "selected": false},
+                "features": [
+                  {"key": "RTX_ENABLED", "value": "true"},
+                  {"key": "SUPPORTED_HDR_VERSION", "values": ["HDR10"]}
+                ]
+              }
+            },
+            {
+              "id": "201",
+              "appStore": "EPIC",
+              "gfn": {
+                "library": {"status": "PLATFORM_SYNC", "selected": true},
+                "features": [{"key": "REFLEX_ENABLED", "value": "true"}]
+              }
+            }
+          ]
+        },
+        {
+          "id": "fallback-title",
+          "title": null,
+          "images": {},
+          "variants": []
+        }
+      ]
+    }
+  }
+}

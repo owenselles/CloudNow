@@ -1,0 +1,18 @@
+v=0
+o=- 2 2 IN IP4 127.0.0.1
+s=-
+t=0 0
+a=group:BUNDLE game video mic
+m=audio 9 UDP/TLS/RTP/SAVPF 112
+c=IN IP4 0.0.0.0
+a=mid:game
+a=rtpmap:112 multiopus/48000/6
+a=fmtp:112 channel_mapping=0,4,1,2,3,5;num_streams=4;coupled_streams=2
+m=video 9 UDP/TLS/RTP/SAVPF 96
+c=IN IP4 0.0.0.0
+a=mid:video
+a=rtpmap:96 H264/90000
+m=audio 9 UDP/TLS/RTP/SAVPF 111
+c=IN IP4 0.0.0.0
+a=mid:mic
+a=rtpmap:111 opus/48000/2

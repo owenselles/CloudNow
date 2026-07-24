@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Zone Model
 
-struct GFNZone: Identifiable, Equatable {
+nonisolated struct GFNZone: Identifiable, Equatable, Sendable {
     let id: String // e.g. "NP-AWS-US-N-Virginia-1"
     let region: String // e.g. "US"
     /// ISO country code derived from the dedicated-server site code.
@@ -71,9 +71,18 @@ actor ZoneClient {
 
     private var latencyCache: [String: LatencyRecord]
     private var cacheGeneration = 0
+    private let transport: any HTTPTransport
+    private let defaults: UserDefaults
+    private let now: @Sendable () -> Date
 
-    private init() {
-        let defaults = UserDefaults.standard
+    init(
+        transport: any HTTPTransport = URLSessionHTTPTransport(),
+        defaults: UserDefaults = .standard,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.transport = transport
+        self.defaults = defaults
+        self.now = now
         latencyCache = defaults.data(forKey: Self.latencyCacheKey)
             .flatMap { try? JSONDecoder().decode([String: LatencyRecord].self, from: $0) } ?? [:]
     }
@@ -88,7 +97,7 @@ actor ZoneClient {
 
         let nukedIds = Set(mappingData.compactMap { id, entry in entry.nuked == true ? id : nil })
 
-        let now = Date()
+        let now = now()
         return queueData
             .filter { id, _ in id.hasPrefix("NP-") && !id.hasPrefix("NPA-") && !nukedIds.contains(id) }
             .map { zoneId, entry in
@@ -108,7 +117,12 @@ actor ZoneClient {
                     isMeasuring: !hasFreshHeadPing(record, now: now)
                 )
             }
-            .sorted { $0.queuePosition < $1.queuePosition }
+            .sorted {
+                if $0.queuePosition != $1.queuePosition {
+                    return $0.queuePosition < $1.queuePosition
+                }
+                return $0.id < $1.id
+            }
     }
 
     /// Refreshes the HTTP probe and returns the best known latency for the zone.
@@ -128,10 +142,10 @@ actor ZoneClient {
         let ping = samples.reduce(0, +) / Double(samples.count)
         var record = latencyCache[cacheKey(for: url)] ?? LatencyRecord()
         record.headPingMs = ping
-        record.headMeasuredAt = Date()
+        record.headMeasuredAt = now()
         latencyCache[cacheKey(for: url)] = record
         persistLatencyCache()
-        let effectivePing = effectivePingMs(from: record, now: Date()) ?? ping
+        let effectivePing = effectivePingMs(from: record, now: now()) ?? ping
         return Int(effectivePing.rounded())
     }
 
@@ -141,7 +155,7 @@ actor ZoneClient {
         let key = cacheKey(for: zoneUrl)
         var record = latencyCache[key] ?? LatencyRecord()
         record.sessionRttMs = record.sessionRttMs.map { $0 * 0.7 + rttMs * 0.3 } ?? rttMs
-        record.sessionMeasuredAt = Date()
+        record.sessionMeasuredAt = now()
         latencyCache[key] = record
         persistLatencyCache()
     }
@@ -149,7 +163,6 @@ actor ZoneClient {
     func clearCachedRoutingData() {
         cacheGeneration &+= 1
         latencyCache.removeAll(keepingCapacity: false)
-        let defaults = UserDefaults.standard
         defaults.removeObject(forKey: Self.latencyCacheKey)
     }
 
@@ -210,7 +223,7 @@ actor ZoneClient {
 
     private func persistLatencyCache() {
         if let data = try? JSONEncoder().encode(latencyCache) {
-            UserDefaults.standard.set(data, forKey: Self.latencyCacheKey)
+            defaults.set(data, forKey: Self.latencyCacheKey)
         }
     }
 
@@ -219,10 +232,13 @@ actor ZoneClient {
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
         req.timeoutInterval = 5
-        let start = Date()
+        let start = now()
         return try? await {
-            _ = try await URLSession.shared.data(for: req)
-            return Date().timeIntervalSince(start) * 1000
+            let (_, response) = try await transport.data(for: req)
+            guard let response = response as? HTTPURLResponse,
+                  (200 ..< 400).contains(response.statusCode)
+            else { return nil }
+            return now().timeIntervalSince(start) * 1000
         }()
     }
 
@@ -249,7 +265,10 @@ actor ZoneClient {
         var req = URLRequest(url: url)
         req.setValue("CloudNow/1.0 tvOS", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 10
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await transport.data(for: req)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
         struct Response: Decodable { let data: [String: QueueEntry] }
         return try JSONDecoder().decode(Response.self, from: data).data
     }
@@ -259,7 +278,10 @@ actor ZoneClient {
         var req = URLRequest(url: url)
         req.setValue("CloudNow/1.0 tvOS", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 10
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await transport.data(for: req)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
         struct Response: Decodable { let data: [String: MappingEntry] }
         return try JSONDecoder().decode(Response.self, from: data).data
     }
@@ -268,24 +290,41 @@ actor ZoneClient {
 // MARK: - Zone recommendation
 
 extension [GFNZone] {
-    /// Highlights a likely good manual choice. Ping dominates; queue depth is a
-    /// bounded secondary penalty so a distant empty zone cannot beat a nearby one.
+    /// Highlights a likely good manual choice using the documented 40% ping and
+    /// 60% queue-depth score. Zone IDs provide deterministic tie-breaking.
     nonisolated func recommendedZone(isUnlimited: Bool = false) -> GFNZone? {
         guard !isEmpty else { return nil }
         if isUnlimited {
             return closestZone
         }
         let measured = filter { $0.pingMs != nil }
-        guard !measured.isEmpty else { return self.min { $0.queuePosition < $1.queuePosition } }
+        guard !measured.isEmpty else {
+            return self.min {
+                if $0.queuePosition != $1.queuePosition {
+                    return $0.queuePosition < $1.queuePosition
+                }
+                return $0.id < $1.id
+            }
+        }
         return measured.min {
-            let leftScore = Double($0.pingMs ?? .max) + Double(Swift.min($0.queuePosition, 80)) * 0.25
-            let rightScore = Double($1.pingMs ?? .max) + Double(Swift.min($1.queuePosition, 80)) * 0.25
-            return leftScore < rightScore
+            let leftScore = Double($0.pingMs ?? .max) * 0.4 + Double($0.queuePosition) * 0.6
+            let rightScore = Double($1.pingMs ?? .max) * 0.4 + Double($1.queuePosition) * 0.6
+            if leftScore != rightScore {
+                return leftScore < rightScore
+            }
+            return $0.id < $1.id
         }
     }
 
     /// Zone with the lowest measured ping.
     nonisolated var closestZone: GFNZone? {
-        filter { $0.pingMs != nil }.min { ($0.pingMs ?? .max) < ($1.pingMs ?? .max) }
+        filter { $0.pingMs != nil }.min {
+            let leftPing = $0.pingMs ?? .max
+            let rightPing = $1.pingMs ?? .max
+            if leftPing != rightPing {
+                return leftPing < rightPing
+            }
+            return $0.id < $1.id
+        }
     }
 }
