@@ -18,7 +18,7 @@ nonisolated struct StubbedHTTPResponse: Sendable {
     }
 }
 
-actor RecordingHTTPTransport: HTTPTransport {
+actor RecordingHTTPTransport {
     typealias Handler = @Sendable (URLRequest, Int) async throws -> StubbedHTTPResponse
 
     private let handler: Handler
@@ -47,6 +47,9 @@ actor RecordingHTTPTransport: HTTPTransport {
         recordedRequests
     }
 }
+
+/// Kept separate so Sendable isolation inference does not apply to the actor declaration.
+extension RecordingHTTPTransport: HTTPTransport {}
 
 nonisolated enum TestTransportError: Error, Equatable {
     case unexpectedRequest(String)
