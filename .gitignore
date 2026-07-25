@@ -42,6 +42,9 @@ Podfile.lock
 *.mobileprovision
 *.provisionprofile
 AuthKey_*.p8
+.env
+.env.*
+!.env.example
 
 # Local signing config (each dev sets their own DEVELOPMENT_TEAM)
 Local.xcconfig
@@ -52,3 +55,8 @@ CloudNow.xcodeproj/project.pbxproj
 
 # Opencode / AI workflow (local-only)
 .omo/
+
+# Local Discord provisioning state and safety snapshots
+Scripts/Discord/.discord-state.json
+Scripts/Discord/.discord-content-state.json
+Scripts/Discord/.discord-rollbacks/
