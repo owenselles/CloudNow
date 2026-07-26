@@ -1,17 +1,18 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
+  "authoritative": true,
   "guild": {
     "name": "CloudNow Community",
     "description": "Community support and development for CloudNow, an unofficial native GeForce NOW client for Apple TV.",
     "preferred_locale": "en-US",
-    "verification_level": 2,
+    "verification_level": 3,
     "default_message_notifications": 1,
     "explicit_content_filter": 2,
     "system_channel_flags": 7,
     "rules_channel": "rules",
     "public_updates_channel": "discord-updates",
     "safety_alerts_channel": "automod-alerts",
-    "system_channel": "announcements"
+    "system_channel": null
   },
   "everyone_permissions": [
     "ADD_REACTIONS",
@@ -105,6 +106,14 @@
       "mentionable": false
     },
     {
+      "key": "support-interest",
+      "name": "Support Interest",
+      "permissions": [],
+      "color": 3447003,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
       "key": "localization-interest",
       "name": "Localization Interest",
       "permissions": [],
@@ -125,6 +134,14 @@
       "name": "Developer Interest",
       "permissions": [],
       "color": 8359053,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "voice-access",
+      "name": "Voice Access",
+      "permissions": [],
+      "color": 9807270,
       "hoist": false,
       "mentionable": false
     },
@@ -175,17 +192,131 @@
     {
       "key": "support",
       "name": "SUPPORT",
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-team",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "development",
       "name": "DEVELOPMENT",
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "contributor",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "voice",
       "name": "VOICE",
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MUTE_MEMBERS",
+            "DEAFEN_MEMBERS",
+            "MOVE_MEMBERS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MUTE_MEMBERS",
+            "DEAFEN_MEMBERS",
+            "MOVE_MEMBERS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "voice-access",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "staff-only",
@@ -328,7 +459,8 @@
           "allow": [
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
-            "SEND_MESSAGES_IN_THREADS"
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
           ],
           "deny": []
         },
@@ -337,7 +469,8 @@
           "allow": [
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
-            "SEND_MESSAGES_IN_THREADS"
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
           ],
           "deny": []
         }
@@ -359,6 +492,7 @@
             "ADD_REACTIONS"
           ],
           "deny": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
             "CREATE_PRIVATE_THREADS",
@@ -369,18 +503,36 @@
         {
           "target": "server-admin",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
-            "SEND_MESSAGES_IN_THREADS"
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
           ],
           "deny": []
         },
         {
           "target": "project-maintainer",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
-            "SEND_MESSAGES_IN_THREADS"
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "releases",
+          "allow": [
+            "VIEW_CHANNEL"
           ],
           "deny": []
         }
@@ -399,6 +551,7 @@
           "target": "@everyone",
           "allow": [],
           "deny": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
             "CREATE_PRIVATE_THREADS",
@@ -409,6 +562,7 @@
         {
           "target": "server-admin",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -416,6 +570,7 @@
         {
           "target": "project-maintainer",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -423,6 +578,7 @@
         {
           "target": "moderator",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -430,7 +586,15 @@
         {
           "target": "support-team",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-interest",
+          "allow": [
+            "VIEW_CHANNEL"
           ],
           "deny": []
         }
@@ -449,6 +613,7 @@
           "target": "@everyone",
           "allow": [],
           "deny": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
             "CREATE_PRIVATE_THREADS",
@@ -459,20 +624,25 @@
         {
           "target": "server-admin",
           "allow": [
-            "SEND_MESSAGES"
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "MENTION_EVERYONE"
           ],
           "deny": []
         },
         {
           "target": "project-maintainer",
           "allow": [
-            "SEND_MESSAGES"
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "MENTION_EVERYONE"
           ],
           "deny": []
         },
         {
           "target": "moderator",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -480,7 +650,15 @@
         {
           "target": "support-team",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-interest",
+          "allow": [
+            "VIEW_CHANNEL"
           ],
           "deny": []
         }
@@ -545,10 +723,13 @@
       "nsfw": false,
       "slowmode_seconds": 5,
       "default_auto_archive_minutes": 4320,
+      "default_thread_slowmode_seconds": 30,
+      "require_tag": true,
       "overwrites": [
         {
           "target": "support-team",
           "allow": [
+            "VIEW_CHANNEL",
             "MANAGE_THREADS"
           ],
           "deny": []
@@ -625,6 +806,7 @@
           "target": "@everyone",
           "allow": [],
           "deny": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
             "CREATE_PRIVATE_THREADS",
@@ -635,6 +817,7 @@
         {
           "target": "server-admin",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -642,6 +825,7 @@
         {
           "target": "project-maintainer",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -649,6 +833,7 @@
         {
           "target": "moderator",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -656,6 +841,7 @@
         {
           "target": "support-team",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -670,7 +856,15 @@
       "topic": "Technical discussion about CloudNow architecture, Swift, tvOS, WebRTC, streaming, and implementation work.",
       "nsfw": false,
       "slowmode_seconds": 3,
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "contributing",
@@ -685,6 +879,7 @@
           "target": "@everyone",
           "allow": [],
           "deny": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES",
             "CREATE_PUBLIC_THREADS",
             "CREATE_PRIVATE_THREADS",
@@ -695,6 +890,7 @@
         {
           "target": "server-admin",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
           ],
           "deny": []
@@ -702,7 +898,15 @@
         {
           "target": "project-maintainer",
           "allow": [
+            "VIEW_CHANNEL",
             "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
           ],
           "deny": []
         }
@@ -716,7 +920,15 @@
       "topic": "Discussion and selected notifications for active CloudNow pull requests. Final review decisions remain on GitHub.",
       "nsfw": false,
       "slowmode_seconds": 3,
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "testing",
@@ -726,7 +938,38 @@
       "topic": "Coordinate beta testing, reproduce issues, compare devices, and validate candidate fixes.",
       "nsfw": false,
       "slowmode_seconds": 3,
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "beta-tester",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "beta-updates",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "localization",
@@ -736,7 +979,22 @@
       "topic": "Coordinate translations and review CloudNow localization changes.",
       "nsfw": false,
       "slowmode_seconds": 3,
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "translator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "localization-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "community-projects",
@@ -746,7 +1004,15 @@
       "topic": "Share clearly labelled source-available unofficial forks, tools, documentation, and related projects. No unexplained binaries.",
       "nsfw": false,
       "slowmode_seconds": 10,
-      "overwrites": []
+      "overwrites": [
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
     },
     {
       "key": "lounge",
@@ -766,6 +1032,7 @@
       "topic": "",
       "nsfw": false,
       "slowmode_seconds": 0,
+      "user_limit": 4,
       "overwrites": []
     },
     {
@@ -940,20 +1207,21 @@
     "enabled": true,
     "mode": "default",
     "default_channels": [
+      "start-here",
+      "rules",
       "announcements",
-      "releases-channel",
       "general",
       "introductions",
-      "help",
       "showcase",
-      "feature-discussion"
+      "feature-discussion",
+      "off-topic"
     ],
     "writable_default_channels": [
       "general",
       "introductions",
-      "help",
       "showcase",
-      "feature-discussion"
+      "feature-discussion",
+      "off-topic"
     ],
     "prompts": [
       {
@@ -970,9 +1238,12 @@
             "channels": [
               "help",
               "support-resources",
-              "known-issues"
+              "known-issues",
+              "faq"
             ],
-            "roles": []
+            "roles": [
+              "support-interest"
+            ]
           },
           {
             "title": "I want release updates",
@@ -988,13 +1259,13 @@
           },
           {
             "title": "I want to contribute code",
-            "description": "Development, contribution, PR, and testing channels",
+            "description": "Development, contribution, PR, and community project channels",
             "emoji": "💻",
             "channels": [
               "development-channel",
               "contributing",
               "pull-requests",
-              "testing"
+              "community-projects"
             ],
             "roles": [
               "developer-interest"
@@ -1022,6 +1293,18 @@
               "off-topic"
             ],
             "roles": []
+          },
+          {
+            "title": "I want to use voice channels",
+            "description": "Community voice chat and focused pair debugging",
+            "emoji": "🎙️",
+            "channels": [
+              "lounge",
+              "pair-debugging"
+            ],
+            "roles": [
+              "voice-access"
+            ]
           }
         ]
       },
@@ -1030,7 +1313,7 @@
         "type": "multiple_choice",
         "single_select": false,
         "required": false,
-        "in_onboarding": true,
+        "in_onboarding": false,
         "options": [
           {
             "title": "Installation and sign-in",
@@ -1039,7 +1322,9 @@
               "help",
               "support-resources"
             ],
-            "roles": []
+            "roles": [
+              "support-interest"
+            ]
           },
           {
             "title": "Streaming, networking, and latency",
@@ -1048,7 +1333,9 @@
               "help",
               "general"
             ],
-            "roles": []
+            "roles": [
+              "support-interest"
+            ]
           },
           {
             "title": "Video, codecs, and HDR",
@@ -1057,7 +1344,9 @@
               "help",
               "general"
             ],
-            "roles": []
+            "roles": [
+              "support-interest"
+            ]
           },
           {
             "title": "Audio, microphone, and controllers",
@@ -1066,7 +1355,9 @@
               "help",
               "general"
             ],
-            "roles": []
+            "roles": [
+              "support-interest"
+            ]
           },
           {
             "title": "Development and architecture",
@@ -1158,6 +1449,52 @@
             ]
           }
         ]
+      }
+    ]
+  },
+  "cleanup": {
+    "roles": [
+      {
+        "id": "1525110182453968936",
+        "name": "Tester",
+        "migrate_to": "beta-tester"
+      },
+      {
+        "id": "1529910988315299870",
+        "name": "Member",
+        "migrate_to": null
+      }
+    ],
+    "channels": [
+      {
+        "id": "1525109764479258624",
+        "name": "welcome",
+        "type": "text"
+      },
+      {
+        "id": "1529911807035314278",
+        "name": "moderator-only",
+        "type": "text"
+      },
+      {
+        "id": "1525111730164858970",
+        "name": "updates",
+        "type": "text"
+      },
+      {
+        "id": "1525110772181631107",
+        "name": "suggestions",
+        "type": "forum"
+      }
+    ],
+    "categories": [
+      {
+        "id": "1525109552356266044",
+        "name": "Text Channels"
+      },
+      {
+        "id": "1525110881254375505",
+        "name": "Development"
       }
     ]
   },

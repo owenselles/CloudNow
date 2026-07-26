@@ -77,7 +77,7 @@ Moderation discussion will not continue in public. Submit an appeal privately
 through `{MODERATION_APPEAL_METHOD}`. Do not include account credentials or
 unrelated personal data.
 
-# Staff-only `#security-response` Starter
+## Staff-only `#security-response` Starter
 
 This channel coordinates staff response after a report exists in GitHub private
 vulnerability reporting or after a secret is exposed in Discord. It is not a
@@ -89,5 +89,6 @@ member-facing vulnerability intake channel.
   them.
 - Do not ask members to post vulnerability details, credentials, tokens, PINs,
   or QR codes in Discord.
-- Limit copied sensitive material, access, and retention to the approved
-  community privacy policy.
+- Copy only the minimum context needed. Keep vulnerability material in the
+  GitHub private advisory, remove it from Discord after handoff, and never
+  retain exposed credentials.

@@ -58,5 +58,7 @@ CloudNow.xcodeproj/project.pbxproj
 
 # Local Discord provisioning state and safety snapshots
 Scripts/Discord/.discord-state.json
+Scripts/Discord/.discord-state.json.lock
 Scripts/Discord/.discord-content-state.json
+Scripts/Discord/.discord-content-state.json.lock
 Scripts/Discord/.discord-rollbacks/
