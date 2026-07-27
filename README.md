@@ -8,6 +8,18 @@ A native GeForce NOW client for Apple TV. Stream your entire PC game library dir
 
 ---
 
+## Community
+
+Join the [CloudNow Community on Discord](https://discord.gg/5d9wDJdtBa) for installation help, troubleshooting, release updates, feature discussion, and contributor chat.
+
+<a href="https://discord.gg/5d9wDJdtBa">
+  <img src="https://img.shields.io/badge/Discord-Join%20Us-7289da?style=for-the-badge&logo=discord&logoColor=white" alt="Discord">
+</a>
+
+Use [GitHub Issues](https://github.com/owenselles/CloudNow/issues) for tracked bugs and final project decisions. Report security vulnerabilities through [GitHub private vulnerability reporting](https://github.com/owenselles/CloudNow/security/advisories/new), not Discord.
+
+---
+
 ## Installation
 
 ### Option A — TestFlight (recommended)
