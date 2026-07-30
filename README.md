@@ -44,6 +44,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
 - **Library & Store** — browse your linked games separately from the full public catalog; search and sort by default order, recently played, A→Z, or Z→A; filter by collection, genre, game store, RTX, HDR, and Reflex with live result counts; long-press any card to add/remove from Favorites
 - **Instant startup** — catalog, library, and subscription data are cached on device and shown immediately on launch while fresh data loads in the background
+- **Incremental Library metadata** — enriched game details are cached by locale and VPC; unchanged refreshes reuse fresh entries and request only missing or expired app IDs
 - **Bounded performance pipelines** — artwork requests are coalesced and downsampled through shared cost-bounded caches; input-latency sampling uses bounded storage and remains disabled unless statistics or diagnostics need it
 - **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), color mode, keyboard layout, game language, and Low Latency Mode (L4S) from the Settings tab
 - **Color mode preferences** — Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR. CloudNow separates user preference, requested stream mode, negotiated server mode, and actual detected decoded format instead of assuming HDR from bit depth or Apple TV output mode
@@ -313,14 +314,15 @@ Shared real-time streaming state uses explicit lock or queue ownership, while st
 
 ```
 CloudNow/
-├── PersistenceStore.swift          Actor-serialized Keychain, UserDefaults, JSON, and catalog-cache I/O
+├── PersistenceStore.swift          Actor-serialized credentials, preferences, and scoped file-cache I/O
 ├── Auth/
 │   ├── AuthManager.swift           @Observable auth state, Keychain persistence
 │   └── NVIDIAAuthAPI.swift         OAuth 2.0 PKCE, token refresh, user info
 ├── Session/
 │   ├── SessionState.swift          Models: GameInfo, SessionInfo, StreamSettings, color-mode state
 │   ├── CloudMatchClient.swift      Session create/poll/resume/stop, active sessions, audio/color request fields
-│   ├── GamesClient.swift           Game catalog via GraphQL persisted query
+│   ├── GameMetadataCache.swift     Locale/VPC-scoped metadata cache values and persistence boundary
+│   ├── GamesClient.swift           Catalog browse and incremental metadata enrichment via GraphQL
 │   ├── MESClient.swift             Subscription tier + entitled resolutions/FPS from the MES API
 │   └── ZoneClient.swift            Dedicated-server list, cancellation-safe ping cache, and queue data
 ├── Streaming/
@@ -356,6 +358,19 @@ CloudNow/
     ├── StatsHUDView.swift          Statistics, audio/microphone telemetry, and live history graphs
     └── StreamView.swift            Single-flight session orchestration, full-screen player, and pause menu
 ```
+
+### Library metadata cache
+
+Library browse results remain the source of truth for dynamic fields such as ownership, variants, and supported features. Only enriched descriptive fields are persisted, then overlaid without replacing newer browse data. A second unchanged Library refresh therefore makes no metadata-enrichment request; missing or expired app IDs are fetched in bounded batches.
+
+| Rule | Behavior |
+|------|----------|
+| Scope | Separate cache for each NVIDIA locale and VPC |
+| Enriched metadata freshness | 24 hours |
+| Missing-record tombstone | 1 hour, preventing immediate repeat requests |
+| Failed refresh fallback | Retain stale metadata for up to 30 days without advancing its timestamp |
+| Storage bound | Keep the newest 2,000 records per locale/VPC scope |
+| Manual invalidation | Settings → Clear Cache removes catalog and metadata cache files |
 
 ### Protocol
 

@@ -207,6 +207,326 @@ struct GamesClientTests {
         #expect(await transport.requests().contains { $0.url?.path == "/v2/serverInfo" })
     }
 
+    @Test("An unchanged second Library refresh sends no metadata request")
+    func unchangedLibraryRefreshUsesMetadataCache() async throws {
+        let cache = InMemoryGameMetadataCache()
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let transport = RecordingHTTPTransport { request, _ in
+            if let variables = try metadataVariables(from: request) {
+                let ids = try #require(variables["appIds"] as? [String])
+                return try StubbedHTTPResponse(
+                    data: metadataResponse(ids: ids)
+                )
+            }
+            return StubbedHTTPResponse(
+                json: libraryBrowsePage(ids: ["one"])
+            )
+        }
+
+        let firstClient = GamesClient(
+            transport: transport,
+            now: { firstDate },
+            localeCode: { "en-US" },
+            metadataCache: cache
+        )
+        let first = try await firstClient.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-a"
+        )
+        let secondClient = GamesClient(
+            transport: transport,
+            now: { firstDate.addingTimeInterval(60) },
+            localeCode: { "en-US" },
+            metadataCache: cache
+        )
+        let second = try await secondClient.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-a"
+        )
+        let requests = await transport.requests()
+
+        #expect(requests.filter(isMetadataRequest).count == 1)
+        #expect(requests.filter { $0.httpMethod == "POST" }.count == 2)
+        #expect(first == second)
+        let game = try #require(second.first)
+        #expect(game.title == "Metadata one")
+        #expect(game.longDescription == "Description one")
+        #expect(game.boxArtUrl?.contains("browse-one") == true)
+        #expect(game.supportedFeatures == [.rtx])
+        #expect(game.isInLibrary)
+        #expect(game.variants.map(\.id) == ["one-variant"])
+    }
+
+    @Test("A Library request uses one locale for browse, metadata, and cache scope")
+    func libraryRequestKeepsCapturedLocale() async throws {
+        let cache = InMemoryGameMetadataCache()
+        let locale = LockedLocaleCode("en-US")
+        let transport = RecordingHTTPTransport { request, _ in
+            if let variables = try metadataVariables(from: request) {
+                let ids = try #require(variables["appIds"] as? [String])
+                return try StubbedHTTPResponse(
+                    data: metadataResponse(ids: ids)
+                )
+            }
+            locale.set("fr-FR")
+            return StubbedHTTPResponse(
+                json: libraryBrowsePage(ids: ["one"])
+            )
+        }
+        let client = GamesClient(
+            transport: transport,
+            localeCode: { locale.get() },
+            metadataCache: cache
+        )
+
+        _ = try await client.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-a"
+        )
+        let requests = await transport.requests()
+        let browseRequest = try #require(
+            requests.first { $0.httpMethod == "POST" }
+        )
+        let browseBody = try jsonObject(from: browseRequest)
+        let browseVariables = try #require(
+            browseBody["variables"] as? [String: Any]
+        )
+        let metadataRequestVariables = try #require(
+            requests.compactMap { try metadataVariables(from: $0) }.first
+        )
+        let englishCache = await cache.loadGameMetadataCache(
+            localeCode: "en-US",
+            vpcId: "vpc-a"
+        )
+        let frenchCache = await cache.loadGameMetadataCache(
+            localeCode: "fr-FR",
+            vpcId: "vpc-a"
+        )
+
+        #expect(browseVariables["locale"] as? String == "en-US")
+        #expect(metadataRequestVariables["locale"] as? String == "en-US")
+        #expect(englishCache.entries["one"]?.metadata?.title == "Metadata one")
+        #expect(frenchCache.entries.isEmpty)
+    }
+
+    @Test("Clearing metadata while enrichment is in flight prevents a late cache write")
+    func cacheClearIsGenerationBarrier() async throws {
+        let cache = InMemoryGameMetadataCache()
+        let gate = RequestGate()
+        let transport = RecordingHTTPTransport { request, _ in
+            if let variables = try metadataVariables(from: request) {
+                await gate.suspendRequest()
+                let ids = try #require(variables["appIds"] as? [String])
+                return try StubbedHTTPResponse(
+                    data: metadataResponse(ids: ids)
+                )
+            }
+            return StubbedHTTPResponse(
+                json: libraryBrowsePage(ids: ["one"])
+            )
+        }
+        let client = GamesClient(
+            transport: transport,
+            localeCode: { "en-US" },
+            metadataCache: cache
+        )
+        let fetch = Task {
+            try await client.fetchLibrary(
+                token: "token",
+                vpcId: "vpc-a"
+            )
+        }
+
+        await gate.waitUntilSuspended()
+        await cache.clear()
+        await gate.releaseRequest()
+        _ = try await fetch.value
+
+        #expect(
+            await cache.loadGameMetadataCache(
+                localeCode: "en-US",
+                vpcId: "vpc-a"
+            ).entries.isEmpty
+        )
+    }
+
+    @Test("Clearing metadata during browse prevents that refresh from repopulating it")
+    func cacheClearDuringBrowseIsGenerationBarrier() async throws {
+        let cache = InMemoryGameMetadataCache()
+        let gate = RequestGate()
+        let transport = RecordingHTTPTransport { request, _ in
+            if let variables = try metadataVariables(from: request) {
+                let ids = try #require(variables["appIds"] as? [String])
+                return try StubbedHTTPResponse(
+                    data: metadataResponse(ids: ids)
+                )
+            }
+            await gate.suspendRequest()
+            return StubbedHTTPResponse(
+                json: libraryBrowsePage(ids: ["one"])
+            )
+        }
+        let client = GamesClient(
+            transport: transport,
+            localeCode: { "en-US" },
+            metadataCache: cache
+        )
+        let fetch = Task {
+            try await client.fetchLibrary(
+                token: "token",
+                vpcId: "vpc-a"
+            )
+        }
+
+        await gate.waitUntilSuspended()
+        await cache.clear()
+        await gate.releaseRequest()
+        _ = try await fetch.value
+
+        #expect(await transport.requests().filter(isMetadataRequest).isEmpty)
+        #expect(
+            await cache.loadGameMetadataCache(
+                localeCode: "en-US",
+                vpcId: "vpc-a"
+            ).entries.isEmpty
+        )
+    }
+
+    @Test("Metadata refresh requests only missing or expired IDs and is VPC scoped")
+    func metadataRefreshSelectsIdsAndScopesVpc() async throws {
+        let cache = InMemoryGameMetadataCache()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        await cache.seed(
+            [
+                "fresh": GameMetadataCacheEntry(
+                    metadata: cachedMetadata(title: "Cached fresh"),
+                    refreshedAt: now.addingTimeInterval(-60)
+                ),
+                "expired": GameMetadataCacheEntry(
+                    metadata: cachedMetadata(title: "Stale expired"),
+                    refreshedAt: now.addingTimeInterval(-(25 * 60 * 60))
+                ),
+            ],
+            localeCode: "en-US",
+            vpcId: "vpc-a"
+        )
+        let transport = RecordingHTTPTransport { request, _ in
+            if let variables = try metadataVariables(from: request) {
+                let ids = try #require(variables["appIds"] as? [String])
+                return try StubbedHTTPResponse(
+                    data: metadataResponse(ids: ids)
+                )
+            }
+            return StubbedHTTPResponse(
+                json: libraryBrowsePage(ids: ["fresh", "expired", "new"])
+            )
+        }
+        let client = GamesClient(
+            transport: transport,
+            now: { now },
+            localeCode: { "en-US" },
+            metadataCache: cache
+        )
+
+        let firstVpc = try await client.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-a"
+        )
+        _ = try await client.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-b"
+        )
+        let metadataRequests = await transport.requests()
+            .compactMap { try? metadataVariables(from: $0) }
+        let requestedIds = metadataRequests.compactMap {
+            $0["appIds"] as? [String]
+        }
+
+        #expect(requestedIds == [
+            ["expired", "new"],
+            ["fresh", "expired", "new"],
+        ])
+        #expect(firstVpc.first { $0.id == "fresh" }?.title == "Cached fresh")
+        #expect(firstVpc.first { $0.id == "expired" }?.title == "Metadata expired")
+    }
+
+    @Test("A successful metadata omission is temporarily negative cached")
+    func missingMetadataUsesTombstone() async throws {
+        let cache = InMemoryGameMetadataCache()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let transport = RecordingHTTPTransport { request, _ in
+            if isMetadataRequest(request) {
+                return StubbedHTTPResponse(
+                    json: #"{"data":{"apps":{"items":[]}}}"#
+                )
+            }
+            return StubbedHTTPResponse(
+                json: libraryBrowsePage(ids: ["missing"])
+            )
+        }
+        let client = GamesClient(
+            transport: transport,
+            now: { now },
+            localeCode: { "en-US" },
+            metadataCache: cache
+        )
+
+        let first = try await client.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-a"
+        )
+        let second = try await client.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-a"
+        )
+
+        #expect(await transport.requests().filter(isMetadataRequest).count == 1)
+        #expect(first == second)
+        #expect(second.first?.title == "Browse missing")
+    }
+
+    @Test("Failed metadata refresh retains stale enrichment without refreshing its timestamp")
+    func failedMetadataRefreshUsesStaleCache() async throws {
+        let cache = InMemoryGameMetadataCache()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let staleDate = now.addingTimeInterval(-(25 * 60 * 60))
+        let staleEntry = GameMetadataCacheEntry(
+            metadata: cachedMetadata(title: "Stale title"),
+            refreshedAt: staleDate
+        )
+        await cache.seed(
+            ["stale": staleEntry],
+            localeCode: "en-US",
+            vpcId: "vpc-a"
+        )
+        let transport = RecordingHTTPTransport { request, _ in
+            if isMetadataRequest(request) {
+                throw TestTransportError.unexpectedRequest("metadata unavailable")
+            }
+            return StubbedHTTPResponse(
+                json: libraryBrowsePage(ids: ["stale"])
+            )
+        }
+        let client = GamesClient(
+            transport: transport,
+            now: { now },
+            localeCode: { "en-US" },
+            metadataCache: cache
+        )
+
+        let games = try await client.fetchLibrary(
+            token: "token",
+            vpcId: "vpc-a"
+        )
+        let persisted = await cache.loadGameMetadataCache(
+            localeCode: "en-US",
+            vpcId: "vpc-a"
+        ).entries
+
+        #expect(games.first?.title == "Stale title")
+        #expect(persisted["stale"] == staleEntry)
+    }
+
     @Test("Cancellation propagates without retry")
     func cancellation() async {
         let transport = RecordingHTTPTransport { request, _ in
@@ -244,4 +564,248 @@ private nonisolated func browsePage(items: [String], hasNextPage: Bool, cursor: 
       }
     }
     """
+}
+
+private nonisolated func libraryBrowsePage(ids: [String]) -> String {
+    browsePage(
+        items: ids.map { id in
+            """
+            {
+              "id": "\(id)",
+              "title": "Browse \(id)",
+              "genres": ["ACTION"],
+              "images": {
+                "GAME_BOX_ART": "https://images.invalid/browse-\(id).jpg"
+              },
+              "variants": [
+                {
+                  "id": "\(id)-variant",
+                  "appStore": "STEAM",
+                  "gfn": {
+                    "status": "AVAILABLE",
+                    "library": {
+                      "status": "IN_LIBRARY",
+                      "selected": true
+                    },
+                    "features": [
+                      {
+                        "__typename": "GfnSubscriptionFeatureValue",
+                        "key": "RTX_ENABLED",
+                        "value": "true"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """
+        },
+        hasNextPage: false,
+        cursor: ""
+    )
+}
+
+private nonisolated func metadataResponse(ids: [String]) throws -> Data {
+    let items: [[String: Any]] = ids.map { id in
+        [
+            "id": id,
+            "title": "Metadata \(id)",
+            "longDescription": "Description \(id)",
+            "genres": ["RACING"],
+            "developerName": "Developer \(id)",
+            "publisherName": "Publisher \(id)",
+            "contentRatings": [
+                "type": "ESRB",
+                "categoryKey": "TEEN",
+            ],
+            "images": [
+                "TV_BANNER": "https://images.invalid/banner-\(id).jpg",
+                "HERO_IMAGE": "https://images.invalid/hero-\(id).jpg",
+                "SCREENSHOT_1": "https://images.invalid/screenshot-\(id).jpg",
+            ],
+            "variants": [],
+        ]
+    }
+    return try JSONSerialization.data(
+        withJSONObject: [
+            "data": [
+                "apps": [
+                    "items": items,
+                ],
+            ],
+        ]
+    )
+}
+
+private nonisolated func metadataVariables(
+    from request: URLRequest
+) throws -> [String: Any]? {
+    guard let url = request.url,
+          let components = URLComponents(
+              url: url,
+              resolvingAgainstBaseURL: false
+          ),
+          components.queryItems?.first(where: {
+              $0.name == "requestType"
+          })?.value == "appMetaData",
+          let variablesValue = components.queryItems?.first(where: {
+              $0.name == "variables"
+          })?.value,
+          let variablesData = variablesValue.data(using: .utf8)
+    else {
+        return nil
+    }
+    return try #require(
+        JSONSerialization.jsonObject(with: variablesData) as? [String: Any]
+    )
+}
+
+private nonisolated func isMetadataRequest(_ request: URLRequest) -> Bool {
+    guard let url = request.url,
+          let components = URLComponents(
+              url: url,
+              resolvingAgainstBaseURL: false
+          )
+    else {
+        return false
+    }
+    return components.queryItems?.contains {
+        $0.name == "requestType" && $0.value == "appMetaData"
+    } == true
+}
+
+private nonisolated func cachedMetadata(title: String) -> CachedGameMetadata {
+    CachedGameMetadata(
+        title: title,
+        longDescription: nil,
+        genres: nil,
+        developer: nil,
+        publisher: nil,
+        contentRating: nil,
+        boxArtUrl: nil,
+        tvBannerUrl: nil,
+        heroImageUrl: nil,
+        screenshots: []
+    )
+}
+
+private final class LockedLocaleCode: @unchecked Sendable {
+    private let lock = NSLock()
+    private var code: String
+
+    init(_ code: String) {
+        self.code = code
+    }
+
+    func get() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return code
+    }
+
+    func set(_ code: String) {
+        lock.lock()
+        self.code = code
+        lock.unlock()
+    }
+}
+
+private actor RequestGate {
+    private var isSuspended = false
+    private var isReleased = false
+    private var requestContinuation: CheckedContinuation<Void, Never>?
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func suspendRequest() async {
+        isSuspended = true
+        let waiters = suspensionWaiters
+        suspensionWaiters = []
+        waiters.forEach { $0.resume() }
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            requestContinuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        guard !isSuspended else { return }
+        await withCheckedContinuation { continuation in
+            suspensionWaiters.append(continuation)
+        }
+    }
+
+    func releaseRequest() {
+        isReleased = true
+        requestContinuation?.resume()
+        requestContinuation = nil
+    }
+}
+
+private actor InMemoryGameMetadataCache: GameMetadataCacheStore {
+    private struct Scope: Hashable {
+        let localeCode: String
+        let vpcId: String
+    }
+
+    private var entriesByScope: [
+        Scope: [String: GameMetadataCacheEntry]
+    ] = [:]
+    private var generation: UInt64 = 0
+
+    func currentGameMetadataCacheGeneration() -> UInt64 {
+        generation
+    }
+
+    func seed(
+        _ entries: [String: GameMetadataCacheEntry],
+        localeCode: String,
+        vpcId: String
+    ) {
+        entriesByScope[
+            Scope(localeCode: localeCode, vpcId: vpcId)
+        ] = entries
+    }
+
+    func loadGameMetadataCache(
+        localeCode: String,
+        vpcId: String
+    ) -> GameMetadataCacheSnapshot {
+        GameMetadataCacheSnapshot(
+            entries: entriesByScope[
+                Scope(localeCode: localeCode, vpcId: vpcId),
+                default: [:]
+            ],
+            generation: generation
+        )
+    }
+
+    func mergeGameMetadataCache(
+        _ updates: [String: GameMetadataCacheEntry],
+        localeCode: String,
+        vpcId: String,
+        pruningBefore: Date,
+        maximumEntryCount: Int,
+        expectedGeneration: UInt64
+    ) {
+        guard expectedGeneration == generation else { return }
+        let scope = Scope(localeCode: localeCode, vpcId: vpcId)
+        var entries = entriesByScope[scope, default: [:]]
+        entries.merge(updates) { current, updated in
+            current.refreshedAt > updated.refreshedAt
+                ? current
+                : updated
+        }
+        entriesByScope[scope] = Dictionary(
+            uniqueKeysWithValues: entries
+                .filter { $0.value.refreshedAt >= pruningBefore }
+                .sorted { $0.value.refreshedAt > $1.value.refreshedAt }
+                .prefix(maximumEntryCount)
+                .map { ($0.key, $0.value) }
+        )
+    }
+
+    func clear() {
+        generation &+= 1
+        entriesByScope = [:]
+    }
 }

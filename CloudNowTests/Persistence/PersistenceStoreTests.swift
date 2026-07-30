@@ -84,6 +84,168 @@ struct PersistenceStoreTests {
         )
     }
 
+    @Test("Metadata cache is locale and VPC scoped, atomically merged, and cleared")
+    func metadataCacheLifecycle() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let secondDate = firstDate.addingTimeInterval(60)
+        let first = metadataEntry(
+            title: "First",
+            refreshedAt: firstDate
+        )
+        let second = metadataEntry(
+            title: "Second",
+            refreshedAt: secondDate
+        )
+        let store = harness.store
+        let generation = await store.loadGameMetadataCache(
+            localeCode: "en-US",
+            vpcId: "EU-1"
+        ).generation
+
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await store.mergeGameMetadataCache(
+                    ["first": first],
+                    localeCode: "en-US",
+                    vpcId: "EU-1",
+                    pruningBefore: firstDate.addingTimeInterval(-60),
+                    maximumEntryCount: 2000,
+                    expectedGeneration: generation
+                )
+            }
+            group.addTask {
+                await store.mergeGameMetadataCache(
+                    ["second": second],
+                    localeCode: "en-US",
+                    vpcId: "EU-1",
+                    pruningBefore: firstDate.addingTimeInterval(-60),
+                    maximumEntryCount: 2000,
+                    expectedGeneration: generation
+                )
+            }
+        }
+
+        #expect(
+            await store.loadGameMetadataCache(
+                localeCode: "en-US",
+                vpcId: "EU-1"
+            ).entries == [
+                "first": first,
+                "second": second,
+            ]
+        )
+        #expect(
+            await store.loadGameMetadataCache(
+                localeCode: "fr-FR",
+                vpcId: "EU-1"
+            ).entries.isEmpty
+        )
+        #expect(
+            await store.loadGameMetadataCache(
+                localeCode: "en-US",
+                vpcId: "EU-2"
+            ).entries.isEmpty
+        )
+
+        #expect(await store.clearCachedData().isEmpty)
+        await store.mergeGameMetadataCache(
+            ["late": second],
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            pruningBefore: firstDate.addingTimeInterval(-60),
+            maximumEntryCount: 2000,
+            expectedGeneration: generation
+        )
+        #expect(
+            await store.loadGameMetadataCache(
+                localeCode: "en-US",
+                vpcId: "EU-1"
+            ).entries.isEmpty
+        )
+    }
+
+    @Test("An older metadata write cannot replace a newer value")
+    func olderMetadataWriteDoesNotWin() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let oldDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let newDate = oldDate.addingTimeInterval(60)
+        let store = harness.store
+        let generation = await store.loadGameMetadataCache(
+            localeCode: "en-US",
+            vpcId: "EU-1"
+        ).generation
+
+        await store.mergeGameMetadataCache(
+            ["game": metadataEntry(title: "New", refreshedAt: newDate)],
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            pruningBefore: oldDate.addingTimeInterval(-60),
+            maximumEntryCount: 2000,
+            expectedGeneration: generation
+        )
+        await store.mergeGameMetadataCache(
+            ["game": metadataEntry(title: "Old", refreshedAt: oldDate)],
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            pruningBefore: oldDate.addingTimeInterval(-60),
+            maximumEntryCount: 2000,
+            expectedGeneration: generation
+        )
+
+        let entry = await store.loadGameMetadataCache(
+            localeCode: "en-US",
+            vpcId: "EU-1"
+        ).entries["game"]
+        #expect(entry?.metadata?.title == "New")
+        #expect(entry?.refreshedAt == newDate)
+    }
+
+    @Test("Corrupt metadata cache files recover as cache misses")
+    func corruptMetadataCacheRecovery() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let generation = await harness.store.loadGameMetadataCache(
+            localeCode: "en-US",
+            vpcId: "EU-1"
+        ).generation
+
+        await harness.store.mergeGameMetadataCache(
+            [
+                "game": metadataEntry(
+                    title: "Game",
+                    refreshedAt: date
+                ),
+            ],
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            pruningBefore: date.addingTimeInterval(-60),
+            maximumEntryCount: 2000,
+            expectedGeneration: generation
+        )
+        let cacheName = try #require(
+            try FileManager.default
+                .contentsOfDirectory(
+                    atPath: harness.cacheDirectory.path
+                )
+                .first { $0.hasPrefix("gfn.metadata.v1.") }
+        )
+        try Data("not-json".utf8).write(
+            to: harness.cacheDirectory.appendingPathComponent(cacheName),
+            options: .atomic
+        )
+
+        #expect(
+            await harness.store.loadGameMetadataCache(
+                localeCode: "en-US",
+                vpcId: "EU-1"
+            ).entries.isEmpty
+        )
+    }
+
     @Test("Missing and corrupt catalog files recover as cache misses")
     func corruptCatalogRecovery() async throws {
         let harness = try PersistenceHarness()
@@ -208,6 +370,27 @@ struct PersistenceStoreTests {
                     isOwned: true
                 ),
             ]
+        )
+    }
+
+    private func metadataEntry(
+        title: String,
+        refreshedAt: Date
+    ) -> GameMetadataCacheEntry {
+        GameMetadataCacheEntry(
+            metadata: CachedGameMetadata(
+                title: title,
+                longDescription: nil,
+                genres: nil,
+                developer: nil,
+                publisher: nil,
+                contentRating: nil,
+                boxArtUrl: nil,
+                tvBannerUrl: nil,
+                heroImageUrl: nil,
+                screenshots: []
+            ),
+            refreshedAt: refreshedAt
         )
     }
 

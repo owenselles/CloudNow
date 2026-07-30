@@ -17,22 +17,34 @@ actor GamesClient {
     private static let ownedAppsQueryHash = "698bbc7e16a17c8e3fc56944a0e6d62e7d70296b29dfb35fb4d83ebd66dd10f1"
     private static let clientId = NVIDIAAuth.gfnClientId
     private static let clientVersion = NVIDIAAuth.gfnClientVersion
+    private static let metadataFreshnessInterval: TimeInterval = 24 * 60 * 60
+    private static let missingMetadataFreshnessInterval: TimeInterval = 60 * 60
+    private static let metadataStaleRetentionInterval: TimeInterval = 30 * 24 * 60 * 60
+    private static let maximumMetadataEntriesPerScope = 2000
 
     private let transport: any HTTPTransport
+    private let metadataCache: any GameMetadataCacheStore
     private let now: @Sendable () -> Date
     private let uuid: @Sendable () -> UUID
+    private let localeCodeProvider: @Sendable () -> String
     private var localeCode: String {
-        L10n.nvidiaLocaleCode()
+        localeCodeProvider()
     }
 
     init(
         transport: any HTTPTransport = URLSessionHTTPTransport(),
         now: @escaping @Sendable () -> Date = Date.init,
-        uuid: @escaping @Sendable () -> UUID = UUID.init
+        uuid: @escaping @Sendable () -> UUID = UUID.init,
+        localeCode: @escaping @Sendable () -> String = {
+            L10n.nvidiaLocaleCode()
+        },
+        metadataCache: any GameMetadataCacheStore = AppPersistenceStore.shared
     ) {
         self.transport = transport
         self.now = now
         self.uuid = uuid
+        localeCodeProvider = localeCode
+        self.metadataCache = metadataCache
     }
 
     private static let browseQuery = """
@@ -71,10 +83,17 @@ actor GamesClient {
     // MARK: Fetch Full Catalog (browse API)
 
     func fetchMainGames(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl, vpcId: String? = nil) async throws -> [GameInfo] {
+        let localeCode = localeCode
         let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
         // The public catalog is independent of the browse pagination — fetch both at once.
         async let publicTask = fetchPublicCatalog()
-        let games = try await browseCatalog(token: token, vpcId: vpcId, filters: [:], maxPages: 15)
+        let games = try await browseCatalog(
+            token: token,
+            vpcId: vpcId,
+            localeCode: localeCode,
+            filters: [:],
+            maxPages: 15
+        )
         let publicGames = await (try? publicTask) ?? []
         return mergeCatalog(games, supplemental: publicGames)
     }
@@ -82,16 +101,31 @@ actor GamesClient {
     // MARK: Fetch Library (owned/purchased games via browse filter)
 
     func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl, vpcId: String? = nil) async throws -> [GameInfo] {
+        let metadataCacheGeneration = await metadataCache.currentGameMetadataCacheGeneration()
+        let localeCode = localeCode
         let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
         let libraryFilter: [String: Any] = ["variants": ["gfn": ["library": ["status": ["notEquals": "NOT_OWNED"]]]]]
-        let games = try await browseCatalog(token: token, vpcId: vpcId, filters: libraryFilter, maxPages: 10)
-        return await (try? enrich(token: token, vpcId: vpcId, games: games)) ?? games
+        let games = try await browseCatalog(
+            token: token,
+            vpcId: vpcId,
+            localeCode: localeCode,
+            filters: libraryFilter,
+            maxPages: 10
+        )
+        return try await enrich(
+            token: token,
+            vpcId: vpcId,
+            localeCode: localeCode,
+            expectedCacheGeneration: metadataCacheGeneration,
+            games: games
+        )
     }
 
     func search(token: String, query: String, vpcId: String) async throws -> [GameInfo] {
         try await browseCatalog(
             token: token,
             vpcId: vpcId,
+            localeCode: localeCode,
             filters: [:],
             searchString: query.trimmingCharacters(in: .whitespacesAndNewlines),
             maxPages: 3
@@ -118,6 +152,7 @@ actor GamesClient {
     private func browseCatalog(
         token: String,
         vpcId: String,
+        localeCode: String,
         filters: [String: Any],
         searchString: String? = nil,
         maxPages: Int = 3,
@@ -126,7 +161,8 @@ actor GamesClient {
         do {
             do {
                 let games = try await browsePages(
-                    token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+                    token: token, vpcId: vpcId, localeCode: localeCode,
+                    filters: filters, searchString: searchString,
                     pageSize: 500, maxPages: maxPages, includeGenres: includeGenres
                 )
                 if !games.isEmpty {
@@ -137,13 +173,15 @@ actor GamesClient {
             }
 
             return try await browsePages(
-                token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+                token: token, vpcId: vpcId, localeCode: localeCode,
+                filters: filters, searchString: searchString,
                 pageSize: 200, maxPages: maxPages, includeGenres: includeGenres
             )
         } catch let GamesError.graphql(message) where includeGenres && message.localizedCaseInsensitiveContains("genre") {
             gamesLog.warning("[GamesClient] browse genres unavailable; retrying compatible query")
             return try await browseCatalog(
-                token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+                token: token, vpcId: vpcId, localeCode: localeCode,
+                filters: filters, searchString: searchString,
                 maxPages: maxPages, includeGenres: false
             )
         }
@@ -152,6 +190,7 @@ actor GamesClient {
     private func browsePages(
         token: String,
         vpcId: String,
+        localeCode: String,
         filters: [String: Any],
         searchString: String?,
         pageSize: Int,
@@ -429,86 +468,198 @@ actor GamesClient {
 
     // MARK: - Metadata Enrichment
 
-    private func enrich(token: String, vpcId: String, games: [GameInfo]) async throws -> [GameInfo] {
-        let ids = Array(Set(games.map(\.id)))
+    private func enrich(
+        token: String,
+        vpcId: String,
+        localeCode: String,
+        expectedCacheGeneration: UInt64,
+        games: [GameInfo]
+    ) async throws -> [GameInfo] {
+        var seenIds = Set<String>()
+        let ids = games.map(\.id).filter { seenIds.insert($0).inserted }
         guard !ids.isEmpty else { return games }
 
-        var metaById: [String: AppData] = [:]
-        let chunkSize = 40
-
-        for start in stride(from: 0, to: ids.count, by: chunkSize) {
-            let chunk = Array(ids[start ..< min(start + chunkSize, ids.count)])
-            let payload = try await fetchMetadata(token: token, appIds: chunk, vpcId: vpcId)
-            for app in payload {
-                guard let rawId = app.id else { continue }
-                metaById[rawId.stringValue] = app
-            }
+        let refreshStartedAt = now()
+        let retentionCutoff = refreshStartedAt.addingTimeInterval(
+            -Self.metadataStaleRetentionInterval
+        )
+        let cacheSnapshot = await metadataCache.loadGameMetadataCache(
+            localeCode: localeCode,
+            vpcId: vpcId
+        )
+        guard cacheSnapshot.generation == expectedCacheGeneration else {
+            return games
+        }
+        let cachedEntries = cacheSnapshot.entries.filter {
+            $0.value.refreshedAt >= retentionCutoff
+        }
+        var metadataById = cachedEntries.compactMapValues(\.metadata)
+        let idsToRefresh = ids.filter { id in
+            guard let entry = cachedEntries[id] else { return true }
+            return !isMetadataEntryFresh(entry, at: refreshStartedAt)
+        }
+        guard !idsToRefresh.isEmpty else {
+            return games.map { merge(metadataById[$0.id], into: $0) }
         }
 
-        return games.map { game in
-            guard let meta = metaById[game.id] else { return game }
-            let boxArt = meta.images?.GAME_BOX_ART.flatMap { optimizeImageUrl($0) }
-            let hero = (meta.images?.TV_BANNER ?? meta.images?.HERO_IMAGE).flatMap { optimizeImageUrl($0, width: 1920) }
-            let heroImage = (meta.images?.HERO_IMAGE ?? meta.images?.TV_BANNER).flatMap { optimizeImageUrl($0, width: 1920) }
-            let shots = (meta.images?.screenshots ?? []).compactMap { optimizeImageUrl($0, width: 640) }
-            let rating: String? = {
-                guard let t = meta.contentRatings?.type, let k = meta.contentRatings?.categoryKey else { return game.contentRating }
-                return "\(t) \(k)"
-            }()
-            return GameInfo(
-                id: game.id,
-                title: meta.title ?? game.title,
-                longDescription: meta.longDescription ?? game.longDescription,
-                genres: meta.genres ?? game.genres,
-                developer: meta.developerName ?? game.developer,
-                publisher: meta.publisherName ?? game.publisher,
-                contentRating: rating,
-                boxArtUrl: boxArt ?? game.boxArtUrl,
-                heroBannerUrl: hero ?? game.heroBannerUrl,
-                heroImageUrl: heroImage ?? game.heroImageUrl,
-                supportedFeatures: game.supportedFeatures,
-                screenshots: shots.isEmpty ? game.screenshots : shots,
-                isInLibrary: game.isInLibrary,
-                variants: game.variants
+        var cacheUpdates: [String: GameMetadataCacheEntry] = [:]
+        let chunkSize = 40
+
+        for start in stride(from: 0, to: idsToRefresh.count, by: chunkSize) {
+            try Task.checkCancellation()
+            let chunk = Array(
+                idsToRefresh[start ..< min(start + chunkSize, idsToRefresh.count)]
             )
-        }
-    }
-
-    private func fetchMetadata(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
-        guard !appIds.isEmpty else { return [] }
-
-        var apps: [AppData] = []
-        let chunkSize = 40
-        for start in stride(from: 0, to: appIds.count, by: chunkSize) {
-            let chunk = Array(appIds[start ..< min(start + chunkSize, appIds.count)])
-            let payloadApps = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
-            apps.append(contentsOf: payloadApps)
-        }
-        return apps
-    }
-
-    private func fetchMetadataBestEffort(token: String, appIds: [String], vpcId: String) async throws -> MetadataFetchResult {
-        guard !appIds.isEmpty else { return MetadataFetchResult(failedChunkCount: 0) }
-
-        var failedChunkCount = 0
-        let chunkSize = 40
-        for start in stride(from: 0, to: appIds.count, by: chunkSize) {
-            let chunk = Array(appIds[start ..< min(start + chunkSize, appIds.count)])
             do {
-                _ = try await fetchMetadataChunk(token: token, appIds: chunk, vpcId: vpcId)
+                let payload = try await fetchMetadataChunk(
+                    token: token,
+                    appIds: chunk,
+                    vpcId: vpcId,
+                    localeCode: localeCode
+                )
+                let requestedIds = Set(chunk)
+                var fetchedMetadata: [String: CachedGameMetadata] = [:]
+                for app in payload {
+                    guard let id = app.id?.stringValue,
+                          requestedIds.contains(id)
+                    else {
+                        continue
+                    }
+                    fetchedMetadata[id] = cachedMetadata(from: app)
+                }
+
+                let refreshedAt = now()
+                for id in chunk {
+                    let metadata = fetchedMetadata[id]
+                    let entry = GameMetadataCacheEntry(
+                        metadata: metadata,
+                        refreshedAt: refreshedAt
+                    )
+                    cacheUpdates[id] = entry
+                    if let metadata {
+                        metadataById[id] = metadata
+                    } else {
+                        metadataById.removeValue(forKey: id)
+                    }
+                }
             } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where error.code == .cancelled {
                 throw CancellationError()
             } catch GamesError.unauthorized {
                 throw GamesError.unauthorized
             } catch {
-                failedChunkCount += 1
-                gamesLog.warning("[Games] metadata chunk failed for \(chunk.count, privacy: .public) apps: \(error, privacy: .private)")
+                // Keep stale metadata as a fallback. Failed requests never
+                // advance timestamps or create negative cache entries.
+                gamesLog.warning(
+                    "[Games] metadata chunk failed for \(chunk.count, privacy: .public) apps: \(error, privacy: .private)"
+                )
             }
         }
-        return MetadataFetchResult(failedChunkCount: failedChunkCount)
+
+        if !cacheUpdates.isEmpty {
+            try Task.checkCancellation()
+            await metadataCache.mergeGameMetadataCache(
+                cacheUpdates,
+                localeCode: localeCode,
+                vpcId: vpcId,
+                pruningBefore: retentionCutoff,
+                maximumEntryCount: Self.maximumMetadataEntriesPerScope,
+                expectedGeneration: expectedCacheGeneration
+            )
+        }
+        try Task.checkCancellation()
+        return games.map { merge(metadataById[$0.id], into: $0) }
     }
 
-    private func fetchMetadataChunk(token: String, appIds: [String], vpcId: String) async throws -> [AppData] {
+    private func isMetadataEntryFresh(
+        _ entry: GameMetadataCacheEntry,
+        at date: Date
+    ) -> Bool {
+        let age = date.timeIntervalSince(entry.refreshedAt)
+        guard age >= 0 else { return false }
+        let freshnessInterval = entry.metadata == nil
+            ? Self.missingMetadataFreshnessInterval
+            : Self.metadataFreshnessInterval
+        return age < freshnessInterval
+    }
+
+    private func cachedMetadata(from app: AppData) -> CachedGameMetadata {
+        let rating: String? = {
+            guard let type = nonEmptyMetadataString(app.contentRatings?.type),
+                  let category = nonEmptyMetadataString(
+                      app.contentRatings?.categoryKey
+                  )
+            else {
+                return nil
+            }
+            return "\(type) \(category)"
+        }()
+        let genres = app.genres?
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return CachedGameMetadata(
+            title: nonEmptyMetadataString(app.title),
+            longDescription: nonEmptyMetadataString(app.longDescription),
+            genres: genres?.isEmpty == false ? genres : nil,
+            developer: nonEmptyMetadataString(app.developerName),
+            publisher: nonEmptyMetadataString(app.publisherName),
+            contentRating: rating,
+            boxArtUrl: nonEmptyMetadataString(app.images?.GAME_BOX_ART),
+            tvBannerUrl: nonEmptyMetadataString(app.images?.TV_BANNER),
+            heroImageUrl: nonEmptyMetadataString(app.images?.HERO_IMAGE),
+            screenshots: (app.images?.screenshots ?? []).compactMap {
+                nonEmptyMetadataString($0)
+            }
+        )
+    }
+
+    private func merge(
+        _ metadata: CachedGameMetadata?,
+        into game: GameInfo
+    ) -> GameInfo {
+        guard let metadata else { return game }
+        let boxArt = metadata.boxArtUrl.flatMap { optimizeImageUrl($0) }
+        let hero = (metadata.tvBannerUrl ?? metadata.heroImageUrl).flatMap {
+            optimizeImageUrl($0, width: 1920)
+        }
+        let heroImage = (metadata.heroImageUrl ?? metadata.tvBannerUrl).flatMap {
+            optimizeImageUrl($0, width: 1920)
+        }
+        let screenshots = metadata.screenshots.compactMap {
+            optimizeImageUrl($0, width: 640)
+        }
+        return GameInfo(
+            id: game.id,
+            title: metadata.title ?? game.title,
+            longDescription: metadata.longDescription ?? game.longDescription,
+            genres: metadata.genres ?? game.genres,
+            developer: metadata.developer ?? game.developer,
+            publisher: metadata.publisher ?? game.publisher,
+            contentRating: metadata.contentRating ?? game.contentRating,
+            boxArtUrl: boxArt ?? game.boxArtUrl,
+            heroBannerUrl: hero ?? game.heroBannerUrl,
+            heroImageUrl: heroImage ?? game.heroImageUrl,
+            supportedFeatures: game.supportedFeatures,
+            screenshots: screenshots.isEmpty ? game.screenshots : screenshots,
+            isInLibrary: game.isInLibrary,
+            variants: game.variants
+        )
+    }
+
+    private func nonEmptyMetadataString(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func fetchMetadataChunk(
+        token: String,
+        appIds: [String],
+        vpcId: String,
+        localeCode: String
+    ) async throws -> [AppData] {
         let variables: [String: Any] = ["vpcId": vpcId, "locale": localeCode, "appIds": appIds]
         let extensions: [String: Any] = ["persistedQuery": ["sha256Hash": GamesClient.metadataQueryHash]]
         let huId = requestId()
@@ -871,10 +1022,6 @@ private nonisolated struct BrowseResponse: Decodable {
 }
 
 private nonisolated struct GQLError: Decodable { let message: String }
-
-private nonisolated struct MetadataFetchResult {
-    let failedChunkCount: Int
-}
 
 private nonisolated struct OwnedAppsResponse: Decodable {
     let data: OwnedAppsData?

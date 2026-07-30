@@ -86,6 +86,13 @@ actor AppPersistenceStore {
         let games: [GameInfo]
     }
 
+    private struct GameMetadataCacheEnvelope: Codable {
+        let schemaVersion: Int
+        let localeCode: String
+        let vpcId: String
+        let entries: [String: GameMetadataCacheEntry]
+    }
+
     private enum Key {
         static let favoriteIds = "gfn.favoriteIds"
         static let preferredStores = "gfn.preferredStores"
@@ -101,6 +108,7 @@ actor AppPersistenceStore {
     private let cacheDirectory: URL?
     private let fileManager: FileManager
     private let credentialStore: any SecureCredentialStore
+    private var gameMetadataCacheGeneration: UInt64 = 0
 
     init(
         preferences: any PreferencesStore = UserDefaultsPreferencesStore(),
@@ -209,6 +217,96 @@ actor AppPersistenceStore {
         try? data.write(to: url, options: .atomic)
     }
 
+    func currentGameMetadataCacheGeneration() -> UInt64 {
+        gameMetadataCacheGeneration
+    }
+
+    func loadGameMetadataCache(
+        localeCode: String,
+        vpcId: String
+    ) -> GameMetadataCacheSnapshot {
+        let entries: [String: GameMetadataCacheEntry] = if let url = gameMetadataCacheURL(
+            localeCode: localeCode,
+            vpcId: vpcId
+        ),
+            let data = try? Data(contentsOf: url),
+            let envelope = try? JSONDecoder().decode(
+                GameMetadataCacheEnvelope.self,
+                from: data
+            ),
+            envelope.schemaVersion == 1,
+            envelope.localeCode == localeCode,
+            envelope.vpcId == vpcId
+        {
+            envelope.entries
+        } else {
+            [:]
+        }
+        return GameMetadataCacheSnapshot(
+            entries: entries,
+            generation: gameMetadataCacheGeneration
+        )
+    }
+
+    /// Merges updates inside the persistence actor so overlapping client
+    /// instances cannot replace one another's entries with stale snapshots.
+    func mergeGameMetadataCache(
+        _ updates: [String: GameMetadataCacheEntry],
+        localeCode: String,
+        vpcId: String,
+        pruningBefore: Date,
+        maximumEntryCount: Int,
+        expectedGeneration: UInt64
+    ) {
+        guard !updates.isEmpty,
+              expectedGeneration == gameMetadataCacheGeneration
+        else {
+            return
+        }
+        var entries = loadGameMetadataCache(
+            localeCode: localeCode,
+            vpcId: vpcId
+        ).entries
+        entries.merge(updates) { current, updated in
+            if current.refreshedAt != updated.refreshedAt {
+                return current.refreshedAt > updated.refreshedAt
+                    ? current
+                    : updated
+            }
+            if current.metadata != nil, updated.metadata == nil {
+                return current
+            }
+            return updated
+        }
+        let retained = entries
+            .filter { $0.value.refreshedAt >= pruningBefore }
+            .sorted {
+                if $0.value.refreshedAt == $1.value.refreshedAt {
+                    return $0.key < $1.key
+                }
+                return $0.value.refreshedAt > $1.value.refreshedAt
+            }
+            .prefix(max(0, maximumEntryCount))
+        let boundedEntries = Dictionary(
+            uniqueKeysWithValues: retained.map { ($0.key, $0.value) }
+        )
+
+        guard let url = gameMetadataCacheURL(
+            localeCode: localeCode,
+            vpcId: vpcId
+        ),
+            let data = try? JSONEncoder().encode(GameMetadataCacheEnvelope(
+                schemaVersion: 1,
+                localeCode: localeCode,
+                vpcId: vpcId,
+                entries: boundedEntries
+            ))
+        else {
+            return
+        }
+        try? data.write(to: url, options: .atomic)
+    }
+
     func loadAuthSession() async throws -> AuthSession {
         let data = try credentialStore.load()
         return try JSONDecoder().decode(AuthSession.self, from: data)
@@ -227,6 +325,7 @@ actor AppPersistenceStore {
     /// in-flight producers. Running this on the persistence actor serializes the
     /// deletion behind writes that were already submitted.
     func clearCachedData() -> [String] {
+        gameMetadataCacheGeneration &+= 1
         [
             "gfn.cache.mainGames",
             "gfn.cache.libraryGames",
@@ -239,7 +338,11 @@ actor AppPersistenceStore {
 
         let names = (try? fileManager.contentsOfDirectory(atPath: cacheDirectory.path)) ?? []
         let cacheFiles = names.filter {
-            ($0.hasPrefix("gfn.catalog.") || $0.hasPrefix("gfn.library."))
+            (
+                $0.hasPrefix("gfn.catalog.")
+                    || $0.hasPrefix("gfn.library.")
+                    || $0.hasPrefix("gfn.metadata.")
+            )
                 && $0.hasSuffix(".json")
         }
         var failures: [String] = []
@@ -276,12 +379,33 @@ actor AppPersistenceStore {
     }
 
     private func catalogCacheURL(localeCode: String, vpcId: String?) -> URL? {
+        let safeKey = scopedCacheKey(
+            localeCode: localeCode,
+            vpcId: vpcId
+        )
+        return cacheDirectory?.appendingPathComponent("gfn.catalog.v2.\(safeKey).json")
+    }
+
+    private func gameMetadataCacheURL(
+        localeCode: String,
+        vpcId: String
+    ) -> URL? {
+        let safeKey = scopedCacheKey(
+            localeCode: localeCode,
+            vpcId: vpcId
+        )
+        return cacheDirectory?.appendingPathComponent("gfn.metadata.v1.\(safeKey).json")
+    }
+
+    private func scopedCacheKey(
+        localeCode: String,
+        vpcId: String?
+    ) -> String {
         let rawKey = "\(localeCode)\u{1F}\(vpcId ?? "default")"
-        let safeKey = Data(rawKey.utf8).base64EncodedString()
+        return Data(rawKey.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
-        return cacheDirectory?.appendingPathComponent("gfn.catalog.v2.\(safeKey).json")
     }
 
     private var libraryCacheURL: URL? {
