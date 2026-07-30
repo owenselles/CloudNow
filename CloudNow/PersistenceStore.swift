@@ -77,6 +77,13 @@ actor AppPersistenceStore {
         var libraryGames: [GameInfo] = []
         var subscription: SubscriptionInfo?
         var vpcId: String?
+        var ownershipCacheGeneration: UInt64 = 0
+    }
+
+    private struct LibraryCacheEnvelope: Codable {
+        let schemaVersion: Int
+        let accountScope: String
+        let games: [GameInfo]
     }
 
     private struct CatalogCacheEnvelope: Codable {
@@ -84,6 +91,12 @@ actor AppPersistenceStore {
         let localeCode: String
         let vpcId: String?
         let games: [GameInfo]
+    }
+
+    private enum PersistenceError: Error {
+        case cacheUnavailable
+        case invalidAccountScope
+        case staleOwnershipCacheGeneration
     }
 
     private struct GameMetadataCacheEnvelope: Codable {
@@ -109,6 +122,8 @@ actor AppPersistenceStore {
     private let fileManager: FileManager
     private let credentialStore: any SecureCredentialStore
     private var gameMetadataCacheGeneration: UInt64 = 0
+    private var ownershipCacheGeneration: UInt64 = 0
+    private var authCredentialGeneration: UInt64 = 0
 
     init(
         preferences: any PreferencesStore = UserDefaultsPreferencesStore(),
@@ -125,7 +140,7 @@ actor AppPersistenceStore {
         self.credentialStore = credentialStore
     }
 
-    func loadGamesSnapshot() -> GamesSnapshot {
+    func loadGamesSnapshot(accountScope: String?) -> GamesSnapshot {
         // Library metadata can exceed tvOS's per-value UserDefaults limit.
         // Remove the retired preference before reading the file-backed cache.
         preferences.removeObject(forKey: Key.legacyLibraryGames)
@@ -136,9 +151,10 @@ actor AppPersistenceStore {
         snapshot.recentlyPlayedIds = decode([String].self, forKey: Key.recentlyPlayed) ?? []
         snapshot.streamSettings = decode(StreamSettings.self, forKey: Key.streamSettings)
         snapshot.lastSession = decode(LastSessionRecord.self, forKey: Key.lastSession)
-        snapshot.libraryGames = loadLibraryGames()
+        snapshot.libraryGames = loadLibraryGames(accountScope: accountScope)
         snapshot.subscription = decode(SubscriptionInfo.self, forKey: Key.subscription)
         snapshot.vpcId = preferences.string(forKey: Key.vpcId)
+        snapshot.ownershipCacheGeneration = ownershipCacheGeneration
 
         // Remove caches written by the retired panels API.
         preferences.removeObject(forKey: "gfn.cache.mainGames")
@@ -170,13 +186,17 @@ actor AppPersistenceStore {
         encode(session, forKey: Key.lastSession)
     }
 
-    func saveLibraryGames(_ games: [GameInfo]) {
-        guard let url = libraryCacheURL,
-              let data = try? JSONEncoder().encode(games)
+    func saveLibraryGames(
+        _ games: [GameInfo],
+        accountScope: String?,
+        expectedGeneration: UInt64
+    ) {
+        guard expectedGeneration == ownershipCacheGeneration,
+              let accountScope = safeAccountScope(accountScope)
         else {
             return
         }
-        try? data.write(to: url, options: .atomic)
+        try? writeLibraryGames(games, accountScope: accountScope)
     }
 
     func saveSubscription(_ subscription: SubscriptionInfo) {
@@ -187,34 +207,70 @@ actor AppPersistenceStore {
         preferences.setString(vpcId, forKey: Key.vpcId)
     }
 
-    func loadCatalog(localeCode: String, vpcId: String?) -> [GameInfo]? {
-        removeLegacyCatalogCache()
-        guard let url = catalogCacheURL(localeCode: localeCode, vpcId: vpcId),
-              let data = try? Data(contentsOf: url),
-              let envelope = try? JSONDecoder().decode(CatalogCacheEnvelope.self, from: data),
-              envelope.schemaVersion == 2,
-              envelope.localeCode == localeCode,
-              envelope.vpcId == vpcId,
-              !envelope.games.isEmpty
+    func loadCatalog(
+        localeCode: String,
+        vpcId: String?,
+        accountScope _: String?
+    ) -> [GameInfo]? {
+        removeLegacyOwnershipCaches()
+        guard let url = catalogCacheURL(
+            localeCode: localeCode,
+            vpcId: vpcId
+        ),
+            let data = try? Data(contentsOf: url),
+            let envelope = try? JSONDecoder().decode(CatalogCacheEnvelope.self, from: data),
+            envelope.schemaVersion == 3,
+            envelope.localeCode == localeCode,
+            envelope.vpcId == vpcId,
+            !envelope.games.isEmpty,
+            isAccountNeutralCatalog(envelope.games)
         else {
             return nil
         }
         return envelope.games
     }
 
-    func saveCatalog(_ games: [GameInfo], localeCode: String, vpcId: String?) {
-        guard !games.isEmpty,
-              let url = catalogCacheURL(localeCode: localeCode, vpcId: vpcId),
-              let data = try? JSONEncoder().encode(CatalogCacheEnvelope(
-                  schemaVersion: 2,
-                  localeCode: localeCode,
-                  vpcId: vpcId,
-                  games: games
-              ))
+    func saveCatalog(
+        _ games: [GameInfo],
+        localeCode: String,
+        vpcId: String?,
+        accountScope _: String?,
+        expectedGeneration: UInt64
+    ) {
+        guard expectedGeneration == ownershipCacheGeneration,
+              !games.isEmpty
         else {
             return
         }
-        try? data.write(to: url, options: .atomic)
+        try? writeCatalog(
+            games,
+            localeCode: localeCode,
+            vpcId: vpcId
+        )
+    }
+
+    func saveRefreshedLibrarySnapshot(
+        libraryGames: [GameInfo],
+        catalogGames: [GameInfo]?,
+        localeCode: String,
+        vpcId: String?,
+        accountScope: String,
+        expectedGeneration: UInt64
+    ) throws {
+        guard expectedGeneration == ownershipCacheGeneration else {
+            throw PersistenceError.staleOwnershipCacheGeneration
+        }
+        guard let accountScope = safeAccountScope(accountScope) else {
+            throw PersistenceError.invalidAccountScope
+        }
+        try writeLibraryGames(libraryGames, accountScope: accountScope)
+        if let catalogGames, !catalogGames.isEmpty {
+            try? writeCatalog(
+                catalogGames,
+                localeCode: localeCode,
+                vpcId: vpcId
+            )
+        }
     }
 
     func currentGameMetadataCacheGeneration() -> UInt64 {
@@ -312,12 +368,23 @@ actor AppPersistenceStore {
         return try JSONDecoder().decode(AuthSession.self, from: data)
     }
 
-    func saveAuthSession(_ session: AuthSession) async throws {
+    func saveAuthSession(
+        _ session: AuthSession,
+        generation: UInt64
+    ) async throws {
+        guard generation >= authCredentialGeneration else {
+            return
+        }
         let data = try JSONEncoder().encode(session)
+        authCredentialGeneration = generation
         try credentialStore.save(data)
     }
 
-    func deleteAuthSession() async throws {
+    func deleteAuthSession(generation: UInt64) async throws {
+        guard generation >= authCredentialGeneration else {
+            return
+        }
+        authCredentialGeneration = generation
         try credentialStore.delete()
     }
 
@@ -326,6 +393,7 @@ actor AppPersistenceStore {
     /// deletion behind writes that were already submitted.
     func clearCachedData() -> [String] {
         gameMetadataCacheGeneration &+= 1
+        ownershipCacheGeneration &+= 1
         [
             "gfn.cache.mainGames",
             "gfn.cache.libraryGames",
@@ -342,6 +410,7 @@ actor AppPersistenceStore {
                 $0.hasPrefix("gfn.catalog.")
                     || $0.hasPrefix("gfn.library.")
                     || $0.hasPrefix("gfn.metadata.")
+                    || $0.hasPrefix("gfn.refresh.")
             )
                 && $0.hasSuffix(".json")
         }
@@ -362,6 +431,8 @@ actor AppPersistenceStore {
     /// invalidated. Actor serialization prevents an earlier queued write from
     /// restoring data after this deletion completes.
     func clearPersistentData() {
+        ownershipCacheGeneration &+= 1
+        authCredentialGeneration &+= 1
         for key in preferences.keys() {
             preferences.removeObject(forKey: key)
         }
@@ -378,12 +449,16 @@ actor AppPersistenceStore {
         preferences.setData(data, forKey: key)
     }
 
-    private func catalogCacheURL(localeCode: String, vpcId: String?) -> URL? {
+    private func catalogCacheURL(
+        localeCode: String,
+        vpcId: String?
+    ) -> URL? {
         let safeKey = scopedCacheKey(
             localeCode: localeCode,
             vpcId: vpcId
         )
-        return cacheDirectory?.appendingPathComponent("gfn.catalog.v2.\(safeKey).json")
+        return cacheDirectory?
+            .appendingPathComponent("gfn.catalog.v3.\(safeKey).json")
     }
 
     private func gameMetadataCacheURL(
@@ -408,26 +483,134 @@ actor AppPersistenceStore {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private var libraryCacheURL: URL? {
-        cacheDirectory?.appendingPathComponent("gfn.library.v1.json")
+    private func safeAccountScope(_ accountScope: String?) -> String? {
+        let allowedCharacters = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+        )
+        guard let accountScope,
+              !accountScope.isEmpty,
+              accountScope.unicodeScalars.allSatisfy({
+                  allowedCharacters.contains($0)
+              })
+        else {
+            return nil
+        }
+        return accountScope
     }
 
-    private func loadLibraryGames() -> [GameInfo] {
-        guard let url = libraryCacheURL,
+    private func libraryCacheURL(accountScope: String) -> URL? {
+        cacheDirectory?
+            .appendingPathComponent("gfn.library.v2.\(accountScope).json")
+    }
+
+    private func loadLibraryGames(accountScope: String?) -> [GameInfo] {
+        guard let accountScope = safeAccountScope(accountScope) else {
+            return []
+        }
+        removeLegacyOwnershipCaches()
+        guard let url = libraryCacheURL(accountScope: accountScope),
               let data = try? Data(contentsOf: url),
-              let games = try? JSONDecoder().decode([GameInfo].self, from: data)
+              let envelope = try? JSONDecoder().decode(
+                  LibraryCacheEnvelope.self,
+                  from: data
+              ),
+              envelope.schemaVersion == 2,
+              envelope.accountScope == accountScope
         else {
             return []
         }
-        return games
+        return envelope.games
     }
 
-    private func removeLegacyCatalogCache() {
-        guard let url = cacheDirectory?
-            .appendingPathComponent("gfn.catalog.v1.json")
-        else {
-            return
+    private func writeLibraryGames(
+        _ games: [GameInfo],
+        accountScope: String
+    ) throws {
+        guard let url = libraryCacheURL(accountScope: accountScope) else {
+            throw PersistenceError.cacheUnavailable
         }
-        try? fileManager.removeItem(at: url)
+        let data = try JSONEncoder().encode(LibraryCacheEnvelope(
+            schemaVersion: 2,
+            accountScope: accountScope,
+            games: games
+        ))
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func writeCatalog(
+        _ games: [GameInfo],
+        localeCode: String,
+        vpcId: String?
+    ) throws {
+        guard let url = catalogCacheURL(
+            localeCode: localeCode,
+            vpcId: vpcId
+        ) else {
+            throw PersistenceError.cacheUnavailable
+        }
+        let data = try JSONEncoder().encode(CatalogCacheEnvelope(
+            schemaVersion: 3,
+            localeCode: localeCode,
+            vpcId: vpcId,
+            games: accountNeutralCatalog(games)
+        ))
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func accountNeutralCatalog(_ games: [GameInfo]) -> [GameInfo] {
+        games.map { game in
+            var game = game
+            game.isInLibrary = false
+            for index in game.variants.indices {
+                game.variants[index].isOwned = false
+            }
+            return game
+        }
+    }
+
+    private func isAccountNeutralCatalog(_ games: [GameInfo]) -> Bool {
+        games.allSatisfy { game in
+            !game.isInLibrary
+                && game.variants.allSatisfy { !$0.isOwned }
+        }
+    }
+
+    private func removeLegacyOwnershipCaches() {
+        guard let cacheDirectory else { return }
+        let names = (try? fileManager.contentsOfDirectory(
+            atPath: cacheDirectory.path
+        )) ?? []
+        let legacyNames = names.filter {
+            $0 == "gfn.library.v1.json"
+                || $0 == "gfn.catalog.v1.json"
+                || (
+                    $0.hasPrefix("gfn.catalog.v2.")
+                        && $0.hasSuffix(".json")
+                )
+                || (
+                    $0.hasPrefix("gfn.refresh.")
+                        && $0.hasSuffix(".json")
+                )
+                || isAccountScopedVersion3Catalog($0)
+        }
+        for name in legacyNames {
+            try? fileManager.removeItem(
+                at: cacheDirectory.appendingPathComponent(name)
+            )
+        }
+    }
+
+    private func isAccountScopedVersion3Catalog(_ name: String) -> Bool {
+        guard name.hasPrefix("gfn.catalog.v3."),
+              name.hasSuffix(".json")
+        else {
+            return false
+        }
+        let start = name.index(
+            name.startIndex,
+            offsetBy: "gfn.catalog.v3.".count
+        )
+        let end = name.index(name.endIndex, offsetBy: -".json".count)
+        return name[start ..< end].contains(".")
     }
 }

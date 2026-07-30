@@ -6,6 +6,7 @@ struct SettingsView: View {
 
     @State private var showServerLocationPicker = false
     @State private var showNetworkTest = false
+    @State private var showLibraryRefreshProgress = false
     @State private var dataDialog: DataDialog?
     @State private var isPerformingDataAction = false
 
@@ -347,6 +348,40 @@ struct SettingsView: View {
                     }
                 }
 
+                if viewModel.isProviderLibrarySyncEnabled {
+                    Section(L10n.text("library")) {
+                        Button {
+                            viewModel.startFullLibraryRefresh(authManager: authManager)
+                            showLibraryRefreshProgress = true
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label(L10n.text("refresh_library"), systemImage: "arrow.triangle.2.circlepath")
+                                    Text(L10n.text("refresh_library_description"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityHidden(true)
+                                }
+                                .padding(.vertical, 8)
+                                Spacer()
+                                if viewModel.isFullLibraryRefreshRunning {
+                                    ProgressView()
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                        }
+                        .disabled(!viewModel.canPresentFullLibraryRefresh)
+                        .accessibilityIdentifier("libraryRefreshButton")
+                        .accessibilityLabel(L10n.text("refresh_library"))
+                        .accessibilityHint(L10n.text("refresh_library_description"))
+                        .accessibilityValue(
+                            viewModel.isFullLibraryRefreshRunning
+                                ? L10n.text("refresh_syncing")
+                                : ""
+                        )
+                    }
+                }
+
                 #if DEBUG
                     Section(L10n.text("diagnostics")) {
                         Toggle(isOn: $vm.streamSettings.diagnosticsEnabled) {
@@ -429,6 +464,7 @@ struct SettingsView: View {
                     }
 
                     Button(role: .destructive) {
+                        viewModel.prepareForLogout()
                         authManager.logout()
                     } label: {
                         Label(L10n.text("sign_out"), systemImage: "rectangle.portrait.and.arrow.right")
@@ -441,6 +477,11 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showNetworkTest) {
                 NetworkTestView()
+            }
+            .fullScreenCover(isPresented: $showLibraryRefreshProgress) {
+                LibraryRefreshProgressView()
+                    .environment(authManager)
+                    .environment(viewModel)
             }
             .alert(
                 dataDialog?.title ?? "",

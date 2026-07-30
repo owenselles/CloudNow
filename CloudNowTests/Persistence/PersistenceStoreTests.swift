@@ -12,14 +12,20 @@ struct PersistenceStoreTests {
         settings.codec = .h265
         settings.maxBitrateKbps = 42000
         let games = [makeGame(id: "one"), makeGame(id: "two")]
+        let accountScope = accountScope("a")
 
         await harness.store.saveFavoriteIds(["two"])
         await harness.store.savePreferredStoreIds(["two": "two-steam"])
         await harness.store.saveRecentlyPlayedIds(["two", "one"])
         await harness.store.saveStreamSettings(settings)
-        await harness.store.saveLibraryGames(games)
+        await harness.store.saveLibraryGames(
+            games,
+            accountScope: accountScope
+        )
 
-        let snapshot = await harness.store.loadGamesSnapshot()
+        let snapshot = await harness.store.loadGamesSnapshot(
+            accountScope: accountScope
+        )
 
         #expect(snapshot.favoriteIds == ["two"])
         #expect(snapshot.preferredStoreIds == ["two": "two-steam"])
@@ -46,7 +52,9 @@ struct PersistenceStoreTests {
         harness.preferences.setData(legacy, forKey: "gfn.streamSettings")
 
         let settings = try #require(
-            await harness.store.loadGamesSnapshot().streamSettings
+            await harness.store.loadGamesSnapshot(
+                accountScope: nil
+            ).streamSettings
         )
 
         #expect(settings.resolution == "1280x720")
@@ -61,26 +69,384 @@ struct PersistenceStoreTests {
         let harness = try PersistenceHarness()
         defer { harness.cleanup() }
         let games = [makeGame(id: "catalog")]
+        let accountScope = accountScope("a")
 
-        await harness.store.saveCatalog(games, localeCode: "en-US", vpcId: "EU-1")
+        await harness.store.saveCatalog(
+            games,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: accountScope
+        )
+        let neutralGames = accountNeutralCatalog(games)
 
         #expect(
             await harness.store.loadCatalog(
                 localeCode: "en-US",
-                vpcId: "EU-1"
-            ) == games
+                vpcId: "EU-1",
+                accountScope: accountScope
+            ) == neutralGames
         )
         #expect(
             await harness.store.loadCatalog(
                 localeCode: "fr-FR",
-                vpcId: "EU-1"
+                vpcId: "EU-1",
+                accountScope: accountScope
             ) == nil
         )
         #expect(
             await harness.store.loadCatalog(
                 localeCode: "en-US",
-                vpcId: "EU-2"
+                vpcId: "EU-2",
+                accountScope: accountScope
             ) == nil
+        )
+    }
+
+    @Test("Libraries isolate accounts while the catalog is shared and neutral")
+    func ownershipCacheAccountIsolation() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let accountA = accountScope("a")
+        let accountB = accountScope("b")
+        let libraryA = [makeGame(id: "library-a")]
+        let libraryB = [makeGame(id: "library-b")]
+        let catalogA = [makeGame(id: "catalog-a")]
+
+        await harness.store.saveLibraryGames(
+            libraryA,
+            accountScope: accountA
+        )
+        await harness.store.saveLibraryGames(
+            libraryB,
+            accountScope: accountB
+        )
+        await harness.store.saveCatalog(
+            catalogA,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: accountA
+        )
+        let neutralCatalog = accountNeutralCatalog(catalogA)
+
+        #expect(
+            await harness.store.loadGamesSnapshot(
+                accountScope: accountA
+            ).libraryGames == libraryA
+        )
+        #expect(
+            await harness.store.loadGamesSnapshot(
+                accountScope: accountB
+            ).libraryGames == libraryB
+        )
+        #expect(
+            await harness.store.loadCatalog(
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: accountA
+            ) == neutralCatalog
+        )
+        #expect(
+            await harness.store.loadCatalog(
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: accountB
+            ) == neutralCatalog
+        )
+        let cacheNames = try FileManager.default.contentsOfDirectory(
+            atPath: harness.cacheDirectory.path
+        )
+        #expect(cacheNames.contains { $0.contains(accountA) })
+        #expect(cacheNames.contains { $0.contains(accountB) })
+        let catalogNames = cacheNames.filter {
+            $0.hasPrefix("gfn.catalog.v3.")
+        }
+        #expect(catalogNames.count == 1)
+        #expect(catalogNames.allSatisfy { !$0.contains(accountA) })
+        #expect(catalogNames.allSatisfy { !$0.contains(accountB) })
+    }
+
+    @Test("Full refresh writes an account library and shared catalog independently")
+    func refreshedLibrarySnapshotUsesIndependentArtifacts() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let scope = accountScope("a")
+        let library = [makeGame(id: "library")]
+        let catalog = [makeGame(id: "catalog")]
+
+        try await harness.store.saveRefreshedLibrarySnapshot(
+            libraryGames: library,
+            catalogGames: catalog,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: scope
+        )
+
+        #expect(
+            await harness.store.loadGamesSnapshot(
+                accountScope: scope
+            ).libraryGames == library
+        )
+        #expect(
+            await harness.store.loadCatalog(
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: scope
+            ) == accountNeutralCatalog(catalog)
+        )
+
+        let catalogName = try #require(
+            try FileManager.default.contentsOfDirectory(
+                atPath: harness.cacheDirectory.path
+            ).first { $0.hasPrefix("gfn.catalog.v3.") }
+        )
+        let catalogURL = harness.cacheDirectory.appendingPathComponent(
+            catalogName
+        )
+        let catalogDataBeforeLibrarySave = try Data(contentsOf: catalogURL)
+        let replacementLibrary = [makeGame(id: "replacement-library")]
+        await harness.store.saveLibraryGames(
+            replacementLibrary,
+            accountScope: scope
+        )
+        #expect(
+            await harness.store.loadGamesSnapshot(
+                accountScope: scope
+            ).libraryGames == replacementLibrary
+        )
+        #expect(
+            await harness.store.loadCatalog(
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: scope
+            ) == accountNeutralCatalog(catalog)
+        )
+        #expect(try Data(contentsOf: catalogURL) == catalogDataBeforeLibrarySave)
+
+        let cacheNames = try FileManager.default.contentsOfDirectory(
+            atPath: harness.cacheDirectory.path
+        )
+        #expect(cacheNames.filter { $0.hasPrefix("gfn.library.v2.") }.count == 1)
+        #expect(cacheNames.filter { $0.hasPrefix("gfn.catalog.v3.") }.count == 1)
+        #expect(cacheNames.allSatisfy { !$0.hasPrefix("gfn.refresh.") })
+    }
+
+    @Test("A failed fresh catalog preserves the old catalog and new library")
+    func failedCatalogRefreshPreservesLastKnownGoodCatalog() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let scope = accountScope("a")
+        let oldCatalog = [makeGame(id: "old-catalog")]
+        await harness.store.saveCatalog(
+            oldCatalog,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: scope
+        )
+        let refreshedLibrary = [makeGame(id: "fresh-library")]
+        try await harness.store.saveRefreshedLibrarySnapshot(
+            libraryGames: refreshedLibrary,
+            catalogGames: nil,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: scope
+        )
+        let recreatedStore = AppPersistenceStore(
+            preferences: harness.preferences,
+            cacheDirectory: harness.cacheDirectory,
+            credentialStore: harness.secureStore
+        )
+
+        #expect(
+            await recreatedStore.loadGamesSnapshot(
+                accountScope: scope
+            ).libraryGames == refreshedLibrary
+        )
+        #expect(
+            await recreatedStore.loadCatalog(
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: scope
+            ) == accountNeutralCatalog(oldCatalog)
+        )
+    }
+
+    @Test("Nil account scope skips libraries but can use the shared catalog")
+    func nilAccountScopeSkipsOwnershipCache() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let games = [makeGame(id: "private")]
+
+        await harness.store.saveLibraryGames(games, accountScope: nil)
+        await harness.store.saveCatalog(
+            games,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: nil
+        )
+
+        #expect(
+            await harness.store.loadGamesSnapshot(
+                accountScope: nil
+            ).libraryGames.isEmpty
+        )
+        #expect(
+            await harness.store.loadCatalog(
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: nil
+            ) == accountNeutralCatalog(games)
+        )
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                atPath: harness.cacheDirectory.path
+            ).filter { $0.hasPrefix("gfn.catalog.v3.") }.count == 1
+        )
+    }
+
+    @Test("Scoped loads remove legacy ownership caches")
+    func scopedLoadRemovesLegacyOwnershipCaches() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let legacyNames = [
+            "gfn.library.v1.json",
+            "gfn.catalog.v1.json",
+            "gfn.catalog.v2.legacy.json",
+            "gfn.refresh.v1.\(accountScope("a")).json",
+            "gfn.catalog.v3.\(accountScope("a")).legacy.json",
+        ]
+        for name in legacyNames {
+            try Data("legacy".utf8).write(
+                to: harness.cacheDirectory.appendingPathComponent(name),
+                options: .atomic
+            )
+        }
+
+        _ = await harness.store.loadGamesSnapshot(
+            accountScope: accountScope("a")
+        )
+
+        let remainingNames = try FileManager.default.contentsOfDirectory(
+            atPath: harness.cacheDirectory.path
+        )
+        #expect(legacyNames.allSatisfy { !remainingNames.contains($0) })
+    }
+
+    @Test("Cache clearing removes every account-scoped ownership file")
+    func clearRemovesAllScopedOwnershipCaches() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let games = [makeGame(id: "private")]
+        let accountA = accountScope("a")
+        let accountB = accountScope("b")
+
+        for scope in [accountA, accountB] {
+            await harness.store.saveLibraryGames(
+                games,
+                accountScope: scope
+            )
+            await harness.store.saveCatalog(
+                games,
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: scope
+            )
+        }
+
+        #expect(await harness.store.clearCachedData().isEmpty)
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                atPath: harness.cacheDirectory.path
+            ).isEmpty
+        )
+        for scope in [accountA, accountB] {
+            #expect(
+                await harness.store.loadGamesSnapshot(
+                    accountScope: scope
+                ).libraryGames.isEmpty
+            )
+            #expect(
+                await harness.store.loadCatalog(
+                    localeCode: "en-US",
+                    vpcId: "EU-1",
+                    accountScope: scope
+                ) == nil
+            )
+        }
+    }
+
+    @Test("Cache clear and reset reject every stale ownership write")
+    func staleOwnershipWritesDoNotRecreateClearedCaches() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let scope = accountScope("a")
+        let staleGeneration = await harness.store.loadGamesSnapshot(
+            accountScope: scope
+        ).ownershipCacheGeneration
+        let games = [makeGame(id: "stale")]
+
+        #expect(await harness.store.clearCachedData().isEmpty)
+        await harness.store.saveLibraryGames(
+            games,
+            accountScope: scope,
+            expectedGeneration: staleGeneration
+        )
+        await harness.store.saveCatalog(
+            games,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: scope,
+            expectedGeneration: staleGeneration
+        )
+        await #expect(throws: (any Error).self) {
+            try await harness.store.saveRefreshedLibrarySnapshot(
+                libraryGames: games,
+                catalogGames: games,
+                localeCode: "en-US",
+                vpcId: "EU-1",
+                accountScope: scope,
+                expectedGeneration: staleGeneration
+            )
+        }
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                atPath: harness.cacheDirectory.path
+            ).isEmpty
+        )
+
+        let resetGeneration = await harness.store.loadGamesSnapshot(
+            accountScope: scope
+        ).ownershipCacheGeneration
+        await harness.store.clearPersistentData()
+        await harness.store.saveLibraryGames(
+            games,
+            accountScope: scope,
+            expectedGeneration: resetGeneration
+        )
+        await harness.store.saveCatalog(
+            games,
+            localeCode: "en-US",
+            vpcId: "EU-1",
+            accountScope: scope,
+            expectedGeneration: resetGeneration
+        )
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                atPath: harness.cacheDirectory.path
+            ).isEmpty
+        )
+
+        let currentGeneration = await harness.store.loadGamesSnapshot(
+            accountScope: scope
+        ).ownershipCacheGeneration
+        await harness.store.saveLibraryGames(
+            games,
+            accountScope: scope,
+            expectedGeneration: currentGeneration
+        )
+        #expect(
+            await harness.store.loadGamesSnapshot(
+                accountScope: scope
+            ).libraryGames == games
         )
     }
 
@@ -254,19 +620,21 @@ struct PersistenceStoreTests {
         #expect(
             await harness.store.loadCatalog(
                 localeCode: "en-US",
-                vpcId: nil
+                vpcId: nil,
+                accountScope: accountScope("a")
             ) == nil
         )
 
         await harness.store.saveCatalog(
             [makeGame(id: "catalog")],
             localeCode: "en-US",
-            vpcId: nil
+            vpcId: nil,
+            accountScope: accountScope("a")
         )
         let cacheName = try #require(
             try FileManager.default
                 .contentsOfDirectory(atPath: harness.cacheDirectory.path)
-                .first { $0.hasPrefix("gfn.catalog.v2.") }
+                .first { $0.hasPrefix("gfn.catalog.v3.") }
         )
         try Data("not-json".utf8).write(
             to: harness.cacheDirectory.appendingPathComponent(cacheName),
@@ -276,7 +644,8 @@ struct PersistenceStoreTests {
         #expect(
             await harness.store.loadCatalog(
                 localeCode: "en-US",
-                vpcId: nil
+                vpcId: nil,
+                accountScope: accountScope("a")
             ) == nil
         )
     }
@@ -301,7 +670,9 @@ struct PersistenceStoreTests {
             }
         }
 
-        let snapshot = await harness.store.loadGamesSnapshot()
+        let snapshot = await harness.store.loadGamesSnapshot(
+            accountScope: nil
+        )
         #expect(snapshot.favoriteIds == ["favorite"])
         #expect(snapshot.recentlyPlayedIds == ["recent"])
         #expect(snapshot.preferredStoreIds == [
@@ -316,16 +687,62 @@ struct PersistenceStoreTests {
         let first = makeAuthSession(accessToken: "first")
         let updated = makeAuthSession(accessToken: "updated")
 
-        try await harness.store.saveAuthSession(first)
+        try await harness.store.saveAuthSession(
+            first,
+            generation: 0
+        )
         #expect(try await harness.store.loadAuthSession().tokens.accessToken == "first")
 
-        try await harness.store.saveAuthSession(updated)
+        try await harness.store.saveAuthSession(
+            updated,
+            generation: 1
+        )
         #expect(try await harness.store.loadAuthSession().tokens.accessToken == "updated")
 
-        try await harness.store.deleteAuthSession()
+        try await harness.store.deleteAuthSession(generation: 2)
         await #expect(throws: FakeSecureStoreError.notFound) {
             _ = try await harness.store.loadAuthSession()
         }
+    }
+
+    @Test("Credential generation rejects stale saves and deletes across reset")
+    func credentialGenerationRejectsStaleMutations() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let current = makeAuthSession(accessToken: "current")
+        let stale = makeAuthSession(accessToken: "stale")
+
+        try await harness.store.saveAuthSession(
+            current,
+            generation: 2
+        )
+        try await harness.store.deleteAuthSession(generation: 1)
+        try await harness.store.saveAuthSession(
+            stale,
+            generation: 1
+        )
+        #expect(
+            try await harness.store.loadAuthSession().tokens.accessToken
+                == "current"
+        )
+
+        await harness.store.clearPersistentData()
+        try await harness.store.saveAuthSession(
+            stale,
+            generation: 2
+        )
+        await #expect(throws: FakeSecureStoreError.notFound) {
+            _ = try await harness.store.loadAuthSession()
+        }
+
+        try await harness.store.saveAuthSession(
+            current,
+            generation: 3
+        )
+        #expect(
+            try await harness.store.loadAuthSession().tokens.accessToken
+                == "current"
+        )
     }
 
     @Test("Secure credential storage errors propagate")
@@ -336,14 +753,15 @@ struct PersistenceStoreTests {
 
         await #expect(throws: FakeSecureStoreError.injected) {
             try await harness.store.saveAuthSession(
-                makeAuthSession(accessToken: "secret")
+                makeAuthSession(accessToken: "secret"),
+                generation: 0
             )
         }
         await #expect(throws: FakeSecureStoreError.injected) {
             _ = try await harness.store.loadAuthSession()
         }
         await #expect(throws: FakeSecureStoreError.injected) {
-            try await harness.store.deleteAuthSession()
+            try await harness.store.deleteAuthSession(generation: 0)
         }
     }
 
@@ -371,6 +789,23 @@ struct PersistenceStoreTests {
                 ),
             ]
         )
+    }
+
+    private func accountNeutralCatalog(
+        _ games: [GameInfo]
+    ) -> [GameInfo] {
+        games.map { game in
+            var game = game
+            game.isInLibrary = false
+            for index in game.variants.indices {
+                game.variants[index].isOwned = false
+            }
+            return game
+        }
+    }
+
+    private func accountScope(_ character: Character) -> String {
+        String(repeating: String(character), count: 64)
     }
 
     private func metadataEntry(
@@ -418,6 +853,60 @@ struct PersistenceStoreTests {
                 avatarUrl: nil,
                 membershipTier: "FREE"
             )
+        )
+    }
+}
+
+extension AppPersistenceStore {
+    func saveLibraryGames(
+        _ games: [GameInfo],
+        accountScope: String?
+    ) {
+        let generation = loadGamesSnapshot(
+            accountScope: accountScope
+        ).ownershipCacheGeneration
+        saveLibraryGames(
+            games,
+            accountScope: accountScope,
+            expectedGeneration: generation
+        )
+    }
+
+    func saveCatalog(
+        _ games: [GameInfo],
+        localeCode: String,
+        vpcId: String?,
+        accountScope: String?
+    ) {
+        let generation = loadGamesSnapshot(
+            accountScope: accountScope
+        ).ownershipCacheGeneration
+        saveCatalog(
+            games,
+            localeCode: localeCode,
+            vpcId: vpcId,
+            accountScope: accountScope,
+            expectedGeneration: generation
+        )
+    }
+
+    func saveRefreshedLibrarySnapshot(
+        libraryGames: [GameInfo],
+        catalogGames: [GameInfo]?,
+        localeCode: String,
+        vpcId: String?,
+        accountScope: String
+    ) throws {
+        let generation = loadGamesSnapshot(
+            accountScope: accountScope
+        ).ownershipCacheGeneration
+        try saveRefreshedLibrarySnapshot(
+            libraryGames: libraryGames,
+            catalogGames: catalogGames,
+            localeCode: localeCode,
+            vpcId: vpcId,
+            accountScope: accountScope,
+            expectedGeneration: generation
         )
     }
 }

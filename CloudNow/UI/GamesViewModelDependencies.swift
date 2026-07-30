@@ -37,21 +37,39 @@ nonisolated protocol ActiveSessionsClient: Sendable {
 extension CloudMatchClient: ActiveSessionsClient {}
 
 nonisolated protocol GamesPersistence: Actor {
-    func loadGamesSnapshot() -> AppPersistenceStore.GamesSnapshot
+    func loadGamesSnapshot(accountScope: String?) -> AppPersistenceStore.GamesSnapshot
     func saveFavoriteIds(_ ids: Set<String>)
     func savePreferredStoreIds(_ stores: [String: String])
     func saveRecentlyPlayedIds(_ ids: [String])
     func saveStreamSettings(_ settings: StreamSettings)
     func saveLastSession(_ session: LastSessionRecord?)
-    func saveLibraryGames(_ games: [GameInfo])
+    func saveLibraryGames(
+        _ games: [GameInfo],
+        accountScope: String?,
+        expectedGeneration: UInt64
+    )
     func saveSubscription(_ subscription: SubscriptionInfo)
     func saveVpcId(_ vpcId: String)
-    func loadCatalog(localeCode: String, vpcId: String?) -> [GameInfo]?
+    func loadCatalog(
+        localeCode: String,
+        vpcId: String?,
+        accountScope: String?
+    ) -> [GameInfo]?
     func saveCatalog(
         _ games: [GameInfo],
         localeCode: String,
-        vpcId: String?
+        vpcId: String?,
+        accountScope: String?,
+        expectedGeneration: UInt64
     )
+    func saveRefreshedLibrarySnapshot(
+        libraryGames: [GameInfo],
+        catalogGames: [GameInfo]?,
+        localeCode: String,
+        vpcId: String?,
+        accountScope: String,
+        expectedGeneration: UInt64
+    ) throws
 }
 
 extension AppPersistenceStore: GamesPersistence {}

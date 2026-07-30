@@ -21,6 +21,42 @@ struct AuthManagerTests {
     }
 
     @MainActor
+    @Test("A delayed restore cannot replace a newer login")
+    func delayedRestoreCannotReplaceNewLogin() async {
+        let persistence = FakeAuthPersistence(
+            session: makeSession(expiresAt: Date().addingTimeInterval(3600)),
+            blocksFirstLoad: true
+        )
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "new-login",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence
+        )
+        let initialization = Task { @MainActor in
+            await manager.initialize()
+        }
+        await persistence.waitForLoadRequest()
+
+        let login = manager.login()
+        await login.value
+        await persistence.releaseLoad()
+        await initialization.value
+
+        #expect(manager.startupPhase == .ready)
+        #expect(manager.session?.tokens.accessToken == "new-login")
+        #expect(
+            await persistence.savedSession?.tokens.accessToken
+                == "new-login"
+        )
+        #expect(await persistence.saveGenerations == [1])
+    }
+
+    @MainActor
     @Test("An expired token refreshes and persists the replacement session")
     func refreshesExpiredToken() async {
         let saved = makeSession(expiresAt: Date().addingTimeInterval(-1))
@@ -115,6 +151,33 @@ struct AuthManagerTests {
     }
 
     @MainActor
+    @Test("A rejected ID token omitted by refresh is not reused")
+    func rejectedIdTokenIsQuarantined() async throws {
+        var saved = makeSession(expiresAt: Date().addingTimeInterval(3600))
+        saved.tokens.idToken = "rejected-id-token"
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(
+            refreshTokensResponse: makeTokens(
+                accessToken: "replacement-access-token",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let manager = makeManager(api: api, persistence: persistence)
+        await manager.initialize()
+
+        let retryToken = try await manager.resolveToken(
+            rejecting: "rejected-id-token"
+        )
+        let subsequentToken = try await manager.resolveToken()
+
+        #expect(retryToken == "replacement-access-token")
+        #expect(subsequentToken == "replacement-access-token")
+        #expect(manager.session?.tokens.idToken == nil)
+        #expect(await persistence.savedSession?.tokens.idToken == nil)
+        #expect(await api.refreshTokenCallCount == 1)
+    }
+
+    @MainActor
     @Test("Device flow publishes the PIN and cancellation prevents authentication")
     func deviceFlowCancellation() async {
         let persistence = FakeAuthPersistence()
@@ -140,6 +203,72 @@ struct AuthManagerTests {
     }
 
     @MainActor
+    @Test("Cancellation rejects a delayed login save")
+    func cancellationRejectsDelayedLoginSave() async {
+        let persistence = FakeAuthPersistence(
+            blocksFirstSave: true
+        )
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "cancelled-login",
+                expiresAt: Date().addingTimeInterval(3600)
+            )
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence
+        )
+        await manager.initialize()
+
+        let login = manager.login()
+        await persistence.waitForSaveRequest()
+        #expect(manager.session?.tokens.accessToken == "cancelled-login")
+
+        manager.cancelLogin()
+        await persistence.waitForDeleteCompletion()
+        await persistence.releaseSave()
+        await login.value
+
+        #expect(manager.loginPhase == .idle)
+        #expect(!manager.isAuthenticated)
+        #expect(await persistence.savedSession == nil)
+        #expect(await persistence.saveGenerations == [1])
+        #expect(await persistence.deleteGenerations == [2])
+    }
+
+    @MainActor
+    @Test("Cancellation restores the session that preceded login")
+    func cancellationRestoresPriorSession() async {
+        let persistence = FakeAuthPersistence(
+            session: makeSession(expiresAt: Date().addingTimeInterval(3600)),
+            blocksFirstSave: true
+        )
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "cancelled-login",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence
+        )
+        await manager.initialize()
+
+        let login = manager.login()
+        await persistence.waitForSaveRequest()
+        manager.cancelLogin()
+        await persistence.waitForSaveRequest(count: 2)
+        await persistence.releaseSave()
+        await login.value
+
+        #expect(manager.session?.tokens.accessToken == "access")
+        #expect(await persistence.savedSession?.tokens.accessToken == "access")
+        #expect(await persistence.saveGenerations == [1, 2])
+        #expect(await persistence.deleteGenerations.isEmpty)
+    }
+
+    @MainActor
     @Test("Device-flow denial is reported instead of silently restarting")
     func deviceFlowDenialFails() async {
         let persistence = FakeAuthPersistence()
@@ -156,6 +285,163 @@ struct AuthManagerTests {
         }
         #expect(await api.deviceAuthorizationCallCount == 1)
         #expect(!manager.isAuthenticated)
+    }
+
+    @MainActor
+    @Test("A delayed login save cannot restore credentials after logout")
+    func delayedSaveCannotUndoLogout() async {
+        let persistence = FakeAuthPersistence(
+            blocksFirstSave: true
+        )
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "old-login",
+                expiresAt: Date().addingTimeInterval(3600)
+            )
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence
+        )
+        await manager.initialize()
+
+        let login = manager.login()
+        await persistence.waitForSaveRequest()
+        manager.logout()
+        await persistence.waitForDeleteCompletion()
+        await persistence.releaseSave()
+        await login.value
+
+        #expect(!manager.isAuthenticated)
+        #expect(await persistence.savedSession == nil)
+        #expect(await persistence.saveGenerations == [1])
+        #expect(await persistence.deleteGenerations == [2])
+        #expect(await persistence.deleteCount == 1)
+    }
+
+    @MainActor
+    @Test("Logout discards login rollback ownership")
+    func logoutDiscardsLoginRollbackOwnership() async {
+        let persistence = FakeAuthPersistence(
+            session: makeSession(expiresAt: Date().addingTimeInterval(3600)),
+            blocksFirstSave: true,
+            blocksSecondSave: true
+        )
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "replacement-login",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence
+        )
+        await manager.initialize()
+
+        let firstLogin = manager.login()
+        await persistence.waitForSaveRequest()
+        manager.logout()
+        await persistence.waitForDeleteCompletion()
+
+        let secondLogin = manager.login()
+        await persistence.waitForSaveRequest(count: 2)
+        await persistence.releaseSave()
+        await firstLogin.value
+
+        manager.cancelLogin()
+        await persistence.waitForDeleteCompletion(count: 2)
+        await persistence.releaseSave(request: 2)
+        await secondLogin.value
+
+        #expect(!manager.isAuthenticated)
+        #expect(await persistence.savedSession == nil)
+        #expect(await persistence.saveGenerations == [1, 3])
+        #expect(await persistence.deleteGenerations == [2, 4])
+    }
+
+    @MainActor
+    @Test("A newer login save wins over a delayed older delete")
+    func newerLoginWinsOverDelayedDelete() async {
+        let persistence = FakeAuthPersistence(
+            session: makeSession(
+                expiresAt: Date().addingTimeInterval(3600)
+            ),
+            blocksFirstDelete: true
+        )
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "new-login",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence
+        )
+        await manager.initialize()
+
+        manager.logout()
+        await persistence.waitForDeleteRequest()
+        let login = manager.login()
+        await login.value
+        #expect(manager.session?.tokens.accessToken == "new-login")
+        #expect(
+            await persistence.savedSession?.tokens.accessToken
+                == "new-login"
+        )
+
+        await persistence.releaseDelete()
+        await persistence.waitForDeleteCompletion()
+
+        #expect(manager.session?.tokens.accessToken == "new-login")
+        #expect(
+            await persistence.savedSession?.tokens.accessToken
+                == "new-login"
+        )
+        #expect(await persistence.saveGenerations == [2])
+        #expect(await persistence.deleteGenerations == [1])
+        #expect(await persistence.deleteCount == 0)
+    }
+
+    @MainActor
+    @Test("An old refresh failure cannot clear a newer login")
+    func oldRefreshFailureCannotClearNewLogin() async {
+        let persistence = FakeAuthPersistence(
+            session: makeSession(
+                expiresAt: Date().addingTimeInterval(-1)
+            )
+        )
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "new-login",
+                expiresAt: Date().addingTimeInterval(7200)
+            ),
+            blockRefresh: true
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence
+        )
+        let initialization = Task { @MainActor in
+            await manager.initialize()
+        }
+        await api.waitForRefreshRequest()
+
+        let login = manager.login()
+        await login.value
+        #expect(manager.session?.tokens.accessToken == "new-login")
+
+        await api.releaseRefresh()
+        await initialization.value
+
+        #expect(manager.session?.tokens.accessToken == "new-login")
+        #expect(
+            await persistence.savedSession?.tokens.accessToken
+                == "new-login"
+        )
+        #expect(await persistence.saveGenerations == [1])
+        #expect(await persistence.deleteGenerations.isEmpty)
     }
 
     @MainActor
@@ -216,6 +502,7 @@ private enum FakeAuthAPIError: Error {
 private actor FakeAuthAPI: NVIDIAAuthAPIClient {
     private let refreshTokensResponse: AuthTokens?
     private let clientTokenResponse: (String, Date)?
+    private let devicePollResponse: AuthTokens?
     private let blockRefresh: Bool
     private let blockDevicePoll: Bool
     private let devicePollError: (any Error)?
@@ -234,12 +521,14 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
     init(
         refreshTokensResponse: AuthTokens? = nil,
         clientTokenResponse: (String, Date)? = nil,
+        devicePollResponse: AuthTokens? = nil,
         blockRefresh: Bool = false,
         blockDevicePoll: Bool = false,
         devicePollError: (any Error)? = nil
     ) {
         self.refreshTokensResponse = refreshTokensResponse
         self.clientTokenResponse = clientTokenResponse
+        self.devicePollResponse = devicePollResponse
         self.blockRefresh = blockRefresh
         self.blockDevicePoll = blockDevicePoll
         self.devicePollError = devicePollError
@@ -350,6 +639,9 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
                 throw error
             }
         }
+        if let devicePollResponse {
+            return devicePollResponse
+        }
         throw FakeAuthAPIError.unavailable
     }
 
@@ -398,24 +690,187 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
 private actor FakeAuthPersistence: AuthSessionPersistence {
     private(set) var savedSession: AuthSession?
     private(set) var deleteCount = 0
+    private(set) var saveGenerations: [UInt64] = []
+    private(set) var deleteGenerations: [UInt64] = []
+    private(set) var completedDeleteCount = 0
+    private(set) var loadRequestCount = 0
+    private let blocksFirstLoad: Bool
+    private let blocksFirstSave: Bool
+    private let blocksSecondSave: Bool
+    private let blocksFirstDelete: Bool
+    private var didBlockLoad = false
+    private var didBlockDelete = false
+    private var credentialGeneration: UInt64 = 0
+    private var loadContinuation: CheckedContinuation<Void, Never>?
+    private var saveContinuations: [
+        Int: CheckedContinuation<Void, Never>
+    ] = [:]
+    private var deleteContinuation: CheckedContinuation<Void, Never>?
+    private var loadRequestWaiters: [OperationWaiter] = []
+    private var saveRequestWaiters: [OperationWaiter] = []
+    private var deleteRequestWaiters: [OperationWaiter] = []
+    private var deleteCompletionWaiters: [OperationWaiter] = []
 
-    init(session: AuthSession? = nil) {
+    private struct OperationWaiter {
+        let count: Int
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
+    init(
+        session: AuthSession? = nil,
+        blocksFirstLoad: Bool = false,
+        blocksFirstSave: Bool = false,
+        blocksSecondSave: Bool = false,
+        blocksFirstDelete: Bool = false
+    ) {
         savedSession = session
+        self.blocksFirstLoad = blocksFirstLoad
+        self.blocksFirstSave = blocksFirstSave
+        self.blocksSecondSave = blocksSecondSave
+        self.blocksFirstDelete = blocksFirstDelete
     }
 
     func loadAuthSession() async throws -> AuthSession {
-        guard let savedSession else {
+        let loadedSession = savedSession
+        loadRequestCount += 1
+        resumeWaiters(
+            &loadRequestWaiters,
+            completedCount: loadRequestCount
+        )
+        if blocksFirstLoad, !didBlockLoad {
+            didBlockLoad = true
+            await withCheckedContinuation { continuation in
+                loadContinuation = continuation
+            }
+        }
+        guard let loadedSession else {
             throw FakeAuthAPIError.unavailable
         }
-        return savedSession
+        return loadedSession
     }
 
-    func saveAuthSession(_ session: AuthSession) async throws {
+    func saveAuthSession(
+        _ session: AuthSession,
+        generation: UInt64
+    ) async throws {
+        saveGenerations.append(generation)
+        resumeWaiters(
+            &saveRequestWaiters,
+            completedCount: saveGenerations.count
+        )
+        let requestCount = saveGenerations.count
+        if (blocksFirstSave && requestCount == 1)
+            || (blocksSecondSave && requestCount == 2)
+        {
+            await withCheckedContinuation { continuation in
+                saveContinuations[requestCount] = continuation
+            }
+        }
+        guard generation >= credentialGeneration else {
+            return
+        }
+        credentialGeneration = generation
         savedSession = session
     }
 
-    func deleteAuthSession() async throws {
-        deleteCount += 1
-        savedSession = nil
+    func deleteAuthSession(generation: UInt64) async throws {
+        deleteGenerations.append(generation)
+        resumeWaiters(
+            &deleteRequestWaiters,
+            completedCount: deleteGenerations.count
+        )
+        if blocksFirstDelete, !didBlockDelete {
+            didBlockDelete = true
+            await withCheckedContinuation { continuation in
+                deleteContinuation = continuation
+            }
+        }
+        if generation >= credentialGeneration {
+            credentialGeneration = generation
+            deleteCount += 1
+            savedSession = nil
+        }
+        completedDeleteCount += 1
+        resumeWaiters(
+            &deleteCompletionWaiters,
+            completedCount: completedDeleteCount
+        )
+    }
+
+    func waitForSaveRequest(count: Int = 1) async {
+        guard saveGenerations.count < count else { return }
+        await withCheckedContinuation { continuation in
+            saveRequestWaiters.append(
+                OperationWaiter(
+                    count: count,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func waitForLoadRequest(count: Int = 1) async {
+        guard loadRequestCount < count else { return }
+        await withCheckedContinuation { continuation in
+            loadRequestWaiters.append(
+                OperationWaiter(
+                    count: count,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func waitForDeleteRequest(count: Int = 1) async {
+        guard deleteGenerations.count < count else { return }
+        await withCheckedContinuation { continuation in
+            deleteRequestWaiters.append(
+                OperationWaiter(
+                    count: count,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func waitForDeleteCompletion(count: Int = 1) async {
+        guard completedDeleteCount < count else { return }
+        await withCheckedContinuation { continuation in
+            deleteCompletionWaiters.append(
+                OperationWaiter(
+                    count: count,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func releaseSave(request: Int = 1) {
+        saveContinuations.removeValue(forKey: request)?.resume()
+    }
+
+    func releaseLoad() {
+        loadContinuation?.resume()
+        loadContinuation = nil
+    }
+
+    func releaseDelete() {
+        deleteContinuation?.resume()
+        deleteContinuation = nil
+    }
+
+    private func resumeWaiters(
+        _ waiters: inout [OperationWaiter],
+        completedCount: Int
+    ) {
+        var remaining: [OperationWaiter] = []
+        for waiter in waiters {
+            if completedCount >= waiter.count {
+                waiter.continuation.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        waiters = remaining
     }
 }

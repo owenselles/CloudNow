@@ -30,6 +30,7 @@ struct SignalingEndpointRaceTests {
     func firstSuccessCancelsLosers() async throws {
         let probe = CancellationProbe()
         let barrier = AttemptStartBarrier(participantCount: 3)
+        let attemptEntryBarrier = AttemptEntryBarrier(participantCount: 2)
 
         let winner = try await SignalingEndpointRace.firstSuccess(
             candidates: ["slow-a", "winner", "slow-b"],
@@ -37,9 +38,13 @@ struct SignalingEndpointRaceTests {
             stagger: { _ in await barrier.arrive() },
             attempt: { candidate, _ in
                 if candidate == "winner" {
+                    await attemptEntryBarrier.waitUntilAllEntered()
                     return candidate
                 }
-                return try await probe.waitForCancellation(candidate)
+                return try await probe.waitForCancellation(
+                    candidate,
+                    entryBarrier: attemptEntryBarrier
+                )
             },
             discard: { value in
                 await probe.recordDiscard(value)
@@ -111,6 +116,31 @@ struct SignalingEndpointRaceTests {
     }
 }
 
+private actor AttemptEntryBarrier {
+    private var enteredCount = 0
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    private let participantCount: Int
+
+    init(participantCount: Int) {
+        self.participantCount = participantCount
+    }
+
+    func arrive() {
+        enteredCount += 1
+        guard enteredCount == participantCount else { return }
+        let waiting = continuations
+        continuations.removeAll()
+        waiting.forEach { $0.resume() }
+    }
+
+    func waitUntilAllEntered() async {
+        guard enteredCount < participantCount else { return }
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+}
+
 private enum EndpointTestError: Error {
     case failed(String)
 }
@@ -140,7 +170,11 @@ private actor CancellationProbe {
     private(set) var cancelledCandidates: [String] = []
     private(set) var discardedValues: [String] = []
 
-    func waitForCancellation(_ candidate: String) async throws -> String {
+    func waitForCancellation(
+        _ candidate: String,
+        entryBarrier: AttemptEntryBarrier
+    ) async throws -> String {
+        await entryBarrier.arrive()
         do {
             while true {
                 try Task.checkCancellation()

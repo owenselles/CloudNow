@@ -13,15 +13,18 @@ struct CoreLogicIntegrationTests {
         let cached = TestGameFactory.make(
             id: "cached-game",
             title: "Cached Game",
-            stores: [("STEAM", true)],
-            isInLibrary: true
+            stores: [("STEAM", false)],
+            isInLibrary: false
         )
         let vpcId = "fixture-vpc"
+        let accountScope = nvidiaAccountScope(for: "fixture-user")
         await harness.store.saveVpcId(vpcId)
         await harness.store.saveCatalog(
             [cached],
             localeCode: L10n.nvidiaLocaleCode(),
-            vpcId: vpcId
+            vpcId: vpcId,
+            accountScope: accountScope,
+            expectedGeneration: 0
         )
 
         let browseFixture = try NetworkingFixture.data("games-browse.json")
@@ -70,7 +73,8 @@ struct CoreLogicIntegrationTests {
         #expect(
             await harness.store.loadCatalog(
                 localeCode: L10n.nvidiaLocaleCode(),
-                vpcId: vpcId
+                vpcId: vpcId,
+                accountScope: accountScope
             )?.map(\.id) == ["101", "fallback-title"]
         )
         #expect(await transport.requests().allSatisfy {
@@ -88,11 +92,11 @@ struct CoreLogicIntegrationTests {
             forKey: "gfn.streamSettings"
         )
         let settings = try #require(
-            await harness.store.loadGamesSnapshot().streamSettings
+            await harness.store.loadGamesSnapshot(accountScope: nil).streamSettings
         ).normalizedForClient
         await harness.store.saveStreamSettings(settings)
         let restored = try #require(
-            await harness.store.loadGamesSnapshot().streamSettings
+            await harness.store.loadGamesSnapshot(accountScope: nil).streamSettings
         )
         let response = try NetworkingFixture.data("cloudmatch-session.json")
         let fixedUUID = try #require(
@@ -410,11 +414,14 @@ private actor IntegrationAuthPersistence: AuthSessionPersistence {
         return session
     }
 
-    func saveAuthSession(_ session: AuthSession) {
+    func saveAuthSession(
+        _ session: AuthSession,
+        generation _: UInt64
+    ) {
         self.session = session
     }
 
-    func deleteAuthSession() {
+    func deleteAuthSession(generation _: UInt64) {
         session = nil
     }
 }

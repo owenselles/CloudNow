@@ -43,6 +43,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 - **Tab bar navigation** — Home, Library, Store, and Settings; fully focus-engine compatible
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
 - **Library & Store** — browse your linked games separately from the full public catalog; search and sort by default order, recently played, A→Z, or Z→A; filter by collection, genre, game store, RTX, HDR, and Reflex with live result counts; long-press any card to add/remove from Favorites
+- **End-to-end library refresh** — available in Debug and Release builds from Settings → Library → Refresh Library. The workflow requests synchronization for every connected store that NVIDIA marks as sync-capable, reports categorical provider progress, waits for every provider to finish, fail, or time out, then atomically imports the latest GeForce NOW library into CloudNow. Unsupported connected stores remain visible but are skipped, failed or timed-out providers can be retried, relink-required providers are identified, and Reload from GeForce NOW remains the lightweight fallback
 - **Instant startup** — catalog, library, and subscription data are cached on device and shown immediately on launch while fresh data loads in the background
 - **Incremental Library metadata** — enriched game details are cached by locale and VPC; unchanged refreshes reuse fresh entries and request only missing or expired app IDs
 - **Bounded performance pipelines** — artwork requests are coalesced and downsampled through shared cost-bounded caches; input-latency sampling uses bounded storage and remains disabled unless statistics or diagnostics need it
@@ -305,6 +306,7 @@ Some behavior remains hardware- or Apple-framework-bound. The nearest automated 
 | Actual VideoToolbox hardware decoding | SDP codec/profile tests and synthetic pixel-buffer format inspection |
 | Live WebRTC media transport | Session state-machine, signaling codec, endpoint-race, and cancellation tests using fakes |
 | Apple TLS and certificate-stack behavior | Transport-independent signaling parsing and endpoint-selection tests |
+| Live storefront → GeForce NOW synchronization | Injected library-sync contract, retry, timeout, orchestration, persistence, and UI tests; authenticated Apple TV verification remains manual |
 
 ---
 
@@ -323,6 +325,7 @@ CloudNow/
 │   ├── CloudMatchClient.swift      Session create/poll/resume/stop, active sessions, audio/color request fields
 │   ├── GameMetadataCache.swift     Locale/VPC-scoped metadata cache values and persistence boundary
 │   ├── GamesClient.swift           Catalog browse and incremental metadata enrichment via GraphQL
+│   ├── LibrarySyncClient.swift     GFN provider discovery, connected-account snapshots, and sync requests
 │   ├── MESClient.swift             Subscription tier + entitled resolutions/FPS from the MES API
 │   └── ZoneClient.swift            Dedicated-server list, cancellation-safe ping cache, and queue data
 ├── Streaming/
@@ -345,7 +348,9 @@ CloudNow/
 │   ├── L10nEN.swift                English fallback strings
 │   └── L10nXX.swift                One file per supported locale, easy to edit independently
 └── UI/
-    ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings
+    ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings, library imports
+    ├── LibraryRefreshCoordinator.swift Single-flight provider sync and final-import orchestration
+    ├── LibraryRefreshProgressView.swift Scrollable provider progress and completion UI
     ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings) with controller tab cycling
     ├── GameFilters.swift           Shared catalog filtering, sorting, filter sheet, and result bar
     ├── HeroArtPrefetcher.swift     Shared downsampling artwork pipeline with bounded LRU caches
@@ -362,6 +367,8 @@ CloudNow/
 ### Library metadata cache
 
 Library browse results remain the source of truth for dynamic fields such as ownership, variants, and supported features. Only enriched descriptive fields are persisted, then overlaid without replacing newer browse data. A second unchanged Library refresh therefore makes no metadata-enrichment request; missing or expired app IDs are fetched in bounded batches.
+
+Library ownership is keyed by a SHA-256 NVIDIA account identifier. The descriptive catalog remains ownership-neutral and shared by locale and VPC, with only the current account's authoritative library overlaid in memory. A full refresh atomically replaces that account's library and updates the independent catalog cache only when fresh catalog data is available, preserving the last-known-good Store cache after transient failures. Legacy unscoped ownership caches are treated as misses so signing into another account cannot expose the previous account's library.
 
 | Rule | Behavior |
 |------|----------|
@@ -384,6 +391,7 @@ The GFN streaming protocol was independently reverse-engineered from NVIDIA's ne
 | Streaming | WebRTC via [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) |
 | Input | XInput binary protocol over WebRTC data channel |
 | Game catalog | GraphQL persisted query → `games.geforce.com` |
+| Provider library sync | GFN GraphQL provider/account discovery + ALS sync requests using the live web-client contract |
 
 ---
 
@@ -409,6 +417,7 @@ This means an HDR request can legitimately fall back to SDR10 or SDR8, and the a
 ## Known Limitations
 
 - **No App Store.** NVIDIA has not published a public API for third-party GFN clients. Sideloading only.
+- **Provider library refresh uses undocumented NVIDIA services.** The live GFN web-client contract may change without notice. CloudNow fails closed to a GeForce NOW-only reload when discovery or schema validation fails, reports categorical rather than per-game progress, and only synchronizes accounts already linked through GeForce NOW.
 - **Queue ad playback.** During high demand GFN shows ads while in queue. The app plays them via AVPlayer and reports lifecycle events (start/pause/finish) back to CloudMatch.
 - **Server location.** Region names and addresses come from NVIDIA's serverInfo endpoint. The manual Servers browser gets queue-depth and location metadata from the PrintedWaste community API, which may lag behind actual queue conditions; ping values are measured locally after opening a city. Dedicated servers pinned by older builds remain selected after upgrading.
 - **HDR depends on the full pipeline.** A selected HDR-capable mode does not guarantee the server will deliver HDR, and a 10-bit stream is not automatically HDR.

@@ -37,8 +37,11 @@ extension NVIDIAAuthAPI: NVIDIAAuthAPIClient {}
 
 nonisolated protocol AuthSessionPersistence: Sendable {
     func loadAuthSession() async throws -> AuthSession
-    func saveAuthSession(_ session: AuthSession) async throws
-    func deleteAuthSession() async throws
+    func saveAuthSession(
+        _ session: AuthSession,
+        generation: UInt64
+    ) async throws
+    func deleteAuthSession(generation: UInt64) async throws
 }
 
 extension AppPersistenceStore: AuthSessionPersistence {}
@@ -84,6 +87,11 @@ enum AuthStartupPhase: Equatable {
 @Observable
 @MainActor
 final class AuthManager {
+    private struct ActiveLogin {
+        let generation: UInt64
+        let priorSession: AuthSession?
+    }
+
     private(set) var session: AuthSession?
     private(set) var loginPhase: LoginPhase = .idle
     private(set) var startupPhase: AuthStartupPhase = .pending
@@ -97,10 +105,11 @@ final class AuthManager {
     private let backgroundScheduler: AuthBackgroundScheduler
     private let schedulesAutomaticRefresh: Bool
     private var loginTask: Task<Void, Never>?
+    private var activeLogin: ActiveLogin?
     private var activeRefreshTask: Task<AuthSession, Error>?
     private var refreshTaskGeneration: UInt64 = 0
     private var refreshTimer: Task<Void, Never>?
-    private var credentialGeneration = 0
+    private var credentialGeneration: UInt64 = 0
 
     private static let bgTaskID = "com.owenselles.CloudNow.tokenRefresh"
 
@@ -108,12 +117,17 @@ final class AuthManager {
         api: any NVIDIAAuthAPIClient = NVIDIAAuthAPI(),
         persistence: any AuthSessionPersistence = AppPersistenceStore.shared,
         backgroundScheduler: AuthBackgroundScheduler = .live,
-        schedulesAutomaticRefresh: Bool = true
+        schedulesAutomaticRefresh: Bool = true,
+        initialSession: AuthSession? = nil
     ) {
         self.api = api
         self.persistence = persistence
         self.backgroundScheduler = backgroundScheduler
         self.schedulesAutomaticRefresh = schedulesAutomaticRefresh
+        session = initialSession
+        if initialSession != nil {
+            startupPhase = .ready
+        }
     }
 
     // MARK: Lifecycle
@@ -121,8 +135,14 @@ final class AuthManager {
     func initialize() async {
         guard startupPhase == .pending else { return }
         startupPhase = .restoringSession
+        let generation = credentialGeneration
 
-        guard let saved = try? await persistence.loadAuthSession() else {
+        let saved = try? await persistence.loadAuthSession()
+        guard credentialGeneration == generation else {
+            startupPhase = .ready
+            return
+        }
+        guard let saved else {
             startupPhase = .ready
             return
         }
@@ -138,10 +158,22 @@ final class AuthManager {
 
     @discardableResult
     func login(with provider: LoginProvider? = nil) -> Task<Void, Never> {
-        loginTask?.cancel()
+        if activeLogin != nil {
+            cancelLogin()
+        }
         credentialGeneration &+= 1
         let generation = credentialGeneration
+        activeLogin = ActiveLogin(
+            generation: generation,
+            priorSession: session
+        )
         let task = Task {
+            defer {
+                if activeLogin?.generation == generation {
+                    activeLogin = nil
+                    loginTask = nil
+                }
+            }
             loginPhase = .idle
             do {
                 let providers: [LoginProvider] = if let provider {
@@ -217,7 +249,13 @@ final class AuthManager {
                 session = newSession
                 scheduleProactiveRefresh()
                 scheduleBackgroundRefresh()
-                try await persist(newSession)
+                try await persist(
+                    newSession,
+                    generation: generation
+                )
+                guard credentialGeneration == generation else {
+                    throw CancellationError()
+                }
                 loginPhase = .idle
             } catch is CancellationError {
                 if credentialGeneration == generation {
@@ -234,18 +272,54 @@ final class AuthManager {
     }
 
     func cancelLogin() {
+        guard let activeLogin else {
+            loginTask = nil
+            loginPhase = .idle
+            return
+        }
+
+        credentialGeneration &+= 1
+        let rollbackGeneration = credentialGeneration
         loginTask?.cancel()
         loginTask = nil
+        self.activeLogin = nil
+        session = activeLogin.priorSession
         loginPhase = .idle
+        refreshTimer?.cancel()
+        refreshTimer = nil
+        if session == nil {
+            backgroundScheduler.cancel(Self.bgTaskID)
+        } else {
+            scheduleProactiveRefresh()
+            scheduleBackgroundRefresh()
+        }
+
+        Task {
+            if let priorSession = activeLogin.priorSession {
+                try? await persistence.saveAuthSession(
+                    priorSession,
+                    generation: rollbackGeneration
+                )
+            } else {
+                try? await persistence.deleteAuthSession(
+                    generation: rollbackGeneration
+                )
+            }
+        }
     }
 
     // MARK: Logout
 
     func logout() {
         invalidateAuthenticationWork()
+        let generation = credentialGeneration
         session = nil
         loginPhase = .idle
-        Task { try? await persistence.deleteAuthSession() }
+        Task {
+            try? await persistence.deleteAuthSession(
+                generation: generation
+            )
+        }
     }
 
     /// Stops authentication work before Reset All Data removes credentials.
@@ -257,6 +331,7 @@ final class AuthManager {
 
     private func invalidateAuthenticationWork() {
         credentialGeneration &+= 1
+        activeLogin = nil
         cancelAuthenticationWork()
     }
 
@@ -284,15 +359,40 @@ final class AuthManager {
     /// Returns a credential different from one rejected by the server. If another
     /// request already refreshed the session, reuse it instead of rotating again.
     func resolveToken(rejecting rejectedToken: String) async throws -> String {
-        guard var s = session else { throw AuthError.noSession }
+        guard let s = session else { throw AuthError.noSession }
         let currentToken = preferredToken(in: s)
         if currentToken != rejectedToken {
             return currentToken
         }
 
-        s = try await refresh(session: s)
-        let refreshedToken = preferredToken(in: s)
-        return refreshedToken == rejectedToken ? s.tokens.accessToken : refreshedToken
+        let generation = credentialGeneration
+        _ = try await refresh(session: s)
+        guard credentialGeneration == generation else {
+            throw CancellationError()
+        }
+        guard var refreshedSession = session else {
+            throw AuthError.noSession
+        }
+
+        // Some refresh grants omit id_token, causing performRefresh to preserve
+        // the previous value. Once a server has rejected that ID token, keeping
+        // it would make the next plain resolveToken() select it again.
+        if refreshedSession.tokens.idToken == rejectedToken {
+            refreshedSession.tokens.idToken = nil
+            session = refreshedSession
+            try await persist(
+                refreshedSession,
+                generation: generation
+            )
+            guard credentialGeneration == generation else {
+                throw CancellationError()
+            }
+        }
+
+        let refreshedToken = preferredToken(in: refreshedSession)
+        return refreshedToken == rejectedToken
+            ? refreshedSession.tokens.accessToken
+            : refreshedToken
     }
 
     // MARK: Private
@@ -303,16 +403,22 @@ final class AuthManager {
 
     func refreshIfNeeded() async {
         guard let s = session, s.tokens.isNearExpiry else { return }
+        let generation = credentialGeneration
         do {
             _ = try await refresh(session: s)
         } catch is CancellationError {
             return
         } catch {
+            guard credentialGeneration == generation else {
+                return
+            }
             if s.tokens.isExpired {
                 authLog.error("[Auth] Token expired and refresh failed: \(error, privacy: .private) — clearing session, re-login required")
                 refreshTimer?.cancel()
                 session = nil
-                try? await persistence.deleteAuthSession()
+                try? await persistence.deleteAuthSession(
+                    generation: generation
+                )
             } else {
                 authLog.warning("[Auth] Refresh failed but token still valid (\(Int(s.tokens.expiresAt.timeIntervalSinceNow), privacy: .public)s left) — keeping session")
             }
@@ -341,7 +447,10 @@ final class AuthManager {
         return try await task.value
     }
 
-    private func performRefresh(session s: AuthSession, generation: Int) async throws -> AuthSession {
+    private func performRefresh(
+        session s: AuthSession,
+        generation: UInt64
+    ) async throws -> AuthSession {
         var updated = s
         authLog.debug("[Auth] performRefresh: accessToken expires=\(String(describing: s.tokens.expiresAt), privacy: .public), clientToken=\(s.tokens.clientToken != nil ? "yes" : "nil", privacy: .public) expires=\(s.tokens.clientTokenExpiresAt?.description ?? "nil", privacy: .public), refreshToken=\(s.tokens.refreshToken != nil ? "yes" : "nil", privacy: .public), idToken=\(s.tokens.idToken != nil ? "yes" : "nil", privacy: .public)")
         let clientTokenUsable = s.tokens.clientToken != nil &&
@@ -432,7 +541,13 @@ final class AuthManager {
         session = updated
         scheduleProactiveRefresh()
         scheduleBackgroundRefresh()
-        try await persist(updated)
+        try await persist(
+            updated,
+            generation: generation
+        )
+        guard credentialGeneration == generation else {
+            throw CancellationError()
+        }
         return updated
     }
 
@@ -463,7 +578,13 @@ final class AuthManager {
         )
     }
 
-    private func persist(_ s: AuthSession) async throws {
-        try await persistence.saveAuthSession(s)
+    private func persist(
+        _ session: AuthSession,
+        generation: UInt64
+    ) async throws {
+        try await persistence.saveAuthSession(
+            session,
+            generation: generation
+        )
     }
 }
