@@ -742,7 +742,8 @@ private func makeRequest() -> SessionCreateRequest {
             supportedCodecs: [.h264]
         ),
         accountLinked: true,
-        accountAllowsHDR: false
+        accountAllowsHDR: false,
+        skipNvidiaFallback: false
     )
 }
 

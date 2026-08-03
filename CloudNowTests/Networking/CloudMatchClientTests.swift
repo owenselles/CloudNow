@@ -90,7 +90,8 @@ struct CloudMatchClientTests {
             settings: input.settings,
             localVideoCapabilities: input.localVideoCapabilities,
             accountLinked: input.accountLinked,
-            accountAllowsHDR: input.accountAllowsHDR
+            accountAllowsHDR: input.accountAllowsHDR,
+            skipNvidiaFallback: false
         )
 
         let session = try await client.createSession(input)
@@ -329,7 +330,8 @@ struct CloudMatchClientTests {
             settings: settings,
             localVideoCapabilities: capabilities,
             accountLinked: true,
-            accountAllowsHDR: true
+            accountAllowsHDR: true,
+            skipNvidiaFallback: false
         )
     }
 }
