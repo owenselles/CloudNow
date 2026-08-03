@@ -148,7 +148,8 @@ struct CoreLogicIntegrationTests {
                 settings: restored,
                 localVideoCapabilities: capabilities,
                 accountLinked: true,
-                accountAllowsHDR: true
+                accountAllowsHDR: true,
+                skipNvidiaFallback: false
             )
         )
 
