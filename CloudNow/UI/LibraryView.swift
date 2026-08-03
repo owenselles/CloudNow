@@ -69,9 +69,10 @@ struct LibraryView: View {
                 Button {
                     Task { await viewModel.refreshLibrary(authManager: authManager) }
                 } label: {
-                    Label(L10n.text("refresh_library"), systemImage: "arrow.clockwise")
+                    Label(L10n.text("reload_from_geforce_now"), systemImage: "arrow.clockwise")
                 }
-                .disabled(viewModel.isLibraryLoading)
+                .disabled(viewModel.isLibraryLoading || viewModel.isFullLibraryRefreshRunning)
+                .accessibilityIdentifier("reloadLibraryFromGeForceNowButton")
             }
         }
         .searchable(

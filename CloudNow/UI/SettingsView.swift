@@ -6,6 +6,7 @@ struct SettingsView: View {
 
     @State private var showServerLocationPicker = false
     @State private var showNetworkTest = false
+    @State private var showLibraryRefreshProgress = false
     @State private var dataDialog: DataDialog?
     @State private var isPerformingDataAction = false
 
@@ -359,6 +360,40 @@ struct SettingsView: View {
                     }
                 }
 
+                if viewModel.isProviderLibrarySyncEnabled {
+                    Section(L10n.text("library")) {
+                        Button {
+                            viewModel.startFullLibraryRefresh(authManager: authManager)
+                            showLibraryRefreshProgress = true
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label(L10n.text("refresh_library"), systemImage: "arrow.triangle.2.circlepath")
+                                    Text(L10n.text("refresh_library_description"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityHidden(true)
+                                }
+                                .padding(.vertical, 8)
+                                Spacer()
+                                if viewModel.isFullLibraryRefreshRunning {
+                                    ProgressView()
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                        }
+                        .disabled(!viewModel.canPresentFullLibraryRefresh)
+                        .accessibilityIdentifier("libraryRefreshButton")
+                        .accessibilityLabel(L10n.text("refresh_library"))
+                        .accessibilityHint(L10n.text("refresh_library_description"))
+                        .accessibilityValue(
+                            viewModel.isFullLibraryRefreshRunning
+                                ? L10n.text("refresh_syncing")
+                                : ""
+                        )
+                    }
+                }
+
                 #if DEBUG
                     Section(L10n.text("diagnostics")) {
                         Toggle(isOn: $vm.streamSettings.diagnosticsEnabled) {
@@ -441,6 +476,7 @@ struct SettingsView: View {
                     }
 
                     Button(role: .destructive) {
+                        viewModel.prepareForLogout()
                         authManager.logout()
                     } label: {
                         Label(L10n.text("sign_out"), systemImage: "rectangle.portrait.and.arrow.right")
@@ -453,6 +489,11 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showNetworkTest) {
                 NetworkTestView()
+            }
+            .fullScreenCover(isPresented: $showLibraryRefreshProgress) {
+                LibraryRefreshProgressView()
+                    .environment(authManager)
+                    .environment(viewModel)
             }
             .alert(
                 dataDialog?.title ?? "",
@@ -805,12 +846,18 @@ private struct ServerLocationPickerView: View {
     }
 
     private func loadRegions() async {
-        if let cached = ServerInfoClient.shared.cached {
+        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+        // Seed from cache only when it was fetched from this provider's streaming
+        // service. `init` seeds optimistically without access to the session, so a
+        // mismatch here also has to clear it — partner regions are not interchangeable.
+        if let cached = ServerInfoClient.shared.cachedForBase(base) {
             serverInfo = cached
             isLoadingRegions = false
+        } else if serverInfo != nil {
+            serverInfo = nil
+            isLoadingRegions = true
         }
 
-        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
         guard let token = try? await authManager.resolveToken() else {
             isLoadingRegions = false
             if serverInfo == nil {
@@ -1032,6 +1079,8 @@ private struct ServerCityPickerView: View {
 }
 
 private struct DedicatedServerPickerView: View {
+    private static let maximumConcurrentPingMeasurements = 6
+
     let city: String
     let onSelect: (GFNZone) -> Void
 
@@ -1146,17 +1195,28 @@ private struct DedicatedServerPickerView: View {
     private func measurePings() async {
         let staleZones = zones.filter(\.isMeasuring)
         await withTaskGroup(of: (String, Int?).self) { group in
-            for zone in staleZones {
+            var pendingZones = staleZones.makeIterator()
+
+            for _ in 0 ..< min(Self.maximumConcurrentPingMeasurements, staleZones.count) {
+                guard let zone = pendingZones.next() else { break }
                 group.addTask {
                     let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
                     return (zone.id, ping)
                 }
             }
+
             for await (id, ping) in group {
                 guard !Task.isCancelled else { return }
                 if let index = zones.firstIndex(where: { $0.id == id }) {
                     zones[index].pingMs = ping
                     zones[index].isMeasuring = false
+                }
+
+                if let zone = pendingZones.next() {
+                    group.addTask {
+                        let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
+                        return (zone.id, ping)
+                    }
                 }
             }
         }
@@ -1389,12 +1449,11 @@ private struct NetworkTestView: View {
         }
 
         let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
-        let info: GFNServerInfo? = if let cached = ServerInfoClient.shared.cachedForBase(base) {
-            cached
-        } else if let token = try? await authManager.resolveToken() {
-            try? await ServerInfoClient.shared.fetch(baseUrl: base, token: token)
+        let cached = ServerInfoClient.shared.cachedForBase(base)
+        let info: GFNServerInfo? = if let token = try? await authManager.resolveToken() {
+            await (try? ServerInfoClient.shared.fetch(baseUrl: base, token: token)) ?? cached
         } else {
-            nil
+            cached
         }
         if let local = info?.localRegionName,
            let region = info?.regions.first(where: { $0.name == local })

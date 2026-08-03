@@ -7,7 +7,7 @@ import AVFoundation
 import Foundation
 @preconcurrency import LiveKitWebRTC
 import Observation
-import os.log
+import os
 
 private nonisolated let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
 private nonisolated let videoColorLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "VideoColor")
@@ -104,6 +104,7 @@ nonisolated struct AudioStats: Equatable {
     var acceleratedMsPerSecond: Double = 0
     /// video − audio playout timestamp; positive = audio lags video. nil without RTCP SR.
     var avOffsetMs: Double?
+    var inputLatencyMs: Double?
     var outputLatencyMs: Double = 0
     var outputChannels: Int = 0
     var outputSampleRateHz: Double = 0
@@ -174,6 +175,59 @@ private nonisolated let streamStatsParsingQueue = DispatchQueue(
     qos: .utility
 )
 
+private nonisolated let maximumInputLatencySamples = 4096
+
+/// Mutable state shared by WebRTC delegate callbacks and the latency-sensitive input sender.
+/// Every access is protected by `inputSendState`; the dispatch queue preserves packet ordering,
+/// while the lock makes the ownership boundary visible to Swift's strict-concurrency checker.
+private nonisolated struct InputSendState {
+    var reliableChannel: LKRTCDataChannel?
+    var rumbleSink: (@Sendable (Int, UInt16, UInt16) -> Void)?
+    var generated: UInt64 = 0
+    var submitted: UInt64 = 0
+    var accepted: UInt64 = 0
+    var dropped: UInt64 = 0
+    var superseded: UInt64 = 0
+    var bufferedBytes: UInt64 = 0
+    var queueWaitsNs = BoundedSampleHistory<UInt64>(capacity: maximumInputLatencySamples)
+    var queueMaxNs: UInt64 = 0
+    var latencySamplingEnabled = false
+    var newestGamepadGeneratedAt: UInt64 = 0
+    var channelState = "closed"
+    var pendingGamepadSnapshots: [Int: PendingInputSend] = [:]
+}
+
+private typealias PendingInputSend = (
+    packet: EncodedInputPacket,
+    completion: @Sendable (InputSendDisposition) -> Void
+)
+
+private nonisolated struct InputStatsSnapshot: Sendable {
+    var generated: UInt64
+    var submitted: UInt64
+    var accepted: UInt64
+    var dropped: UInt64
+    var superseded: UInt64
+    var bufferedBytes: UInt64
+    var queueP50Ns: UInt64
+    var queueP95Ns: UInt64
+    var queueMaxNs: UInt64
+    var newestGamepadAgeNs: UInt64
+    var channelState: String
+}
+
+private nonisolated struct CompletedInputSend: Sendable {
+    let completion: @Sendable (InputSendDisposition) -> Void
+    let disposition: InputSendDisposition
+}
+
+/// Identifies callbacks owned by the active peer without crossing `@MainActor` isolation.
+/// Object identifiers avoid retaining WebRTC objects through the lock.
+private nonisolated struct PeerCallbackState {
+    var peerConnectionID: ObjectIdentifier?
+    var controlChannelID: ObjectIdentifier?
+}
+
 // MARK: - GFNStreamController
 
 @Observable
@@ -185,6 +239,7 @@ final class GFNStreamController: NSObject {
     private(set) var videoTrack: LKRTCVideoTrack?
     private(set) var statsMode: StreamStatsMode = .off
     private(set) var diagnosticsEnabled = false
+    private(set) var microphoneEnabledForConnection = false
     private(set) var videoDiagnostics = VideoPipelineSnapshot()
     /// Wall-clock start of the current stream, for the HUD's session duration row.
     private(set) var streamingStartedAt: Date?
@@ -200,6 +255,9 @@ final class GFNStreamController: NSObject {
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
     private(set) var bitrateHistory: [Double] = []
+    @ObservationIgnored private var pingSamples = BoundedSampleHistory<Double>(capacity: 30)
+    @ObservationIgnored private var fpsSamples = BoundedSampleHistory<Double>(capacity: 30)
+    @ObservationIgnored private var bitrateSamples = BoundedSampleHistory<Double>(capacity: 30)
     /// Active time-limit warning from the GFN server (nil when no warning is in effect).
     private(set) var timeWarning: StreamTimeWarning?
     /// Incremented each time the user presses Menu while VideoSurfaceView is first responder.
@@ -208,27 +266,12 @@ final class GFNStreamController: NSObject {
 
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
-    // WebRTC invokes its delegates from arbitrary threads. Every mutable field in this block is
-    // confined to inputSendQueue; nonisolated(unsafe) documents that GCD-backed boundary until the
-    // imported Objective-C delegate APIs can express Swift actor isolation.
-    @ObservationIgnored private nonisolated(unsafe) var reliableSendChannel: LKRTCDataChannel?
-    @ObservationIgnored private nonisolated(unsafe) var rumbleSink: (@Sendable (Int, UInt16, UInt16) -> Void)?
-    @ObservationIgnored private nonisolated(unsafe) var inputGenerated: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputSubmitted: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputAccepted: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputDropped: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputSuperseded: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputBufferedBytes: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputQueueWaitsNs: [UInt64] = []
-    @ObservationIgnored private nonisolated(unsafe) var inputQueueWaitWriteIndex = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputQueueMaxNs: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputLatencySamplingEnabled = false
-    @ObservationIgnored private nonisolated(unsafe) var newestGamepadGeneratedAt: UInt64 = 0
-    @ObservationIgnored private nonisolated(unsafe) var inputChannelState = "closed"
-    @ObservationIgnored private nonisolated(unsafe) var pendingGamepadSnapshots: [
-        Int: (packet: EncodedInputPacket, completion: @Sendable (InputSendDisposition) -> Void)
-    ] = [:]
-    private nonisolated static let maximumInputLatencySamples = 4096
+    @ObservationIgnored private nonisolated let inputSendState = OSAllocatedUnfairLock(
+        initialState: InputSendState()
+    )
+    @ObservationIgnored private nonisolated let peerCallbackState = OSAllocatedUnfairLock(
+        initialState: PeerCallbackState()
+    )
     private nonisolated let inputBackpressureHighWaterBytes: UInt64 = 512
     private nonisolated let inputBackpressureLowWaterBytes: UInt64 = 128
     private let inputSendQueue = DispatchQueue(
@@ -249,6 +292,8 @@ final class GFNStreamController: NSObject {
     private var accountAllowsHDR: Bool?
     private var micAudioSource: LKRTCAudioSource?
     private var micAudioTrack: LKRTCAudioTrack?
+    private var microphoneAuthorizedForConnection = false
+    private var connectionGeneration: UInt64 = 0
     private var signalingComplete = false
     private var partiallyReliableDataChannel: LKRTCDataChannel?
     private var statsChannel: LKRTCDataChannel?
@@ -262,6 +307,7 @@ final class GFNStreamController: NSObject {
     private var connectionStatsRequestInFlight = false
     private var wasStreaming = false
     private var reconnectAttempt = 0
+    private var reconnectTask: Task<Void, Never>?
     private static let maxReconnectAttempts = 3
     /// Set when the server sends an `exitMessage` (game closed, session ended, kicked). The
     /// subsequent ICE disconnect is then treated as a normal end — not a reconnect candidate.
@@ -297,6 +343,10 @@ final class GFNStreamController: NSObject {
             return
         default: break
         }
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         let settings = settings.normalizedForClient
         let localCapabilities = LocalVideoCapabilities.detect(codec: settings.codec)
         let colorRequest = settings.colorRequest(localCapabilities: localCapabilities, accountAllowsHDR: accountAllowsHDR)
@@ -317,6 +367,8 @@ final class GFNStreamController: NSObject {
         )
         setStatsMode(settings.statsMode)
         setDiagnosticsEnabled(settings.diagnosticsEnabled)
+        microphoneEnabledForConnection = false
+        microphoneAuthorizedForConnection = false
         var initialStats = StreamStats()
         initialStats.gpuType = session.gpuType ?? ""
         initialStats.serverZone = Self.zoneShortName(from: session.zone)
@@ -324,25 +376,47 @@ final class GFNStreamController: NSObject {
         audioStats = AudioStats()
         streamingStartedAt = nil
         inputSendQueue.sync {
-            inputGenerated = 0
-            inputSubmitted = 0
-            inputAccepted = 0
-            inputDropped = 0
-            inputSuperseded = 0
-            inputBufferedBytes = 0
-            inputQueueWaitsNs.removeAll(keepingCapacity: true)
-            inputQueueWaitWriteIndex = 0
-            inputQueueMaxNs = 0
-            newestGamepadGeneratedAt = 0
-            inputChannelState = "closed"
+            inputSendState.withLock { state in
+                state.generated = 0
+                state.submitted = 0
+                state.accepted = 0
+                state.dropped = 0
+                state.superseded = 0
+                state.bufferedBytes = 0
+                state.queueWaitsNs.reset()
+                state.queueMaxNs = 0
+                state.newestGamepadGeneratedAt = 0
+                state.channelState = "closed"
+            }
         }
 
-        setupSignaling(session: session)
+        let microphoneAuthorized = await requestMicrophonePermissionIfNeeded()
+        guard connectionGeneration == generation,
+              sessionInfo?.sessionId == session.sessionId,
+              case .connecting = state
+        else { return }
+        microphoneAuthorizedForConnection = microphoneAuthorized
+
+        let signalingClient = setupSignaling(session: session)
         do {
             gfnLog.info("connect: opening signaling WebSocket")
-            try await signaling?.connect()
+            try await signalingClient.connect()
+            guard connectionGeneration == generation,
+                  signaling === signalingClient,
+                  case .connecting = state
+            else {
+                signalingClient.disconnect()
+                return
+            }
             gfnLog.info("connect: signaling connected")
         } catch {
+            guard connectionGeneration == generation,
+                  signaling === signalingClient,
+                  case .connecting = state
+            else {
+                signalingClient.disconnect()
+                return
+            }
             gfnLog.error("connect: signaling FAILED: \(error)")
             state = .failed(message: error.localizedDescription)
         }
@@ -389,11 +463,12 @@ final class GFNStreamController: NSObject {
         let enabled = statsMode != .off || diagnosticsEnabled
         inputSendQueue.async { [weak self] in
             guard let self else { return }
-            inputLatencySamplingEnabled = enabled
-            guard resetSamples || !enabled else { return }
-            inputQueueWaitsNs.removeAll(keepingCapacity: true)
-            inputQueueWaitWriteIndex = 0
-            inputQueueMaxNs = 0
+            inputSendState.withLock { state in
+                state.latencySamplingEnabled = enabled
+                guard resetSamples || !enabled else { return }
+                state.queueWaitsNs.reset()
+                state.queueMaxNs = 0
+            }
         }
     }
 
@@ -478,9 +553,61 @@ final class GFNStreamController: NSObject {
         state = .failed(message: message)
     }
 
+    private func resetInputTransport(disableLatencySampling: Bool) {
+        let pending = inputSendQueue.sync {
+            inputSendState.withLock { state in
+                state.reliableChannel = nil
+                state.rumbleSink = nil
+                if disableLatencySampling {
+                    state.latencySamplingEnabled = false
+                }
+                state.bufferedBytes = 0
+                state.channelState = "closed"
+                state.queueWaitsNs.reset()
+                state.queueMaxNs = 0
+                let pending = Array(state.pendingGamepadSnapshots.values)
+                state.pendingGamepadSnapshots.removeAll()
+                state.dropped &+= UInt64(pending.count)
+                return pending
+            }
+        }
+        pending.forEach { $0.completion(.channelUnavailable) }
+    }
+
+    private func setActivePeerConnection(_ newPeerConnection: LKRTCPeerConnection?) {
+        peerCallbackState.withLock { state in
+            state.peerConnectionID = newPeerConnection.map(ObjectIdentifier.init)
+            state.controlChannelID = nil
+        }
+        peerConnection = newPeerConnection
+        controlChannel = nil
+    }
+
+    private nonisolated func registerControlChannel(
+        _ dataChannel: LKRTCDataChannel,
+        for sourcePeerConnection: LKRTCPeerConnection
+    ) -> Bool {
+        peerCallbackState.withLock { state in
+            guard state.peerConnectionID == ObjectIdentifier(sourcePeerConnection) else {
+                return false
+            }
+            state.controlChannelID = ObjectIdentifier(dataChannel)
+            return true
+        }
+    }
+
+    private nonisolated func isCurrentControlChannel(_ dataChannel: LKRTCDataChannel) -> Bool {
+        peerCallbackState.withLock { state in
+            state.controlChannelID == ObjectIdentifier(dataChannel)
+        }
+    }
+
     // MARK: Disconnect
 
     func disconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        connectionGeneration &+= 1
         onReconnectNeeded = nil
         stopRtcEventLog()
         stopStatsTimer()
@@ -489,30 +616,25 @@ final class GFNStreamController: NSObject {
         serverStopped = false
         inputSender?.stop()
         signaling?.disconnect()
+        signaling = nil
         videoView?.videoTrack = nil
-        peerConnection?.close()
-        peerConnection = nil
+        let activePeerConnection = peerConnection
+        setActivePeerConnection(nil)
+        activePeerConnection?.close()
         inputDataChannel = nil
-        inputSendQueue.sync {
-            reliableSendChannel = nil
-            rumbleSink = nil
-            inputLatencySamplingEnabled = false
-            inputQueueWaitsNs.removeAll(keepingCapacity: true)
-            inputQueueWaitWriteIndex = 0
-            inputQueueMaxNs = 0
-            let pending = Array(pendingGamepadSnapshots.values)
-            pendingGamepadSnapshots.removeAll()
-            inputDropped &+= UInt64(pending.count)
-            pending.forEach { $0.completion(.channelUnavailable) }
-        }
+        resetInputTransport(disableLatencySampling: true)
         inputSender = nil
         partiallyReliableDataChannel = nil
         statsChannel = nil
-        controlChannel = nil
         videoTrack = nil
         videoReceiver = nil
         micAudioTrack = nil
         micAudioSource = nil
+        microphoneEnabledForConnection = false
+        microphoneAuthorizedForConnection = false
+        pingSamples.reset()
+        fpsSamples.reset()
+        bitrateSamples.reset()
         pingHistory = []
         fpsHistory = []
         bitrateHistory = []
@@ -545,6 +667,8 @@ final class GFNStreamController: NSObject {
     // MARK: Auto-Reconnect
 
     private func attemptReconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
         reconnectAttempt += 1
         let attempt = reconnectAttempt
         gfnLog.info("attemptReconnect: attempt \(attempt)/\(Self.maxReconnectAttempts)")
@@ -561,88 +685,111 @@ final class GFNStreamController: NSObject {
         inputSender?.stop()
         videoView?.inputHandler = nil
         signaling?.disconnect()
-        peerConnection?.close()
-        peerConnection = nil
+        signaling = nil
+        let activePeerConnection = peerConnection
+        setActivePeerConnection(nil)
+        activePeerConnection?.close()
         inputDataChannel = nil
         partiallyReliableDataChannel = nil
         statsChannel = nil
-        inputSendQueue.sync {
-            reliableSendChannel = nil
-            rumbleSink = nil
-            inputQueueWaitsNs.removeAll(keepingCapacity: true)
-            inputQueueWaitWriteIndex = 0
-            inputQueueMaxNs = 0
-            let pending = Array(pendingGamepadSnapshots.values)
-            pendingGamepadSnapshots.removeAll()
-            inputDropped &+= UInt64(pending.count)
-            pending.forEach { $0.completion(.channelUnavailable) }
-        }
+        resetInputTransport(disableLatencySampling: false)
         inputSender = nil
-        controlChannel = nil
         videoTrack = nil
         micAudioTrack = nil
         micAudioSource = nil
+        microphoneEnabledForConnection = false
         signalingComplete = false
         inputReady = false
 
         let delays: [TimeInterval] = [0.5, 1.0, 2.0]
         let delay = delays[min(attempt - 1, delays.count - 1)]
+        let generation = connectionGeneration
 
-        Task { [weak self] in
+        reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard let self else { return }
-            guard case .reconnecting = state else { return }
+            guard isCurrentReconnect(generation: generation, attempt: attempt) else { return }
 
-            guard let reclaim = onReconnectNeeded,
-                  let session = await reclaim()
-            else {
+            guard let reclaim = onReconnectNeeded else { return }
+            let reclaimedSession = await reclaim()
+            guard isCurrentReconnect(generation: generation, attempt: attempt) else { return }
+            guard let session = reclaimedSession else {
                 gfnLog.info("attemptReconnect: reclaim failed on attempt \(attempt)")
-                if attempt >= Self.maxReconnectAttempts {
-                    state = .sessionEnded
-                }
+                finishFailedReconnect(attempt: attempt)
                 return
             }
 
             gfnLog.info("attemptReconnect: reclaimed session, reconnecting WebRTC")
             sessionInfo = session
-            setupSignaling(session: session)
+            let signalingClient = setupSignaling(session: session)
             do {
-                try await signaling?.connect()
-            } catch {
-                gfnLog.error("attemptReconnect: signaling failed: \(error)")
-                if attempt >= Self.maxReconnectAttempts {
-                    state = .sessionEnded
+                try await signalingClient.connect()
+                guard isCurrentReconnect(generation: generation, attempt: attempt) else {
+                    signalingClient.disconnect()
+                    return
                 }
+                reconnectTask = nil
+            } catch {
+                guard isCurrentReconnect(generation: generation, attempt: attempt) else {
+                    signalingClient.disconnect()
+                    return
+                }
+                gfnLog.error("attemptReconnect: signaling failed: \(error)")
+                finishFailedReconnect(attempt: attempt)
             }
         }
     }
 
+    private func finishFailedReconnect(attempt: Int) {
+        reconnectTask = nil
+        if attempt >= Self.maxReconnectAttempts {
+            state = .sessionEnded
+        } else {
+            attemptReconnect()
+        }
+    }
+
+    private func isCurrentReconnect(generation: UInt64, attempt: Int) -> Bool {
+        guard !Task.isCancelled,
+              connectionGeneration == generation,
+              case let .reconnecting(currentAttempt) = state,
+              currentAttempt == attempt else { return false }
+        return true
+    }
+
     // MARK: Private — Signaling Setup
 
-    private func setupSignaling(session: SessionInfo) {
+    private func setupSignaling(session: SessionInfo) -> GFNSignalingClient {
         let client = GFNSignalingClient(
             signalingUrl: session.signalingUrl,
             sessionId: session.sessionId,
             serverIp: session.serverIp,
             resolution: settings.resolution
         )
-        client.onEvent = { [weak self] event in
-            Task { @MainActor [weak self] in self?.handleSignalingEvent(event) }
+        client.onEvent = { [weak self, weak client] event in
+            Task { @MainActor [weak self, weak client] in
+                guard let self, let client, signaling === client else { return }
+                await handleSignalingEvent(event, sourceClient: client)
+            }
         }
         signaling = client
+        return client
     }
 
-    private func handleSignalingEvent(_ event: SignalingEvent) {
+    private func handleSignalingEvent(
+        _ event: SignalingEvent,
+        sourceClient: GFNSignalingClient
+    ) async {
         switch event {
         case .connected:
             break
         case let .offer(sdp):
-            Task { await handleOffer(sdp: sdp) }
+            await handleOffer(sdp: sdp, signalingClient: sourceClient)
         case let .remoteICE(candidate, sdpMid, sdpMLineIndex):
             addRemoteICE(candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
         case let .disconnected(reason):
             // Always stop the signaling client — kills heartbeat and releases the connection.
-            signaling?.disconnect()
+            sourceClient.disconnect()
             let establishing = switch state {
             case .connecting, .reconnecting: true
             default: false
@@ -651,16 +798,19 @@ final class GFNStreamController: NSObject {
                 // Server closes the WebSocket after answer + ICE exchange — expected GFN behavior.
                 // The media runs over WebRTC ICE/DTLS/SRTP; let ICE state drive the outcome.
                 gfnLog.info("[Stream] Signaling closed after setup (expected): \(reason, privacy: .public)")
-            } else if establishing, !serverStopped, onReconnectNeeded != nil {
-                // Signaling closed before setup completed. On a resume this is GFN's RESUME
-                // host-rotation race — a freshly-claimed media host isn't ready yet and drops
-                // the peer (peerRemoved). Reclaim to a fresh host and retry (bounded, with
-                // backoff) instead of dead-ending on a transient failure the user would
-                // otherwise have to fix by hand.
-                gfnLog.info("signaling closed before setup (\(reason, privacy: .public)); reclaiming to a fresh host")
-                attemptReconnect()
             } else {
-                state = .disconnected(reason: reason)
+                signaling = nil
+                if establishing, !serverStopped, onReconnectNeeded != nil {
+                    // Signaling closed before setup completed. On a resume this is GFN's RESUME
+                    // host-rotation race — a freshly-claimed media host isn't ready yet and drops
+                    // the peer (peerRemoved). Reclaim to a fresh host and retry (bounded, with
+                    // backoff) instead of dead-ending on a transient failure the user would
+                    // otherwise have to fix by hand.
+                    gfnLog.info("signaling closed before setup (\(reason, privacy: .public)); reclaiming to a fresh host")
+                    attemptReconnect()
+                } else {
+                    state = .disconnected(reason: reason)
+                }
             }
         case let .error(msg):
             state = .failed(message: msg)
@@ -674,23 +824,35 @@ final class GFNStreamController: NSObject {
     private func configureAudioSession(microphoneRequested: Bool) -> Bool {
         let audioSession = AVAudioSession.sharedInstance()
         if microphoneRequested, audioSession.availableCategories.contains(.playAndRecord) {
+            logAudioSessionInputDiagnostics(audioSession, stage: "before microphone configuration")
+            var operation = "setCategory(playAndRecord/voiceChat)"
             do {
                 try audioSession.setCategory(
                     .playAndRecord,
                     mode: .voiceChat,
                     options: [.allowBluetoothHFP, .allowBluetoothA2DP]
                 )
+                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone category")
+
+                operation = "setPreferredIOBufferDuration(0.01)"
                 try audioSession.setPreferredIOBufferDuration(0.01)
+
+                operation = "setActive(true)"
                 try audioSession.setActive(true)
-                guard audioSession.isInputAvailable else {
-                    gfnLog.warning("[Stream] AVAudioSession has no input route, falling back to playback")
+                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone activation")
+
+                guard audioSession.isInputAvailable,
+                      !audioSession.currentRoute.inputs.isEmpty,
+                      audioSession.inputNumberOfChannels > 0
+                else {
+                    gfnLog.warning("[Stream] AVAudioSession has no usable input route, falling back to playback")
                     return configurePlaybackAudioSession(audioSession)
                 }
                 gfnLog.info("[Stream] AVAudioSession configured for playback + microphone")
                 logAudioSessionConfiguration(audioSession)
                 return true
             } catch {
-                gfnLog.warning("[Stream] AVAudioSession microphone configuration failed, falling back to playback: \(error, privacy: .private)")
+                logAudioSessionOperationFailure(operation, error: error, session: audioSession)
             }
         } else if microphoneRequested {
             gfnLog.warning("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
@@ -716,6 +878,40 @@ final class GFNStreamController: NSObject {
         return false
     }
 
+    private func logAudioSessionOperationFailure(
+        _ operation: String,
+        error: Error,
+        session: AVAudioSession
+    ) {
+        let nsError = error as NSError
+        let message = "[Stream] AVAudioSession \(operation) failed: " +
+            "domain=\(nsError.domain) code=\(nsError.code); falling back to playback"
+        gfnLog.warning("\(message, privacy: .public); error=\(error, privacy: .private)")
+        logAudioSessionInputDiagnostics(session, stage: "after \(operation) failure")
+    }
+
+    private func logAudioSessionInputDiagnostics(_ session: AVAudioSession, stage: String) {
+        let availableInputs = session.availableInputs?
+            .map(\.portType.rawValue)
+            .joined(separator: ", ") ?? "none"
+        let preferredInput = session.preferredInput
+            .map(\.portType.rawValue) ?? "none"
+        let routeInputs = session.currentRoute.inputs
+            .map(\.portType.rawValue)
+            .joined(separator: ", ")
+        let routeOutputs = session.currentRoute.outputs
+            .map(\.portType.rawValue)
+            .joined(separator: ", ")
+        let message = "audio input \(stage) | category \(session.category.rawValue) " +
+            "mode \(session.mode.rawValue) options \(session.categoryOptions.rawValue) | " +
+            "available \(session.isInputAvailable) " +
+            "channels \(session.inputNumberOfChannels) | preferred [\(preferredInput)] " +
+            "availableInputs [\(availableInputs)] | route inputs [\(routeInputs)] " +
+            "outputs [\(routeOutputs)] | sampleRate \(session.sampleRate) " +
+            "ioBuffer \(session.ioBufferDuration)"
+        audioSyncLog.info("\(message, privacy: .public)")
+    }
+
     /// Logs the OS-level audio output configuration — the latency layer WebRTC stats can't see.
     /// outputLatency is the route's hardware/driver delay (HDMI vs TV speakers vs Bluetooth,
     /// which alone can add 100–200 ms); ioBufferDuration is the render quantum.
@@ -735,8 +931,11 @@ final class GFNStreamController: NSObject {
         audioSyncLog.info("\(message, privacy: .public)")
     }
 
-    private func handleOffer(sdp: String) async {
-        guard let session = sessionInfo else { return }
+    private func handleOffer(
+        sdp: String,
+        signalingClient: GFNSignalingClient
+    ) async {
+        guard signaling === signalingClient, let session = sessionInfo else { return }
         #if DEBUG
             gfnLog.debug("[Stream] Offer SDP (\(sdp.count, privacy: .public) chars):\n\(sdp, privacy: .private)")
         #endif
@@ -753,7 +952,10 @@ final class GFNStreamController: NSObject {
         }
         audioSyncLog.info("offer audio: \(surroundOffered ? "multiopus 5.1" : "opus stereo", privacy: .public)")
 
-        let microphoneEnabledForConnection = configureAudioSession(microphoneRequested: settings.micEnabled)
+        var effectiveMicrophoneEnabled = microphoneAuthorizedForConnection
+        let microphoneRouteReady = configureAudioSession(
+            microphoneRequested: effectiveMicrophoneEnabled
+        )
 
         // The lifetime is immutable after channel creation, so resolve the server's value first.
         if let match = sdp.range(of: #"ri\.partialReliableThresholdMs[: ]+(\d+)"#, options: .regularExpression),
@@ -785,7 +987,7 @@ final class GFNStreamController: NSObject {
             state = .failed(message: "Failed to create LKRTCPeerConnection")
             return
         }
-        peerConnection = pc
+        setActivePeerConnection(pc)
         if settings.enableRtcEventLog {
             if let url = startRtcEventLog() {
                 gfnLog.debug("[Stats] RTC event log: \(url.path, privacy: .public)")
@@ -801,7 +1003,7 @@ final class GFNStreamController: NSObject {
         dcConfig.isNegotiated = false
         if let dc = pc.dataChannel(forLabel: "input_channel_v1", configuration: dcConfig) {
             inputDataChannel = dc
-            reliableSendChannel = dc
+            inputSendState.withLock { $0.reliableChannel = dc }
             dc.delegate = self
         }
 
@@ -827,9 +1029,15 @@ final class GFNStreamController: NSObject {
 
         // Attach microphone audio track if enabled (must happen before answer creation
         // so the m=audio sendrecv line is included in the SDP)
-        if microphoneEnabledForConnection {
-            await attachMicrophone(to: pc)
+        if effectiveMicrophoneEnabled {
+            effectiveMicrophoneEnabled = attachMicrophone(to: pc)
+            if !effectiveMicrophoneEnabled {
+                _ = configurePlaybackAudioSession(AVAudioSession.sharedInstance())
+            } else if !microphoneRouteReady {
+                gfnLog.info("[Stream] Microphone negotiated; capture deferred until an input route appears")
+            }
         }
+        microphoneEnabledForConnection = effectiveMicrophoneEnabled
 
         // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers)
         if settings.codec == .av1 {
@@ -841,7 +1049,7 @@ final class GFNStreamController: NSObject {
         // the offer leaves orphaned a=ssrc-group:FEC-FR lines that cause WebRTC to reject
         // the video m-line (port 0) when generating the answer.
         let serverMediaIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
-            ?? Self.extractIpFromHost(signaling?.connectedHost ?? "")
+            ?? Self.extractIpFromHost(signalingClient.connectedHost)
         let fixedSdp = serverMediaIp.map { ip in
             Self.rewriteOfferConnectionAddresses(sdp, serverIp: ip)
         } ?? sdp
@@ -867,6 +1075,10 @@ final class GFNStreamController: NSObject {
         } catch {
             gfnLog.error("[Stream] setRemoteDescription failed: \(error, privacy: .private)")
         }
+        guard ownsOffer(peerConnection: pc, signalingClient: signalingClient) else {
+            pc.close()
+            return
+        }
 
         // Create answer
         let answerConstraints = LKRTCMediaConstraints(
@@ -885,6 +1097,10 @@ final class GFNStreamController: NSObject {
                         cont.resume(throwing: StreamError.noSDP)
                     }
                 }
+            }
+            guard ownsOffer(peerConnection: pc, signalingClient: signalingClient) else {
+                pc.close()
+                return
             }
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
@@ -930,8 +1146,20 @@ final class GFNStreamController: NSObject {
             } catch {
                 gfnLog.error("[Stream] setLocalDescription failed: \(error, privacy: .private)")
             }
+            guard ownsOffer(peerConnection: pc, signalingClient: signalingClient) else {
+                pc.close()
+                return
+            }
             let (iceUfrag, icePwd, dtlsFingerprint) = Self.extractIceCredentials(from: mangledAnswerSdp)
-            signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp(iceUfrag: iceUfrag, icePwd: icePwd, dtlsFingerprint: dtlsFingerprint))
+            signalingClient.sendAnswer(
+                sdp: mangledAnswerSdp,
+                nvstSdp: buildNvstSdp(
+                    iceUfrag: iceUfrag,
+                    icePwd: icePwd,
+                    dtlsFingerprint: dtlsFingerprint,
+                    microphoneEnabled: effectiveMicrophoneEnabled
+                )
+            )
             signalingComplete = true
 
             // Inject the server's ICE host candidate AFTER sending the answer.
@@ -952,8 +1180,8 @@ final class GFNStreamController: NSObject {
             // We don't know which port carries UDP media (usage=2 is absent for this zone),
             // so we inject candidates for ALL combinations of known IPs × known ports.
             // ICE probes them all simultaneously and succeeds on the first STUN reply.
-            let resolvedIps = signaling?.resolvedIPs ?? []
-            let connectedHost = signaling?.connectedHost ?? ""
+            let resolvedIps = signalingClient.resolvedIPs
+            let connectedHost = signalingClient.connectedHost
             var allIps: [String] = []
             if let ip = mciIp {
                 allIps.append(ip)
@@ -973,6 +1201,10 @@ final class GFNStreamController: NSObject {
             } else {
                 gfnLog.debug("[ICE] Injecting \(pairs.count, privacy: .public) candidate(s) (mciIp=\(mciIp ?? "nil", privacy: .private) mciPort=\(mciPort, privacy: .public) sdpPort=\(sdpPort, privacy: .public))")
                 for (i, (ip, port)) in pairs.enumerated() {
+                    guard ownsOffer(peerConnection: pc, signalingClient: signalingClient) else {
+                        pc.close()
+                        return
+                    }
                     let cand = LKRTCIceCandidate(
                         sdp: "candidate:\(i + 1) 1 UDP 2130706431 \(ip) \(port) typ host",
                         sdpMLineIndex: 0, sdpMid: "0"
@@ -982,8 +1214,16 @@ final class GFNStreamController: NSObject {
                 }
             }
         } catch {
+            guard ownsOffer(peerConnection: pc, signalingClient: signalingClient) else { return }
             state = .failed(message: "Answer creation failed: \(error.localizedDescription)")
         }
+    }
+
+    private func ownsOffer(
+        peerConnection: LKRTCPeerConnection,
+        signalingClient: GFNSignalingClient
+    ) -> Bool {
+        self.peerConnection === peerConnection && signaling === signalingClient
     }
 
     // MARK: Private — NVST SDP
@@ -1004,7 +1244,12 @@ final class GFNStreamController: NSObject {
     /// Builds the NVIDIA streaming protocol capability descriptor sent alongside the WebRTC answer.
     /// Builds the NVST SDP capability descriptor — critically includes the client's ICE credentials so the
     /// GFN server can validate STUN MESSAGE-INTEGRITY on incoming binding requests.
-    private func buildNvstSdp(iceUfrag: String, icePwd: String, dtlsFingerprint: String) -> String {
+    private func buildNvstSdp(
+        iceUfrag: String,
+        icePwd: String,
+        dtlsFingerprint: String,
+        microphoneEnabled: Bool
+    ) -> String {
         let resolutionParts = settings.resolution.split(separator: "x")
         let width = Int(resolutionParts.first ?? "1920") ?? 1920
         let height = Int(resolutionParts.last ?? "1080") ?? 1080
@@ -1044,7 +1289,7 @@ final class GFNStreamController: NSObject {
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
         ]
-        if settings.micEnabled {
+        if microphoneEnabled {
             lines += [
                 "m=mic 0 RTP/AVP",
                 "a=msid:mic",
@@ -1065,14 +1310,21 @@ final class GFNStreamController: NSObject {
 
     // MARK: Private — Microphone
 
-    private func attachMicrophone(to pc: LKRTCPeerConnection) async {
-        #if !os(tvOS)
-            let granted = await withCheckedContinuation { cont in
-                AVAudioSession.sharedInstance().requestRecordPermission { cont.resume(returning: $0) }
-            }
-            guard granted else { return }
-        #endif
+    private func requestMicrophonePermissionIfNeeded() async -> Bool {
+        guard settings.micEnabled else { return false }
 
+        let granted = await withCheckedContinuation { continuation in
+            AVAudioApplication.requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+        if !granted {
+            gfnLog.warning("[Stream] Microphone permission denied, using playback-only audio")
+        }
+        return granted
+    }
+
+    private func attachMicrophone(to pc: LKRTCPeerConnection) -> Bool {
         let audioConstraints = LKRTCMediaConstraints(
             mandatoryConstraints: nil,
             optionalConstraints: [
@@ -1083,9 +1335,13 @@ final class GFNStreamController: NSObject {
         )
         let source = GFNStreamController.factory.audioSource(with: audioConstraints)
         let track = GFNStreamController.factory.audioTrack(with: source, trackId: "mic")
+        guard pc.add(track, streamIds: ["mic"]) != nil else {
+            gfnLog.warning("[Stream] Unable to attach microphone track, continuing without microphone")
+            return false
+        }
         micAudioSource = source
         micAudioTrack = track
-        pc.add(track, streamIds: ["mic"])
+        return true
     }
 
     /// Extracts a dotted-decimal IP from a hostname that encodes it as dashes,
@@ -1246,39 +1502,58 @@ final class GFNStreamController: NSObject {
     private func collectInputStats() {
         inputSendQueue.async { [weak self] in
             guard let self else { return }
-            let sortedWaits = inputQueueWaitsNs.sorted()
+            let capture = inputSendState.withLock { state in
+                let capture = (
+                    waits: state.queueWaitsNs.elements,
+                    newestGamepadGeneratedAt: state.newestGamepadGeneratedAt,
+                    generated: state.generated,
+                    submitted: state.submitted,
+                    accepted: state.accepted,
+                    dropped: state.dropped,
+                    superseded: state.superseded,
+                    bufferedBytes: state.bufferedBytes,
+                    maxNs: state.queueMaxNs,
+                    channelState: state.channelState
+                )
+                state.queueWaitsNs.reset()
+                state.queueMaxNs = 0
+                return capture
+            }
+            let sortedWaits = capture.waits.sorted()
             let p50Ns = Self.percentile(0.50, in: sortedWaits)
             let p95Ns = Self.percentile(0.95, in: sortedWaits)
             let now = DispatchTime.now().uptimeNanoseconds
-            let gamepadAgeNs = newestGamepadGeneratedAt == 0
+            let gamepadAgeNs = capture.newestGamepadGeneratedAt == 0
                 ? 0
-                : now &- newestGamepadGeneratedAt
-            let generated = inputGenerated
-            let submitted = inputSubmitted
-            let accepted = inputAccepted
-            let dropped = inputDropped
-            let superseded = inputSuperseded
-            let bufferedBytes = inputBufferedBytes
-            let maxNs = inputQueueMaxNs
-            let channelState = inputChannelState
-            inputQueueWaitsNs.removeAll(keepingCapacity: true)
-            inputQueueWaitWriteIndex = 0
-            inputQueueMaxNs = 0
+                : now &- capture.newestGamepadGeneratedAt
+            let snapshot = InputStatsSnapshot(
+                generated: capture.generated,
+                submitted: capture.submitted,
+                accepted: capture.accepted,
+                dropped: capture.dropped,
+                superseded: capture.superseded,
+                bufferedBytes: capture.bufferedBytes,
+                queueP50Ns: p50Ns,
+                queueP95Ns: p95Ns,
+                queueMaxNs: capture.maxNs,
+                newestGamepadAgeNs: gamepadAgeNs,
+                channelState: capture.channelState
+            )
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 updateStats {
-                    $0.inputGenerated = generated
-                    $0.inputSubmitted = submitted
-                    $0.inputAccepted = accepted
-                    $0.inputDropped = dropped
-                    $0.inputSuperseded = superseded
-                    $0.inputBufferedBytes = bufferedBytes
-                    $0.inputQueueP50Ms = Double(p50Ns) / 1_000_000
-                    $0.inputQueueP95Ms = Double(p95Ns) / 1_000_000
-                    $0.inputQueueMaxMs = Double(maxNs) / 1_000_000
-                    $0.newestGamepadAgeMs = Double(gamepadAgeNs) / 1_000_000
-                    $0.inputChannelState = channelState
+                    $0.inputGenerated = snapshot.generated
+                    $0.inputSubmitted = snapshot.submitted
+                    $0.inputAccepted = snapshot.accepted
+                    $0.inputDropped = snapshot.dropped
+                    $0.inputSuperseded = snapshot.superseded
+                    $0.inputBufferedBytes = snapshot.bufferedBytes
+                    $0.inputQueueP50Ms = Double(snapshot.queueP50Ns) / 1_000_000
+                    $0.inputQueueP95Ms = Double(snapshot.queueP95Ns) / 1_000_000
+                    $0.inputQueueMaxMs = Double(snapshot.queueMaxNs) / 1_000_000
+                    $0.newestGamepadAgeMs = Double(snapshot.newestGamepadAgeNs) / 1_000_000
+                    $0.inputChannelState = snapshot.channelState
                 }
             }
         }
@@ -1504,9 +1779,12 @@ final class GFNStreamController: NSObject {
         if next != stats {
             stats = next
         }
-        appendHistory(&pingHistory, value: next.rttMs)
-        appendHistory(&fpsHistory, value: next.fps)
-        appendHistory(&bitrateHistory, value: Double(next.bitrateKbps) / 1000.0)
+        pingSamples.append(next.rttMs)
+        fpsSamples.append(next.fps)
+        bitrateSamples.append(Double(next.bitrateKbps) / 1000.0)
+        pingHistory = pingSamples.elements
+        fpsHistory = fpsSamples.elements
+        bitrateHistory = bitrateSamples.elements
     }
 
     private func applyDecodedVideoFormat(_ format: DecodedVideoFormat) {
@@ -1582,6 +1860,10 @@ final class GFNStreamController: NSObject {
         // Live OS output latency: the media-playout stat can be absent depending on the active
         // audio unit (then device reads 0), so also sample the route's latency directly.
         let osOutputLatencyMs = AVAudioSession.sharedInstance().outputLatency * 1000
+        let microphoneSnapshot = GFNAudioDevice.shared.microphoneTelemetry.snapshot
+        let osInputLatencyMs = microphoneSnapshot.isCapturing
+            ? GFNAudioDevice.shared.inputLatency * 1000
+            : nil
 
         updateAudioStats {
             $0.jitterBufferCurrentMs = neteqMs
@@ -1593,6 +1875,7 @@ final class GFNStreamController: NSObject {
             $0.stretchedMsPerSecond = sloweddMs
             $0.acceleratedMsPerSecond = acceleratedMs
             $0.avOffsetMs = avOffsetMs
+            $0.inputLatencyMs = osInputLatencyMs
             $0.outputLatencyMs = osOutputLatencyMs
             $0.outputChannels = GFNAudioDevice.shared.outputNumberOfChannels
             $0.outputSampleRateHz = GFNAudioDevice.shared.deviceOutputSampleRate
@@ -1635,13 +1918,6 @@ final class GFNStreamController: NSObject {
         for url in sorted.dropFirst(max(0, count)) {
             try FileManager.default.removeItem(at: url)
         }
-    }
-
-    private func appendHistory(_ history: inout [Double], value: Double) {
-        if history.count >= 30 {
-            history.removeFirst()
-        }
-        history.append(value)
     }
 
     private func parseSelectedConnectionStats(_ report: LKRTCStatisticsReport) {
@@ -1736,7 +2012,10 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didRemove _: LKRTCMediaStream) {}
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {
+    nonisolated func peerConnection(
+        _ sourcePeerConnection: LKRTCPeerConnection,
+        didChange newState: LKRTCIceConnectionState
+    ) {
         let name = switch newState {
         case .new: "new"
         case .checking: "checking"
@@ -1750,7 +2029,7 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         }
         gfnLog.debug("[ICE] State → \(name, privacy: .public)")
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, peerConnection === sourcePeerConnection else { return }
             switch newState {
             case .connected, .completed:
                 wasStreaming = true
@@ -1794,9 +2073,13 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         gfnLog.debug("[ICE] Gathering → \(name, privacy: .public)")
     }
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {
+    nonisolated func peerConnection(
+        _ sourcePeerConnection: LKRTCPeerConnection,
+        didGenerate candidate: LKRTCIceCandidate
+    ) {
         Task { @MainActor [weak self] in
-            self?.signaling?.sendICECandidate(
+            guard let self, peerConnection === sourcePeerConnection else { return }
+            signaling?.sendICECandidate(
                 candidate: candidate.sdp,
                 sdpMid: candidate.sdpMid,
                 sdpMLineIndex: Int(candidate.sdpMLineIndex)
@@ -1806,17 +2089,25 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
 
     nonisolated func peerConnection(_: LKRTCPeerConnection, didRemove _: [LKRTCIceCandidate]) {}
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {
+    nonisolated func peerConnection(
+        _ sourcePeerConnection: LKRTCPeerConnection,
+        didOpen dataChannel: LKRTCDataChannel
+    ) {
         gfnLog.debug("[DataChannel] Server opened channel: label=\(dataChannel.label, privacy: .public)")
-        if dataChannel.label == "control_channel" {
-            dataChannel.delegate = self
-            Task { @MainActor [weak self] in
-                self?.controlChannel = dataChannel
-            }
+        guard dataChannel.label == "control_channel",
+              registerControlChannel(dataChannel, for: sourcePeerConnection)
+        else { return }
+        dataChannel.delegate = self
+        Task { @MainActor [weak self] in
+            guard let self,
+                  peerConnection === sourcePeerConnection,
+                  isCurrentControlChannel(dataChannel)
+            else { return }
+            controlChannel = dataChannel
         }
     }
 
-    nonisolated func peerConnection(_: LKRTCPeerConnection,
+    nonisolated func peerConnection(_ sourcePeerConnection: LKRTCPeerConnection,
                                     didAdd rtpReceiver: LKRTCRtpReceiver,
                                     streams _: [LKRTCMediaStream])
     {
@@ -1824,8 +2115,9 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         guard let track = rtpReceiver.track as? LKRTCVideoTrack else { return }
         gfnLog.info("[Stream] Got video track")
         Task { @MainActor [weak self] in
-            self?.videoReceiver = rtpReceiver
-            self?.videoTrack = track
+            guard let self, peerConnection === sourcePeerConnection else { return }
+            videoReceiver = rtpReceiver
+            videoTrack = track
         }
     }
 }
@@ -1845,14 +2137,17 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             }
             inputSendQueue.async { [weak self] in
                 guard let self else { return }
-                inputChannelState = state
-                inputBufferedBytes = dataChannel.bufferedAmount
-                if state == "closing" || state == "closed" {
-                    let pending = Array(pendingGamepadSnapshots.values)
-                    pendingGamepadSnapshots.removeAll()
-                    inputDropped &+= UInt64(pending.count)
-                    pending.forEach { $0.completion(.channelUnavailable) }
+                let pending = inputSendState.withLock { inputState -> [PendingInputSend] in
+                    guard inputState.reliableChannel === dataChannel else { return [] }
+                    inputState.channelState = state
+                    inputState.bufferedBytes = dataChannel.bufferedAmount
+                    guard state == "closing" || state == "closed" else { return [] }
+                    let pending = Array(inputState.pendingGamepadSnapshots.values)
+                    inputState.pendingGamepadSnapshots.removeAll()
+                    inputState.dropped &+= UInt64(pending.count)
+                    return pending
                 }
+                pending.forEach { $0.completion(.channelUnavailable) }
             }
         }
         // InputSender is NOT started here — it starts only after the server sends its
@@ -1863,7 +2158,12 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
         guard dataChannel.label == "input_channel_v1" else { return }
         inputSendQueue.async { [weak self] in
             guard let self else { return }
-            inputBufferedBytes = amount
+            let isCurrentChannel = inputSendState.withLock { state -> Bool in
+                guard state.reliableChannel === dataChannel else { return false }
+                state.bufferedBytes = amount
+                return true
+            }
+            guard isCurrentChannel else { return }
             drainPendingGamepadSnapshotsIfPossible(on: dataChannel)
         }
     }
@@ -1872,7 +2172,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
         if dataChannel.label == "stats_channel" {
             if let gameFps = Self.parseStatsChannelGameFps(buffer.data) {
                 Task { @MainActor [weak self] in
-                    self?.updateStats { $0.gameFps = gameFps }
+                    guard let self, statsChannel === dataChannel else { return }
+                    updateStats { $0.gameFps = gameFps }
                 }
             }
             return
@@ -1880,6 +2181,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 
         // Handle control channel messages (timerNotification etc.)
         if dataChannel.label == "control_channel" {
+            guard isCurrentControlChannel(dataChannel) else { return }
             let text = String(data: buffer.data, encoding: .utf8) ?? "<binary \(buffer.data.count)B>"
             gfnLog.debug("[ControlChannel] Message: \(text, privacy: .private)")
 
@@ -1897,7 +2199,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 if let code = mappedCode {
                     let secondsLeft = notification["secondsLeft"] as? Int
                     Task { @MainActor [weak self] in
-                        self?.timeWarning = StreamTimeWarning(code: code, secondsLeft: secondsLeft)
+                        guard let self, isCurrentControlChannel(dataChannel) else { return }
+                        timeWarning = StreamTimeWarning(code: code, secondsLeft: secondsLeft)
                     }
                 }
             }
@@ -1906,7 +2209,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                let rawMode = hdrMode["hdrMode"] as? Int
             {
                 Task { @MainActor [weak self] in
-                    self?.applyNegotiatedHDRMode(rawMode)
+                    guard let self, isCurrentControlChannel(dataChannel) else { return }
+                    applyNegotiatedHDRMode(rawMode)
                 }
             }
             // The server sends an `exitMessage` when it deliberately ends the stream — the user
@@ -1918,7 +2222,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             {
                 gfnLog.info("control channel exitMessage received — server ended stream, not reconnecting")
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
+                    guard let self, isCurrentControlChannel(dataChannel) else { return }
                     serverStopped = true
                     state = .sessionEnded
                 }
@@ -1944,7 +2248,12 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
         } else {
             if let cmd = GFNHapticsDecoder.decode(buffer.data) {
                 inputSendQueue.async { [weak self] in
-                    self?.rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
+                    let sink = self?.inputSendState.withLock {
+                        state -> (@Sendable (Int, UInt16, UInt16) -> Void)? in
+                        guard state.reliableChannel === dataChannel else { return nil }
+                        return state.rumbleSink
+                    }
+                    sink?(cmd.controllerId, cmd.weak, cmd.strong)
                 }
                 return
             }
@@ -1954,7 +2263,10 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 
         let negotiatedVersion = version
         Task { @MainActor [weak self] in
-            guard let self, !self.inputReady else { return }
+            guard let self,
+                  inputDataChannel === dataChannel,
+                  !inputReady
+            else { return }
             inputReady = true
             protocolVersion = negotiatedVersion
             gfnLog.info("[DataChannel] Input ready — starting InputSender (protocol v\(negotiatedVersion, privacy: .public))")
@@ -1970,15 +2282,24 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             )
             remoteMode = settings.defaultRemoteInputMode
             videoView?.gamepadModeActive = remoteMode != .gamepadMouse
-            sender.menuToggleHandler = { [weak self] in self?.handleMenuPress() }
-            sender.onRemoteModeChanged = { [weak self] mode in
-                self?.remoteMode = mode
-                self?.videoView?.gamepadModeActive = mode != .gamepadMouse
+            sender.menuToggleHandler = { [weak self, weak sender] in
+                guard let self, inputSender === sender else { return }
+                handleMenuPress()
+            }
+            sender.onRemoteModeChanged = { [weak self, weak sender] mode in
+                guard let self, inputSender === sender else { return }
+                remoteMode = mode
+                videoView?.gamepadModeActive = mode != .gamepadMouse
             }
             sender.start()
             inputSender = sender
             inputSendQueue.async { [weak self, sender] in
-                self?.rumbleSink = { sender.applyRumble(controllerId: $0, weak: $1, strong: $2) }
+                self?.inputSendState.withLock { state in
+                    guard state.reliableChannel === dataChannel else { return }
+                    state.rumbleSink = { controllerId, weak, strong in
+                        sender.applyRumble(controllerId: controllerId, weak: weak, strong: strong)
+                    }
+                }
             }
             // Forward keyboard/mouse events from the video surface to the sender
             videoView?.inputHandler = sender
@@ -1998,49 +2319,61 @@ extension GFNStreamController: DataChannelSender {
                 completion(.channelUnavailable)
                 return
             }
-            inputGenerated &+= 1
-
-            guard let dc = reliableSendChannel, dc.readyState == .open else {
-                inputDropped &+= 1
-                completion(.channelUnavailable)
-                return
-            }
-
-            if let slot = packet.gamepadSlot {
-                if let pending = pendingGamepadSnapshots.removeValue(forKey: slot) {
-                    inputSuperseded &+= 1
-                    pending.completion(.superseded)
+            let completed = inputSendState.withLock { state -> [CompletedInputSend] in
+                state.generated &+= 1
+                guard let dataChannel = state.reliableChannel,
+                      dataChannel.readyState == .open
+                else {
+                    state.dropped &+= 1
+                    return [CompletedInputSend(completion: completion, disposition: .channelUnavailable)]
                 }
-                if packet.isReplaceableGamepadSnapshot,
-                   dc.bufferedAmount > inputBackpressureHighWaterBytes
-                {
-                    pendingGamepadSnapshots[slot] = (packet, completion)
-                    return
-                }
-            }
 
-            sendImmediately(packet, completion: completion, on: dc)
-            drainPendingGamepadSnapshotsIfPossible(on: dc)
+                var completed: [CompletedInputSend] = []
+                if let slot = packet.gamepadSlot {
+                    if let pending = state.pendingGamepadSnapshots.removeValue(forKey: slot) {
+                        state.superseded &+= 1
+                        completed.append(
+                            CompletedInputSend(completion: pending.completion, disposition: .superseded)
+                        )
+                    }
+                    if packet.isReplaceableGamepadSnapshot,
+                       dataChannel.bufferedAmount > self.inputBackpressureHighWaterBytes
+                    {
+                        state.pendingGamepadSnapshots[slot] = (packet, completion)
+                        return completed
+                    }
+                }
+
+                completed.append(
+                    CompletedInputSend(
+                        completion: completion,
+                        disposition: self.sendImmediately(packet, on: dataChannel, state: &state)
+                    )
+                )
+                completed.append(
+                    contentsOf: self.drainPendingGamepadSnapshotsIfPossible(
+                        on: dataChannel,
+                        state: &state
+                    )
+                )
+                return completed
+            }
+            completed.forEach { $0.completion($0.disposition) }
         }
     }
 
     private nonisolated func sendImmediately(
         _ packet: EncodedInputPacket,
-        completion: @escaping @Sendable (InputSendDisposition) -> Void,
-        on dataChannel: LKRTCDataChannel
-    ) {
+        on dataChannel: LKRTCDataChannel,
+        state: inout InputSendState
+    ) -> InputSendDisposition {
         let waitNs = DispatchTime.now().uptimeNanoseconds &- packet.generatedAt
-        if inputLatencySamplingEnabled {
-            if inputQueueWaitsNs.count < Self.maximumInputLatencySamples {
-                inputQueueWaitsNs.append(waitNs)
-            } else {
-                inputQueueWaitsNs[inputQueueWaitWriteIndex] = waitNs
-                inputQueueWaitWriteIndex = (inputQueueWaitWriteIndex + 1) % Self.maximumInputLatencySamples
-            }
-            inputQueueMaxNs = max(inputQueueMaxNs, waitNs)
+        if state.latencySamplingEnabled {
+            state.queueWaitsNs.append(waitNs)
+            state.queueMaxNs = max(state.queueMaxNs, waitNs)
         }
         if packet.category == .gamepadSnapshot {
-            newestGamepadGeneratedAt = packet.generatedAt
+            state.newestGamepadGeneratedAt = packet.generatedAt
         }
         let data = Data(
             bytesNoCopy: packet.storage.mutableBytes,
@@ -2048,31 +2381,48 @@ extension GFNStreamController: DataChannelSender {
             deallocator: .none
         )
         let buffer = LKRTCDataBuffer(data: data, isBinary: true)
-        inputSubmitted &+= 1
+        state.submitted &+= 1
         var accepted = dataChannel.sendData(buffer)
         if !accepted, dataChannel.readyState == .open {
             // One immediate retry preserves FIFO ordering without creating an application retry queue.
-            inputSubmitted &+= 1
+            state.submitted &+= 1
             accepted = dataChannel.sendData(buffer)
         }
-        inputBufferedBytes = dataChannel.bufferedAmount
+        state.bufferedBytes = dataChannel.bufferedAmount
         if accepted {
-            inputAccepted &+= 1
-            completion(.accepted)
+            state.accepted &+= 1
+            return .accepted
         } else {
-            inputDropped &+= 1
-            completion(.rejected)
+            state.dropped &+= 1
+            return .rejected
         }
     }
 
     private nonisolated func drainPendingGamepadSnapshotsIfPossible(on dataChannel: LKRTCDataChannel) {
-        guard dataChannel.readyState == .open,
-              dataChannel.bufferedAmount <= inputBackpressureLowWaterBytes else { return }
-        for slot in pendingGamepadSnapshots.keys.sorted() {
-            guard dataChannel.bufferedAmount <= inputBackpressureHighWaterBytes,
-                  let pending = pendingGamepadSnapshots.removeValue(forKey: slot) else { break }
-            sendImmediately(pending.packet, completion: pending.completion, on: dataChannel)
+        let completed = inputSendState.withLock { state in
+            drainPendingGamepadSnapshotsIfPossible(on: dataChannel, state: &state)
         }
+        completed.forEach { $0.completion($0.disposition) }
+    }
+
+    private nonisolated func drainPendingGamepadSnapshotsIfPossible(
+        on dataChannel: LKRTCDataChannel,
+        state: inout InputSendState
+    ) -> [CompletedInputSend] {
+        guard dataChannel.readyState == .open,
+              dataChannel.bufferedAmount <= inputBackpressureLowWaterBytes else { return [] }
+        var completed: [CompletedInputSend] = []
+        for slot in state.pendingGamepadSnapshots.keys.sorted() {
+            guard dataChannel.bufferedAmount <= inputBackpressureHighWaterBytes,
+                  let pending = state.pendingGamepadSnapshots.removeValue(forKey: slot) else { break }
+            completed.append(
+                CompletedInputSend(
+                    completion: pending.completion,
+                    disposition: sendImmediately(pending.packet, on: dataChannel, state: &state)
+                )
+            )
+        }
+        return completed
     }
 }
 

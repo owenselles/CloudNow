@@ -1,0 +1,1636 @@
+{
+  "manifest_version": 2,
+  "authoritative": true,
+  "guild": {
+    "name": "CloudNow Community",
+    "description": "Community support and development for CloudNow, an unofficial native GeForce NOW client for Apple TV.",
+    "preferred_locale": "en-US",
+    "verification_level": 3,
+    "default_message_notifications": 1,
+    "explicit_content_filter": 2,
+    "system_channel_flags": 7,
+    "rules_channel": "rules",
+    "public_updates_channel": "discord-updates",
+    "safety_alerts_channel": "automod-alerts",
+    "system_channel": null
+  },
+  "everyone_permissions": [
+    "ADD_REACTIONS",
+    "VIEW_CHANNEL",
+    "SEND_MESSAGES",
+    "EMBED_LINKS",
+    "ATTACH_FILES",
+    "READ_MESSAGE_HISTORY",
+    "USE_EXTERNAL_EMOJIS",
+    "STREAM",
+    "CONNECT",
+    "SPEAK",
+    "USE_VAD",
+    "CHANGE_NICKNAME",
+    "USE_APPLICATION_COMMANDS",
+    "CREATE_PUBLIC_THREADS",
+    "USE_EXTERNAL_STICKERS",
+    "SEND_MESSAGES_IN_THREADS",
+    "SEND_POLLS"
+  ],
+  "roles": [
+    {
+      "key": "server-admin",
+      "name": "Server Admin",
+      "permissions": [
+        "KICK_MEMBERS",
+        "BAN_MEMBERS",
+        "MANAGE_CHANNELS",
+        "MANAGE_GUILD",
+        "VIEW_AUDIT_LOG",
+        "MANAGE_MESSAGES",
+        "MANAGE_NICKNAMES",
+        "MANAGE_ROLES",
+        "MANAGE_WEBHOOKS",
+        "MANAGE_EVENTS",
+        "MANAGE_THREADS",
+        "MODERATE_MEMBERS",
+        "PIN_MESSAGES"
+      ],
+      "color": 15158332,
+      "hoist": true,
+      "mentionable": false
+    },
+    {
+      "key": "project-maintainer",
+      "name": "Project Maintainer",
+      "permissions": [],
+      "color": 15844367,
+      "hoist": true,
+      "mentionable": false
+    },
+    {
+      "key": "moderator",
+      "name": "Moderator",
+      "permissions": [
+        "KICK_MEMBERS",
+        "BAN_MEMBERS",
+        "VIEW_AUDIT_LOG",
+        "MANAGE_MESSAGES",
+        "MANAGE_NICKNAMES",
+        "MANAGE_THREADS",
+        "MODERATE_MEMBERS",
+        "PIN_MESSAGES"
+      ],
+      "color": 10181046,
+      "hoist": true,
+      "mentionable": false
+    },
+    {
+      "key": "support-team",
+      "name": "Support Team",
+      "permissions": [],
+      "color": 3447003,
+      "hoist": true,
+      "mentionable": false
+    },
+    {
+      "key": "contributor",
+      "name": "Contributor",
+      "permissions": [],
+      "color": 3066993,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "translator",
+      "name": "Translator",
+      "permissions": [],
+      "color": 10105599,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "support-interest",
+      "name": "Support Interest",
+      "permissions": [],
+      "color": 3447003,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "localization-interest",
+      "name": "Localization Interest",
+      "permissions": [],
+      "color": 1752220,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "beta-tester",
+      "name": "Beta Tester",
+      "permissions": [],
+      "color": 7419530,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "developer-interest",
+      "name": "Developer Interest",
+      "permissions": [],
+      "color": 8359053,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "voice-access",
+      "name": "Voice Access",
+      "permissions": [],
+      "color": 9807270,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "releases",
+      "name": "Releases",
+      "permissions": [],
+      "color": 0,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "beta-updates",
+      "name": "Beta Updates",
+      "permissions": [],
+      "color": 0,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "project-status",
+      "name": "Project Status",
+      "permissions": [],
+      "color": 0,
+      "hoist": false,
+      "mentionable": false
+    },
+    {
+      "key": "community-events",
+      "name": "Community Events",
+      "permissions": [],
+      "color": 0,
+      "hoist": false,
+      "mentionable": false
+    }
+  ],
+  "categories": [
+    {
+      "key": "information",
+      "name": "INFORMATION",
+      "overwrites": []
+    },
+    {
+      "key": "community",
+      "name": "COMMUNITY",
+      "overwrites": []
+    },
+    {
+      "key": "support",
+      "name": "SUPPORT",
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-team",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "development",
+      "name": "DEVELOPMENT",
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "contributor",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "voice",
+      "name": "VOICE",
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MUTE_MEMBERS",
+            "DEAFEN_MEMBERS",
+            "MOVE_MEMBERS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MUTE_MEMBERS",
+            "DEAFEN_MEMBERS",
+            "MOVE_MEMBERS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "voice-access",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "staff-only",
+      "name": "STAFF-ONLY",
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        }
+      ]
+    }
+  ],
+  "channels": [
+    {
+      "key": "start-here",
+      "name": "start-here",
+      "type": "text",
+      "category": "information",
+      "topic": "Start here for an introduction to CloudNow, important links, and directions to the right channel.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "rules",
+      "name": "rules",
+      "type": "text",
+      "category": "information",
+      "topic": "The rules that keep the CloudNow community welcoming, useful, and safe.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "announcements",
+      "name": "announcements",
+      "type": "announcement",
+      "category": "information",
+      "topic": "Important CloudNow project and community announcements.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "default_auto_archive_minutes": 1440,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [
+            "ADD_REACTIONS"
+          ],
+          "deny": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "releases-channel",
+      "name": "releases",
+      "type": "text",
+      "category": "information",
+      "topic": "New CloudNow releases, beta builds, TestFlight updates, and important release notes.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "default_auto_archive_minutes": 1440,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [
+            "ADD_REACTIONS"
+          ],
+          "deny": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "releases",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "faq",
+      "name": "faq",
+      "type": "text",
+      "category": "information",
+      "topic": "Answers to common questions about installation, compatibility, support, privacy, and contributing.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-team",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "known-issues",
+      "name": "known-issues",
+      "type": "text",
+      "category": "information",
+      "topic": "Confirmed problems, workarounds, service disruptions, and links to tracked GitHub issues.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-team",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "general",
+      "name": "general",
+      "type": "text",
+      "category": "community",
+      "topic": "General discussion about CloudNow, GeForce NOW on Apple TV, and related gaming topics.",
+      "nsfw": false,
+      "slowmode_seconds": 3,
+      "overwrites": []
+    },
+    {
+      "key": "introductions",
+      "name": "introductions",
+      "type": "text",
+      "category": "community",
+      "topic": "Introduce yourself, your Apple TV setup, favourite games, or how you found CloudNow.",
+      "nsfw": false,
+      "slowmode_seconds": 5,
+      "overwrites": []
+    },
+    {
+      "key": "showcase",
+      "name": "showcase",
+      "type": "text",
+      "category": "community",
+      "topic": "Share setups and screenshots. Remove personal information before posting.",
+      "nsfw": false,
+      "slowmode_seconds": 5,
+      "overwrites": []
+    },
+    {
+      "key": "feature-discussion",
+      "name": "feature-discussion",
+      "type": "text",
+      "category": "community",
+      "topic": "Discuss potential features and improvements before creating a formal GitHub issue.",
+      "nsfw": false,
+      "slowmode_seconds": 5,
+      "overwrites": []
+    },
+    {
+      "key": "off-topic",
+      "name": "off-topic",
+      "type": "text",
+      "category": "community",
+      "topic": "Friendly conversation that does not belong in the project channels. Community rules still apply.",
+      "nsfw": false,
+      "slowmode_seconds": 5,
+      "overwrites": []
+    },
+    {
+      "key": "help",
+      "name": "help",
+      "type": "forum",
+      "category": "support",
+      "topic": "Get community help with installing, configuring, or using CloudNow. Create one post per problem and remove private data.",
+      "nsfw": false,
+      "slowmode_seconds": 5,
+      "default_auto_archive_minutes": 4320,
+      "default_thread_slowmode_seconds": 30,
+      "require_tag": true,
+      "overwrites": [
+        {
+          "target": "support-team",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MANAGE_THREADS"
+          ],
+          "deny": []
+        }
+      ],
+      "forum_tags": [
+        {
+          "name": "Installation",
+          "moderated": false,
+          "emoji": "🛠️"
+        },
+        {
+          "name": "Sign-in",
+          "moderated": false,
+          "emoji": "🔐"
+        },
+        {
+          "name": "Streaming",
+          "moderated": false,
+          "emoji": "☁️"
+        },
+        {
+          "name": "Network",
+          "moderated": false,
+          "emoji": "🌐"
+        },
+        {
+          "name": "Video & HDR",
+          "moderated": false,
+          "emoji": "📺"
+        },
+        {
+          "name": "Audio & Microphone",
+          "moderated": false,
+          "emoji": "🎧"
+        },
+        {
+          "name": "Controller & Input",
+          "moderated": false,
+          "emoji": "🎮"
+        },
+        {
+          "name": "Crash",
+          "moderated": false,
+          "emoji": "💥"
+        },
+        {
+          "name": "Beta Build",
+          "moderated": false,
+          "emoji": "🧪"
+        },
+        {
+          "name": "Other",
+          "moderated": false,
+          "emoji": "❓"
+        },
+        {
+          "name": "Solved",
+          "moderated": false,
+          "emoji": "✅"
+        }
+      ]
+    },
+    {
+      "key": "support-resources",
+      "name": "support-resources",
+      "type": "text",
+      "category": "support",
+      "topic": "Installation guides, troubleshooting procedures, diagnostic instructions, and common fixes.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-team",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "development-channel",
+      "name": "development",
+      "type": "text",
+      "category": "development",
+      "topic": "Technical discussion about CloudNow architecture, Swift, tvOS, WebRTC, streaming, and implementation work.",
+      "nsfw": false,
+      "slowmode_seconds": 3,
+      "overwrites": [
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "contributing",
+      "name": "contributing",
+      "type": "text",
+      "category": "development",
+      "topic": "Development setup, coding standards, tests, pull requests, and becoming a contributor.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES",
+            "CREATE_PUBLIC_THREADS",
+            "CREATE_PRIVATE_THREADS",
+            "SEND_MESSAGES_IN_THREADS",
+            "SEND_POLLS"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL",
+            "SEND_MESSAGES"
+          ],
+          "deny": []
+        },
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "pull-requests",
+      "name": "pull-requests",
+      "type": "text",
+      "category": "development",
+      "topic": "Discussion and selected notifications for active CloudNow pull requests. Final review decisions remain on GitHub.",
+      "nsfw": false,
+      "slowmode_seconds": 3,
+      "overwrites": [
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "testing",
+      "name": "testing",
+      "type": "text",
+      "category": "development",
+      "topic": "Coordinate beta testing, reproduce issues, compare devices, and validate candidate fixes.",
+      "nsfw": false,
+      "slowmode_seconds": 3,
+      "overwrites": [
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL",
+            "MENTION_EVERYONE"
+          ],
+          "deny": []
+        },
+        {
+          "target": "beta-tester",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "beta-updates",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "localization",
+      "name": "localization",
+      "type": "text",
+      "category": "development",
+      "topic": "Coordinate translations and review CloudNow localization changes.",
+      "nsfw": false,
+      "slowmode_seconds": 3,
+      "overwrites": [
+        {
+          "target": "translator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "localization-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "community-projects",
+      "name": "community-projects",
+      "type": "text",
+      "category": "development",
+      "topic": "Share clearly labelled source-available unofficial forks, tools, documentation, and related projects. No unexplained binaries.",
+      "nsfw": false,
+      "slowmode_seconds": 10,
+      "overwrites": [
+        {
+          "target": "developer-interest",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "lounge",
+      "name": "Lounge",
+      "type": "voice",
+      "category": "voice",
+      "topic": "",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": []
+    },
+    {
+      "key": "pair-debugging",
+      "name": "Pair Debugging",
+      "type": "voice",
+      "category": "voice",
+      "topic": "",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "user_limit": 4,
+      "overwrites": []
+    },
+    {
+      "key": "staff-chat",
+      "name": "staff-chat",
+      "type": "text",
+      "category": "staff-only",
+      "topic": "Private staff coordination.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "support-team",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "mod-log",
+      "name": "mod-log",
+      "type": "text",
+      "category": "staff-only",
+      "topic": "Warnings, timeouts, kicks, bans, appeals, and significant moderation notes.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "automod-alerts",
+      "name": "automod-alerts",
+      "type": "text",
+      "category": "staff-only",
+      "topic": "AutoMod alerts and suspected spam.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "security-response",
+      "name": "security-response",
+      "type": "text",
+      "category": "staff-only",
+      "topic": "Private coordination for suspected vulnerabilities or accidentally exposed secrets. Move valid reports to the private security process.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "project-maintainer",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    },
+    {
+      "key": "discord-updates",
+      "name": "discord-updates",
+      "type": "text",
+      "category": "staff-only",
+      "topic": "Official Discord community and safety updates.",
+      "nsfw": false,
+      "slowmode_seconds": 0,
+      "overwrites": [
+        {
+          "target": "@everyone",
+          "allow": [],
+          "deny": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        {
+          "target": "server-admin",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        },
+        {
+          "target": "moderator",
+          "allow": [
+            "VIEW_CHANNEL"
+          ],
+          "deny": []
+        }
+      ]
+    }
+  ],
+  "onboarding": {
+    "enabled": true,
+    "mode": "default",
+    "default_channels": [
+      "start-here",
+      "rules",
+      "announcements",
+      "general",
+      "introductions",
+      "showcase",
+      "feature-discussion",
+      "off-topic"
+    ],
+    "writable_default_channels": [
+      "general",
+      "introductions",
+      "showcase",
+      "feature-discussion",
+      "off-topic"
+    ],
+    "prompts": [
+      {
+        "title": "What brings you to CloudNow?",
+        "type": "multiple_choice",
+        "single_select": false,
+        "required": true,
+        "in_onboarding": true,
+        "options": [
+          {
+            "title": "I need help using CloudNow",
+            "description": "Support forum, guides, and known issues",
+            "emoji": "🛠️",
+            "channels": [
+              "help",
+              "support-resources",
+              "known-issues",
+              "faq"
+            ],
+            "roles": [
+              "support-interest"
+            ]
+          },
+          {
+            "title": "I want release updates",
+            "description": "Stable releases and important announcements",
+            "emoji": "🚀",
+            "channels": [
+              "announcements",
+              "releases-channel"
+            ],
+            "roles": [
+              "releases"
+            ]
+          },
+          {
+            "title": "I want to contribute code",
+            "description": "Development, contribution, PR, and community project channels",
+            "emoji": "💻",
+            "channels": [
+              "development-channel",
+              "contributing",
+              "pull-requests",
+              "community-projects"
+            ],
+            "roles": [
+              "developer-interest"
+            ]
+          },
+          {
+            "title": "I want to help translate",
+            "description": "Localization discussion and interest role",
+            "emoji": "🌍",
+            "channels": [
+              "localization"
+            ],
+            "roles": [
+              "localization-interest"
+            ]
+          },
+          {
+            "title": "I want to meet the community",
+            "description": "General conversation, introductions, and setups",
+            "emoji": "👋",
+            "channels": [
+              "general",
+              "introductions",
+              "showcase",
+              "off-topic"
+            ],
+            "roles": []
+          },
+          {
+            "title": "I want to use voice channels",
+            "description": "Community voice chat and focused pair debugging",
+            "emoji": "🎙️",
+            "channels": [
+              "lounge",
+              "pair-debugging"
+            ],
+            "roles": [
+              "voice-access"
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Which topics interest you?",
+        "type": "multiple_choice",
+        "single_select": false,
+        "required": false,
+        "in_onboarding": false,
+        "options": [
+          {
+            "title": "Installation and sign-in",
+            "description": "Installation methods and account sign-in help",
+            "channels": [
+              "help",
+              "support-resources"
+            ],
+            "roles": [
+              "support-interest"
+            ]
+          },
+          {
+            "title": "Streaming, networking, and latency",
+            "description": "Streaming quality and network diagnostics",
+            "channels": [
+              "help",
+              "general"
+            ],
+            "roles": [
+              "support-interest"
+            ]
+          },
+          {
+            "title": "Video, codecs, and HDR",
+            "description": "Display quality, codecs, and HDR",
+            "channels": [
+              "help",
+              "general"
+            ],
+            "roles": [
+              "support-interest"
+            ]
+          },
+          {
+            "title": "Audio, microphone, and controllers",
+            "description": "Audio paths and input devices",
+            "channels": [
+              "help",
+              "general"
+            ],
+            "roles": [
+              "support-interest"
+            ]
+          },
+          {
+            "title": "Development and architecture",
+            "description": "Swift, tvOS, WebRTC, and implementation",
+            "channels": [
+              "development-channel",
+              "contributing"
+            ],
+            "roles": [
+              "developer-interest"
+            ]
+          },
+          {
+            "title": "Testing and beta builds",
+            "description": "Pre-release coordination and validation",
+            "channels": [
+              "testing"
+            ],
+            "roles": [
+              "beta-updates"
+            ]
+          },
+          {
+            "title": "Localization",
+            "description": "Translation and language review",
+            "channels": [
+              "localization"
+            ],
+            "roles": [
+              "localization-interest"
+            ]
+          },
+          {
+            "title": "General gaming discussion",
+            "description": "Cloud gaming and Apple TV conversation",
+            "channels": [
+              "general",
+              "off-topic"
+            ],
+            "roles": []
+          }
+        ]
+      },
+      {
+        "title": "Which notifications would you like?",
+        "type": "multiple_choice",
+        "single_select": false,
+        "required": false,
+        "in_onboarding": true,
+        "options": [
+          {
+            "title": "Stable releases",
+            "description": "New stable CloudNow releases",
+            "channels": [
+              "releases-channel"
+            ],
+            "roles": [
+              "releases"
+            ]
+          },
+          {
+            "title": "Beta testing opportunities",
+            "description": "Calls for testing pre-release builds",
+            "channels": [
+              "testing"
+            ],
+            "roles": [
+              "beta-updates"
+            ]
+          },
+          {
+            "title": "Important project status",
+            "description": "Material project availability and status changes",
+            "channels": [
+              "announcements"
+            ],
+            "roles": [
+              "project-status"
+            ]
+          },
+          {
+            "title": "Community events",
+            "description": "Optional CloudNow community events",
+            "channels": [
+              "general"
+            ],
+            "roles": [
+              "community-events"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cleanup": {
+    "roles": [
+      {
+        "id": "1525110182453968936",
+        "name": "Tester",
+        "migrate_to": "beta-tester"
+      },
+      {
+        "id": "1529910988315299870",
+        "name": "Member",
+        "migrate_to": null
+      }
+    ],
+    "channels": [
+      {
+        "id": "1525109764479258624",
+        "name": "welcome",
+        "type": "text"
+      },
+      {
+        "id": "1529911807035314278",
+        "name": "moderator-only",
+        "type": "text"
+      },
+      {
+        "id": "1525111730164858970",
+        "name": "updates",
+        "type": "text"
+      },
+      {
+        "id": "1525110772181631107",
+        "name": "suggestions",
+        "type": "forum"
+      }
+    ],
+    "categories": [
+      {
+        "id": "1525109552356266044",
+        "name": "Text Channels"
+      },
+      {
+        "id": "1525110881254375505",
+        "name": "Development"
+      }
+    ]
+  },
+  "automod_rules": [
+    {
+      "key": "common-flagged-words",
+      "name": "Common Flagged Words",
+      "enabled": true,
+      "trigger": {
+        "type": "keyword_preset",
+        "presets": [
+          "profanity",
+          "sexual_content",
+          "slurs"
+        ],
+        "allow_list": []
+      },
+      "actions": [
+        {
+          "type": "block_message",
+          "custom_message": "Your message was blocked by CloudNow AutoMod. Remove prohibited content and try again."
+        },
+        {
+          "type": "send_alert",
+          "channel": "automod-alerts"
+        }
+      ],
+      "exempt_roles": [],
+      "exempt_channels": [
+        "security-response"
+      ]
+    },
+    {
+      "key": "spam-content",
+      "name": "Spam Content",
+      "enabled": true,
+      "trigger": {
+        "type": "spam"
+      },
+      "actions": [
+        {
+          "type": "block_message",
+          "custom_message": "Your message was blocked as likely spam. Remove repetitive or deceptive content and try again."
+        },
+        {
+          "type": "send_alert",
+          "channel": "automod-alerts"
+        }
+      ],
+      "exempt_roles": [],
+      "exempt_channels": []
+    },
+    {
+      "key": "mention-spam",
+      "name": "Mention Spam",
+      "enabled": true,
+      "trigger": {
+        "type": "mention_spam",
+        "mention_limit": 5,
+        "mention_raid_protection": true
+      },
+      "actions": [
+        {
+          "type": "block_message",
+          "custom_message": "Your message contained too many mentions. Reduce them and try again."
+        },
+        {
+          "type": "send_alert",
+          "channel": "automod-alerts"
+        },
+        {
+          "type": "timeout",
+          "duration_seconds": 60
+        }
+      ],
+      "exempt_roles": [],
+      "exempt_channels": []
+    },
+    {
+      "key": "scam-and-qr-review",
+      "name": "Scam and QR Review (Alert Only)",
+      "enabled": true,
+      "alert_only": true,
+      "trigger": {
+        "type": "keyword",
+        "keywords": [
+          "*free nitro*",
+          "*nitro giveaway claim*",
+          "*steam gift login*",
+          "*verify by scanning this QR*",
+          "*scan this QR code*",
+          "*crypto airdrop*",
+          "*wallet verification*",
+          "*token grabber*",
+          "*password checker*",
+          "*account generator*",
+          "*DM me for support*",
+          "*staff verification required*"
+        ],
+        "regex_patterns": [],
+        "allow_list": []
+      },
+      "actions": [
+        {
+          "type": "send_alert",
+          "channel": "automod-alerts"
+        }
+      ],
+      "exempt_roles": [],
+      "exempt_channels": []
+    },
+    {
+      "key": "suspicious-distribution",
+      "name": "Suspicious CloudNow Distribution (Alert Only)",
+      "enabled": true,
+      "alert_only": true,
+      "trigger": {
+        "type": "keyword",
+        "keywords": [
+          "*paid CloudNow IPA*",
+          "*cracked CloudNow*",
+          "*modded CloudNow download*",
+          "*DM for CloudNow build*",
+          "*private CloudNow download*"
+        ],
+        "regex_patterns": [],
+        "allow_list": []
+      },
+      "actions": [
+        {
+          "type": "send_alert",
+          "channel": "automod-alerts"
+        }
+      ],
+      "exempt_roles": [],
+      "exempt_channels": []
+    }
+  ]
+}

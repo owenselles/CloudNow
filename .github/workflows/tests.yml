@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CLOUDNOW_DISABLE_LIVE_SERVICES: "1"
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Print Xcode version
+        run: xcodebuild -version
+
+      - name: Run tvOS test plan
+        run: Scripts/test.sh
+
+      - name: Upload compact coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloudnow-coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: TestArtifacts/**/Coverage/targets.*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload failed test result
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloudnow-xcresult-${{ github.run_id }}-${{ github.run_attempt }}
+          path: TestArtifacts/**/*.xcresult
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 14

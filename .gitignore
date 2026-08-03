@@ -17,12 +17,14 @@ xcuserdata/
 *.dSYM
 DerivedData/
 build/
+TestArtifacts/
 
 # Swift Package Manager
 .build/
 .swiftpm/
 Packages/
 Package.resolved
+!CloudNow.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 # CocoaPods (not used but just in case)
 Pods/
@@ -40,6 +42,9 @@ Podfile.lock
 *.mobileprovision
 *.provisionprofile
 AuthKey_*.p8
+.env
+.env.*
+!.env.example
 
 # Local signing config (each dev sets their own DEVELOPMENT_TEAM)
 Local.xcconfig
@@ -47,7 +52,13 @@ Local.xcconfig
 # Local Apple TV/Xcode overrides (tracked files also use skip-worktree locally)
 CloudNow/Info.plist
 CloudNow.xcodeproj/project.pbxproj
-CloudNow.xcodeproj/xcshareddata/xcschemes/CloudNow.xcscheme
 
 # Opencode / AI workflow (local-only)
 .omo/
+
+# Local Discord provisioning state and safety snapshots
+Scripts/Discord/.discord-state.json
+Scripts/Discord/.discord-state.json.lock
+Scripts/Discord/.discord-content-state.json
+Scripts/Discord/.discord-content-state.json.lock
+Scripts/Discord/.discord-rollbacks/

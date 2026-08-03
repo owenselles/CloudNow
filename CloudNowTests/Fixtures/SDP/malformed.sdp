@@ -1,0 +1,6 @@
+v=0
+this is not an SDP media section
+a=rtpmap:not-a-payload
+m=video
+a=fmtp:broken apt=
+a=x-unknown:must-survive

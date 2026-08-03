@@ -1,0 +1,32 @@
+[
+  {
+    "id": "fixture-alpha",
+    "title": "Alpha Orbit",
+    "genres": ["Action", "ACTION"],
+    "supportedFeatures": ["hdr", "rtx"],
+    "screenshots": [],
+    "isInLibrary": true,
+    "variants": [
+      {
+        "id": "fixture-alpha-steam",
+        "appStore": "STEAM",
+        "isOwned": true
+      }
+    ]
+  },
+  {
+    "id": "fixture-beta",
+    "title": "Beta Valley",
+    "genres": ["Strategy"],
+    "supportedFeatures": ["reflex"],
+    "screenshots": [],
+    "isInLibrary": false,
+    "variants": [
+      {
+        "id": "fixture-beta-epic",
+        "appStore": "EPIC",
+        "isOwned": false
+      }
+    ]
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "resolution": "3840x2160",
+  "fps": 120,
+  "maxBitrateKbps": 125000,
+  "codec": "H265",
+  "colorQuality": "HDR10bit",
+  "keyboardLayout": "en-US",
+  "rumbleIntensity": 3.5,
+  "controllerDeadzone": -0.5
+}

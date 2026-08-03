@@ -121,7 +121,14 @@ extension StreamSettings {
         self.init()
         resolution = try c.decodeIfPresent(String.self, forKey: .resolution) ?? d.resolution
         fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
-        maxBitrateKbps = try c.decodeIfPresent(Int.self, forKey: .maxBitrateKbps) ?? d.maxBitrateKbps
+        let storedBitrate = try c.decodeIfPresent(
+            Int.self,
+            forKey: .maxBitrateKbps
+        ) ?? d.maxBitrateKbps
+        maxBitrateKbps = min(
+            storedBitrate,
+            Self.maxSelectableBitrateKbps
+        )
         codec = try c.decodeIfPresent(VideoCodec.self, forKey: .codec) ?? d.codec
         colorPreference = try c.decodeIfPresent(ColorModePreference.self, forKey: .colorPreference)
             ?? (c.decodeIfPresent(ColorQuality.self, forKey: .colorQuality))?.preference
@@ -131,8 +138,22 @@ extension StreamSettings {
         enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
         micEnabled = try c.decodeIfPresent(Bool.self, forKey: .micEnabled) ?? d.micEnabled
         rumbleEnabled = try c.decodeIfPresent(Bool.self, forKey: .rumbleEnabled) ?? d.rumbleEnabled
-        rumbleIntensity = try c.decodeIfPresent(Double.self, forKey: .rumbleIntensity) ?? d.rumbleIntensity
-        controllerDeadzone = try c.decodeIfPresent(Double.self, forKey: .controllerDeadzone) ?? d.controllerDeadzone
+        let storedRumbleIntensity = try c.decodeIfPresent(
+            Double.self,
+            forKey: .rumbleIntensity
+        ) ?? d.rumbleIntensity
+        rumbleIntensity = min(
+            max(storedRumbleIntensity, Self.minRumbleIntensity),
+            Self.maxRumbleIntensity
+        )
+        let storedControllerDeadzone = try c.decodeIfPresent(
+            Double.self,
+            forKey: .controllerDeadzone
+        ) ?? d.controllerDeadzone
+        controllerDeadzone = min(
+            max(storedControllerDeadzone, Self.minControllerDeadzone),
+            Self.maxControllerDeadzone
+        )
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
         preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)

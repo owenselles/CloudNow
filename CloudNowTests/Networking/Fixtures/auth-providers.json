@@ -1,0 +1,20 @@
+{
+  "gfnServiceInfo": {
+    "gfnServiceEndpoints": [
+      {
+        "idpId": "secondary-idp",
+        "loginProviderCode": "BPC",
+        "loginProviderDisplayName": "Secondary",
+        "streamingServiceUrl": "https://secondary.example.invalid",
+        "loginProviderPriority": 20
+      },
+      {
+        "idpId": "primary-idp",
+        "loginProviderCode": "NVIDIA",
+        "loginProviderDisplayName": "NVIDIA",
+        "streamingServiceUrl": "https://primary.example.invalid/",
+        "loginProviderPriority": 5
+      }
+    ]
+  }
+}

@@ -66,14 +66,14 @@ struct GameFilterOptions: Equatable {
                 genreCounts[genre, default: 0] += 1
             }
 
-            let storesForGame: Set<String> = switch context {
+            let rawStores: [String] = switch context {
             case .store:
-                Set(game.variants.map(\.appStore))
+                game.variants.map(\.appStore)
             case .library:
-                Set(game.ownedStores)
+                game.ownedStores
             }
-            for store in storesForGame {
-                let code = GameStoreFilter.normalizedCode(store)
+            let storesForGame = Set(rawStores.map(GameStoreFilter.normalizedCode))
+            for code in storesForGame {
                 if GameStoreFilter.isDisplayable(code) {
                     storeCounts[code, default: 0] += 1
                 }

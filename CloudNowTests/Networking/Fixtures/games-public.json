@@ -1,0 +1,26 @@
+{
+  "games": [
+    {
+      "status": "AVAILABLE",
+      "id": "public-racer",
+      "title": "Fixture Racer",
+      "genres": ["SPORTS"],
+      "variants": [
+        {"id": "303", "appStore": "XBOX", "status": "AVAILABLE"}
+      ]
+    },
+    {
+      "status": "AVAILABLE",
+      "id": "public-only",
+      "title": "Public Only",
+      "store": "STEAM",
+      "appId": "404"
+    },
+    {
+      "status": "REMOVED",
+      "id": "removed",
+      "title": "Removed",
+      "appId": "999"
+    }
+  ]
+}

@@ -20,10 +20,24 @@ private nonisolated enum ArtworkKind: Hashable {
     case heroArt
 }
 
+nonisolated struct ArtworkPipelineSnapshot: Equatable, Sendable {
+    let cachedImageCount: Int
+    let totalCost: Int
+    let inFlightRequestCount: Int
+    let waiterCount: Int
+}
+
 /// One decoded-image pipeline for cards, hero banners, and loading artwork.
 /// The actor coalesces identical in-flight work and enforces separate hard LRU budgets for
 /// card and hero artwork so cache-owned decoded memory cannot drift past configured targets.
 actor ArtworkImagePipeline {
+    typealias ImageLoader = @Sendable (URL, Int) async throws -> CGImage
+
+    struct CacheBudget: Equatable, Sendable {
+        let totalCostLimit: Int
+        let countLimit: Int
+    }
+
     static let shared = ArtworkImagePipeline()
 
     static let boxArtPixelSize = 640
@@ -41,23 +55,19 @@ actor ArtworkImagePipeline {
         let task: Task<CGImage, Error>
         let kind: ArtworkKind
         let generation: UInt64
-    }
-
-    private struct CacheBudget {
-        let totalCostLimit: Int
-        let countLimit: Int
+        var waiters: [UInt64: CheckedContinuation<CGImage, Error>]
     }
 
     private static let megabyte = 1024 * 1024
-    private static let foregroundBoxArtBudget = CacheBudget(
+    private static let defaultForegroundBoxArtBudget = CacheBudget(
         totalCostLimit: 96 * megabyte,
         countLimit: 96
     )
-    private static let backgroundBoxArtBudget = CacheBudget(
+    private static let defaultBackgroundBoxArtBudget = CacheBudget(
         totalCostLimit: 32 * megabyte,
         countLimit: 32
     )
-    private static let heroArtBudget = CacheBudget(
+    private static let defaultHeroArtBudget = CacheBudget(
         totalCostLimit: 32 * megabyte,
         countLimit: 4
     )
@@ -68,10 +78,26 @@ actor ArtworkImagePipeline {
     private var inFlight: [String: InFlightRequest] = [:]
     private var generation: [ArtworkKind: UInt64] = [.boxArt: 0, .heroArt: 0]
     private var memoryEvent = ArtworkMemoryEvent.foreground
+    private var waiterCounter: UInt64 = 0
+    private let imageLoader: ImageLoader
+    private let foregroundBoxArtBudget: CacheBudget
+    private let backgroundBoxArtBudget: CacheBudget
+    private let heroArtBudget: CacheBudget
 
-    private init() {}
+    init(
+        imageLoader: ImageLoader? = nil,
+        foregroundBoxArtBudget: CacheBudget? = nil,
+        backgroundBoxArtBudget: CacheBudget? = nil,
+        heroArtBudget: CacheBudget? = nil
+    ) {
+        self.imageLoader = imageLoader ?? Self.fetchAndDownsample
+        self.foregroundBoxArtBudget = foregroundBoxArtBudget ?? Self.defaultForegroundBoxArtBudget
+        self.backgroundBoxArtBudget = backgroundBoxArtBudget ?? Self.defaultBackgroundBoxArtBudget
+        self.heroArtBudget = heroArtBudget ?? Self.defaultHeroArtBudget
+    }
 
     func image(for url: URL, maxPixelSize: Int) async throws -> CGImage {
+        try Task.checkCancellation()
         let kind = Self.artworkKind(maxPixelSize: maxPixelSize)
         guard permitsNewLoads(for: kind, maxPixelSize: maxPixelSize) else {
             throw CancellationError()
@@ -81,37 +107,134 @@ actor ArtworkImagePipeline {
         if let cached = cachedImage(for: key) {
             return cached
         }
-        if let request = inFlight[key] {
-            return try await request.task.value
+
+        waiterCounter &+= 1
+        let waiterID = waiterCounter
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation(isolation: self) { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                registerWaiter(
+                    continuation,
+                    id: waiterID,
+                    key: key,
+                    url: url,
+                    maxPixelSize: maxPixelSize,
+                    kind: kind
+                )
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaiter(id: waiterID, key: key)
+            }
+        }
+    }
+
+    func snapshot(maxPixelSize: Int) -> ArtworkPipelineSnapshot {
+        let kind = Self.artworkKind(maxPixelSize: maxPixelSize)
+        let requests = inFlight.values.filter { $0.kind == kind }
+        return ArtworkPipelineSnapshot(
+            cachedImageCount: cachedImageCount(for: kind),
+            totalCost: totalCost[kind, default: 0],
+            inFlightRequestCount: requests.count,
+            waiterCount: requests.reduce(0) { $0 + $1.waiters.count }
+        )
+    }
+
+    private func registerWaiter(
+        _ continuation: CheckedContinuation<CGImage, Error>,
+        id: UInt64,
+        key: String,
+        url: URL,
+        maxPixelSize: Int,
+        kind: ArtworkKind
+    ) {
+        if var request = inFlight[key] {
+            request.waiters[id] = continuation
+            inFlight[key] = request
+            return
         }
 
         let requestGeneration = generation[kind, default: 0]
+        let loader = imageLoader
         let task = Task(priority: .userInitiated) { @concurrent in
-            let image = try await Self.fetchAndDownsample(url: url, maxPixelSize: maxPixelSize)
+            let image = try await loader(url, maxPixelSize)
             try Task.checkCancellation()
             return image
         }
         inFlight[key] = InFlightRequest(
             task: task,
             kind: kind,
-            generation: requestGeneration
+            generation: requestGeneration,
+            waiters: [id: continuation]
         )
-        do {
-            let image = try await task.value
-            inFlight[key] = nil
-            guard generation[kind, default: 0] == requestGeneration,
-                  permitsNewLoads(for: kind, maxPixelSize: maxPixelSize)
-            else {
-                throw CancellationError()
+        Task { @concurrent [weak self] in
+            do {
+                let image = try await task.value
+                await self?.completeRequest(
+                    key: key,
+                    generation: requestGeneration,
+                    maxPixelSize: maxPixelSize,
+                    image: image
+                )
+            } catch {
+                await self?.failRequest(
+                    key: key,
+                    generation: requestGeneration,
+                    error: error
+                )
             }
-            insert(image, for: key, kind: kind)
-            return image
-        } catch {
-            if inFlight[key]?.generation == requestGeneration {
-                inFlight[key] = nil
-            }
-            throw error
         }
+    }
+
+    private func completeRequest(
+        key: String,
+        generation requestGeneration: UInt64,
+        maxPixelSize: Int,
+        image: CGImage
+    ) {
+        guard let request = inFlight[key],
+              request.generation == requestGeneration
+        else { return }
+        inFlight[key] = nil
+
+        guard generation[request.kind, default: 0] == requestGeneration,
+              permitsNewLoads(for: request.kind, maxPixelSize: maxPixelSize)
+        else {
+            for value in request.waiters.values {
+                value.resume(throwing: CancellationError())
+            }
+            return
+        }
+
+        insert(image, for: key, kind: request.kind)
+        for value in request.waiters.values {
+            value.resume(returning: image)
+        }
+    }
+
+    private func failRequest(
+        key: String,
+        generation requestGeneration: UInt64,
+        error: any Error
+    ) {
+        guard let request = inFlight[key],
+              request.generation == requestGeneration
+        else { return }
+        inFlight[key] = nil
+        for value in request.waiters.values {
+            value.resume(throwing: error)
+        }
+    }
+
+    private func cancelWaiter(id: UInt64, key: String) {
+        guard var request = inFlight[key],
+              let continuation = request.waiters.removeValue(forKey: id)
+        else { return }
+        inFlight[key] = request
+        continuation.resume(throwing: CancellationError())
     }
 
     func prefetch(_ url: URL, maxPixelSize: Int) async -> Bool {
@@ -132,8 +255,8 @@ actor ArtworkImagePipeline {
 
         switch event {
         case .foreground:
-            trimCache(for: .boxArt, to: Self.foregroundBoxArtBudget)
-            trimCache(for: .heroArt, to: Self.heroArtBudget)
+            trimCache(for: .boxArt, to: foregroundBoxArtBudget)
+            trimCache(for: .heroArt, to: heroArtBudget)
         case .streamOpening:
             cancelInFlight(for: .boxArt)
         case .streaming:
@@ -144,7 +267,7 @@ actor ArtworkImagePipeline {
             cancelInFlight(for: .boxArt)
             cancelInFlight(for: .heroArt)
             removeCachedImages(for: .heroArt)
-            trimCache(for: .boxArt, to: Self.backgroundBoxArtBudget)
+            trimCache(for: .boxArt, to: backgroundBoxArtBudget)
         case .memoryWarning:
             cancelInFlight(for: .boxArt)
             cancelInFlight(for: .heroArt)
@@ -242,6 +365,9 @@ actor ArtworkImagePipeline {
         var keys: [String] = []
         for (key, request) in inFlight where request.kind == kind {
             request.task.cancel()
+            for value in request.waiters.values {
+                value.resume(throwing: CancellationError())
+            }
             keys.append(key)
         }
         for key in keys {
@@ -253,10 +379,10 @@ actor ArtworkImagePipeline {
         switch kind {
         case .boxArt:
             memoryEvent == .background
-                ? Self.backgroundBoxArtBudget
-                : Self.foregroundBoxArtBudget
+                ? backgroundBoxArtBudget
+                : foregroundBoxArtBudget
         case .heroArt:
-            Self.heroArtBudget
+            heroArtBudget
         }
     }
 

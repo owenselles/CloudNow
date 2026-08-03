@@ -7,10 +7,9 @@ For every task that changes repository content, complete this checklist before r
 3. Run the non-mutating checks from the repository root:
 
    ```bash
-   swiftformat --lint --config .swiftformat CloudNow
-   swiftlint --strict --config .swiftlint.yml CloudNow
+   swiftformat --lint --config .swiftformat CloudNow CloudNowTests CloudNowUITests
+   swiftlint --strict --config .swiftlint.yml CloudNow CloudNowTests CloudNowUITests
    ```
 
 4. Do not mark the task complete until both checks pass. If a local executable has the wrong version, use the pinned CI/pre-commit tool environment instead of running the mismatched executable.
 5. Report both check results in the final response.
-

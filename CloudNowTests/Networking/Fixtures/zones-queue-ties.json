@@ -1,0 +1,6 @@
+{
+  "data": {
+    "NP-ZZZ-01": {"QueuePosition": 4, "Region": "EU", "eta": 5000},
+    "NP-AAA-01": {"QueuePosition": 4, "Region": "EU", "eta": 5000}
+  }
+}

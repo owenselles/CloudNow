@@ -1,0 +1,5 @@
+{
+  "statsMode": "hud",
+  "diagnosticsEnabled": false,
+  "enableRtcEventLog": true
+}

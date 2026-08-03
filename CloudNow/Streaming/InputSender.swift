@@ -77,7 +77,7 @@ nonisolated enum RemoteInputMode: String, Codable, Equatable {
 
 extension RemoteInputMode {
     /// The Siri Remote drives the mouse pointer alongside the connected controller.
-    var remoteActsAsMouse: Bool {
+    nonisolated var remoteActsAsMouse: Bool {
         self == .gamepadMouse
     }
 }
@@ -94,7 +94,7 @@ nonisolated protocol InputEventHandler: AnyObject {
 
 // MARK: - Encoded Packet
 
-nonisolated enum InputPacketCategory: String {
+nonisolated enum InputPacketCategory: String, Sendable {
     case heartbeat
     case gamepadSnapshot
     case keyboard
@@ -104,7 +104,7 @@ nonisolated enum InputPacketCategory: String {
     case hapticsEnabled
 }
 
-nonisolated enum InputSendDisposition {
+nonisolated enum InputSendDisposition: Sendable {
     case accepted
     case channelUnavailable
     case rejected
@@ -149,8 +149,17 @@ final nonisolated class EncodedInputPacket: @unchecked Sendable {
 
 /// Encodes controller and HID input into reusable GFN protocol packet buffers.
 final nonisolated class InputEncoder {
+    private let timestampProvider: @Sendable () -> UInt64
     private var protocolVersion = 2
     private var gamepadSequence = [Int: UInt16]()
+
+    init(
+        timestampProvider: @escaping @Sendable () -> UInt64 = {
+            UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        }
+    ) {
+        self.timestampProvider = timestampProvider
+    }
 
     func setProtocolVersion(_ v: Int) {
         protocolVersion = v
@@ -363,7 +372,7 @@ final nonisolated class InputEncoder {
     }
 
     private func currentTimestamp() -> UInt64 {
-        UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        timestampProvider()
     }
 }
 

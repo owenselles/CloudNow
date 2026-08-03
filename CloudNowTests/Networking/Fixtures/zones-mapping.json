@@ -1,0 +1,7 @@
+{
+  "data": {
+    "NP-AMS-01": {"title": "Netherlands", "nuked": false},
+    "NP-NEW-01": {"title": "New City", "nuked": false},
+    "NP-REMOVED-01": {"title": "Removed", "nuked": true}
+  }
+}

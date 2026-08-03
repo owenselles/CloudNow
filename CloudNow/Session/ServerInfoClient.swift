@@ -30,34 +30,68 @@ struct GFNServerInfo: Equatable {
 final class ServerInfoClient {
     static let shared = ServerInfoClient()
 
-    /// Last successful fetch, kept for the app run (region lists change rarely).
+    /// Last successful fetch. Expired data remains available as a conservative
+    /// fallback when a refresh fails.
     private(set) var cached: GFNServerInfo?
-    private var cachedBase: String?
+    private var cachedAt: Date?
+    private var cachedBaseURL: String?
+    private let transport: any HTTPTransport
+    private let uuid: @Sendable () -> UUID
+    private let deviceId: @Sendable () -> String
+    private let now: @Sendable () -> Date
+    private let cacheTTL: TimeInterval
 
+    init(
+        transport: any HTTPTransport = URLSessionHTTPTransport(),
+        uuid: @escaping @Sendable () -> UUID = UUID.init,
+        deviceId: @escaping @Sendable () -> String = GFNDeviceIdentity.stableDeviceId,
+        now: @escaping @Sendable () -> Date = Date.init,
+        cacheTTL: TimeInterval = 15 * 60
+    ) {
+        self.transport = transport
+        self.uuid = uuid
+        self.deviceId = deviceId
+        self.now = now
+        self.cacheTTL = cacheTTL
+    }
+
+    /// Cached info, but only when it was fetched from `url`. Partner providers each
+    /// have their own streaming service URL, so region data from one provider must
+    /// never be reused for another. Unlike `fetch`, this ignores the TTL: expired
+    /// data is still a valid conservative fallback when a refresh fails.
     func cachedForBase(_ url: String) -> GFNServerInfo? {
-        guard let base = cachedBase else { return nil }
-        let normalize: (String) -> String = { s in
-            s.hasSuffix("/") ? String(s.dropLast()).lowercased() : s.lowercased()
-        }
-        return normalize(base) == normalize(url) ? cached : nil
+        guard let cachedBaseURL else { return nil }
+        return Self.normalizedBase(cachedBaseURL).caseInsensitiveCompare(Self.normalizedBase(url)) == .orderedSame
+            ? cached
+            : nil
     }
 
     func fetch(baseUrl: String, token: String) async throws -> GFNServerInfo {
-        let base = baseUrl.hasSuffix("/") ? String(baseUrl.dropLast()) : baseUrl
+        let base = Self.normalizedBase(baseUrl)
+
+        if let cached,
+           cachedBaseURL == base,
+           let cachedAt
+        {
+            let age = now().timeIntervalSince(cachedAt)
+            if age >= 0, age < cacheTTL {
+                return cached
+            }
+        }
+
         guard let url = URL(string: "\(base)/v2/serverInfo") else {
             throw URLError(.badURL)
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        let deviceId = GFNDeviceIdentity.stableDeviceId()
-        for (key, value) in gfnHeaders(token: token, clientId: UUID().uuidString, deviceId: deviceId) {
+        for (key, value) in gfnHeaders(token: token, clientId: uuid().uuidString, deviceId: deviceId()) {
             request.setValue(value, forHTTPHeaderField: key)
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await transport.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard status == 200 else {
-            let body = String(data: data.prefix(400), encoding: .utf8) ?? ""
+            let body = redactedHTTPBody(data)
             serverInfoLog.error("serverInfo failed: \(status) body=\(body, privacy: .public)")
             throw URLError(.badServerResponse)
         }
@@ -65,8 +99,18 @@ final class ServerInfoClient {
         let info = try Self.parse(data)
         serverInfoLog.info("serverInfo: \(info.regions.count) regions, local=\(info.localRegionName ?? "nil", privacy: .public)")
         cached = info
-        cachedBase = baseUrl
+        cachedAt = now()
+        cachedBaseURL = base
         return info
+    }
+
+    /// Trailing slashes stripped so the same host compares equal however it was spelled.
+    private static func normalizedBase(_ raw: String) -> String {
+        var base = raw
+        while base.hasSuffix("/") {
+            base.removeLast()
+        }
+        return base
     }
 
     /// Mirrors the official client's buildZonesFromGfnRegions: `gfn-regions` lists the

@@ -1,0 +1,7 @@
+{
+  "data": {
+    "NP-AMS-01": {"QueuePosition": 12, "Region": "EU", "eta": 15000},
+    "NP-NEW-01": {"QueuePosition": 3, "Region": "US", "eta": null},
+    "NPA-INTERNAL": {"QueuePosition": 0, "Region": "EU", "eta": 0}
+  }
+}
