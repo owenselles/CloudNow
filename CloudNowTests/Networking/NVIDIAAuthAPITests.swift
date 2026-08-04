@@ -27,6 +27,25 @@ struct NVIDIAAuthAPITests {
         #expect(providers[1].displayName == "bro.game")
     }
 
+    @Test("Regional preference metadata orders providers ahead of raw priority")
+    func providerPreferenceOrdering() async throws {
+        let fixture = try NetworkingFixture.data("auth-providers-preferred.json")
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: fixture)
+        }
+
+        let providers = try await NVIDIAAuthAPI(transport: transport).fetchProviders()
+
+        // defaultProvider first (so it takes initial focus), then the remaining
+        // preferred providers, then everything else — each group by priority.
+        // NVIDIA carries the lowest priority number here but is not preferred in
+        // this region, so preference has to outrank it.
+        #expect(providers.map(\.idpId) == ["bpc-idp", "jio-idp", "nvidia-idp"])
+
+        // Non-preferred providers stay reachable rather than being filtered out.
+        #expect(providers.count == 3)
+    }
+
     @Test("Device authorization encodes identity and provider without live credentials")
     func deviceAuthorization() async throws {
         let fixture = try NetworkingFixture.data("auth-device.json")

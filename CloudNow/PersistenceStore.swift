@@ -484,7 +484,7 @@ actor AppPersistenceStore {
 
     /// Returns the cached value only when it was written by this same account.
     private func loadScoped<Value: Codable>(
-        _ type: Value.Type,
+        _: Value.Type,
         forKey key: String,
         accountScope: String?
     ) -> Value? {

@@ -1,0 +1,29 @@
+{
+  "gfnServiceInfo": {
+    "defaultProvider": "BPC",
+    "loginPreferredProviders": ["BPC", "JIO"],
+    "gfnServiceEndpoints": [
+      {
+        "idpId": "nvidia-idp",
+        "loginProviderCode": "NVIDIA",
+        "loginProviderDisplayName": "NVIDIA",
+        "streamingServiceUrl": "https://nvidia.example.invalid/",
+        "loginProviderPriority": 1
+      },
+      {
+        "idpId": "jio-idp",
+        "loginProviderCode": "JIO",
+        "loginProviderDisplayName": "Jio",
+        "streamingServiceUrl": "https://jio.example.invalid",
+        "loginProviderPriority": 30
+      },
+      {
+        "idpId": "bpc-idp",
+        "loginProviderCode": "BPC",
+        "loginProviderDisplayName": "Secondary",
+        "streamingServiceUrl": "https://bpc.example.invalid",
+        "loginProviderPriority": 20
+      }
+    ]
+  }
+}
