@@ -218,7 +218,26 @@ actor NVIDIAAuthAPI {
         let (data, response) = try await perform(request)
         try validateHTTP(response, data: data, context: "Provider discovery")
         let payload = try JSONDecoder().decode(ServiceUrlsResponse.self, from: data)
-        let endpoints = payload.gfnServiceInfo?.gfnServiceEndpoints ?? []
+        let info = payload.gfnServiceInfo
+        let endpoints = info?.gfnServiceEndpoints ?? []
+
+        // NVIDIA advertises which providers apply to the caller's region. Those sort
+        // first, with defaultProvider ahead of them so it receives initial focus.
+        // Non-preferred endpoints stay listed: a travelling user still needs to reach
+        // their home provider, and a misdetected region must not lock anyone out.
+        // With no metadata this falls back to the advertised priority order.
+        let defaultCode = info?.defaultProvider ?? payload.defaultProvider
+        let preferredCodes = Set(
+            info?.loginPreferredProviders ?? payload.loginPreferredProviders ?? []
+        )
+
+        func preferenceRank(_ provider: LoginProvider) -> Int {
+            if let defaultCode, provider.code == defaultCode {
+                return 0
+            }
+            return preferredCodes.contains(provider.code) ? 1 : 2
+        }
+
         return endpoints.map { entry in
             LoginProvider(
                 idpId: entry.idpId,
@@ -227,7 +246,11 @@ actor NVIDIAAuthAPI {
                 streamingServiceUrl: entry.streamingServiceUrl.hasSuffix("/") ? entry.streamingServiceUrl : "\(entry.streamingServiceUrl)/",
                 priority: entry.loginProviderPriority ?? 0
             )
-        }.sorted { $0.priority < $1.priority }
+        }.sorted { lhs, rhs in
+            let lhsRank = preferenceRank(lhs)
+            let rhsRank = preferenceRank(rhs)
+            return lhsRank == rhsRank ? lhs.priority < rhs.priority : lhsRank < rhsRank
+        }
     }
 
     // MARK: Token Exchange
@@ -525,8 +548,15 @@ actor NVIDIAAuthAPI {
 
 private nonisolated struct ServiceUrlsResponse: Decodable {
     let gfnServiceInfo: GFNServiceInfo?
+    /// Preference metadata has been observed alongside the endpoints; accept it at
+    /// the root too so a change in nesting degrades to "no preference" rather than
+    /// a decode failure.
+    let defaultProvider: String?
+    let loginPreferredProviders: [String]?
     struct GFNServiceInfo: Decodable {
         let gfnServiceEndpoints: [Endpoint]?
+        let defaultProvider: String?
+        let loginPreferredProviders: [String]?
         struct Endpoint: Decodable {
             let idpId: String
             let loginProviderCode: String
