@@ -87,9 +87,13 @@ struct LoginView: View {
                     .buttonStyle(.bordered)
                     .tint(.green)
                 case .loaded:
+                    // Discovery returned nothing. Pass NVIDIA explicitly so this button
+                    // performs the NVIDIA login it advertises — deferring to AuthManager
+                    // would refetch providers and take whichever came back first, which
+                    // can be a partner.
                     Button {
-                        selectedProvider = nil
-                        authManager.login()
+                        selectedProvider = .nvidiaDirect
+                        authManager.login(with: .nvidiaDirect)
                     } label: {
                         Label(L10n.text("sign_in_with_nvidia"), systemImage: "person.badge.key")
                             .font(.title2.weight(.semibold))

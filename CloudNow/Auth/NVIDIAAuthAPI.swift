@@ -118,6 +118,17 @@ nonisolated struct LoginProvider: Codable {
     var isNvidiaDirect: Bool {
         idpId == NVIDIAAuth.defaultIdpId
     }
+
+    /// NVIDIA-direct provider used whenever discovery yields nothing. Sign-in paths
+    /// labelled "NVIDIA" pass this explicitly so the action cannot drift to whichever
+    /// provider a later discovery call happens to return first.
+    static let nvidiaDirect = LoginProvider(
+        idpId: NVIDIAAuth.defaultIdpId,
+        code: "NVIDIA",
+        displayName: "NVIDIA",
+        streamingServiceUrl: NVIDIAAuth.defaultStreamingUrl,
+        priority: 0
+    )
 }
 
 // MARK: - NVIDIA OAuth API

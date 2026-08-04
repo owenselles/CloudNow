@@ -855,7 +855,8 @@ struct StreamView: View {
                     clientId: sessionInfo.clientId,
                     deviceId: sessionInfo.deviceId,
                     createdAt: Date(),
-                    idpId: authManager.session?.provider.idpId ?? NVIDIAAuth.defaultIdpId
+                    idpId: authManager.session?.provider.idpId ?? NVIDIAAuth.defaultIdpId,
+                    userId: authManager.session?.user.userId
                 ))
             }
 

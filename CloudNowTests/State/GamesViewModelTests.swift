@@ -490,7 +490,7 @@ struct GamesViewModelTests {
         )
         #expect(
             await persistence.savedLibraryAccountScopes.last
-                == nvidiaAccountScope(for: "fixture-user")
+                == accountCacheScope(idpId: "fixture", userId: "fixture-user")
         )
     }
 
@@ -938,8 +938,8 @@ struct GamesViewModelTests {
         #expect(
             await persistence.loadedAccountScopes
                 == [
-                    nvidiaAccountScope(for: "account-a"),
-                    nvidiaAccountScope(for: "account-b"),
+                    accountCacheScope(idpId: "fixture", userId: "account-a"),
+                    accountCacheScope(idpId: "fixture", userId: "account-b"),
                 ]
         )
     }
@@ -1867,11 +1867,11 @@ private actor FakeGamesPersistence: GamesPersistence {
         savedLibraryGenerations.append(expectedGeneration)
     }
 
-    func saveSubscription(_ subscription: SubscriptionInfo) {
+    func saveSubscription(_ subscription: SubscriptionInfo, accountScope _: String?) {
         savedSubscription = subscription
     }
 
-    func saveVpcId(_: String) {}
+    func saveVpcId(_: String, accountScope _: String?) {}
 
     func loadCatalog(
         localeCode _: String,

@@ -203,6 +203,15 @@ actor AppPersistenceStore {
         case staleOwnershipCacheGeneration
     }
 
+    /// Wraps an account-specific cached value with the identity that produced it, so
+    /// a value written by one account is never handed back to another. Values written
+    /// before scoping existed are stored in a different format and simply fail to
+    /// decode, which is the safe outcome — the caller refetches.
+    private struct ScopedValueEnvelope<Value: Codable>: Codable {
+        let accountScope: String
+        let value: Value
+    }
+
     private struct GameMetadataCacheEnvelope: Codable {
         let schemaVersion: Int
         let localeCode: String
@@ -272,8 +281,16 @@ actor AppPersistenceStore {
         snapshot.streamSettings = decode(StreamSettings.self, forKey: Key.streamSettings)
         snapshot.lastSession = decode(LastSessionRecord.self, forKey: Key.lastSession)
         snapshot.libraryGames = loadLibraryGames(accountScope: accountScope)
-        snapshot.subscription = decode(SubscriptionInfo.self, forKey: Key.subscription)
-        snapshot.vpcId = preferences.string(forKey: Key.vpcId)
+        snapshot.subscription = loadScoped(
+            SubscriptionInfo.self,
+            forKey: Key.subscription,
+            accountScope: accountScope
+        )
+        snapshot.vpcId = loadScoped(
+            String.self,
+            forKey: Key.vpcId,
+            accountScope: accountScope
+        )
         snapshot.ownershipCacheGeneration = ownershipCacheGeneration
 
         // Remove caches written by the retired panels API.
@@ -446,12 +463,37 @@ actor AppPersistenceStore {
         try? writeLibraryGames(games, accountScope: accountScope)
     }
 
-    func saveSubscription(_ subscription: SubscriptionInfo) {
-        encode(subscription, forKey: Key.subscription)
+    func saveSubscription(_ subscription: SubscriptionInfo, accountScope: String?) {
+        saveScoped(subscription, forKey: Key.subscription, accountScope: accountScope)
     }
 
-    func saveVpcId(_ vpcId: String) {
-        preferences.setString(vpcId, forKey: Key.vpcId)
+    func saveVpcId(_ vpcId: String, accountScope: String?) {
+        saveScoped(vpcId, forKey: Key.vpcId, accountScope: accountScope)
+    }
+
+    /// Stores a value tagged with the current account. Without a usable scope there
+    /// is no identity to tag it with, so any existing value is cleared rather than
+    /// left behind for the next account to read.
+    private func saveScoped(_ value: some Codable, forKey key: String, accountScope: String?) {
+        guard let accountScope = safeAccountScope(accountScope) else {
+            preferences.removeObject(forKey: key)
+            return
+        }
+        encode(ScopedValueEnvelope(accountScope: accountScope, value: value), forKey: key)
+    }
+
+    /// Returns the cached value only when it was written by this same account.
+    private func loadScoped<Value: Codable>(
+        _ type: Value.Type,
+        forKey key: String,
+        accountScope: String?
+    ) -> Value? {
+        guard let accountScope = safeAccountScope(accountScope),
+              let envelope = decode(ScopedValueEnvelope<Value>.self, forKey: key)
+        else {
+            return nil
+        }
+        return envelope.accountScope == accountScope ? envelope.value : nil
     }
 
     func loadCatalog(

@@ -17,8 +17,8 @@ struct CoreLogicIntegrationTests {
             isInLibrary: false
         )
         let vpcId = "fixture-vpc"
-        let accountScope = nvidiaAccountScope(for: "fixture-user")
-        await harness.store.saveVpcId(vpcId)
+        let accountScope = accountCacheScope(idpId: "fixture", userId: "fixture-user")
+        await harness.store.saveVpcId(vpcId, accountScope: accountScope)
         await harness.store.saveCatalog(
             [cached],
             localeCode: L10n.nvidiaLocaleCode(),
