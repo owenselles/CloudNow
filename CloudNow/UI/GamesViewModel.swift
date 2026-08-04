@@ -33,9 +33,14 @@ nonisolated struct LastSessionRecord: Codable {
     /// Provider that created this session. Records written before this field was
     /// added decode to NVIDIAAuth.defaultIdpId so they are treated as NVIDIA sessions.
     let idpId: String
+    /// User who created this session. `nil` for records written before this field
+    /// existed — those cannot be attributed to anyone, so they are discarded rather
+    /// than resumed, since resuming would send the current user's token to a session
+    /// that may belong to someone else on the same provider.
+    let userId: String?
 
     enum CodingKeys: String, CodingKey {
-        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, idpId
+        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, idpId, userId
     }
 
     init(
@@ -47,7 +52,8 @@ nonisolated struct LastSessionRecord: Codable {
         clientId: String?,
         deviceId: String?,
         createdAt: Date,
-        idpId: String
+        idpId: String,
+        userId: String?
     ) {
         self.sessionId = sessionId
         self.serverIp = serverIp
@@ -58,6 +64,7 @@ nonisolated struct LastSessionRecord: Codable {
         self.deviceId = deviceId
         self.createdAt = createdAt
         self.idpId = idpId
+        self.userId = userId
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +78,7 @@ nonisolated struct LastSessionRecord: Codable {
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         idpId = try c.decodeIfPresent(String.self, forKey: .idpId) ?? NVIDIAAuth.defaultIdpId
+        userId = try c.decodeIfPresent(String.self, forKey: .userId)
     }
 }
 
@@ -389,7 +397,7 @@ class GamesViewModel {
         let identity = beginLoad()
         latestNetworkLibraryGames = nil
         let accountScope = authManager.session.map {
-            nvidiaAccountScope(for: $0.user.userId)
+            accountCacheScope(idpId: $0.provider.idpId, userId: $0.user.userId)
         }
         if currentAccountScope != accountScope {
             libraryRefreshCoordinator.cancel()
@@ -414,10 +422,17 @@ class GamesViewModel {
         lastSession = snapshot.lastSession
         currentVpcId = snapshot.vpcId
 
-        // Discard a persisted session that belongs to a different provider — its base
-        // URL and token are incompatible with the currently signed-in provider.
+        // Discard a persisted session belonging to a different account. A different
+        // provider means an incompatible base URL; a different user on the *same*
+        // provider looks compatible but is not — claiming or stopping it would send
+        // this user's token against someone else's session. Records with no userId
+        // predate identity tracking and cannot be attributed, so they go too.
+        // Dropped locally only: the old endpoint is never contacted with the new token.
         let currentIdpId = authManager.session?.provider.idpId ?? NVIDIAAuth.defaultIdpId
-        if let saved = lastSession, saved.idpId != currentIdpId {
+        let currentUserId = authManager.session?.user.userId
+        if let saved = lastSession,
+           saved.idpId != currentIdpId || saved.userId == nil || saved.userId != currentUserId
+        {
             lastSession = nil
             Task { [weak self] in await self?.persistence.saveLastSession(nil) }
         }
@@ -582,7 +597,7 @@ class GamesViewModel {
               request.generation == vpcIdRequestGeneration
         else { return nil }
         if let fetched, !fetched.isEmpty {
-            await persistence.saveVpcId(fetched)
+            await persistence.saveVpcId(fetched, accountScope: currentAccountScope)
             guard isCurrent(identity),
                   request.generation == vpcIdRequestGeneration
             else { return nil }
@@ -799,7 +814,7 @@ class GamesViewModel {
         gamesLog.info("[MES] tier=\(subscription.membershipTier, privacy: .public) resolutions=\(String(describing: subscription.entitledResolutions.map(\.resolutionLabel)), privacy: .public)")
         self.subscription = subscription
         normalizeStreamSettingsForCurrentEntitlements()
-        await persistence.saveSubscription(subscription)
+        await persistence.saveSubscription(subscription, accountScope: currentAccountScope)
         guard isCurrent(identity) else { return }
     }
 
@@ -952,13 +967,16 @@ class GamesViewModel {
     ) {
         guard providerLibrarySyncEnabled,
               let userId = authManager.session?.user.userId,
+              let idpId = authManager.session?.provider.idpId,
               hasCompletedInitialLoad,
               libraryLoadPhase != .loading,
               catalogLoadPhase != .loading,
               !isFullLibraryRefreshRunning
         else { return }
         _ = beginLoad()
-        let accountScope = nvidiaAccountScope(for: userId)
+        // Must match the scope computed in load(), or a refresh would write the
+        // library cache under a key the next load cannot read.
+        let accountScope = accountCacheScope(idpId: idpId, userId: userId)
         currentAccountScope = accountScope
 
         _ = libraryRefreshCoordinator.start(

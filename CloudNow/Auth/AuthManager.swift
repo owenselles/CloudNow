@@ -181,13 +181,7 @@ final class AuthManager {
                 } else {
                     await (try? api.fetchProviders()) ?? []
                 }
-                let selectedProvider = providers.first ?? LoginProvider(
-                    idpId: NVIDIAAuth.defaultIdpId,
-                    code: "NVIDIA",
-                    displayName: "NVIDIA",
-                    streamingServiceUrl: NVIDIAAuth.defaultStreamingUrl,
-                    priority: 0
-                )
+                let selectedProvider = providers.first ?? .nvidiaDirect
 
                 // Device flow loop: restart automatically when the code expires.
                 // access_denied and other hard errors escape to the outer catch.
