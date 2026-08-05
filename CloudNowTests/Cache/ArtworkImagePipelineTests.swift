@@ -106,6 +106,44 @@ struct ArtworkImagePipelineTests {
         #expect(snapshot.waiterCount == 0)
     }
 
+    @Test("Ephemeral artwork uses a separate loader and decoded cache key")
+    func ephemeralArtworkStaysOffTheSharedNetworkCachePath() async throws {
+        let image = try makeImage(width: 2, height: 2)
+        let sharedLoader = RecordingArtworkLoader(image: image)
+        let ephemeralLoader = RecordingArtworkLoader(image: image)
+        let pipeline = ArtworkImagePipeline(
+            imageLoader: { url, maxPixelSize in
+                try await sharedLoader.load(
+                    url: url,
+                    maxPixelSize: maxPixelSize
+                )
+            },
+            ephemeralImageLoader: { url, maxPixelSize in
+                try await ephemeralLoader.load(
+                    url: url,
+                    maxPixelSize: maxPixelSize
+                )
+            }
+        )
+        let url = try testURLs()[0]
+
+        _ = try await pipeline.image(for: url, maxPixelSize: 320)
+        _ = try await pipeline.image(
+            for: url,
+            maxPixelSize: 320,
+            networkCachePolicy: .ephemeral
+        )
+        _ = try await pipeline.image(
+            for: url,
+            maxPixelSize: 320,
+            networkCachePolicy: .ephemeral
+        )
+
+        #expect(await sharedLoader.requestedURLs() == [url])
+        #expect(await ephemeralLoader.requestedURLs() == [url])
+        #expect(await pipeline.snapshot(maxPixelSize: 320).cachedImageCount == 2)
+    }
+
     @Test("Cancelling a waiter removes it without cancelling shared work")
     func waiterCancellationCleansUp() async throws {
         let image = try makeImage(width: 2, height: 2)

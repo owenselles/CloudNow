@@ -1,13 +1,343 @@
 import SwiftUI
 
+struct CloudNowStorageAndDataSection: View {
+    let isPerformingAction: Bool
+    let clearCache: () -> Void
+    let resetAllData: () -> Void
+
+    var body: some View {
+        Section(L10n.text("storage_and_data")) {
+            Button(action: clearCache) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(
+                            L10n.text("clear_cache"),
+                            systemImage: "externaldrive.badge.xmark"
+                        )
+                        Text(L10n.text("clear_cache_description"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 8)
+                    Spacer()
+                    if isPerformingAction {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(isPerformingAction)
+
+            Button(role: .destructive, action: resetAllData) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(L10n.text("reset_all_data"), systemImage: "trash")
+                    Text(L10n.text("reset_all_data_description"))
+                        .font(.caption)
+                }
+                .padding(.vertical, 8)
+            }
+            .disabled(isPerformingAction)
+            .accessibilityIdentifier("settings.reset-all-data")
+        }
+    }
+}
+
+struct CloudNowCloudServiceSection: View {
+    let activeProvider: CloudGamingProvider
+    let isInteractionDisabled: Bool
+    let onSelectProvider: (CloudGamingProvider?) -> Void
+
+    var body: some View {
+        Section(L10n.text("cloud_service")) {
+            LabeledContent(
+                L10n.text("active_service"),
+                value: activeProvider.displayName
+            )
+
+            ForEach(CloudGamingProvider.allCases) { provider in
+                if provider != activeProvider {
+                    Button {
+                        onSelectProvider(provider)
+                    } label: {
+                        Label(
+                            L10n.format("switch_to_service", provider.displayName),
+                            systemImage: provider.systemImage
+                        )
+                    }
+                    .accessibilityIdentifier("service-switch.\(provider.rawValue)")
+                    .disabled(isInteractionDisabled)
+                }
+            }
+
+            Button(L10n.text("choose_another_service")) {
+                onSelectProvider(nil)
+            }
+            .accessibilityIdentifier("service-switcher")
+            .disabled(isInteractionDisabled)
+        }
+    }
+}
+
+nonisolated struct CloudNowControllerSettingsPolicy: Equatable, Sendable {
+    nonisolated enum RumbleValueStyle: Equatable, Sendable {
+        case multiplier
+        case percentage
+    }
+
+    let rumbleRange: ClosedRange<Double>
+    let rumbleStep: Double
+    let rumbleValueStyle: RumbleValueStyle
+    let deadzoneRange: ClosedRange<Double>
+    let deadzoneStep: Double
+
+    static let geForceNow = CloudNowControllerSettingsPolicy(
+        rumbleRange: StreamSettings.minRumbleIntensity ... StreamSettings.maxRumbleIntensity,
+        rumbleStep: 0.05,
+        rumbleValueStyle: .multiplier,
+        deadzoneRange: StreamSettings.minControllerDeadzone ... StreamSettings.maxControllerDeadzone,
+        deadzoneStep: 0.01
+    )
+
+    static let xboxCloudGaming = CloudNowControllerSettingsPolicy(
+        rumbleRange: XboxCloudStreamSettings.minimumRumbleIntensity ... XboxCloudStreamSettings.maximumRumbleIntensity,
+        rumbleStep: 0.05,
+        rumbleValueStyle: .percentage,
+        deadzoneRange: XboxCloudStreamSettings.minimumControllerDeadzone ... 0.30,
+        deadzoneStep: 0.01
+    )
+
+    func rumbleLabel(for value: Double) -> String {
+        switch rumbleValueStyle {
+        case .multiplier:
+            String(format: "%.2f×", value)
+        case .percentage:
+            percentageLabel(for: value)
+        }
+    }
+
+    func deadzoneLabel(for value: Double) -> String {
+        percentageLabel(for: value)
+    }
+
+    func adjustedRumbleValue(_ value: Double, direction: Double) -> Double {
+        clamped(value + (rumbleStep * direction), to: rumbleRange)
+    }
+
+    func adjustedDeadzoneValue(_ value: Double, direction: Double) -> Double {
+        clamped(value + (deadzoneStep * direction), to: deadzoneRange)
+    }
+
+    private func percentageLabel(for value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func clamped(_ value: Double, to range: ClosedRange<Double>) -> Double {
+        min(max(value, range.lowerBound), range.upperBound)
+    }
+}
+
+private struct CloudNowSettingLabel: View {
+    let title: String
+    let description: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+            Text(description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+private struct CloudNowAdjustableControllerRow: View {
+    enum ValueKind {
+        case rumble
+        case deadzone
+    }
+
+    let title: String
+    let description: String
+    let accessibilityIdentifier: String
+    @Binding var value: Double
+    let policy: CloudNowControllerSettingsPolicy
+    let valueKind: ValueKind
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 16) {
+                Button {
+                    adjust(direction: -1)
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.plain)
+
+                Text(formattedValue)
+                    .monospacedDigit()
+                    .frame(minWidth: valueKind == .rumble ? 64 : 44)
+                    .padding(.horizontal, 24)
+
+                Button {
+                    adjust(direction: 1)
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .buttonStyle(.plain)
+            }
+        } label: {
+            CloudNowSettingLabel(title: title, description: description)
+        }
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    private var formattedValue: String {
+        switch valueKind {
+        case .rumble:
+            policy.rumbleLabel(for: value)
+        case .deadzone:
+            policy.deadzoneLabel(for: value)
+        }
+    }
+
+    private func adjust(direction: Double) {
+        switch valueKind {
+        case .rumble:
+            value = policy.adjustedRumbleValue(value, direction: direction)
+        case .deadzone:
+            value = policy.adjustedDeadzoneValue(value, direction: direction)
+        }
+    }
+}
+
+struct CloudNowControllerSettingsSection<AdditionalContent: View>: View {
+    @Binding var rumbleEnabled: Bool
+    @Binding var rumbleIntensity: Double
+    @Binding var controllerDeadzone: Double
+    let policy: CloudNowControllerSettingsPolicy
+    let isDisabled: Bool
+    let footer: String?
+    let additionalContent: AdditionalContent
+
+    init(
+        rumbleEnabled: Binding<Bool>,
+        rumbleIntensity: Binding<Double>,
+        controllerDeadzone: Binding<Double>,
+        policy: CloudNowControllerSettingsPolicy,
+        isDisabled: Bool = false,
+        footer: String? = nil,
+        @ViewBuilder additionalContent: () -> AdditionalContent
+    ) {
+        _rumbleEnabled = rumbleEnabled
+        _rumbleIntensity = rumbleIntensity
+        _controllerDeadzone = controllerDeadzone
+        self.policy = policy
+        self.isDisabled = isDisabled
+        self.footer = footer
+        self.additionalContent = additionalContent()
+    }
+
+    var body: some View {
+        Section {
+            Toggle(isOn: $rumbleEnabled) {
+                CloudNowSettingLabel(
+                    title: L10n.text("controller_rumble"),
+                    description: L10n.text("controller_rumble_description")
+                )
+            }
+            .accessibilityIdentifier("settings.rumble-enabled")
+
+            if rumbleEnabled {
+                CloudNowAdjustableControllerRow(
+                    title: L10n.text("controller_rumble_intensity"),
+                    description: L10n.text("controller_rumble_intensity_description"),
+                    accessibilityIdentifier: "settings.rumble-intensity",
+                    value: $rumbleIntensity,
+                    policy: policy,
+                    valueKind: .rumble
+                )
+            }
+
+            CloudNowAdjustableControllerRow(
+                title: L10n.text("deadzone"),
+                description: L10n.text("deadzone_description"),
+                accessibilityIdentifier: "settings.controller-deadzone",
+                value: $controllerDeadzone,
+                policy: policy,
+                valueKind: .deadzone
+            )
+
+            additionalContent
+        } header: {
+            Text(L10n.text("controller"))
+        } footer: {
+            if let footer {
+                Text(footer)
+            }
+        }
+        .disabled(isDisabled)
+    }
+}
+
+extension CloudNowControllerSettingsSection where AdditionalContent == EmptyView {
+    init(
+        rumbleEnabled: Binding<Bool>,
+        rumbleIntensity: Binding<Double>,
+        controllerDeadzone: Binding<Double>,
+        policy: CloudNowControllerSettingsPolicy,
+        isDisabled: Bool = false,
+        footer: String? = nil
+    ) {
+        self.init(
+            rumbleEnabled: rumbleEnabled,
+            rumbleIntensity: rumbleIntensity,
+            controllerDeadzone: controllerDeadzone,
+            policy: policy,
+            isDisabled: isDisabled,
+            footer: footer,
+            additionalContent: { EmptyView() }
+        )
+    }
+}
+
+enum CloudNowDataDialog: Equatable {
+    case confirmClearCache
+    case confirmResetAllData
+    case result(title: String, message: String)
+
+    var title: String {
+        switch self {
+        case .confirmClearCache:
+            L10n.text("clear_cache_confirmation_title")
+        case .confirmResetAllData:
+            L10n.text("reset_all_data_confirmation_title")
+        case let .result(title, _):
+            title
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .confirmClearCache:
+            L10n.text("clear_cache_confirmation_message")
+        case .confirmResetAllData:
+            L10n.text("reset_all_data_confirmation_message")
+        case let .result(_, message):
+            message
+        }
+    }
+}
+
 struct SettingsView: View {
     @Environment(AuthManager.self) var authManager
+    @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+    @Environment(XboxAuthManager.self) private var xboxAuthManager
     @Environment(GamesViewModel.self) var viewModel
 
     @State private var showServerLocationPicker = false
     @State private var showNetworkTest = false
     @State private var showLibraryRefreshProgress = false
-    @State private var dataDialog: DataDialog?
+    @State private var dataDialog: CloudNowDataDialog?
     @State private var isPerformingDataAction = false
 
     var body: some View {
@@ -15,6 +345,12 @@ struct SettingsView: View {
 
         NavigationStack {
             Form {
+                CloudNowCloudServiceSection(
+                    activeProvider: providerCoordinator.selectedProvider ?? .geForceNow,
+                    isInteractionDisabled: isProviderActionBusy,
+                    onSelectProvider: switchProvider
+                )
+
                 Section(L10n.text("stream_quality")) {
                     Picker(L10n.text("resolution"), selection: $vm.streamSettings.resolution) {
                         let common = commonResolutions.filter { viewModel.availableResolutions.contains($0.res) }
@@ -214,80 +550,12 @@ struct SettingsView: View {
                     }
                 }
 
-                Section(L10n.text("controller")) {
-                    Toggle(isOn: $vm.streamSettings.rumbleEnabled) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("controller_rumble"))
-                            Text(L10n.text("controller_rumble_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
-                    if vm.streamSettings.rumbleEnabled {
-                        LabeledContent {
-                            HStack(spacing: 16) {
-                                Button {
-                                    vm.streamSettings.rumbleIntensity = max(
-                                        StreamSettings.minRumbleIntensity,
-                                        vm.streamSettings.rumbleIntensity - 0.05
-                                    )
-                                } label: {
-                                    Image(systemName: "minus.circle")
-                                }
-                                .buttonStyle(.plain)
-                                Text(rumbleMultiplierLabel(vm.streamSettings.rumbleIntensity))
-                                    .monospacedDigit()
-                                    .frame(minWidth: 64)
-                                    .padding(.horizontal, 24)
-                                Button {
-                                    vm.streamSettings.rumbleIntensity = min(
-                                        StreamSettings.maxRumbleIntensity,
-                                        vm.streamSettings.rumbleIntensity + 0.05
-                                    )
-                                } label: {
-                                    Image(systemName: "plus.circle")
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L10n.text("controller_rumble_intensity"))
-                                Text(L10n.text("controller_rumble_intensity_description"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
-                        }
-                    }
-                    LabeledContent {
-                        HStack(spacing: 16) {
-                            Button {
-                                vm.streamSettings.controllerDeadzone = max(StreamSettings.minControllerDeadzone, vm.streamSettings.controllerDeadzone - 0.01)
-                            } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.plain)
-                            Text("\(Int(vm.streamSettings.controllerDeadzone * 100))%")
-                                .monospacedDigit()
-                                .frame(minWidth: 44)
-                                .padding(.horizontal, 24)
-                            Button {
-                                vm.streamSettings.controllerDeadzone = min(StreamSettings.maxControllerDeadzone, vm.streamSettings.controllerDeadzone + 0.01)
-                            } label: {
-                                Image(systemName: "plus.circle")
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("deadzone"))
-                            Text(L10n.text("deadzone_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                CloudNowControllerSettingsSection(
+                    rumbleEnabled: $vm.streamSettings.rumbleEnabled,
+                    rumbleIntensity: $vm.streamSettings.rumbleIntensity,
+                    controllerDeadzone: $vm.streamSettings.controllerDeadzone,
+                    policy: .geForceNow
+                ) {
                     Picker(selection: $vm.streamSettings.overlayTriggerButton) {
                         ForEach(OverlayTriggerButton.allCases, id: \.self) { btn in
                             Text(btn.label).tag(btn)
@@ -412,38 +680,11 @@ struct SettingsView: View {
                     }
                 #endif
 
-                Section(L10n.text("storage_and_data")) {
-                    Button {
-                        dataDialog = .confirmClearCache
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Label(L10n.text("clear_cache"), systemImage: "externaldrive.badge.xmark")
-                                Text(L10n.text("clear_cache_description"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
-                            Spacer()
-                            if isPerformingDataAction {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isPerformingDataAction)
-
-                    Button(role: .destructive) {
-                        dataDialog = .confirmResetAllData
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(L10n.text("reset_all_data"), systemImage: "trash")
-                            Text(L10n.text("reset_all_data_description"))
-                                .font(.caption)
-                        }
-                        .padding(.vertical, 8)
-                    }
-                    .disabled(isPerformingDataAction)
-                }
+                CloudNowStorageAndDataSection(
+                    isPerformingAction: isProviderActionBusy,
+                    clearCache: { dataDialog = .confirmClearCache },
+                    resetAllData: { dataDialog = .confirmResetAllData }
+                )
 
                 Section(L10n.text("account")) {
                     if let user = authManager.session?.user {
@@ -469,11 +710,12 @@ struct SettingsView: View {
                     }
 
                     Button(role: .destructive) {
-                        viewModel.prepareForLogout()
-                        authManager.logout()
+                        signOut()
                     } label: {
                         Label(L10n.text("sign_out"), systemImage: "rectangle.portrait.and.arrow.right")
                     }
+                    .disabled(isProviderActionBusy)
+                    .accessibilityIdentifier("settings.sign-out")
                 }
             }
             .navigationTitle("")
@@ -524,6 +766,26 @@ struct SettingsView: View {
         )
     }
 
+    private var isProviderActionBusy: Bool {
+        isPerformingDataAction || providerCoordinator.isProviderInteractionBlocked
+    }
+
+    private func switchProvider(to provider: CloudGamingProvider?) {
+        guard !isPerformingDataAction,
+              let intent = providerCoordinator.beginProviderSwitch(to: provider)
+        else {
+            return
+        }
+        Task { @MainActor in
+            await viewModel.deactivateForInactiveProvider()
+            guard !Task.isCancelled else {
+                providerCoordinator.cancelProviderSwitch(intent)
+                return
+            }
+            _ = providerCoordinator.commitProviderSwitch(intent)
+        }
+    }
+
     private func clearCache() {
         isPerformingDataAction = true
         viewModel.prepareForCacheClear()
@@ -545,16 +807,83 @@ struct SettingsView: View {
     }
 
     private func resetAllData() {
+        guard let mutation = providerCoordinator.beginCredentialMutation() else {
+            return
+        }
         isPerformingDataAction = true
         authManager.prepareForDataReset()
+        xboxAuthManager.prepareForDataReset()
         viewModel.prepareForDataReset()
 
         Task {
-            try? await AppDataManager.shared.clearCaches()
-            await viewModel.resetAllData()
-            await AppDataManager.shared.clearPersistentData()
-            isPerformingDataAction = false
-            authManager.logout()
+            defer {
+                providerCoordinator.finishCredentialMutation(mutation)
+                isPerformingDataAction = false
+            }
+            do {
+                try await AppDataManager.shared.clearCaches()
+                let result = await AppDataManager.shared.clearPersistentData()
+                let remainingProvider = result.remainingProvider(
+                    preferring: .geForceNow
+                )
+                if result.geForceNowCredentialsRemoved {
+                    await viewModel.resetAllData()
+                    authManager.finishDataReset()
+                } else {
+                    authManager.abortDataResetWithoutActivation()
+                }
+                if result.xboxCredentialsRemoved {
+                    await xboxAuthManager.finishDataReset()
+                } else {
+                    xboxAuthManager.abortDataResetWithoutActivation()
+                }
+                if result.isComplete {
+                    providerCoordinator.select(nil)
+                } else if let remainingProvider {
+                    providerCoordinator.preserveSelectionAfterFailedDataReset(
+                        remainingProvider
+                    )
+                    providerCoordinator.presentDataResetFailure(
+                        result.failureDescription ?? L10n.text("reset_failed")
+                    )
+                    if remainingProvider == .geForceNow {
+                        await authManager.activateForCurrentProvider()
+                        await viewModel.load(authManager: authManager)
+                    }
+                }
+            } catch {
+                authManager.abortDataResetWithoutActivation()
+                xboxAuthManager.abortDataResetWithoutActivation()
+                await authManager.activateForCurrentProvider()
+                await viewModel.load(authManager: authManager)
+                dataDialog = .result(
+                    title: L10n.text("reset_failed"),
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func signOut() {
+        guard let mutation = providerCoordinator.beginCredentialMutation() else {
+            return
+        }
+        isPerformingDataAction = true
+        viewModel.prepareForLogout()
+        Task {
+            defer {
+                providerCoordinator.finishCredentialMutation(mutation)
+                isPerformingDataAction = false
+            }
+            do {
+                try await authManager.logout()
+            } catch {
+                await viewModel.load(authManager: authManager)
+                dataDialog = .result(
+                    title: L10n.text("sign_out"),
+                    message: error.localizedDescription
+                )
+            }
         }
     }
 
@@ -588,10 +917,6 @@ struct SettingsView: View {
         return host.components(separatedBy: ".").first?.uppercased() ?? url
     }
 
-    private func rumbleMultiplierLabel(_ value: Double) -> String {
-        String(format: "%.2f×", value)
-    }
-
     private struct ResolutionEntry { let res: String; let badge: String; let symbol: String }
     private let commonResolutions: [ResolutionEntry] = [
         ResolutionEntry(res: "1280x720", badge: "HD", symbol: "tv"),
@@ -599,34 +924,6 @@ struct SettingsView: View {
         ResolutionEntry(res: "2560x1440", badge: "2K", symbol: "tv"),
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
-
-    private enum DataDialog: Equatable {
-        case confirmClearCache
-        case confirmResetAllData
-        case result(title: String, message: String)
-
-        var title: String {
-            switch self {
-            case .confirmClearCache:
-                L10n.text("clear_cache_confirmation_title")
-            case .confirmResetAllData:
-                L10n.text("reset_all_data_confirmation_title")
-            case let .result(title, _):
-                title
-            }
-        }
-
-        var message: String {
-            switch self {
-            case .confirmClearCache:
-                L10n.text("clear_cache_confirmation_message")
-            case .confirmResetAllData:
-                L10n.text("reset_all_data_confirmation_message")
-            case let .result(_, message):
-                message
-            }
-        }
-    }
 }
 
 // MARK: - Server Location Picker

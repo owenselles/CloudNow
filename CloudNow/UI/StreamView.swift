@@ -1,4 +1,3 @@
-import Combine
 import os.log
 import SwiftUI
 
@@ -35,19 +34,10 @@ struct StreamView: View {
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
-    /// Loading progress bar state (ETA-driven, mirrors the official client's determinate bar).
-    @State private var loadingProgress: Double = 0
-    /// Largest queue position seen this attempt, used as the 0% anchor so the bar fills as it drops.
-    @State private var queueAnchor: Int?
-    @State private var prepareStartedAt: Date?
-    /// Latest server-reported remaining setup ETA, and when it was captured (for live countdown).
-    @State private var prepareEta: TimeInterval?
-    @State private var prepareEtaAt: Date?
     /// Feature badges to show on the loading screen (game supports it AND the client can use it).
     @State private var loadingBadges: [GameFeature] = []
 
     private let cloudMatchClient: CloudMatchClient
-    private let progressTick = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
 
     init(
         game: GameInfo,
@@ -158,11 +148,14 @@ struct StreamView: View {
                 if case .timedOut = loadingPhase {
                     EmptyView()
                 } else if showDeterminateProgress {
-                    ProgressView(value: loadingProgress)
-                        .progressViewStyle(.linear)
-                        .tint(loadingForegroundColor)
-                        .frame(maxWidth: 560)
-                        .padding(.top, 8)
+                    StreamLoadingProgressView(
+                        phase: loadingPhase,
+                        seatSetupEta: createdSession?.seatSetupEta
+                    )
+                    .progressViewStyle(.linear)
+                    .tint(loadingForegroundColor)
+                    .frame(maxWidth: 560)
+                    .padding(.top, 8)
                 } else {
                     ProgressView()
                         .tint(loadingForegroundColor)
@@ -204,7 +197,6 @@ struct StreamView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay(alignment: .bottomLeading) { loadingBadgeRow }
-        .onReceive(progressTick) { _ in advanceLoadingProgress() }
     }
 
     /// Feature badges (RTX/HDR/Reflex) shown bottom-left, mirroring the official client's badge
@@ -318,54 +310,6 @@ struct StreamView: View {
         switch loadingPhase {
         case .finding, .timedOut: false
         case .inQueue, .preparing: true
-        }
-    }
-
-    /// Eases the bar toward a phase-derived target. Queue fills as the position drops toward its
-    /// first-seen anchor; setup fills over the server ETA (falling back to a nominal duration).
-    /// The value only ever moves forward, so it never visibly jumps backward on a poll update.
-    private func advanceLoadingProgress() {
-        let target: Double
-        switch loadingPhase {
-        case .finding:
-            prepareStartedAt = nil
-            target = 0.06
-        case let .inQueue(pos):
-            prepareStartedAt = nil
-            if let pos {
-                queueAnchor = max(queueAnchor ?? pos, pos)
-                let anchor = max(queueAnchor ?? pos, 1)
-                let advanced = Double(anchor - pos) / Double(anchor)
-                target = 0.08 + 0.47 * min(max(advanced, 0), 1)
-            } else {
-                target = 0.25
-            }
-        case .preparing:
-            let now = Date()
-            if prepareStartedAt == nil {
-                prepareStartedAt = now
-            }
-            // seatSetupEta is the server's estimated *remaining* time. Refresh it whenever the
-            // server revises the estimate (e.g. 30s → 20s) and count it down between polls so the
-            // bar keeps advancing; mapping progress by elapsed / (elapsed + remaining) makes it
-            // complete as the estimate approaches zero, matching the official client.
-            if let serverEta = createdSession?.seatSetupEta, serverEta != prepareEta {
-                prepareEta = serverEta
-                prepareEtaAt = now
-            }
-            let elapsed = prepareStartedAt.map { now.timeIntervalSince($0) } ?? 0
-            let liveRemaining: Double = if let eta = prepareEta, let at = prepareEtaAt {
-                max(eta - now.timeIntervalSince(at), 0)
-            } else {
-                max(30 - elapsed, 0)
-            }
-            let total = max(elapsed + liveRemaining, 4)
-            target = 0.55 + 0.41 * min(elapsed / total, 1)
-        case .timedOut:
-            return
-        }
-        if target > loadingProgress {
-            loadingProgress = min(target, loadingProgress + (target - loadingProgress) * 0.12 + 0.0006)
         }
     }
 
@@ -782,11 +726,6 @@ struct StreamView: View {
         }
         createdSession = nil
         loadingPhase = .finding
-        loadingProgress = 0
-        queueAnchor = nil
-        prepareStartedAt = nil
-        prepareEta = nil
-        prepareEtaAt = nil
         do {
             let token = try await authManager.resolveToken()
             try requireCurrentSessionAttempt(generation)
@@ -1160,4 +1099,91 @@ struct StreamView: View {
         // the game cursor and keyboard shortcuts don't reach the game accidentally.
         streamController.setInputPaused(showOverlay)
     }
+}
+
+/// Owns the 10 Hz loading clock so progress updates invalidate only this small
+/// bar, not the complete stream/session view hierarchy.
+private struct StreamLoadingProgressView: View {
+    let phase: LoadingPhase
+    let seatSetupEta: TimeInterval?
+
+    @State private var progress: Double = 0
+    @State private var lifecycle = StreamLoadingProgressLifecycle()
+
+    var body: some View {
+        ProgressView(value: progress)
+            .task(id: TickInput(phase: phase, seatSetupEta: seatSetupEta)) {
+                while !Task.isCancelled {
+                    advance(at: Date())
+                    do {
+                        try await Task.sleep(for: .milliseconds(100))
+                    } catch {
+                        return
+                    }
+                }
+            }
+    }
+
+    /// Eases toward a phase-derived target and never moves backwards.
+    private func advance(at now: Date) {
+        let target: Double
+        switch phase {
+        case .finding:
+            lifecycle.prepareStartedAt = nil
+            target = 0.06
+        case let .inQueue(position):
+            lifecycle.prepareStartedAt = nil
+            if let position {
+                lifecycle.queueAnchor = max(lifecycle.queueAnchor ?? position, position)
+                let anchor = max(lifecycle.queueAnchor ?? position, 1)
+                let advanced = Double(anchor - position) / Double(anchor)
+                target = 0.08 + 0.47 * min(max(advanced, 0), 1)
+            } else {
+                target = 0.25
+            }
+        case .preparing:
+            if lifecycle.prepareStartedAt == nil {
+                lifecycle.prepareStartedAt = now
+            }
+            if let seatSetupEta, seatSetupEta != lifecycle.prepareEta {
+                lifecycle.prepareEta = seatSetupEta
+                lifecycle.prepareEtaAt = now
+            }
+            let elapsed = lifecycle.prepareStartedAt.map { now.timeIntervalSince($0) } ?? 0
+            let liveRemaining: Double = if let prepareEta = lifecycle.prepareEta,
+                                           let prepareEtaAt = lifecycle.prepareEtaAt
+            {
+                max(prepareEta - now.timeIntervalSince(prepareEtaAt), 0)
+            } else {
+                max(30 - elapsed, 0)
+            }
+            let total = max(elapsed + liveRemaining, 4)
+            target = 0.55 + 0.41 * min(elapsed / total, 1)
+        case .timedOut:
+            return
+        }
+
+        guard target > progress else { return }
+        let nextProgress = min(
+            target,
+            progress + (target - progress) * 0.12 + 0.0006
+        )
+        guard nextProgress != progress else { return }
+        progress = nextProgress
+    }
+
+    private struct TickInput: Equatable {
+        let phase: LoadingPhase
+        let seatSetupEta: TimeInterval?
+    }
+}
+
+/// Non-rendered loading bookkeeping stays outside SwiftUI observation so the
+/// 10 Hz clock only invalidates this view when the visible progress changes.
+@MainActor
+private final class StreamLoadingProgressLifecycle {
+    var queueAnchor: Int?
+    var prepareStartedAt: Date?
+    var prepareEta: TimeInterval?
+    var prepareEtaAt: Date?
 }

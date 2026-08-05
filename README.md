@@ -1,10 +1,12 @@
 # CloudNow
 
-A native GeForce NOW client for Apple TV. Stream your entire PC game library directly on tvOS with full controller support, no browser, no workarounds.
+A lightweight native cloud-gaming app for Apple TV with separate GeForce NOW and experimental Xbox Cloud Gaming modes, both implemented in Swift and backed by one shared native WebRTC runtime.
 
 ![CloudNow Home screen on Apple TV](App%20Store%20Media/Screenshot%201.png)
 
-> **Personal use / sideload only.** This project is not affiliated with, endorsed by, or sponsored by NVIDIA. NVIDIA and GeForce NOW are trademarks of NVIDIA Corporation.
+> **Personal use / sideload only.** This project is not affiliated with, endorsed by, or sponsored by NVIDIA or Microsoft. NVIDIA and GeForce NOW are trademarks of NVIDIA Corporation. Microsoft, Xbox, and Xbox Cloud Gaming are trademarks of the Microsoft group of companies.
+
+> **Xbox Cloud Gaming status:** CloudNow's experimental native Xbox mode includes Microsoft QR/PIN sign-in, catalog, session, WebRTC media, controller input, and rumble. Microsoft does not currently list Apple TV as an officially supported Xbox Cloud Gaming client platform, so consumer service changes may break interoperability. No third-party Xbox client code, UI, assets, or dependency is included. See [Xbox Cloud Gaming integration](Documentation/XboxCloudGaming.md).
 
 ---
 
@@ -40,6 +42,10 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 
 ## Features
 
+- **Separate provider modes** — fresh installs can choose GeForce NOW or Xbox Cloud Gaming, keep both accounts signed in, and switch from a top-left dropdown. Each mode has its own CloudNow Home, Browse/Library, Settings, launch flow, and player; catalogs and settings are never merged
+- **Native Xbox Cloud Gaming** — clean-room Microsoft device-code, Xbox Live/XSTS, entitlement/offering discovery, catalog, session allocation, REST SDP/ICE signaling, WebRTC media, up to four controllers, and rumble; no browser, JavaScript runtime, backend, or copied third-party client code
+- **Xbox access-aware catalog** — Xbox Home and Browse show Microsoft's current `Stream free with ads` preview catalog separately from standard cloud access, preserve Microsoft's authenticated title mapping through launch, defer final ad-backed authorization to session creation, and show the account's authoritative Game Pass membership in Settings when Microsoft's optional metadata service is available
+- **One lightweight runtime** — Xbox and GeForce NOW reuse CloudNow's single WebRTC factory, audio/video primitives, artwork pipeline, persistence, controller haptics, and lifecycle controls while retaining provider-specific network protocols and settings
 - **Tab bar navigation** — Home, Library, Store, and Settings; fully focus-engine compatible
 - **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
 - **Library & Store** — browse your linked games separately from the full public catalog; search and sort by default order, recently played, A→Z, or Z→A; filter by collection, genre, game store, RTX, HDR, and Reflex with live result counts; long-press any card to add/remove from Favorites
@@ -73,6 +79,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 
 - Apple TV 4K (2nd generation or later) running tvOS 26.2+
 - Active GeForce NOW account (Free, Priority, or Ultimate)
+- For Xbox mode, a Microsoft/Xbox account in a supported region with either standard Xbox Cloud Gaming access or Microsoft's currently eligible Xbox Insider `Stream free with ads` preview
 - **Build from source only:** Xcode 26.2+ on a Mac, Apple Developer account (free tier works)
 
 ## Getting Started
@@ -122,13 +129,13 @@ These commands require the exact tool versions pinned by CI: SwiftFormat 0.62.1 
 
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
-On first launch the app prompts you to sign in. A QR code and PIN are displayed — scan the QR code or visit the URL on any device and enter the PIN to complete sign-in, then return to the TV.
+On first launch, choose **GeForce NOW** or **Xbox Cloud Gaming**. CloudNow then shows that provider's QR code and PIN; scan it or visit the displayed URL on another device to complete sign-in, then return to the TV. The two accounts are stored independently, so you can sign into both and use the top-left provider dropdown to move between their separate modes without signing in again.
 
 CloudNow automatically localizes the entire UI to the active tvOS language. No app-side language picker is required for the interface. If a supported locale is unavailable, the app falls back to English.
 
 The game language setting is separate from the app UI language. In Settings, choose `Automatic` if you want CloudNow to send the tvOS language to GeForce NOW, or pick a specific game language manually.
 
-In the main app menu, LB/RB on a connected controller switches between Home, Library, Store, and Settings. Once a stream is open, those shoulder buttons stay with the streaming controller path instead of the menu.
+In either provider mode, LB/RB on a connected controller moves through the top-level navigation, including the provider dropdown and that mode's Home, Browse/Library, optional Store, and Settings tabs. Once a stream is open, those shoulder buttons stay with the active streaming controller path instead of the app menu.
 
 ### Supported tvOS languages
 
@@ -305,6 +312,7 @@ Some behavior remains hardware- or Apple-framework-bound. The nearest automated 
 | Bluetooth microphone route transitions | SDP audio-format and session-request coverage; framework route transitions remain uncovered |
 | Actual VideoToolbox hardware decoding | SDP codec/profile tests and synthetic pixel-buffer format inspection |
 | Live WebRTC media transport | Session state-machine, signaling codec, endpoint-race, and cancellation tests using fakes |
+| Live Xbox Cloud Gaming consumer services | Device-code, Xbox Live/XSTS, offering, catalog, session, REST signaling, WebRTC, input, and teardown tests use injected transports; an entitled Microsoft account on Apple TV remains a manual smoke test |
 | Apple TLS and certificate-stack behavior | Transport-independent signaling parsing and endpoint-selection tests |
 | Live storefront → GeForce NOW synchronization | Injected library-sync contract, retry, timeout, orchestration, persistence, and UI tests; authenticated Apple TV verification remains manual |
 

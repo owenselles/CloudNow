@@ -317,21 +317,6 @@ final class GFNStreamController: NSObject {
     private var previousSelectedCandidatePairId = ""
     private var lastZoneRttFeedbackAt: Date?
 
-    private static let factory: LKRTCPeerConnectionFactory = {
-        LKRTCInitializeSSL()
-        let encoderFactory = LKRTCDefaultVideoEncoderFactory()
-        let decoderFactory = GFNVideoDecoderFactory()
-        // Inject our own audio device (GFNAudioDevice): the built-in audio device module
-        // plays MONO on Apple platforms and routes through the call-oriented voice
-        // processing unit. The custom device renders true stereo — or 5.1 for multiopus
-        // streams — through AVAudioEngine and owns the output render quantum (latency).
-        return LKRTCPeerConnectionFactory(
-            encoderFactory: encoderFactory,
-            decoderFactory: decoderFactory,
-            audioDevice: GFNAudioDevice.shared
-        )
-    }()
-
     // MARK: Connect
 
     func connect(session: SessionInfo, settings: StreamSettings, accountAllowsHDR: Bool? = nil) async {
@@ -983,7 +968,11 @@ final class GFNStreamController: NSObject {
         config.audioJitterBufferMaxPackets = 50
 
         let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-        guard let pc = GFNStreamController.factory.peerConnection(with: config, constraints: constraints, delegate: self) else {
+        guard let pc = CloudRTCRuntime.peerConnectionFactory.peerConnection(
+            with: config,
+            constraints: constraints,
+            delegate: self
+        ) else {
             state = .failed(message: "Failed to create LKRTCPeerConnection")
             return
         }
@@ -1333,8 +1322,8 @@ final class GFNStreamController: NSObject {
                 "googNoiseSuppression": "false",
             ]
         )
-        let source = GFNStreamController.factory.audioSource(with: audioConstraints)
-        let track = GFNStreamController.factory.audioTrack(with: source, trackId: "mic")
+        let source = CloudRTCRuntime.peerConnectionFactory.audioSource(with: audioConstraints)
+        let track = CloudRTCRuntime.peerConnectionFactory.audioTrack(with: source, trackId: "mic")
         guard pc.add(track, streamIds: ["mic"]) != nil else {
             gfnLog.warning("[Stream] Unable to attach microphone track, continuing without microphone")
             return false

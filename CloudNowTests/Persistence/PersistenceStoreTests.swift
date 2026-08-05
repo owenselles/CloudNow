@@ -4,6 +4,114 @@ import Testing
 
 @Suite("Application persistence")
 struct PersistenceStoreTests {
+    @Test("Cloud gaming service selection round-trips and rejects stale writes")
+    func cloudGamingProviderSelection() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+
+        #expect(await harness.store.loadSelectedCloudGamingProvider() == nil)
+
+        await harness.store.saveSelectedCloudGamingProvider(
+            .xboxCloudGaming,
+            generation: 2
+        )
+        await harness.store.saveSelectedCloudGamingProvider(
+            .geForceNow,
+            generation: 1
+        )
+
+        #expect(
+            await harness.store.loadSelectedCloudGamingProvider()
+                == .xboxCloudGaming
+        )
+
+        await harness.store.saveSelectedCloudGamingProvider(nil, generation: 3)
+        #expect(await harness.store.loadSelectedCloudGamingProvider() == nil)
+    }
+
+    @Test("Xbox credentials use independent secure storage and reject stale writes")
+    func xboxCredentialPersistence() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let configuration = try MicrosoftDeviceCodeOAuthConfiguration(
+            tenant: "consumers",
+            clientID: "fixture-client",
+            scopes: ["openid"]
+        )
+        let current = XboxAuthSession(
+            configuration: configuration,
+            token: MicrosoftOAuthToken(
+                accessToken: "current",
+                refreshToken: "refresh",
+                idToken: nil,
+                tokenType: "Bearer",
+                scopes: ["openid"],
+                expiresAt: .distantFuture
+            )
+        )
+        var stale = current
+        stale.token = MicrosoftOAuthToken(
+            accessToken: "stale",
+            refreshToken: "refresh",
+            idToken: nil,
+            tokenType: "Bearer",
+            scopes: ["openid"],
+            expiresAt: .distantFuture
+        )
+
+        try await harness.store.saveXboxAuthSession(current, generation: 2)
+        try await harness.store.saveXboxAuthSession(stale, generation: 1)
+
+        #expect(try await harness.store.loadXboxAuthSession() == current)
+        #expect(throws: FakeSecureStoreError.notFound) {
+            _ = try harness.secureStore.load()
+        }
+
+        try await harness.store.deleteXboxAuthSession(generation: 3)
+        await #expect(throws: FakeSecureStoreError.notFound) {
+            _ = try await harness.store.loadXboxAuthSession()
+        }
+    }
+
+    @Test("Xbox stream settings persist independently from GeForce NOW settings")
+    func xboxStreamSettingsPersistence() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        var geForceNowSettings = StreamSettings()
+        geForceNowSettings.maxBitrateKbps = 42000
+        let xboxSettings = XboxCloudStreamSettings(
+            controllerDeadzone: 0.25,
+            rumbleEnabled: false,
+            rumbleIntensity: 0.6,
+            enableTextToSpeech: true,
+            magnifier: true,
+            highContrast: true,
+            enableOptionalDataCollection: true
+        )
+
+        await harness.store.saveStreamSettings(geForceNowSettings)
+        await harness.store.saveXboxCloudStreamSettings(xboxSettings)
+
+        #expect(
+            await harness.store.loadXboxCloudStreamSettings() == xboxSettings
+        )
+        #expect(
+            await harness.store.loadGamesSnapshot(accountScope: nil).streamSettings
+                == geForceNowSettings
+        )
+
+        _ = await harness.store.clearCachedData()
+        #expect(
+            await harness.store.loadXboxCloudStreamSettings() == xboxSettings
+        )
+
+        _ = await harness.store.clearPersistentData()
+        #expect(
+            await harness.store.loadXboxCloudStreamSettings()
+                == XboxCloudStreamSettings()
+        )
+    }
+
     @Test("Settings, favorites, history, and library data round-trip in isolated storage")
     func snapshotRoundTrip() async throws {
         let harness = try PersistenceHarness()
@@ -253,7 +361,8 @@ struct PersistenceStoreTests {
         let recreatedStore = AppPersistenceStore(
             preferences: harness.preferences,
             cacheDirectory: harness.cacheDirectory,
-            credentialStore: harness.secureStore
+            credentialStore: harness.secureStore,
+            xboxCredentialStore: harness.xboxSecureStore
         )
 
         #expect(
@@ -416,7 +525,7 @@ struct PersistenceStoreTests {
         let resetGeneration = await harness.store.loadGamesSnapshot(
             accountScope: scope
         ).ownershipCacheGeneration
-        await harness.store.clearPersistentData()
+        _ = await harness.store.clearPersistentData()
         await harness.store.saveLibraryGames(
             games,
             accountScope: scope,
@@ -726,7 +835,7 @@ struct PersistenceStoreTests {
                 == "current"
         )
 
-        await harness.store.clearPersistentData()
+        _ = await harness.store.clearPersistentData()
         try await harness.store.saveAuthSession(
             stale,
             generation: 2
@@ -763,6 +872,54 @@ struct PersistenceStoreTests {
         await #expect(throws: FakeSecureStoreError.injected) {
             try await harness.store.deleteAuthSession(generation: 0)
         }
+    }
+
+    @Test("Reset reports secure deletion failures and attempts both accounts")
+    func resetReportsCredentialDeletionFailures() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        harness.secureStore.error = .injected
+        harness.xboxSecureStore.error = .injected
+
+        let result = await harness.store.clearPersistentData()
+
+        #expect(!result.isComplete)
+        #expect(!result.geForceNowCredentialsRemoved)
+        #expect(!result.xboxCredentialsRemoved)
+        #expect(result.failedCredentialStoreCount == 2)
+        #expect(harness.secureStore.deleteCount == 1)
+        #expect(harness.xboxSecureStore.deleteCount == 1)
+    }
+
+    @Test("Reset reports each credential namespace independently")
+    func resetReportsPartialCredentialDeletion() async throws {
+        let geForceNowFailure = try PersistenceHarness()
+        defer { geForceNowFailure.cleanup() }
+        geForceNowFailure.secureStore.error = .injected
+
+        let geForceNowResult = await geForceNowFailure.store.clearPersistentData()
+
+        #expect(!geForceNowResult.geForceNowCredentialsRemoved)
+        #expect(geForceNowResult.xboxCredentialsRemoved)
+        #expect(geForceNowResult.failedCredentialStoreCount == 1)
+        #expect(
+            geForceNowResult.remainingProvider(preferring: .xboxCloudGaming)
+                == .geForceNow
+        )
+
+        let xboxFailure = try PersistenceHarness()
+        defer { xboxFailure.cleanup() }
+        xboxFailure.xboxSecureStore.error = .injected
+
+        let xboxResult = await xboxFailure.store.clearPersistentData()
+
+        #expect(xboxResult.geForceNowCredentialsRemoved)
+        #expect(!xboxResult.xboxCredentialsRemoved)
+        #expect(xboxResult.failedCredentialStoreCount == 1)
+        #expect(
+            xboxResult.remainingProvider(preferring: .geForceNow)
+                == .xboxCloudGaming
+        )
     }
 
     private func makeGame(id: String) -> GameInfo {
@@ -916,6 +1073,7 @@ private struct PersistenceHarness {
     let preferences: UserDefaultsPreferencesStore
     let cacheDirectory: URL
     let secureStore: FakeSecureCredentialStore
+    let xboxSecureStore: FakeSecureCredentialStore
     let store: AppPersistenceStore
     private let suiteName: String
 
@@ -931,10 +1089,12 @@ private struct PersistenceHarness {
             withIntermediateDirectories: true
         )
         secureStore = FakeSecureCredentialStore()
+        xboxSecureStore = FakeSecureCredentialStore()
         store = AppPersistenceStore(
             preferences: preferences,
             cacheDirectory: cacheDirectory,
-            credentialStore: secureStore
+            credentialStore: secureStore,
+            xboxCredentialStore: xboxSecureStore
         )
     }
 
@@ -953,6 +1113,7 @@ private final class FakeSecureCredentialStore: SecureCredentialStore, @unchecked
     private let lock = NSLock()
     private var storedData: Data?
     private var storedError: FakeSecureStoreError?
+    private var storedDeleteCount = 0
 
     var error: FakeSecureStoreError? {
         get {
@@ -965,6 +1126,12 @@ private final class FakeSecureCredentialStore: SecureCredentialStore, @unchecked
             storedError = newValue
             lock.unlock()
         }
+    }
+
+    var deleteCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedDeleteCount
     }
 
     func load() throws -> Data {
@@ -991,6 +1158,7 @@ private final class FakeSecureCredentialStore: SecureCredentialStore, @unchecked
     func delete() throws {
         lock.lock()
         defer { lock.unlock() }
+        storedDeleteCount += 1
         if let storedError {
             throw storedError
         }

@@ -6,20 +6,6 @@ nonisolated protocol SecureCredentialStore: Sendable {
     func delete() throws
 }
 
-nonisolated struct KeychainCredentialStore: SecureCredentialStore {
-    func load() throws -> Data {
-        try KeychainService.load()
-    }
-
-    func save(_ data: Data) throws {
-        try KeychainService.save(data)
-    }
-
-    func delete() throws {
-        KeychainService.delete()
-    }
-}
-
 nonisolated protocol PreferencesStore: Sendable {
     func data(forKey key: String) -> Data?
     func string(forKey key: String) -> String?
@@ -27,6 +13,42 @@ nonisolated protocol PreferencesStore: Sendable {
     func setString(_ value: String, forKey key: String)
     func removeObject(forKey key: String)
     func keys() -> [String]
+}
+
+nonisolated struct PersistentDataClearResult: Equatable, Sendable {
+    let geForceNowCredentialsRemoved: Bool
+    let xboxCredentialsRemoved: Bool
+
+    var isComplete: Bool {
+        geForceNowCredentialsRemoved && xboxCredentialsRemoved
+    }
+
+    var failedCredentialStoreCount: Int {
+        (geForceNowCredentialsRemoved ? 0 : 1)
+            + (xboxCredentialsRemoved ? 0 : 1)
+    }
+
+    var failureDescription: String? {
+        guard !isComplete else { return nil }
+        return "Unable to remove \(failedCredentialStoreCount) secure account credential store(s)."
+    }
+
+    func remainingProvider(
+        preferring currentProvider: CloudGamingProvider
+    ) -> CloudGamingProvider? {
+        if !geForceNowCredentialsRemoved,
+           !xboxCredentialsRemoved
+        {
+            return currentProvider
+        }
+        if !geForceNowCredentialsRemoved {
+            return .geForceNow
+        }
+        if !xboxCredentialsRemoved {
+            return .xboxCloudGaming
+        }
+        return nil
+    }
 }
 
 /// `UserDefaults` is documented as thread-safe but is not annotated `Sendable`.
@@ -107,6 +129,8 @@ actor AppPersistenceStore {
     }
 
     private enum Key {
+        static let selectedCloudGamingProvider = "cloudnow.provider.selected.v1"
+        static let xboxCloudStreamSettings = "xbox.streamSettings.v1"
         static let favoriteIds = "gfn.favoriteIds"
         static let preferredStores = "gfn.preferredStores"
         static let recentlyPlayed = "gfn.recentlyPlayed"
@@ -117,13 +141,18 @@ actor AppPersistenceStore {
         static let vpcId = "gfn.cache.vpcId"
     }
 
+    private static let serviceChooserSelection = "cloudnow-service-chooser"
+
     private let preferences: any PreferencesStore
     private let cacheDirectory: URL?
     private let fileManager: FileManager
     private let credentialStore: any SecureCredentialStore
+    private let xboxCredentialStore: any SecureCredentialStore
     private var gameMetadataCacheGeneration: UInt64 = 0
     private var ownershipCacheGeneration: UInt64 = 0
     private var authCredentialGeneration: UInt64 = 0
+    private var xboxAuthCredentialGeneration: UInt64 = 0
+    private var cloudGamingProviderGeneration: UInt64 = 0
 
     init(
         preferences: any PreferencesStore = UserDefaultsPreferencesStore(),
@@ -132,12 +161,16 @@ actor AppPersistenceStore {
             in: .userDomainMask
         ).first,
         fileManager: FileManager = .default,
-        credentialStore: any SecureCredentialStore = KeychainCredentialStore()
+        credentialStore: any SecureCredentialStore = KeychainCredentialStore(),
+        xboxCredentialStore: any SecureCredentialStore = KeychainCredentialStore(
+            namespace: .xboxCloudGaming
+        )
     ) {
         self.preferences = preferences
         self.cacheDirectory = cacheDirectory
         self.fileManager = fileManager
         self.credentialStore = credentialStore
+        self.xboxCredentialStore = xboxCredentialStore
     }
 
     func loadGamesSnapshot(accountScope: String?) -> GamesSnapshot {
@@ -160,6 +193,49 @@ actor AppPersistenceStore {
         preferences.removeObject(forKey: "gfn.cache.mainGames")
         preferences.removeObject(forKey: "gfn.cache.libraryGames")
         return snapshot
+    }
+
+    func loadSelectedCloudGamingProvider() -> CloudGamingProvider? {
+        guard let rawValue = preferences.string(
+            forKey: Key.selectedCloudGamingProvider
+        ) else {
+            return nil
+        }
+        return CloudGamingProvider(rawValue: rawValue)
+    }
+
+    func hasStoredCloudGamingProviderSelection() -> Bool {
+        preferences.keys().contains(Key.selectedCloudGamingProvider)
+    }
+
+    func saveSelectedCloudGamingProvider(
+        _ provider: CloudGamingProvider?,
+        generation: UInt64
+    ) {
+        guard generation >= cloudGamingProviderGeneration else { return }
+        cloudGamingProviderGeneration = generation
+        if let provider {
+            preferences.setString(
+                provider.rawValue,
+                forKey: Key.selectedCloudGamingProvider
+            )
+        } else {
+            preferences.setString(
+                Self.serviceChooserSelection,
+                forKey: Key.selectedCloudGamingProvider
+            )
+        }
+    }
+
+    func loadXboxCloudStreamSettings() -> XboxCloudStreamSettings {
+        decode(
+            XboxCloudStreamSettings.self,
+            forKey: Key.xboxCloudStreamSettings
+        ) ?? XboxCloudStreamSettings()
+    }
+
+    func saveXboxCloudStreamSettings(_ settings: XboxCloudStreamSettings) {
+        encode(settings, forKey: Key.xboxCloudStreamSettings)
     }
 
     func saveFavoriteIds(_ ids: Set<String>) {
@@ -388,6 +464,27 @@ actor AppPersistenceStore {
         try credentialStore.delete()
     }
 
+    func loadXboxAuthSession() async throws -> XboxAuthSession? {
+        let data = try xboxCredentialStore.load()
+        return try JSONDecoder().decode(XboxAuthSession.self, from: data)
+    }
+
+    func saveXboxAuthSession(
+        _ session: XboxAuthSession,
+        generation: UInt64
+    ) async throws {
+        guard generation >= xboxAuthCredentialGeneration else { return }
+        let data = try JSONEncoder().encode(session)
+        xboxAuthCredentialGeneration = generation
+        try xboxCredentialStore.save(data)
+    }
+
+    func deleteXboxAuthSession(generation: UInt64) async throws {
+        guard generation >= xboxAuthCredentialGeneration else { return }
+        xboxAuthCredentialGeneration = generation
+        try xboxCredentialStore.delete()
+    }
+
     /// Removes cache-backed preferences and files after callers have invalidated
     /// in-flight producers. Running this on the persistence actor serializes the
     /// deletion behind writes that were already submitted.
@@ -430,13 +527,32 @@ actor AppPersistenceStore {
     /// Clears every preference and credential after all producers have been
     /// invalidated. Actor serialization prevents an earlier queued write from
     /// restoring data after this deletion completes.
-    func clearPersistentData() {
+    func clearPersistentData() -> PersistentDataClearResult {
         ownershipCacheGeneration &+= 1
         authCredentialGeneration &+= 1
+        xboxAuthCredentialGeneration &+= 1
+        cloudGamingProviderGeneration &+= 1
         for key in preferences.keys() {
             preferences.removeObject(forKey: key)
         }
-        try? credentialStore.delete()
+        var geForceNowCredentialsRemoved = false
+        do {
+            try credentialStore.delete()
+            geForceNowCredentialsRemoved = true
+        } catch {
+            geForceNowCredentialsRemoved = false
+        }
+        var xboxCredentialsRemoved = false
+        do {
+            try xboxCredentialStore.delete()
+            xboxCredentialsRemoved = true
+        } catch {
+            xboxCredentialsRemoved = false
+        }
+        return PersistentDataClearResult(
+            geForceNowCredentialsRemoved: geForceNowCredentialsRemoved,
+            xboxCredentialsRemoved: xboxCredentialsRemoved
+        )
     }
 
     private func decode<T: Decodable>(_ type: T.Type, forKey key: String) -> T? {

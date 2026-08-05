@@ -75,6 +75,9 @@ final class MemoryLifecycleCoordinator {
     }
 
     func didReceiveMemoryWarning() {
+        Task(priority: .utility) {
+            await XboxCatalogMemoryCache.shared.clear()
+        }
         releaseCachedArtwork()
     }
 

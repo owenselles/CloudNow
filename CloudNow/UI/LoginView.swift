@@ -1,9 +1,8 @@
-import CoreImage
-import CoreImage.CIFilterBuiltins
 import SwiftUI
 
 struct LoginView: View {
     @Environment(AuthManager.self) var authManager
+    @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
 
     var body: some View {
         ZStack {
@@ -24,17 +23,7 @@ struct LoginView: View {
 
     private var loginPrompt: some View {
         VStack(spacing: 48) {
-            VStack(spacing: 12) {
-                Image(systemName: "play.tv.fill")
-                    .font(.system(size: 80))
-                    .foregroundStyle(.white)
-                Text(L10n.text("app_name"))
-                    .font(.system(size: 52, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                Text(L10n.text("app_tagline"))
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
+            CloudNowBrandHeader(subtitle: L10n.text("app_tagline"))
 
             VStack(spacing: 16) {
                 Button {
@@ -51,6 +40,13 @@ struct LoginView: View {
                 Text(L10n.text("requires_geforce_now_account"))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+
+                Button(L10n.text("choose_another_service")) {
+                    authManager.cancelLogin()
+                    providerCoordinator.select(nil)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
         }
         .padding(80)
@@ -59,57 +55,15 @@ struct LoginView: View {
     // MARK: PIN Display
 
     private func pinView(code: String, url: String, urlComplete: String) -> some View {
-        VStack(spacing: 40) {
-            Text(L10n.text("sign_in_to_geforce_now"))
-                .font(.title.weight(.semibold))
-                .foregroundStyle(.white)
-
-            // QR code
-            if let qrImage = generateQRCode(from: urlComplete) {
-                qrImage
-                    .interpolation(.none)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 280, height: 280)
-                    .cornerRadius(16)
-            }
-
-            // Instructions
-            VStack(spacing: 12) {
-                Text(L10n.text("scan_qr_or_go_to"))
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                Text(url)
-                    .font(.system(size: 32, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white)
-                Text(L10n.text("and_enter_pin"))
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
-
-            // PIN display
-            let formattedPIN = formatPIN(code)
-            Text(formattedPIN)
-                .font(.system(size: 72, weight: .bold, design: .monospaced))
-                .foregroundStyle(.green)
-                .tracking(8)
-
-            // Waiting indicator
-            HStack(spacing: 12) {
-                ProgressView()
-                    .tint(.secondary)
-                Text(L10n.text("waiting_for_sign_in"))
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button(L10n.text("cancel")) {
+        CloudNowDeviceCodeView(
+            title: L10n.text("sign_in_to_geforce_now"),
+            code: code,
+            verificationURL: url,
+            verificationURLComplete: urlComplete,
+            onCancel: {
                 authManager.cancelLogin()
             }
-            .buttonStyle(.bordered)
-            .tint(.gray)
-        }
-        .padding(60)
+        )
     }
 
     // MARK: Exchanging Tokens
@@ -149,31 +103,12 @@ struct LoginView: View {
 
                 Button(L10n.text("cancel")) {
                     authManager.cancelLogin()
+                    providerCoordinator.select(nil)
                 }
                 .buttonStyle(.bordered)
                 .tint(.gray)
             }
         }
         .padding(80)
-    }
-
-    // MARK: Helpers
-
-    private func formatPIN(_ code: String) -> String {
-        guard code.count == 8 else { return code }
-        let left = code.prefix(4)
-        let right = code.suffix(4)
-        return "\(left) \u{2014} \(right)"
-    }
-
-    private func generateQRCode(from string: String) -> Image? {
-        let context = CIContext()
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(string.utf8)
-        filter.correctionLevel = "M"
-        guard let outputImage = filter.outputImage else { return nil }
-        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return Image(decorative: cgImage, scale: 1)
     }
 }

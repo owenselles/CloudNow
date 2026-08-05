@@ -100,7 +100,9 @@ final class AuthManager {
         session != nil
     }
 
-    private let api: any NVIDIAAuthAPIClient
+    @ObservationIgnored private var api: (any NVIDIAAuthAPIClient)?
+    @ObservationIgnored private let makeAPI: @Sendable () -> any NVIDIAAuthAPIClient
+    @ObservationIgnored private let retainsInjectedAPI: Bool
     private let persistence: any AuthSessionPersistence
     private let backgroundScheduler: AuthBackgroundScheduler
     private let schedulesAutomaticRefresh: Bool
@@ -110,17 +112,24 @@ final class AuthManager {
     private var refreshTaskGeneration: UInt64 = 0
     private var refreshTimer: Task<Void, Never>?
     private var credentialGeneration: UInt64 = 0
+    private var isCredentialMutationInProgress = false
+    @ObservationIgnored private var sessionRestoreWaiters: [CheckedContinuation<Void, Never>] = []
 
     private static let bgTaskID = "com.owenselles.CloudNow.tokenRefresh"
 
     init(
-        api: any NVIDIAAuthAPIClient = NVIDIAAuthAPI(),
+        api: (any NVIDIAAuthAPIClient)? = nil,
+        makeAPI: @escaping @Sendable () -> any NVIDIAAuthAPIClient = {
+            NVIDIAAuthAPI()
+        },
         persistence: any AuthSessionPersistence = AppPersistenceStore.shared,
         backgroundScheduler: AuthBackgroundScheduler = .live,
         schedulesAutomaticRefresh: Bool = true,
         initialSession: AuthSession? = nil
     ) {
         self.api = api
+        self.makeAPI = makeAPI
+        retainsInjectedAPI = api != nil
         self.persistence = persistence
         self.backgroundScheduler = backgroundScheduler
         self.schedulesAutomaticRefresh = schedulesAutomaticRefresh
@@ -133,34 +142,87 @@ final class AuthManager {
     // MARK: Lifecycle
 
     func initialize() async {
-        guard startupPhase == .pending else { return }
+        guard !isCredentialMutationInProgress else { return }
+        await restorePersistedSession()
+        await refreshIfNeeded()
+    }
+
+    func restorePersistedSession() async {
+        guard !isCredentialMutationInProgress else {
+            return
+        }
+        switch startupPhase {
+        case .ready:
+            return
+        case .restoringSession:
+            await withCheckedContinuation { continuation in
+                sessionRestoreWaiters.append(continuation)
+            }
+            return
+        case .pending:
+            break
+        }
         startupPhase = .restoringSession
+        defer { finishSessionRestore() }
         let generation = credentialGeneration
 
         let saved = try? await persistence.loadAuthSession()
-        guard credentialGeneration == generation else {
-            startupPhase = .ready
+        guard !isCredentialMutationInProgress,
+              credentialGeneration == generation
+        else {
             return
         }
         guard let saved else {
-            startupPhase = .ready
             return
         }
 
         session = saved
+    }
+
+    private func finishSessionRestore() {
+        startupPhase = .ready
+        let waiters = sessionRestoreWaiters
+        sessionRestoreWaiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
+    }
+
+    /// Starts GeForce NOW-only refresh work after the provider coordinator has
+    /// selected it. Restoring credentials by itself must not produce network
+    /// traffic while another cloud service is active.
+    func activateForCurrentProvider() async {
+        guard !isCredentialMutationInProgress,
+              session != nil
+        else {
+            return
+        }
+        await refreshIfNeeded()
+        guard !Task.isCancelled, session != nil else { return }
         scheduleProactiveRefresh()
         scheduleBackgroundRefresh()
-        startupPhase = .ready
-        await refreshIfNeeded()
+    }
+
+    /// Cancels provider-owned work without removing the persisted account.
+    func deactivateForInactiveProvider() {
+        if activeLogin != nil {
+            cancelLogin()
+        }
+        activeRefreshTask?.cancel()
+        activeRefreshTask = nil
+        refreshTimer?.cancel()
+        refreshTimer = nil
+        backgroundScheduler.cancel(Self.bgTaskID)
+        releaseRuntimeClient()
     }
 
     // MARK: Login (Device Flow)
 
     @discardableResult
     func login(with provider: LoginProvider? = nil) -> Task<Void, Never> {
+        guard !isCredentialMutationInProgress else { return Task {} }
         if activeLogin != nil {
             cancelLogin()
         }
+        let api = resolvedAPI()
         credentialGeneration &+= 1
         let generation = credentialGeneration
         activeLogin = ActiveLogin(
@@ -289,6 +351,7 @@ final class AuthManager {
         refreshTimer = nil
         if session == nil {
             backgroundScheduler.cancel(Self.bgTaskID)
+            releaseRuntimeClient()
         } else {
             scheduleProactiveRefresh()
             scheduleBackgroundRefresh()
@@ -310,23 +373,57 @@ final class AuthManager {
 
     // MARK: Logout
 
-    func logout() {
+    func logout() async throws {
+        guard !isCredentialMutationInProgress else { return }
+        isCredentialMutationInProgress = true
+        defer { isCredentialMutationInProgress = false }
         invalidateAuthenticationWork()
         let generation = credentialGeneration
-        session = nil
-        loginPhase = .idle
-        Task {
-            try? await persistence.deleteAuthSession(
+        do {
+            try await persistence.deleteAuthSession(
                 generation: generation
             )
+        } catch {
+            guard credentialGeneration == generation else { return }
+            resumeAfterDataResetFailure()
+            throw AuthError.secureStorageUnavailable
         }
+        guard credentialGeneration == generation else { return }
+        session = nil
+        loginPhase = .idle
+        releaseRuntimeClient()
     }
 
     /// Stops authentication work before Reset All Data removes credentials.
     /// The visible session remains available until cleanup finishes and logout
     /// performs the final UI transition.
     func prepareForDataReset() {
+        isCredentialMutationInProgress = true
         invalidateAuthenticationWork()
+    }
+
+    /// Completes the in-memory half of Reset All Data after the shared
+    /// persistence store confirms that both account namespaces were removed.
+    func finishDataReset() {
+        invalidateAuthenticationWork()
+        session = nil
+        loginPhase = .idle
+        releaseRuntimeClient()
+        isCredentialMutationInProgress = false
+    }
+
+    /// Restores refresh scheduling when Reset All Data aborts before credentials
+    /// are removed and the current session remains active.
+    func resumeAfterDataResetFailure() {
+        abortDataResetWithoutActivation()
+        guard session != nil else { return }
+        scheduleProactiveRefresh()
+        scheduleBackgroundRefresh()
+    }
+
+    /// Leaves the reset barrier without starting inactive-provider work.
+    func abortDataResetWithoutActivation() {
+        isCredentialMutationInProgress = false
     }
 
     private func invalidateAuthenticationWork() {
@@ -349,6 +446,9 @@ final class AuthManager {
 
     /// Returns the best available JWT token, refreshing if near expiry.
     func resolveToken() async throws -> String {
+        guard !isCredentialMutationInProgress else {
+            throw CancellationError()
+        }
         guard var s = session else { throw AuthError.noSession }
         if s.tokens.isNearExpiry {
             s = try await refresh(session: s)
@@ -359,6 +459,9 @@ final class AuthManager {
     /// Returns a credential different from one rejected by the server. If another
     /// request already refreshed the session, reuse it instead of rotating again.
     func resolveToken(rejecting rejectedToken: String) async throws -> String {
+        guard !isCredentialMutationInProgress else {
+            throw CancellationError()
+        }
         guard let s = session else { throw AuthError.noSession }
         let currentToken = preferredToken(in: s)
         if currentToken != rejectedToken {
@@ -402,7 +505,12 @@ final class AuthManager {
     }
 
     func refreshIfNeeded() async {
-        guard let s = session, s.tokens.isNearExpiry else { return }
+        guard !isCredentialMutationInProgress,
+              let s = session,
+              s.tokens.isNearExpiry
+        else {
+            return
+        }
         let generation = credentialGeneration
         do {
             _ = try await refresh(session: s)
@@ -426,6 +534,9 @@ final class AuthManager {
     }
 
     private func refresh(session s: AuthSession) async throws -> AuthSession {
+        guard !isCredentialMutationInProgress else {
+            throw CancellationError()
+        }
         // Coalesce: if a refresh is already in-flight, wait for it instead of
         // starting a second one (which would try to use an already-rotated token).
         if let existing = activeRefreshTask {
@@ -451,6 +562,8 @@ final class AuthManager {
         session s: AuthSession,
         generation: UInt64
     ) async throws -> AuthSession {
+        try ensureAuthenticationWorkIsCurrent(generation)
+        let api = resolvedAPI()
         var updated = s
         authLog.debug("[Auth] performRefresh: accessToken expires=\(String(describing: s.tokens.expiresAt), privacy: .public), clientToken=\(s.tokens.clientToken != nil ? "yes" : "nil", privacy: .public) expires=\(s.tokens.clientTokenExpiresAt?.description ?? "nil", privacy: .public), refreshToken=\(s.tokens.refreshToken != nil ? "yes" : "nil", privacy: .public), idToken=\(s.tokens.idToken != nil ? "yes" : "nil", privacy: .public)")
         let clientTokenUsable = s.tokens.clientToken != nil &&
@@ -461,8 +574,10 @@ final class AuthManager {
         var clientTokenRefreshed: AuthTokens? = nil
         if clientTokenUsable, let clientToken = s.tokens.clientToken {
             do {
+                try ensureAuthenticationWorkIsCurrent(generation)
                 clientTokenRefreshed = try await api.refreshWithClientToken(clientToken, userId: s.user.userId)
             } catch {
+                try ensureAuthenticationWorkIsCurrent(generation)
                 authLog.warning("[Auth] client_token grant failed: \(error, privacy: .private)")
             }
         }
@@ -479,6 +594,7 @@ final class AuthManager {
                 updated.tokens.idToken = savedIdToken
             }
         } else if let refreshToken = s.tokens.refreshToken {
+            try ensureAuthenticationWorkIsCurrent(generation)
             authLog.warning("[Auth] client_token path unavailable or failed, falling back to refresh_token grant")
             let savedRefreshToken = updated.tokens.refreshToken
             let savedIdToken = updated.tokens.idToken
@@ -500,14 +616,18 @@ final class AuthManager {
             let ct: (token: String, expiresAt: Date)
             let rebound: AuthTokens
             do {
+                try ensureAuthenticationWorkIsCurrent(generation)
                 ct = try await api.fetchClientToken(accessToken: idToken)
             } catch {
+                try ensureAuthenticationWorkIsCurrent(generation)
                 authLog.error("[Auth] idToken bootstrap — fetchClientToken failed: \(error, privacy: .private)")
                 throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
             }
             do {
+                try ensureAuthenticationWorkIsCurrent(generation)
                 rebound = try await api.refreshWithClientToken(ct.token, userId: s.user.userId)
             } catch {
+                try ensureAuthenticationWorkIsCurrent(generation)
                 authLog.error("[Auth] idToken bootstrap — refreshWithClientToken failed: \(error, privacy: .private)")
                 throw AuthError.tokenRefreshFailed("All refresh mechanisms exhausted.")
             }
@@ -527,17 +647,16 @@ final class AuthManager {
         }
         // Re-bootstrap client token
         do {
+            try ensureAuthenticationWorkIsCurrent(generation)
             let ct = try await api.fetchClientToken(accessToken: updated.tokens.accessToken)
             authLog.info("[Auth] client_token re-bootstrapped, expires: \(String(describing: ct.expiresAt), privacy: .public)")
             updated.tokens.clientToken = ct.token
             updated.tokens.clientTokenExpiresAt = ct.expiresAt
         } catch {
+            try ensureAuthenticationWorkIsCurrent(generation)
             authLog.warning("[Auth] warning: failed to re-bootstrap client_token after refresh: \(error, privacy: .private)")
         }
-        try Task.checkCancellation()
-        guard credentialGeneration == generation else {
-            throw CancellationError()
-        }
+        try ensureAuthenticationWorkIsCurrent(generation)
         session = updated
         scheduleProactiveRefresh()
         scheduleBackgroundRefresh()
@@ -551,17 +670,32 @@ final class AuthManager {
         return updated
     }
 
+    private func resolvedAPI() -> any NVIDIAAuthAPIClient {
+        if let api {
+            return api
+        }
+        let api = makeAPI()
+        self.api = api
+        return api
+    }
+
+    private func releaseRuntimeClient() {
+        guard !retainsInjectedAPI else { return }
+        api = nil
+    }
+
     // MARK: Proactive Refresh
 
     private func scheduleProactiveRefresh() {
         refreshTimer?.cancel()
-        guard schedulesAutomaticRefresh else { return }
-        guard let s = session else { return }
-        let delay = s.tokens.expiresAt.timeIntervalSinceNow - (5 * 60)
-        guard delay > 0 else {
-            Task { await self.refreshIfNeeded() }
+        guard !isCredentialMutationInProgress,
+              schedulesAutomaticRefresh
+        else {
             return
         }
+        guard let s = session else { return }
+        let delay = s.tokens.expiresAt.timeIntervalSinceNow - (5 * 60)
+        guard delay > 0 else { return }
         refreshTimer = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
@@ -570,7 +704,11 @@ final class AuthManager {
     }
 
     func scheduleBackgroundRefresh() {
-        guard schedulesAutomaticRefresh else { return }
+        guard !isCredentialMutationInProgress,
+              schedulesAutomaticRefresh
+        else {
+            return
+        }
         guard let s = session else { return }
         backgroundScheduler.submit(
             Self.bgTaskID,
@@ -582,9 +720,21 @@ final class AuthManager {
         _ session: AuthSession,
         generation: UInt64
     ) async throws {
+        try ensureAuthenticationWorkIsCurrent(generation)
         try await persistence.saveAuthSession(
             session,
             generation: generation
         )
+    }
+
+    private func ensureAuthenticationWorkIsCurrent(
+        _ generation: UInt64
+    ) throws {
+        try Task.checkCancellation()
+        guard !isCredentialMutationInProgress,
+              credentialGeneration == generation
+        else {
+            throw CancellationError()
+        }
     }
 }

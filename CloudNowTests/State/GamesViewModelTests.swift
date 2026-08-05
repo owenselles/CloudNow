@@ -4,6 +4,20 @@ import Testing
 
 @Suite("Games view-model state")
 struct GamesViewModelTests {
+    @Test("Re-leaving the same session restarts its expiry task")
+    func resumableExpiryIdentityIncludesLeaveTime() {
+        let firstLeave = ResumableSessionExpiryIdentity(
+            sessionID: "same-session",
+            leftAt: Date(timeIntervalSince1970: 100)
+        )
+        let secondLeave = ResumableSessionExpiryIdentity(
+            sessionID: "same-session",
+            leftAt: Date(timeIntervalSince1970: 200)
+        )
+
+        #expect(firstLeave != secondLeave)
+    }
+
     @MainActor
     @Test("Cached catalog appears before its deterministic refresh completes")
     func cachedCatalogAppearsBeforeRefresh() async {
@@ -1078,6 +1092,36 @@ struct GamesViewModelTests {
     }
 
     @MainActor
+    @Test("Provider deactivation cancels the foreground library request")
+    func providerDeactivationCancelsForegroundLibraryRequest() async {
+        let initial = makeGame(
+            id: "initial",
+            title: "Initial",
+            isInLibrary: true
+        )
+        var snapshot = AppPersistenceStore.GamesSnapshot()
+        snapshot.vpcId = "TEST-VPC"
+        let gamesClient = ForegroundCancellationGamesClient(initial: initial)
+        let viewModel = GamesViewModel(
+            gamesClient: gamesClient,
+            cloudMatchClient: FakeActiveSessionsClient(),
+            membershipClient: FakeMembershipClient(),
+            persistence: FakeGamesPersistence(snapshot: snapshot)
+        )
+        let authManager = await makeAuthenticatedManager()
+        await viewModel.load(authManager: authManager)
+
+        viewModel.startForegroundLibraryRefresh(authManager: authManager)
+        await gamesClient.waitForForegroundRequest()
+        await viewModel.deactivateForInactiveProvider()
+        await gamesClient.waitForCancellation()
+
+        #expect(await gamesClient.libraryCallCount == 2)
+        #expect(await gamesClient.cancellationCount == 1)
+        #expect(viewModel.libraryGames == [initial])
+    }
+
+    @MainActor
     private func waitForLibraryRefresh(
         _ viewModel: GamesViewModel
     ) async -> Bool {
@@ -1157,6 +1201,85 @@ private enum ScriptedGamesOutcome: Sendable {
 
 private enum GamesViewModelTestError: Error {
     case unavailable
+}
+
+private actor ForegroundCancellationGamesClient: GamesCatalogClient {
+    private let initial: GameInfo
+    private var foregroundContinuation: CheckedContinuation<Void, Error>?
+    private var cancellationRequested = false
+    private var foregroundRequestWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var libraryCallCount = 0
+    private(set) var cancellationCount = 0
+
+    init(initial: GameInfo) {
+        self.initial = initial
+    }
+
+    func fetchMainGames(
+        token _: String,
+        streamingBaseUrl _: String,
+        vpcId _: String?
+    ) -> [GameInfo] {
+        [initial]
+    }
+
+    func fetchLibrary(
+        token _: String,
+        streamingBaseUrl _: String,
+        vpcId _: String?
+    ) async throws -> [GameInfo] {
+        libraryCallCount += 1
+        guard libraryCallCount > 1 else { return [initial] }
+        let requestWaiters = foregroundRequestWaiters
+        foregroundRequestWaiters = []
+        requestWaiters.forEach { $0.resume() }
+
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (
+                    continuation: CheckedContinuation<Void, Error>
+                ) in
+                    if cancellationRequested {
+                        continuation.resume(throwing: CancellationError())
+                    } else {
+                        foregroundContinuation = continuation
+                    }
+                }
+            } onCancel: {
+                Task {
+                    await self.requestCancellation()
+                }
+            }
+        } catch is CancellationError {
+            cancellationCount += 1
+            let waiters = cancellationWaiters
+            cancellationWaiters = []
+            waiters.forEach { $0.resume() }
+            throw CancellationError()
+        }
+        return [initial]
+    }
+
+    func waitForForegroundRequest() async {
+        guard libraryCallCount < 2 else { return }
+        await withCheckedContinuation { continuation in
+            foregroundRequestWaiters.append(continuation)
+        }
+    }
+
+    func waitForCancellation() async {
+        guard cancellationCount == 0 else { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
+    private func requestCancellation() {
+        cancellationRequested = true
+        foregroundContinuation?.resume(throwing: CancellationError())
+        foregroundContinuation = nil
+    }
 }
 
 @MainActor

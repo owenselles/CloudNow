@@ -19,6 +19,319 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testFreshLaunchOffersBothCloudServices() {
+        let app = makeApp(extraArguments: ["--cloudnow-ui-service-chooser"])
+        app.launch()
+
+        XCTAssertTrue(element("service-chooser", in: app).waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["GeForce NOW"].exists)
+        XCTAssertTrue(app.buttons["Xbox Cloud Gaming"].exists)
+    }
+
+    @MainActor
+    func testXboxChoiceDisplaysMicrosoftDeviceCodeLogin() {
+        let app = makeApp(extraArguments: ["--cloudnow-ui-service-chooser"])
+        app.launch()
+
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xbox.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["GeForce NOW"].hasFocus)
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xbox.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xbox-device-code-login", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        let qrCode = element("xbox-device-code-login.qr", in: app)
+        XCTAssertTrue(qrCode.exists)
+        XCTAssertEqual(
+            qrCode.value as? String,
+            "https://www.microsoft.com/link?otc=ABCD-EFGH"
+        )
+        XCTAssertTrue(element("xbox-device-code-login.code", in: app).exists)
+        XCTAssertTrue(app.staticTexts["ABCD-EFGH"].exists)
+        XCTAssertTrue(app.buttons["xbox-device-code-login.cancel"].exists)
+    }
+
+    @MainActor
+    func testConfiguredXboxUsesCloudNowShellAndRoundTripsBetweenServices() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        app.launch()
+
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xbox.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xbox.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xbox-home-screen", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.buttons["Fixture Racer"].waitForExistence(timeout: 5))
+
+        let xboxProviderSwitcher = app.buttons["Cloud Service"]
+        XCTAssertTrue(xboxProviderSwitcher.waitForExistence(timeout: 3))
+        XCTAssertEqual(xboxProviderSwitcher.value as? String, "Xbox Cloud Gaming")
+        assertLeadingProviderSwitcher(
+            xboxProviderSwitcher,
+            firstTab: app.buttons["Home"],
+            in: app
+        )
+        let xboxProviderSwitcherFrame = xboxProviderSwitcher.frame
+        openProviderMenu(
+            xboxProviderSwitcher,
+            in: app,
+            tabLabels: ["Home", "Browse", "Settings"]
+        )
+        let switchToGeForceNow = element("provider-option.geforce-now", in: app)
+        XCTAssertTrue(switchToGeForceNow.waitForExistence(timeout: 3))
+        XCTAssertTrue(switchToGeForceNow.isEnabled)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(element("home-screen", in: app).waitForExistence(timeout: 5))
+
+        let geForceNowProviderSwitcher = app.buttons["Cloud Service"]
+        XCTAssertTrue(geForceNowProviderSwitcher.waitForExistence(timeout: 3))
+        XCTAssertEqual(geForceNowProviderSwitcher.value as? String, "GeForce NOW")
+        let geForceNowHome = app.buttons["Home"]
+        if !geForceNowHome.hasFocus {
+            XCUIRemote.shared.press(.right)
+        }
+        XCTAssertTrue(geForceNowHome.hasFocus)
+        assertLeadingProviderSwitcher(
+            geForceNowProviderSwitcher,
+            firstTab: geForceNowHome,
+            in: app
+        )
+        XCTAssertEqual(
+            geForceNowProviderSwitcher.frame.height,
+            xboxProviderSwitcherFrame.height,
+            accuracy: 1
+        )
+        XCTAssertLessThanOrEqual(
+            abs(
+                geForceNowProviderSwitcher.frame.width
+                    - xboxProviderSwitcherFrame.width
+            ),
+            1
+        )
+        openProviderMenu(
+            geForceNowProviderSwitcher,
+            in: app,
+            tabLabels: ["Home", "Library", "Store", "Settings"]
+        )
+        let switchToXbox = element("provider-option.xbox-cloud-gaming", in: app)
+        XCTAssertTrue(switchToXbox.waitForExistence(timeout: 3))
+        XCTAssertTrue(switchToXbox.isEnabled)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xbox-home-screen", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.buttons["Fixture Racer"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testProviderSwitcherRetractsWithNativeNavigationInBothModes() {
+        let geForceNowApp = makeApp()
+        geForceNowApp.launch()
+
+        openSettings(in: geForceNowApp)
+        assertProviderSwitcherFollowsNativeNavigation(
+            in: geForceNowApp,
+            selectedTab: geForceNowApp.buttons["Settings"]
+        )
+        geForceNowApp.terminate()
+
+        let xboxApp = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        xboxApp.launch()
+
+        let xboxChoice = xboxApp.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xboxChoice.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xboxChoice.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        let xboxSettings = xboxApp.buttons["Settings"]
+        XCTAssertTrue(xboxSettings.waitForExistence(timeout: 5))
+        selectTab(xboxSettings, movingRight: 2)
+        assertProviderSwitcherFollowsNativeNavigation(
+            in: xboxApp,
+            selectedTab: xboxSettings
+        )
+    }
+
+    @MainActor
+    func testConfiguredXboxLaunchCanBeCancelledBeforeConnection() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        app.launch()
+
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xbox.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xbox.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        let racer = app.buttons["Fixture Racer"]
+        XCTAssertTrue(racer.waitForExistence(timeout: 5))
+        focusAndSelect(
+            racer,
+            directions: [.down, .left, .right],
+            pressesPerDirection: 8
+        )
+        XCTAssertTrue(
+            element("xbox-game-preview", in: app)
+                .waitForExistence(timeout: 3)
+        )
+
+        let play = element("xbox-game.play.fixture-racer", in: app)
+        XCTAssertTrue(play.waitForExistence(timeout: 3))
+        focusAndSelect(
+            play,
+            directions: [.down, .left, .right],
+            pressesPerDirection: 4
+        )
+        XCTAssertTrue(
+            element("xbox-stream-state.requesting-access", in: app)
+                .waitForExistence(timeout: 5)
+        )
+
+        let cancel = element("xbox-stream.cancel", in: app)
+        XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+        focusAndSelect(
+            cancel,
+            directions: [.down, .up, .left, .right],
+            pressesPerDirection: 4
+        )
+        XCTAssertTrue(
+            element("xbox-home-screen", in: app)
+                .waitForExistence(timeout: 5)
+        )
+    }
+
+    @MainActor
+    func testXboxFreeWithAdsAndMembershipAreExposed() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        app.launch()
+
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xbox.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xbox.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xbox-home.free-with-ads", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        let freeGame = element(
+            "xbox-game-card.fixture-adventure.freeWithAds.fixture-adventure",
+            in: app
+        )
+        XCTAssertTrue(freeGame.waitForExistence(timeout: 3))
+        // The native provider menu sits immediately left of Home in the shared
+        // focus row. Enter the tab bar before moving down into the first rail.
+        XCUIRemote.shared.press(.right)
+        focusAndSelect(
+            freeGame,
+            directions: [.down, .left, .right],
+            pressesPerDirection: 8
+        )
+        XCTAssertTrue(
+            app.buttons["Stream free with ads"]
+                .waitForExistence(timeout: 3)
+        )
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(waitForFocus(freeGame))
+
+        let lockedPreview = element(
+            "xbox-game-card.fixture-preview-locked.freeWithAds.fixture-preview-locked",
+            in: app
+        )
+        XCTAssertTrue(lockedPreview.waitForExistence(timeout: 3))
+        focusAndSelect(
+            lockedPreview,
+            directions: [.right, .left],
+            pressesPerDirection: 3
+        )
+        let unavailablePlay = element(
+            "xbox-game.play.fixture-preview-locked",
+            in: app
+        )
+        XCTAssertTrue(unavailablePlay.waitForExistence(timeout: 3))
+        XCTAssertFalse(unavailablePlay.isEnabled)
+        XCTAssertTrue(unavailablePlay.label.contains("Not eligible"))
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(waitForFocus(lockedPreview))
+
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
+        focusAndSelect(
+            settings,
+            directions: [.up, .right, .left],
+            pressesPerDirection: 12
+        )
+
+        let membership = element("xbox-settings.membership", in: app)
+        for _ in 0 ..< 50 where !membership.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(membership.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            "\(membership.label) \(accessibilityValue(of: membership))"
+                .contains("PC Game Pass")
+        )
+    }
+
+    @MainActor
+    func testSignedInGeForceNowCanReturnToServiceChooser() {
+        let app = makeApp(extraArguments: ["--cloudnow-ui-service-chooser"])
+        app.launch()
+
+        let geForceNow = app.buttons["GeForce NOW"]
+        XCTAssertTrue(geForceNow.waitForExistence(timeout: 8))
+        XCTAssertTrue(geForceNow.hasFocus)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(element("main-navigation", in: app).waitForExistence(timeout: 5))
+
+        openSettings(in: app)
+        let serviceSwitcher = app.buttons["service-switcher"]
+        let focusedServiceSwitcher = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "hasFocus == true AND label == %@",
+                "Choose Another Service"
+            ))
+            .firstMatch
+        for _ in 0 ..< 12 {
+            if focusedServiceSwitcher.exists {
+                break
+            }
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(serviceSwitcher.exists)
+        XCTAssertTrue(focusedServiceSwitcher.exists)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(element("service-chooser", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["GeForce NOW"].hasFocus)
+    }
+
+    @MainActor
     func testMainTabsSwitchBetweenLibraryAndStore() {
         let app = makeApp()
         app.launch()
@@ -41,6 +354,57 @@ final class CloudNowUITests: XCTestCase {
 
         openSettings(in: app)
         XCTAssertTrue(element("settings-screen", in: app).waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testControllerSettingsUseTheSameCloudNowRowsInBothModes() {
+        let geForceNowApp = makeApp()
+        geForceNowApp.launch()
+        openSettings(in: geForceNowApp)
+        XCTAssertTrue(
+            element("settings-screen", in: geForceNowApp)
+                .waitForExistence(timeout: 3)
+        )
+
+        let geForceNowRumble = geForceNowApp.switches["settings.rumble-enabled"]
+        let geForceNowIntensity = geForceNowApp.staticTexts["settings.rumble-intensity"]
+        let geForceNowDeadzone = geForceNowApp.staticTexts["settings.controller-deadzone"]
+        XCTAssertTrue(geForceNowRumble.waitForExistence(timeout: 3))
+        XCTAssertTrue(geForceNowIntensity.waitForExistence(timeout: 3))
+        XCTAssertTrue(geForceNowDeadzone.waitForExistence(timeout: 3))
+        let rumbleLabel = geForceNowRumble.label
+        XCTAssertTrue(geForceNowIntensity.label.hasSuffix("×"))
+        XCTAssertTrue(geForceNowDeadzone.label.hasSuffix("%"))
+        geForceNowApp.terminate()
+
+        let xboxApp = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        xboxApp.launch()
+        let xboxChoice = xboxApp.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xboxChoice.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xboxChoice.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        let xboxSettings = xboxApp.buttons["Settings"]
+        XCTAssertTrue(xboxSettings.waitForExistence(timeout: 5))
+        selectTab(xboxSettings, movingRight: 2)
+        XCTAssertTrue(
+            element("xbox-settings-screen", in: xboxApp)
+                .waitForExistence(timeout: 3)
+        )
+
+        let xboxRumble = xboxApp.switches["settings.rumble-enabled"]
+        let xboxIntensity = xboxApp.staticTexts["settings.rumble-intensity"]
+        let xboxDeadzone = xboxApp.staticTexts["settings.controller-deadzone"]
+        XCTAssertTrue(xboxRumble.waitForExistence(timeout: 3))
+        XCTAssertTrue(xboxIntensity.waitForExistence(timeout: 3))
+        XCTAssertTrue(xboxDeadzone.waitForExistence(timeout: 3))
+        XCTAssertEqual(xboxRumble.label, rumbleLabel)
+        XCTAssertTrue(xboxIntensity.label.hasSuffix("%"))
+        XCTAssertTrue(xboxDeadzone.label.hasSuffix("%"))
     }
 
     @MainActor
@@ -277,6 +641,201 @@ final class CloudNowUITests: XCTestCase {
         XCUIRemote.shared.press(.select)
     }
 
+    /// SwiftUI's native tvOS `Menu` exposes its button to accessibility, but
+    /// XCTest does not report `hasFocus` for that node even while the system
+    /// focus effect is visible. Focus can also restore to this menu after a
+    /// mode transition. Opening it and observing its options is the reliable
+    /// accessibility-level assertion for this system control.
+    @MainActor
+    private func openProviderMenu(
+        _ menu: XCUIElement,
+        in app: XCUIApplication,
+        tabLabels: [String]
+    ) {
+        XCTAssertTrue(menu.exists && menu.isEnabled)
+
+        let focusedElement = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasFocus == true"))
+            .firstMatch
+        if !focusedElement.exists || menu.hasFocus {
+            XCUIRemote.shared.press(.select)
+            return
+        }
+
+        let firstTab = app.buttons[tabLabels[0]]
+        if !firstTab.hasFocus {
+            // Focus normally stays on the provider menu across a mode switch,
+            // but XCTest does not expose `hasFocus` for a native tvOS Menu.
+            // Moving right is a safe probe because the menu sits immediately
+            // before the first native tab in the focus row.
+            XCUIRemote.shared.press(.right)
+        }
+        for _ in 0 ..< 8 {
+            if firstTab.hasFocus {
+                break
+            }
+            XCUIRemote.shared.press(.up)
+        }
+        for _ in 0 ..< tabLabels.count {
+            if firstTab.hasFocus {
+                break
+            }
+            XCUIRemote.shared.press(.left)
+        }
+        XCTAssertTrue(firstTab.hasFocus)
+
+        XCUIRemote.shared.press(.left)
+        XCTAssertTrue(waitForFocusLoss(firstTab, timeout: 3))
+        XCUIRemote.shared.press(.select)
+    }
+
+    @MainActor
+    private func assertLeadingProviderSwitcher(
+        _ switcher: XCUIElement,
+        firstTab: XCUIElement,
+        in app: XCUIApplication
+    ) {
+        XCTAssertTrue(firstTab.exists)
+        let switcherFrame = switcher.frame
+        let firstTabFrame = firstTab.frame
+        let windowFrame = app.windows.firstMatch.frame
+
+        XCTAssertLessThanOrEqual(switcherFrame.maxX + 24, firstTabFrame.minX)
+        XCTAssertEqual(switcherFrame.midY, firstTabFrame.midY, accuracy: 12)
+        // XCTest exposes the native tab label, while its focus chrome extends
+        // about 30 points per side. Compare equivalent visual footprints.
+        let nativeTabVisualWidth = firstTabFrame.width + 60
+        XCTAssertGreaterThanOrEqual(
+            switcherFrame.width / nativeTabVisualWidth,
+            1.05
+        )
+        XCTAssertLessThanOrEqual(
+            switcherFrame.width / nativeTabVisualWidth,
+            1.25
+        )
+        XCTAssertLessThan(switcherFrame.width / windowFrame.width, 0.13)
+    }
+
+    @MainActor
+    private func assertProviderSwitcherFollowsNativeNavigation(
+        in app: XCUIApplication,
+        selectedTab: XCUIElement
+    ) {
+        let switcher = app.buttons["Cloud Service"]
+        let bottomSetting = element("settings.sign-out", in: app)
+        let focusedBottomSetting = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "hasFocus == true AND label == %@",
+                "Sign Out"
+            ))
+            .firstMatch
+        for _ in 0 ..< 12 {
+            if selectedTab.hasFocus {
+                break
+            }
+            XCUIRemote.shared.press(.up)
+        }
+        for _ in 0 ..< 5 {
+            if selectedTab.hasFocus {
+                break
+            }
+            XCUIRemote.shared.press(.right)
+        }
+        let initialFocusedElement = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasFocus == true"))
+            .firstMatch
+        XCTAssertTrue(
+            selectedTab.hasFocus,
+            "Expected native tab focus; current focus: \(initialFocusedElement.debugDescription)"
+        )
+        XCTAssertTrue(switcher.waitForExistence(timeout: 3))
+
+        for _ in 0 ..< 80 {
+            if focusedBottomSetting.exists {
+                break
+            }
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(bottomSetting.exists)
+        let focusedElement = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasFocus == true"))
+            .firstMatch
+        XCTAssertTrue(
+            focusedBottomSetting.exists,
+            "Expected Sign Out focus; current focus: \(focusedElement.debugDescription)"
+        )
+        XCTAssertFalse(selectedTab.hasFocus)
+        let nativeNavigationRetracted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let element = object as? XCUIElement else { return false }
+                return element.frame.maxY <= 1
+            },
+            object: selectedTab
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [nativeNavigationRetracted], timeout: 3),
+            .completed
+        )
+        let switcherRetracted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let element = object as? XCUIElement else { return false }
+                return !element.exists || element.frame.maxY <= 1
+            },
+            object: switcher
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [switcherRetracted], timeout: 3),
+            .completed
+        )
+
+        let windowFrame = app.windows.firstMatch.frame
+        for step in 1 ... 80 {
+            if selectedTab.hasFocus {
+                break
+            }
+            XCUIRemote.shared.press(.up)
+            let nativeVisibleFraction = visibleFraction(
+                of: selectedTab,
+                inside: windowFrame
+            )
+            let providerVisibleFraction = visibleFraction(
+                of: switcher,
+                inside: windowFrame
+            )
+            if providerVisibleFraction > nativeVisibleFraction + 0.1 {
+                let attachment = XCTAttachment(screenshot: app.screenshot())
+                attachment.name = "Provider switcher led native navigation at step \(step)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                XCTFail(
+                    "Provider visibility \(providerVisibleFraction) exceeded native navigation visibility \(nativeVisibleFraction) at upward step \(step)"
+                )
+                return
+            }
+        }
+        for _ in 0 ..< 5 {
+            if selectedTab.hasFocus {
+                break
+            }
+            XCUIRemote.shared.press(.right)
+        }
+        XCTAssertTrue(selectedTab.hasFocus)
+        let nativeNavigationReturned = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let element = object as? XCUIElement else { return false }
+                return element.frame.minY > 1
+            },
+            object: selectedTab
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [nativeNavigationReturned], timeout: 3),
+            .completed
+        )
+        XCTAssertTrue(switcher.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(switcher.frame.minY, 1)
+        XCTAssertEqual(switcher.frame.midY, selectedTab.frame.midY, accuracy: 12)
+    }
+
     @MainActor
     private func focus(
         _ element: XCUIElement,
@@ -314,6 +873,18 @@ final class CloudNowUITests: XCTestCase {
     ) -> Bool {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "hasFocus == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    private func waitForFocusLoss(
+        _ element: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasFocus == false"),
             object: element
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed

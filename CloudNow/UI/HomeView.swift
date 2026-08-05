@@ -106,15 +106,26 @@ struct HomeView: View {
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: carouselRequest?.id)
         .toolbar(.hidden, for: .navigationBar)
-        .task(id: viewModel.resumableSession?.session.sessionId) {
-            guard viewModel.resumableSession != nil else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                if viewModel.resumableSession?.isExpired == true {
-                    viewModel.resumableSession = nil
-                    return
-                }
+        .task(id: viewModel.resumableSession?.expiryIdentity) {
+            guard let resumableSession = viewModel.resumableSession else { return }
+            let remaining = max(
+                ResumableSession.gracePeriod
+                    - Date().timeIntervalSince(resumableSession.leftAt),
+                0
+            )
+            do {
+                try await Task.sleep(for: .seconds(remaining))
+            } catch {
+                return
             }
+            guard !Task.isCancelled,
+                  viewModel.resumableSession?.session.sessionId
+                  == resumableSession.session.sessionId,
+                  viewModel.resumableSession?.isExpired == true
+            else {
+                return
+            }
+            viewModel.resumableSession = nil
         }
     }
 
@@ -153,11 +164,7 @@ struct HomeView: View {
                             .padding(.vertical, 3)
                             .background(.green, in: Capsule())
                     }
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        Text(L10n.format("session_expires_in", rs.secondsRemaining))
-                            .font(.callout)
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
+                    ResumableSessionCountdownView(leftAt: rs.leftAt)
                     Button { onResume(rs) } label: {
                         Label(L10n.text("rejoin_session"), systemImage: "arrow.counterclockwise")
                     }
@@ -282,6 +289,26 @@ struct HomeView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 500)
+        }
+    }
+}
+
+/// Keeps the once-per-second countdown update inside the single text leaf.
+private struct ResumableSessionCountdownView: View {
+    let leftAt: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let secondsRemaining = max(
+                0,
+                Int(
+                    ResumableSession.gracePeriod
+                        - context.date.timeIntervalSince(leftAt)
+                )
+            )
+            Text(L10n.format("session_expires_in", secondsRemaining))
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.8))
         }
     }
 }

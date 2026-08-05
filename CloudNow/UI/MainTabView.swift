@@ -21,7 +21,12 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        CloudNowTabShell(
+            selection: $selectedTab,
+            controllerNavigation: controllerNavigation,
+            accessibilityIdentifier: "main-navigation",
+            modeLifecycle: viewModel
+        ) {
             Tab(L10n.text("home"), systemImage: "house.fill", value: AppTab.home) {
                 HomeView(
                     onPlay: { game in
@@ -55,38 +60,17 @@ struct MainTabView: View {
                     .accessibilityIdentifier("settings-screen")
             }
         }
-        .accessibilityIdentifier("main-navigation")
         .environment(viewModel)
-        .environment(controllerNavigation)
-        .onAppear {
-            controllerNavigation.start(
-                onPreviousTab: { selectedTab = selectedTab.previous },
-                onNextTab: { selectedTab = selectedTab.next }
-            )
-        }
         .task {
             guard loadsRemoteData else { return }
             await viewModel.load(authManager: authManager)
         }
         .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
-                MemoryLifecycleCoordinator.shared.appDidBecomeActive()
-                if loadsRemoteData {
-                    Task { await viewModel.refreshLibrary(authManager: authManager) }
-                }
-            case .background:
-                MemoryLifecycleCoordinator.shared.appDidEnterBackground()
-            case .inactive:
-                break
-            @unknown default:
-                break
-            }
+            guard phase == .active, loadsRemoteData else { return }
+            viewModel.startForegroundLibraryRefresh(authManager: authManager)
         }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didReceiveMemoryWarningNotification
-        )) { _ in
-            MemoryLifecycleCoordinator.shared.didReceiveMemoryWarning()
+        .onDisappear {
+            viewModel.cancelForegroundLibraryRefresh()
         }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
@@ -124,11 +108,20 @@ struct MainTabView: View {
     }
 }
 
-private enum AppTab: Hashable {
+extension GamesViewModel: CloudGamingProviderModeLifecycle {
+    func deactivateForInactiveProvider() async {
+        prepareForLogout()
+    }
+}
+
+private nonisolated enum AppTab: CloudNowTabSelection {
     case home
     case library
     case store
     case settings
+
+    static let first = AppTab.home
+    static let last = AppTab.settings
 
     var next: AppTab {
         switch self {

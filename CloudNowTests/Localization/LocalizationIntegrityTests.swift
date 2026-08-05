@@ -5,18 +5,55 @@ import Testing
 @Suite("Localization integrity and locale mapping")
 @MainActor
 struct LocalizationIntegrityTests {
+    private static let xboxUIKeys: Set<String> = [
+        "cloud_gaming_access",
+        "free_with_ads",
+        "free_with_ads_session_description",
+        "high_contrast",
+        "magnifier",
+        "not_eligible",
+        "share_optional_diagnostic_data",
+        "stream_free_with_ads",
+        "text_to_speech",
+        "xbox_accessibility",
+        "xbox_allocating_session",
+        "xbox_connecting_stream",
+        "xbox_controller_changes_next_session",
+        "xbox_ending_session",
+        "xbox_estimated_wait",
+        "xbox_free_with_ads_candidate_description",
+        "xbox_optional_data_description",
+        "xbox_privacy",
+        "xbox_provisioning_console",
+        "xbox_requesting_access",
+        "xbox_stream_settings",
+        "xbox_waiting_capacity",
+    ]
+
     struct MappingCase: Sendable {
         let input: String
         let expected: String
     }
 
-    @Test("Every supported translation contains the complete English key set")
-    func everyTableContainsEnglishKeys() {
+    @Test("Every supported translation exactly matches the English key set")
+    func everyTableMatchesEnglishKeys() {
         let english = L10n.translationTable(for: "en-US")
+        let expectedKeys = Set(english.keys)
 
         for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key }) {
-            let missing = Set(english.keys).subtracting(table.keys)
+            let actualKeys = Set(table.keys)
+            let missing = expectedKeys.subtracting(actualKeys)
+            let unexpected = actualKeys.subtracting(expectedKeys)
             #expect(missing.isEmpty, "\(locale) is missing keys: \(missing.sorted())")
+            #expect(unexpected.isEmpty, "\(locale) has unexpected keys: \(unexpected.sorted())")
+        }
+    }
+
+    @Test("Every locale directly provides every Xbox UI translation")
+    func everyTableProvidesXboxUIKeys() {
+        for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key }) {
+            let missing = Self.xboxUIKeys.subtracting(table.keys)
+            #expect(missing.isEmpty, "\(locale) is missing Xbox UI keys: \(missing.sorted())")
         }
     }
 

@@ -11,6 +11,9 @@ import SwiftUI
 @main
 struct CloudNowApp: App {
     @State private var authManager: AuthManager
+    @State private var providerCoordinator: CloudGamingProviderCoordinator
+    @State private var xboxAuthManager: XboxAuthManager
+    @State private var hasRestoredApplicationState = false
     #if DEBUG
         private let usesUITestFixtures: Bool
     #endif
@@ -28,10 +31,60 @@ struct CloudNowApp: App {
                     initialSession: Self.uiTestAuthSession
                 )
                 : AuthManager()
+            let showsServiceChooserFixture = ProcessInfo.processInfo.arguments.contains(
+                "--cloudnow-ui-service-chooser"
+            )
+            let usesConfiguredXboxFixture = usesUITestFixtures
+                && ProcessInfo.processInfo.arguments.contains(
+                    "--cloudnow-ui-xbox-configured"
+                )
+            let usesXboxDeviceCodeFixture = usesUITestFixtures
+                && showsServiceChooserFixture
+                && !usesConfiguredXboxFixture
+            let xboxEnvironment: XboxCloudEnvironment = if usesConfiguredXboxFixture {
+                XboxUITestFixture.environment
+            } else if usesXboxDeviceCodeFixture {
+                XboxUITestFixture.deviceCodeEnvironment
+            } else if usesUITestFixtures {
+                .unconfigured
+            } else {
+                Self.productionXboxEnvironment
+            }
+            let providerCoordinator = CloudGamingProviderCoordinator(
+                xboxEnvironment: xboxEnvironment,
+                initialSelection: usesUITestFixtures && !showsServiceChooserFixture
+                    ? .geForceNow
+                    : nil,
+                startsReady: usesUITestFixtures
+            )
+            let xboxAuthManager = XboxAuthManager(
+                environment: xboxEnvironment,
+                oauthClient: usesXboxDeviceCodeFixture
+                    ? XboxUITestFixture.makeDeviceCodeOAuthClient()
+                    : nil,
+                persistence: AppPersistenceStore.shared,
+                initialSession: usesConfiguredXboxFixture
+                    ? XboxUITestFixture.session
+                    : nil,
+                initialAuthorizedAccount: usesConfiguredXboxFixture
+                    ? XboxUITestFixture.account
+                    : nil,
+                startsReady: usesUITestFixtures
+            )
         #else
             let authManager = AuthManager()
+            let xboxEnvironment = Self.productionXboxEnvironment
+            let providerCoordinator = CloudGamingProviderCoordinator(
+                xboxEnvironment: xboxEnvironment
+            )
+            let xboxAuthManager = XboxAuthManager(
+                environment: xboxEnvironment,
+                persistence: AppPersistenceStore.shared
+            )
         #endif
         _authManager = State(initialValue: authManager)
+        _providerCoordinator = State(initialValue: providerCoordinator)
+        _xboxAuthManager = State(initialValue: xboxAuthManager)
 
         URLCache.shared = URLCache(
             memoryCapacity: 50 * 1024 * 1024,
@@ -44,10 +97,13 @@ struct CloudNowApp: App {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: "com.owenselles.CloudNow.tokenRefresh",
             using: nil
-        ) { [authManager] task in
+        ) { [authManager, providerCoordinator] task in
             Task { @MainActor in
-                await authManager.refreshIfNeeded()
-                authManager.scheduleBackgroundRefresh()
+                let handler = GeForceNowBackgroundRefreshHandler(
+                    providerCoordinator: providerCoordinator,
+                    authManager: authManager
+                )
+                _ = await handler.perform()
                 task.setTaskCompleted(success: true)
             }
         }
@@ -55,38 +111,165 @@ struct CloudNowApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG
-                if usesUITestFixtures {
-                    UITestRootView()
-                        .environment(authManager)
-                } else {
+            Group {
+                #if DEBUG
+                    if usesUITestFixtures {
+                        UITestRootView()
+                            .environment(authManager)
+                            .environment(providerCoordinator)
+                            .environment(xboxAuthManager)
+                    } else {
+                        productionRoot
+                    }
+                #else
                     productionRoot
+                #endif
+            }
+            .modifier(CloudAppLifecycleModifier())
+            .alert(
+                L10n.text("reset_failed"),
+                isPresented: dataResetFailureBinding
+            ) {
+                Button(L10n.text("ok")) {
+                    providerCoordinator.dismissDataResetFailure()
                 }
-            #else
-                productionRoot
-            #endif
+            } message: {
+                Text(providerCoordinator.dataResetFailureMessage ?? "")
+            }
         }
+    }
+
+    private var dataResetFailureBinding: Binding<Bool> {
+        Binding(
+            get: { providerCoordinator.dataResetFailureMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    providerCoordinator.dismissDataResetFailure()
+                }
+            }
+        )
     }
 
     private var productionRoot: some View {
         Group {
-            switch authManager.startupPhase {
-            case .pending, .restoringSession:
+            if isRestoringApplicationState {
                 AuthRestorationView()
-            case .ready:
-                if authManager.isAuthenticated {
-                    MainTabView()
-                } else {
-                    LoginView()
+            } else if let selectedProvider = providerCoordinator.selectedProvider {
+                switch selectedProvider {
+                case .geForceNow:
+                    if authManager.isAuthenticated {
+                        MainTabView()
+                    } else {
+                        LoginView()
+                    }
+                case .xboxCloudGaming:
+                    if !xboxAuthManager.canRequestMicrosoftDeviceCode {
+                        XboxCloudConfigurationRequiredView()
+                    } else if xboxAuthManager.isXboxCloudAuthorized,
+                              let account = xboxAuthManager.authorizedAccount,
+                              let configuration = providerCoordinator.xboxServiceConfiguration
+                    {
+                        XboxMainTabView(
+                            configuration: configuration,
+                            account: account
+                        )
+                    } else {
+                        XboxLoginView()
+                    }
                 }
+            } else {
+                CloudServiceSelectionView()
             }
         }
         .environment(authManager)
-        .task { await authManager.initialize() }
+        .environment(providerCoordinator)
+        .environment(xboxAuthManager)
+        .task {
+            await restoreInitialProviderState()
+        }
+        .task(
+            id: ProviderActivationIdentity(
+                provider: providerCoordinator.selectedProvider,
+                isReady: hasRestoredApplicationState
+            )
+        ) {
+            guard hasRestoredApplicationState else { return }
+            await activateSelectedProvider()
+        }
         .onChange(of: authManager.isAuthenticated) { _, authenticated in
             if !authenticated {
                 MemoryLifecycleCoordinator.shared.releaseCachedArtwork()
             }
+        }
+        .onChange(of: xboxAuthManager.isXboxCloudAuthorized) { _, authorized in
+            if !authorized {
+                MemoryLifecycleCoordinator.shared.releaseCachedArtwork()
+            }
+        }
+    }
+
+    private var isRestoringApplicationState: Bool {
+        guard providerCoordinator.startupPhase == .ready,
+              hasRestoredApplicationState
+        else {
+            return true
+        }
+        switch providerCoordinator.selectedProvider {
+        case .geForceNow:
+            return authManager.startupPhase != .ready
+        case .xboxCloudGaming:
+            return xboxAuthManager.startupPhase != .ready
+        case nil:
+            return false
+        }
+    }
+
+    private func restoreInitialProviderState() async {
+        await providerCoordinator.initialize()
+        guard !Task.isCancelled else { return }
+
+        switch providerCoordinator.selectedProvider {
+        case .geForceNow:
+            await authManager.restorePersistedSession()
+        case .xboxCloudGaming:
+            await xboxAuthManager.restorePersistedSession()
+        case nil where providerCoordinator.requiresLegacyGeForceNowMigration:
+            await authManager.restorePersistedSession()
+            guard !Task.isCancelled else { return }
+            if authManager.isAuthenticated {
+                providerCoordinator.adoptLegacyGeForceNowSessionIfNeeded()
+            }
+        case nil:
+            break
+        }
+
+        guard !Task.isCancelled else { return }
+        hasRestoredApplicationState = true
+    }
+
+    private func activateSelectedProvider() async {
+        switch providerCoordinator.selectedProvider {
+        case .geForceNow:
+            await xboxAuthManager.deactivateForInactiveProvider()
+            await authManager.restorePersistedSession()
+            guard !Task.isCancelled,
+                  providerCoordinator.selectedProvider == .geForceNow
+            else {
+                return
+            }
+            await authManager.activateForCurrentProvider()
+        case .xboxCloudGaming:
+            authManager.deactivateForInactiveProvider()
+            await xboxAuthManager.restorePersistedSession()
+            guard !Task.isCancelled,
+                  providerCoordinator.selectedProvider == .xboxCloudGaming
+            else {
+                return
+            }
+            await xboxAuthManager.activateXboxCloudAccess()
+        case nil:
+            authManager.deactivateForInactiveProvider()
+            await xboxAuthManager.deactivateForInactiveProvider()
         }
     }
 
@@ -116,6 +299,20 @@ struct CloudNowApp: App {
             )
         )
     #endif
+
+    private static let productionXboxEnvironment: XboxCloudEnvironment = {
+        do {
+            return try XboxProductionRuntimeContext.microsoftProduction()
+                .environment
+        } catch {
+            return .productionMicrosoftSignIn
+        }
+    }()
+}
+
+private struct ProviderActivationIdentity: Hashable {
+    let provider: CloudGamingProvider?
+    let isReady: Bool
 }
 
 private struct AuthRestorationView: View {
@@ -130,10 +327,15 @@ private struct AuthRestorationView: View {
 
 #if DEBUG
     private struct UITestRootView: View {
+        @Environment(AuthManager.self) private var authManager
+        @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+        @Environment(XboxAuthManager.self) private var xboxAuthManager
         @State private var viewModel: GamesViewModel
+        private let showsServiceChooser: Bool
 
         init() {
             let arguments = ProcessInfo.processInfo.arguments
+            showsServiceChooser = arguments.contains("--cloudnow-ui-service-chooser")
             let syncClientMode: UITestLibrarySyncClient.Mode =
                 arguments.contains("--cloudnow-ui-library-refresh-empty")
                     ? .empty
@@ -174,7 +376,45 @@ private struct AuthRestorationView: View {
         }
 
         var body: some View {
-            MainTabView(viewModel: viewModel, loadsRemoteData: false)
+            Group {
+                if showsServiceChooser {
+                    switch providerCoordinator.selectedProvider {
+                    case .geForceNow:
+                        MainTabView(viewModel: viewModel, loadsRemoteData: false)
+                    case .xboxCloudGaming:
+                        if !xboxAuthManager.canRequestMicrosoftDeviceCode {
+                            XboxCloudConfigurationRequiredView()
+                        } else if xboxAuthManager.isXboxCloudAuthorized,
+                                  let account = xboxAuthManager.authorizedAccount,
+                                  let configuration = providerCoordinator.xboxServiceConfiguration
+                        {
+                            XboxMainTabView(
+                                configuration: configuration,
+                                account: account
+                            )
+                        } else {
+                            XboxLoginView()
+                        }
+                    case nil:
+                        CloudServiceSelectionView()
+                    }
+                } else {
+                    MainTabView(viewModel: viewModel, loadsRemoteData: false)
+                }
+            }
+            .task(id: providerCoordinator.selectedProvider) {
+                switch providerCoordinator.selectedProvider {
+                case .geForceNow:
+                    await xboxAuthManager.deactivateForInactiveProvider()
+                    await authManager.activateForCurrentProvider()
+                case .xboxCloudGaming:
+                    authManager.deactivateForInactiveProvider()
+                    await xboxAuthManager.activateXboxCloudAccess()
+                case nil:
+                    authManager.deactivateForInactiveProvider()
+                    await xboxAuthManager.deactivateForInactiveProvider()
+                }
+            }
         }
 
         private static let fixtureGames = [

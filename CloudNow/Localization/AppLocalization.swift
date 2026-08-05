@@ -107,7 +107,10 @@ enum L10n {
     /// lazy and only uses the active table.
     static var supportedTranslationTables: [String: [String: String]] {
         Dictionary(uniqueKeysWithValues: supportedLanguageCodes.map {
-            ($0, translationTable(for: $0))
+            guard let provider = tableProvidersByLocale[$0] else {
+                preconditionFailure("Missing translation table provider for \($0)")
+            }
+            return ($0, provider())
         })
     }
 

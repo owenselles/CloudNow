@@ -17,6 +17,7 @@ actor AppDataManager {
         await HeroArtPrefetcher.shared.cancelAll()
         await BoxArtPrefetcher.shared.cancelAll()
         await ArtworkImagePipeline.shared.clearCache()
+        await XboxCatalogMemoryCache.shared.clear()
         URLCache.shared.removeAllCachedResponses()
 
         var failures = await AppPersistenceStore.shared.clearCachedData()
@@ -44,7 +45,7 @@ actor AppDataManager {
 
     /// Removes preferences and credentials after disposable caches were cleared.
     /// Authentication work must be cancelled before calling this method.
-    func clearPersistentData() async {
+    func clearPersistentData() async -> PersistentDataClearResult {
         await AppPersistenceStore.shared.clearPersistentData()
     }
 }

@@ -12,15 +12,9 @@ struct QueueAdPlayerView: View {
     let message: String?
 
     @State private var player = AVPlayer()
-    @State private var periodicObserver: Any?
-    @State private var endObserver: NSObjectProtocol?
-    @State private var loadedAdId: String?
-    @State private var watchedTimeMs = 0
+    @State private var lifecycle = QueueAdPlaybackLifecycle()
     @State private var isPlaying = false
     @State private var isMuted = false
-    @State private var hasReportedStart = false
-    @State private var hasSentFinish = false
-    @State private var isPaused = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -90,14 +84,14 @@ struct QueueAdPlayerView: View {
     // MARK: Player lifecycle
 
     private func loadPlayer(url: URL) {
-        guard loadedAdId != ad.adId else { return }
+        guard lifecycle.loadedAdId != ad.adId else { return }
         teardown()
-        loadedAdId = ad.adId
-        watchedTimeMs = 0
+        lifecycle.loadedAdId = ad.adId
+        lifecycle.watchedTimeMs = 0
         isPlaying = false
-        hasReportedStart = false
-        hasSentFinish = false
-        isPaused = false
+        lifecycle.hasReportedStart = false
+        lifecycle.hasSentFinish = false
+        lifecycle.isPaused = false
 
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
@@ -105,62 +99,88 @@ struct QueueAdPlayerView: View {
         player.volume = 0.5
         player.play()
 
-        periodicObserver = player.addPeriodicTimeObserver(
+        lifecycle.periodicObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { _ in
             MainActor.assumeIsolated {
                 let currentMs = max(0, Int(player.currentTime().seconds * 1000))
-                watchedTimeMs = currentMs
+                lifecycle.watchedTimeMs = currentMs
                 let playing = player.rate > 0.01
-                isPlaying = playing
+                if isPlaying != playing {
+                    isPlaying = playing
+                }
 
-                if playing, !hasReportedStart {
-                    hasReportedStart = true
-                    isPaused = false
+                if playing, !lifecycle.hasReportedStart {
+                    lifecycle.hasReportedStart = true
+                    lifecycle.isPaused = false
                     onStart(ad.adId)
-                } else if !playing, hasReportedStart, !hasSentFinish, !isPaused {
-                    isPaused = true
+                } else if !playing,
+                          lifecycle.hasReportedStart,
+                          !lifecycle.hasSentFinish,
+                          !lifecycle.isPaused
+                {
+                    lifecycle.isPaused = true
                     onPause(ad.adId)
-                } else if playing, isPaused {
-                    isPaused = false
+                } else if playing, lifecycle.isPaused {
+                    lifecycle.isPaused = false
                     onResume(ad.adId)
                 }
             }
         }
 
-        endObserver = NotificationCenter.default.addObserver(
+        lifecycle.endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
         ) { _ in
             MainActor.assumeIsolated {
-                guard !hasSentFinish else { return }
-                hasSentFinish = true
-                isPlaying = false
-                onFinish(ad.adId, watchedTimeMs)
+                guard !lifecycle.hasSentFinish else { return }
+                lifecycle.hasSentFinish = true
+                if isPlaying {
+                    isPlaying = false
+                }
+                onFinish(ad.adId, lifecycle.watchedTimeMs)
             }
         }
     }
 
     private func reload(url: URL) {
-        loadedAdId = nil
-        hasSentFinish = false
-        hasReportedStart = false
-        isPaused = false
+        lifecycle.loadedAdId = nil
+        lifecycle.hasSentFinish = false
+        lifecycle.hasReportedStart = false
+        lifecycle.isPaused = false
         isPlaying = false
         loadPlayer(url: url)
     }
 
     private func teardown() {
         player.pause()
-        if let o = periodicObserver {
-            player.removeTimeObserver(o); periodicObserver = nil
+        lifecycle.loadedAdId = nil
+        if let observer = lifecycle.periodicObserver {
+            player.removeTimeObserver(observer)
+            lifecycle.periodicObserver = nil
         }
-        if let o = endObserver {
-            NotificationCenter.default.removeObserver(o); endObserver = nil
+        if let observer = lifecycle.endObserver {
+            NotificationCenter.default.removeObserver(observer)
+            lifecycle.endObserver = nil
         }
+        player.replaceCurrentItem(with: nil)
     }
+}
+
+/// Operational AVPlayer bookkeeping is intentionally non-observable. Only the
+/// two values rendered by the view (`isPlaying` and `isMuted`) live in SwiftUI
+/// state, so the 4 Hz time observer cannot invalidate the ad card.
+@MainActor
+private final class QueueAdPlaybackLifecycle {
+    var periodicObserver: Any?
+    var endObserver: NSObjectProtocol?
+    var loadedAdId: String?
+    var watchedTimeMs = 0
+    var hasReportedStart = false
+    var hasSentFinish = false
+    var isPaused = false
 }
 
 // MARK: - AVPlayer wrapper (tvOS)
