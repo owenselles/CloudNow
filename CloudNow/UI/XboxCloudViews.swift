@@ -2895,7 +2895,7 @@ private struct XboxSettingsView: View {
         }
     }
 
-    private func switchProvider(to provider: CloudGamingProvider?) {
+    private func switchProvider(to provider: CloudGamingProvider) {
         guard !isSigningOut,
               !isPerformingDataAction,
               let intent = providerCoordinator.beginProviderSwitch(to: provider)

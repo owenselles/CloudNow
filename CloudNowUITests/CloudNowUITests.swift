@@ -386,7 +386,7 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
-    func testSignedInGeForceNowCanReturnToServiceChooser() {
+    func testCloudServiceSettingsOnlyShowsOtherProvider() {
         let app = makeApp(extraArguments: ["--cloudnow-ui-service-chooser"])
         app.launch()
 
@@ -397,25 +397,12 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(element("main-navigation", in: app).waitForExistence(timeout: 5))
 
         openSettings(in: app)
-        let serviceSwitcher = app.buttons["service-switcher"]
-        let focusedServiceSwitcher = app.descendants(matching: .any)
-            .matching(NSPredicate(
-                format: "hasFocus == true AND label == %@",
-                "Choose Another Service"
-            ))
-            .firstMatch
-        for _ in 0 ..< 12 {
-            if focusedServiceSwitcher.exists {
-                break
-            }
-            XCUIRemote.shared.press(.down)
-        }
-        XCTAssertTrue(serviceSwitcher.exists)
-        XCTAssertTrue(focusedServiceSwitcher.exists)
-        XCUIRemote.shared.press(.select)
-
-        XCTAssertTrue(element("service-chooser", in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["GeForce NOW"].hasFocus)
+        XCTAssertTrue(
+            app.buttons["service-switch.xbox-cloud-gaming"]
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertFalse(app.buttons["service-switcher"].exists)
+        XCTAssertFalse(app.buttons["Choose Another Service"].exists)
     }
 
     @MainActor

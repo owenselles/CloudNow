@@ -44,7 +44,7 @@ struct CloudNowStorageAndDataSection: View {
 struct CloudNowCloudServiceSection: View {
     let activeProvider: CloudGamingProvider
     let isInteractionDisabled: Bool
-    let onSelectProvider: (CloudGamingProvider?) -> Void
+    let onSelectProvider: (CloudGamingProvider) -> Void
 
     var body: some View {
         Section(L10n.text("cloud_service")) {
@@ -68,11 +68,6 @@ struct CloudNowCloudServiceSection: View {
                 }
             }
 
-            Button(L10n.text("choose_another_service")) {
-                onSelectProvider(nil)
-            }
-            .accessibilityIdentifier("service-switcher")
-            .disabled(isInteractionDisabled)
         }
     }
 }
@@ -770,7 +765,7 @@ struct SettingsView: View {
         isPerformingDataAction || providerCoordinator.isProviderInteractionBlocked
     }
 
-    private func switchProvider(to provider: CloudGamingProvider?) {
+    private func switchProvider(to provider: CloudGamingProvider) {
         guard !isPerformingDataAction,
               let intent = providerCoordinator.beginProviderSwitch(to: provider)
         else {
