@@ -603,10 +603,13 @@ struct XboxAuthManagerTests {
                 expiresAt: fixedDate.addingTimeInterval(5 * 60)
             )
         )
-        let account = makeAccount()
+        let account = makeAccount(
+            authorizationIdentifier: "ephemeral-vault-handle",
+            activityScopeIdentifier: "stable-catalog-scope"
+        )
         let cache = XboxCatalogMemoryCache()
         let key = XboxCatalogCacheKey(
-            accountAuthorizationIdentifier: account.authorizationIdentifier,
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
             localeIdentifier: "en-US",
             market: "US"
         )
@@ -1039,10 +1042,12 @@ struct XboxAuthManagerTests {
     }
 
     private func makeAccount(
-        authorizationIdentifier: String = "fixture-account"
+        authorizationIdentifier: String = "fixture-account",
+        activityScopeIdentifier: String? = nil
     ) -> XboxCloudAuthorizedAccount {
         XboxCloudAuthorizedAccount(
             authorizationIdentifier: authorizationIdentifier,
+            activityScopeIdentifier: activityScopeIdentifier,
             displayName: "Fixture Player",
             expiresAt: fixedDate.addingTimeInterval(3600)
         )

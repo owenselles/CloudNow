@@ -20,7 +20,8 @@ actor XboxContentAccessStore: XboxContentAccessProviding {
 
     private struct InFlightOperation: Sendable {
         let identifier: UUID
-        let generation: UInt64
+        let storeGeneration: UInt64
+        let accountGeneration: UInt64
         let task: Task<XboxContentAccessSnapshot, Error>
     }
 
@@ -28,7 +29,8 @@ actor XboxContentAccessStore: XboxContentAccessProviding {
     private let timeToLive: TimeInterval
     private let maximumEntryCount: Int
     private let now: @Sendable () -> Date
-    private var generation: UInt64 = 0
+    private var storeGeneration: UInt64 = 0
+    private var accountGenerations: [String: UInt64] = [:]
     private var accessOrder: UInt64 = 0
     private var entries: [Key: Entry] = [:]
     private var inFlightOperations: [Key: InFlightOperation] = [:]
@@ -79,7 +81,8 @@ actor XboxContentAccessStore: XboxContentAccessProviding {
             }
             operation = InFlightOperation(
                 identifier: UUID(),
-                generation: generation,
+                storeGeneration: storeGeneration,
+                accountGeneration: accountGeneration(for: key),
                 task: task
             )
             inFlightOperations[key] = operation
@@ -103,10 +106,40 @@ actor XboxContentAccessStore: XboxContentAccessProviding {
         }
     }
 
+    /// Invalidates only the selected account. Per-account generation fencing
+    /// prevents a canceled stale request from repopulating the cache while
+    /// leaving other signed-in account entries intact.
+    func invalidateContentAccess(
+        for account: XboxCloudAuthorizedAccount
+    ) async {
+        let identifier = account.authorizationIdentifier
+        accountGenerations[identifier, default: 0] &+= 1
+
+        let matchingEntryKeys = entries.keys.filter {
+            $0.accountAuthorizationIdentifier == identifier
+        }
+        for key in matchingEntryKeys {
+            entries.removeValue(forKey: key)
+        }
+
+        let matchingOperationKeys = inFlightOperations.keys.filter {
+            $0.accountAuthorizationIdentifier == identifier
+        }
+        let operations = matchingOperationKeys.compactMap {
+            inFlightOperations.removeValue(forKey: $0)
+        }
+        for operation in operations {
+            operation.task.cancel()
+        }
+
+        await upstream.invalidateContentAccess(for: account)
+    }
+
     /// Invalidates cached and in-flight work. Identity fencing prevents an old
     /// completion from repopulating the store after this barrier.
     func clear() {
-        generation &+= 1
+        storeGeneration &+= 1
+        accountGenerations.removeAll(keepingCapacity: false)
         let operations = Array(inFlightOperations.values)
         inFlightOperations.removeAll(keepingCapacity: false)
         entries.removeAll(keepingCapacity: false)
@@ -155,13 +188,19 @@ actor XboxContentAccessStore: XboxContentAccessProviding {
         _ operation: InFlightOperation,
         for key: Key
     ) -> Bool {
-        guard generation == operation.generation,
+        guard storeGeneration == operation.storeGeneration,
+              accountGeneration(for: key) == operation.accountGeneration,
               let currentOperation = inFlightOperations[key]
         else {
             return false
         }
         return currentOperation.identifier == operation.identifier
-            && currentOperation.generation == operation.generation
+            && currentOperation.storeGeneration == operation.storeGeneration
+            && currentOperation.accountGeneration == operation.accountGeneration
+    }
+
+    private func accountGeneration(for key: Key) -> UInt64 {
+        accountGenerations[key.accountAuthorizationIdentifier, default: 0]
     }
 
     private func trimIfNeeded() {

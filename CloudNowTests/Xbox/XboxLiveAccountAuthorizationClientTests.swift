@@ -100,6 +100,8 @@ struct XboxLiveAccountAuthorizationClientTests {
         )
 
         #expect(account.authorizationIdentifier == "fixture-authorization")
+        #expect(account.activityScopeIdentifier.hasPrefix("xbox-activity-"))
+        #expect(!account.activityScopeIdentifier.contains("fixture-user-hash"))
         #expect(account.displayName == "Fixture Gamer")
         #expect(account.expiresAt == fixedDate.addingTimeInterval(14400))
         #expect(
@@ -483,6 +485,24 @@ struct XboxLiveAccountAuthorizationClientTests {
         await #expect(throws: XboxLiveAuthorizationError.accountNotAuthorized) {
             _ = try await vault.credential(for: second, relyingParty: .cloudGaming)
         }
+    }
+
+    @Test("Activity scope is stable across transient vault authorizations")
+    func stableActivityScope() async throws {
+        let fixedDate = fixedDate
+        let vault = XboxLiveCredentialVault(now: { fixedDate })
+        let first = try await vault.store(
+            identifier: "first-transient-handle",
+            credentials: [makeCredential(token: "one")]
+        )
+        let second = try await vault.store(
+            identifier: "second-transient-handle",
+            credentials: [makeCredential(token: "two")]
+        )
+
+        #expect(first.authorizationIdentifier != second.authorizationIdentifier)
+        #expect(first.activityScopeIdentifier == second.activityScopeIdentifier)
+        #expect(!first.activityScopeIdentifier.contains("fixture-user-hash"))
     }
 
     private func makeAccountClient(

@@ -151,6 +151,8 @@ struct XboxMainTabView: View {
     @Environment(XboxAuthManager.self) private var xboxAuthManager
     @State private var modeViewModel: XboxCloudModeViewModel
     @State private var playbackRequest: XboxCloudPlaybackRequest?
+    @State private var pendingPlaybackFocusRestoreID: String?
+    @State private var browsePlaybackFocusRestoreID: String?
     @State private var selectedTab: XboxAppTab = .home
     @State private var controllerNavigation = UIControllerNavigationCoordinator()
     private let account: XboxCloudAuthorizedAccount
@@ -183,28 +185,22 @@ struct XboxMainTabView: View {
         ) {
             Tab(L10n.text("home"), systemImage: "house.fill", value: XboxAppTab.home) {
                 XboxCatalogHome(
-                    standardItems: modeViewModel.catalogViewModel.homeStandardItems,
-                    freeWithAdsItems: modeViewModel.catalogViewModel.homeFreeWithAdsItems,
+                    recentlyPlayedItems: modeViewModel.catalogViewModel.recentlyPlayedItems,
+                    favoriteItems: modeViewModel.catalogViewModel.favoriteItems,
                     phase: modeViewModel.catalogViewModel.phase,
                     showsRefreshWarning: modeViewModel.catalogViewModel.showsRefreshWarning,
+                    onBrowse: { selectedTab = .browse },
                     onRetry: retryCatalog,
-                    onPlay: play
+                    onPlay: play,
+                    onToggleFavorite: modeViewModel.catalogViewModel.toggleFavorite
                 )
                 .accessibilityIdentifier("xbox-home-screen")
             }
             Tab(L10n.text("browse"), systemImage: "rectangle.stack.fill", value: XboxAppTab.browse) {
                 XboxCatalogGrid(
-                    title: L10n.text("xbox_cloud_catalog"),
-                    items: modeViewModel.catalogViewModel.visibleItems,
-                    phase: modeViewModel.catalogViewModel.phase,
-                    showsRefreshWarning: modeViewModel.catalogViewModel.showsRefreshWarning,
-                    filter: Binding(
-                        get: { modeViewModel.catalogViewModel.browseFilter },
-                        set: { modeViewModel.catalogViewModel.browseFilter = $0 }
-                    ),
-                    onItemVisible: modeViewModel.catalogViewModel.loadNextPageIfNeeded,
                     onRetry: retryCatalog,
-                    onPlay: play
+                    onPlay: play,
+                    playbackFocusRestoreID: $browsePlaybackFocusRestoreID
                 )
                 .accessibilityIdentifier("xbox-browse-screen")
             }
@@ -219,6 +215,11 @@ struct XboxMainTabView: View {
             await modeViewModel.load()
         }
         .onDisappear {
+            // Full-screen game/detail presentations can make the shell
+            // disappear temporarily. Only tear down here when authorization
+            // was actually lost; provider switches already deactivate before
+            // committing navigation.
+            guard !xboxAuthManager.isXboxCloudAuthorized else { return }
             Task {
                 await modeViewModel.deactivateForInactiveProvider()
             }
@@ -230,13 +231,19 @@ struct XboxMainTabView: View {
                 MemoryLifecycleCoordinator.shared.streamWillOpen()
             }
         }
-        .fullScreenCover(item: $playbackRequest) { request in
+        .fullScreenCover(
+            item: $playbackRequest,
+            onDismiss: restorePlaybackFocus
+        ) { request in
             XboxCloudPlayerView(
                 item: request.item,
                 route: request.route,
                 account: account,
                 settings: request.settings,
                 controller: request.controller,
+                onStreamStarted: {
+                    modeViewModel.catalogViewModel.recordPlayed(request.item)
+                },
                 onDismiss: { playbackRequest = nil }
             )
             .blocksGlobalControllerNavigation(mode: .streaming)
@@ -250,6 +257,7 @@ struct XboxMainTabView: View {
     ) {
         guard route.isPlayable else { return }
 
+        pendingPlaybackFocusRestoreID = item.id
         playbackRequest = XboxCloudPlaybackRequest(
             item: item,
             route: route,
@@ -261,9 +269,16 @@ struct XboxMainTabView: View {
         )
     }
 
+    private func restorePlaybackFocus() {
+        defer { pendingPlaybackFocusRestoreID = nil }
+        guard selectedTab == .browse else { return }
+        browsePlaybackFocusRestoreID = pendingPlaybackFocusRestoreID
+    }
+
     private func retryCatalog() {
         Task {
             await modeViewModel.catalogViewModel.reload()
+            await modeViewModel.reloadContentAccessAfterCatalogRefresh()
         }
     }
 }
@@ -400,6 +415,13 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         await loadContentAccess()
     }
 
+    func reloadContentAccessAfterCatalogRefresh() async {
+        cancelContentAccessRequest()
+        membershipTier = nil
+        contentAccessPhase = .idle
+        await loadContentAccess()
+    }
+
     private func scheduleSettingsSave(oldValue: XboxCloudStreamSettings) {
         guard hasLoadedSettings, streamSettings != oldValue else { return }
         settingsSaveTask?.cancel()
@@ -499,9 +521,67 @@ private struct XboxCloudPlaybackRequest: Identifiable {
     }
 }
 
-nonisolated enum XboxCatalogBrowseFilter: Hashable, Sendable {
-    case all
+nonisolated enum XboxCatalogCollectionFilter: CaseIterable, Hashable, Sendable {
+    case favorites
+}
+
+nonisolated enum XboxCatalogAccessFilter: CaseIterable, Hashable, Sendable {
+    case standard
     case freeWithAds
+    case owned
+}
+
+nonisolated struct XboxCatalogFilterState: Equatable, Sendable {
+    var collections: Set<XboxCatalogCollectionFilter> = []
+    var access: Set<XboxCatalogAccessFilter> = []
+    var inputTypes: Set<XboxCloudInputType> = []
+    var genres: Set<String> = []
+
+    var activeSelectionCount: Int {
+        collections.count + access.count + inputTypes.count + genres.count
+    }
+
+    var isEmpty: Bool {
+        activeSelectionCount == 0
+    }
+
+    mutating func clear() {
+        collections.removeAll()
+        access.removeAll()
+        inputTypes.removeAll()
+        genres.removeAll()
+    }
+}
+
+nonisolated struct XboxCatalogGenreFilterOption: Equatable, Identifiable, Sendable {
+    let id: String
+    let label: String
+    let count: Int
+}
+
+nonisolated struct XboxCatalogFilterOptions: Equatable, Sendable {
+    let genres: [XboxCatalogGenreFilterOption]
+    let inputTypeCounts: [XboxCloudInputType: Int]
+    let favoriteCount: Int
+    let standardCount: Int
+    let freeWithAdsCount: Int
+    let ownedCount: Int
+
+    static let empty = XboxCatalogFilterOptions(
+        genres: [],
+        inputTypeCounts: [:],
+        favoriteCount: 0,
+        standardCount: 0,
+        freeWithAdsCount: 0,
+        ownedCount: 0
+    )
+}
+
+nonisolated enum XboxCatalogSortOrder: CaseIterable, Hashable, Sendable {
+    case `default`
+    case titleAZ
+    case titleZA
+    case recentFirst
 }
 
 @Observable
@@ -515,39 +595,78 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     }
 
     private(set) var visibleItems: [XboxCatalogItem] = []
-    private(set) var homeStandardItems: [XboxCatalogItem] = []
-    private(set) var homeFreeWithAdsItems: [XboxCatalogItem] = []
+    private(set) var carouselItems: [XboxCatalogItem] = []
+    private(set) var favoriteItems: [XboxCatalogItem] = []
+    private(set) var recentlyPlayedItems: [XboxCatalogItem] = []
+    private(set) var favoriteIDs: Set<String> = []
+    private(set) var recentlyPlayedIDs: [String] = []
     private(set) var availableAccessKinds: Set<XboxCloudAccessKind> = []
+    private(set) var playableAccessKinds: Set<XboxCloudAccessKind> = []
+    private(set) var filterOptions: XboxCatalogFilterOptions = .empty
     private(set) var phase: LoadPhase = .idle
+    private(set) var isRefreshing = false
     private(set) var showsRefreshWarning = false
-    var browseFilter: XboxCatalogBrowseFilter = .all {
+    private(set) var totalItemCount = 0
+    private(set) var browseFilterBaseCount = 0
+    private(set) var filteredItemCount = 0
+    var searchText = "" {
         didSet {
-            guard browseFilter != oldValue else { return }
-            visibleItemLimit = 96
-            publishVisibleItems()
+            guard searchText != oldValue else { return }
+            resetBrowsePagination()
         }
+    }
+
+    var sortOrder: XboxCatalogSortOrder = .default {
+        didSet {
+            guard sortOrder != oldValue else { return }
+            resetBrowsePagination()
+        }
+    }
+
+    var filterState = XboxCatalogFilterState() {
+        didSet {
+            guard filterState != oldValue else { return }
+            resetBrowsePagination()
+        }
+    }
+
+    var activeBrowseFilterCount: Int {
+        filterState.activeSelectionCount
+    }
+
+    var hasActiveBrowseFilters: Bool {
+        activeBrowseFilterCount > 0
     }
 
     @ObservationIgnored private let makeClient: @Sendable () -> any XboxCatalogClient
     @ObservationIgnored private var client: (any XboxCatalogClient)?
     @ObservationIgnored private let account: XboxCloudAuthorizedAccount
     @ObservationIgnored private let cache: any XboxCatalogCaching
+    @ObservationIgnored private let activityPersistence: any XboxCatalogActivityPersistence
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let freshnessInterval: TimeInterval
     @ObservationIgnored private var allItems: [XboxCatalogItem] = []
     @ObservationIgnored private var visibleItemLimit = 96
     @ObservationIgnored private var loadGeneration: UInt64 = 0
+    @ObservationIgnored private var refreshGeneration: UInt64 = 0
+    @ObservationIgnored private var activityGeneration: UInt64 = 0
+    @ObservationIgnored private var hasLoadedActivity = false
+    @ObservationIgnored private var activityPersistenceGeneration: UInt64?
+    @ObservationIgnored private var activityLoadTask: Task<CloudCatalogActivityLease, Never>?
+    @ObservationIgnored private var activitySaveTask: Task<Void, Never>?
 
     init(
         client: any XboxCatalogClient,
         account: XboxCloudAuthorizedAccount,
         cache: any XboxCatalogCaching = XboxCatalogMemoryCache.shared,
+        activityPersistence: any XboxCatalogActivityPersistence = AppPersistenceStore.shared,
         now: @escaping @Sendable () -> Date = Date.init,
         freshnessInterval: TimeInterval = 15 * 60
     ) {
         makeClient = { client }
         self.account = account
         self.cache = cache
+        self.activityPersistence = activityPersistence
         self.now = now
         self.freshnessInterval = freshnessInterval
     }
@@ -556,18 +675,49 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         makeClient: @escaping @Sendable () -> any XboxCatalogClient,
         account: XboxCloudAuthorizedAccount,
         cache: any XboxCatalogCaching = XboxCatalogMemoryCache.shared,
+        activityPersistence: any XboxCatalogActivityPersistence = AppPersistenceStore.shared,
         now: @escaping @Sendable () -> Date = Date.init,
         freshnessInterval: TimeInterval = 15 * 60
     ) {
         self.makeClient = makeClient
         self.account = account
         self.cache = cache
+        self.activityPersistence = activityPersistence
         self.now = now
         self.freshnessInterval = freshnessInterval
     }
 
     func load() async {
-        guard phase == .idle else { return }
+        await loadActivityIfNeeded()
+        guard !Task.isCancelled else { return }
+        await load(forceRefresh: false)
+    }
+
+    func reload() async {
+        guard !isRefreshing else { return }
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
+        isRefreshing = true
+        defer {
+            if refreshGeneration == generation {
+                isRefreshing = false
+            }
+        }
+
+        cancelCatalogRequest()
+        if phase != .loaded {
+            phase = .idle
+        }
+        showsRefreshWarning = false
+        await loadActivityIfNeeded()
+        guard !Task.isCancelled else { return }
+        await load(forceRefresh: true)
+    }
+
+    private func load(forceRefresh: Bool) async {
+        guard phase == .idle || (forceRefresh && phase == .loaded) else {
+            return
+        }
         loadGeneration &+= 1
         let generation = loadGeneration
         let request = XboxCatalogRequest(
@@ -575,13 +725,17 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
             market: Locale.current.region?.identifier
         )
         let cacheKey = XboxCatalogCacheKey(
-            accountAuthorizationIdentifier: account.authorizationIdentifier,
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
             localeIdentifier: request.localeIdentifier,
             market: request.market
         )
-        var loadedCachedSnapshot = false
+        var loadedCachedSnapshot = forceRefresh && phase == .loaded
         showsRefreshWarning = false
-        if let cached = await cache.snapshot(for: cacheKey) {
+        if forceRefresh {
+            if !loadedCachedSnapshot {
+                phase = .loading
+            }
+        } else if let cached = await cache.snapshot(for: cacheKey) {
             guard loadGeneration == generation else { return }
             loadedCachedSnapshot = true
             allItems = cached.items
@@ -595,6 +749,11 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         }
         do {
             let client = resolvedClient()
+            if forceRefresh {
+                await client.refreshAccountState(for: account)
+                try Task.checkCancellation()
+                guard loadGeneration == generation else { return }
+            }
             let snapshot = try await client.fetchCatalog(
                 request,
                 account: account
@@ -615,24 +774,85 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         }
     }
 
-    func reload() async {
-        cancel()
-        phase = .idle
-        showsRefreshWarning = false
-        await load()
-    }
-
     func loadNextPageIfNeeded(_ item: XboxCatalogItem) {
         guard item.id == visibleItems.last?.id,
-              visibleItems.count < browseItems.count
+              visibleItems.count < carouselItems.count
         else {
             return
         }
-        visibleItemLimit = min(visibleItemLimit + 96, browseItems.count)
+        visibleItemLimit = min(visibleItemLimit + 96, carouselItems.count)
         publishVisibleItems()
     }
 
+    func isFavorite(_ item: XboxCatalogItem) -> Bool {
+        isFavorite(item.id)
+    }
+
+    func isFavorite(_ itemID: String) -> Bool {
+        favoriteIDs.contains(itemID)
+    }
+
+    func toggleFavorite(_ item: XboxCatalogItem) {
+        toggleFavorite(item.id)
+    }
+
+    func toggleFavorite(_ itemID: String) {
+        if favoriteIDs.contains(itemID) {
+            favoriteIDs.remove(itemID)
+        } else {
+            favoriteIDs.insert(itemID)
+            if favoriteIDs.count > CloudCatalogActivitySnapshot.maximumFavoriteCount,
+               let evictedID = favoriteIDs
+               .filter({ $0 != itemID })
+               .sorted()
+               .first
+            {
+                favoriteIDs.remove(evictedID)
+            }
+        }
+        publishVisibleItems()
+        enqueueFavoriteSave()
+    }
+
+    func recordPlayed(_ item: XboxCatalogItem) {
+        var itemIDs = recentlyPlayedIDs
+        itemIDs.removeAll { $0 == item.id }
+        itemIDs.insert(item.id, at: 0)
+        recentlyPlayedIDs = Array(
+            itemIDs.prefix(CloudCatalogActivitySnapshot.maximumRecentlyPlayedCount)
+        )
+        publishVisibleItems()
+        enqueueRecentlyPlayedSave()
+    }
+
+    func fetchDetail(for item: XboxCatalogItem) async -> XboxCatalogItem? {
+        let request = XboxCatalogRequest(
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        do {
+            let detail = try await resolvedClient().fetchDetail(
+                for: item,
+                request: request
+            )
+            guard detail.id == item.id else { return nil }
+            return detail
+        } catch {
+            return nil
+        }
+    }
+
+    func flushActivityPersistence() async {
+        await activitySaveTask?.value
+    }
+
     func cancel() {
+        refreshGeneration &+= 1
+        isRefreshing = false
+        cancelCatalogRequest()
+    }
+
+    private func cancelCatalogRequest() {
         loadGeneration &+= 1
         client?.cancel()
         client = nil
@@ -642,49 +862,298 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         cancel()
         allItems.removeAll(keepingCapacity: false)
         visibleItems.removeAll(keepingCapacity: false)
-        homeStandardItems.removeAll(keepingCapacity: false)
-        homeFreeWithAdsItems.removeAll(keepingCapacity: false)
+        carouselItems.removeAll(keepingCapacity: false)
+        favoriteItems.removeAll(keepingCapacity: false)
+        recentlyPlayedItems.removeAll(keepingCapacity: false)
         availableAccessKinds.removeAll(keepingCapacity: false)
+        playableAccessKinds.removeAll(keepingCapacity: false)
+        filterOptions = .empty
         phase = .idle
         showsRefreshWarning = false
+        totalItemCount = 0
+        browseFilterBaseCount = 0
+        filteredItemCount = 0
         visibleItemLimit = 96
     }
 
-    func deactivateForInactiveProvider() async {
+    func prepareForPersistentDataClear() {
         prepareForCacheClear()
-        await cache.remove(
-            accountAuthorizationIdentifier: account.authorizationIdentifier
-        )
+        activityGeneration &+= 1
+        activityLoadTask?.cancel()
+        activityLoadTask = nil
+        activitySaveTask?.cancel()
+        activitySaveTask = nil
+        activityPersistenceGeneration = nil
+        hasLoadedActivity = false
+        favoriteIDs.removeAll(keepingCapacity: false)
+        recentlyPlayedIDs.removeAll(keepingCapacity: false)
+    }
+
+    func deactivateForInactiveProvider() async {
+        await flushActivityPersistence()
+        prepareForCacheClear()
     }
 
     private func publishVisibleItems() {
         let availableAccessKinds = Set(allItems.flatMap(\.accessKinds))
-        let freeWithAdsItems = allItems.filter(\.supportsFreeWithAds)
-        let standardItems = allItems.filter {
-            $0.accessKinds.contains(.standard)
-        }
-        let homeFreeWithAdsItems = Array(freeWithAdsItems.prefix(12))
-        let homeStandardItems = Array(standardItems.prefix(12))
-        let items = Array(browseItems.prefix(visibleItemLimit))
+        let playableAccessKinds = Set(allItems.flatMap { item in
+            item.routes.compactMap { route in
+                route.isPlayable ? route.accessKind : nil
+            }
+        })
+        let searchedItems = search(allItems)
+        let carouselItems = sort(filter(searchedItems, state: filterState))
+        let items = Array(carouselItems.prefix(visibleItemLimit))
+        let favoriteItems = allItems.filter { favoriteIDs.contains($0.id) }
+        let itemsByID = Dictionary(
+            allItems.map { ($0.id, $0) },
+            uniquingKeysWith: { retained, _ in retained }
+        )
+        let recentlyPlayedItems = recentlyPlayedIDs.compactMap { itemsByID[$0] }
+        let filterOptions = makeFilterOptions()
+        totalItemCount = allItems.count
+        browseFilterBaseCount = searchedItems.count
+        filteredItemCount = carouselItems.count
         if availableAccessKinds != self.availableAccessKinds {
             self.availableAccessKinds = availableAccessKinds
         }
-        if homeFreeWithAdsItems != self.homeFreeWithAdsItems {
-            self.homeFreeWithAdsItems = homeFreeWithAdsItems
+        if playableAccessKinds != self.playableAccessKinds {
+            self.playableAccessKinds = playableAccessKinds
         }
-        if homeStandardItems != self.homeStandardItems {
-            self.homeStandardItems = homeStandardItems
+        if carouselItems != self.carouselItems {
+            self.carouselItems = carouselItems
+        }
+        if favoriteItems != self.favoriteItems {
+            self.favoriteItems = favoriteItems
+        }
+        if recentlyPlayedItems != self.recentlyPlayedItems {
+            self.recentlyPlayedItems = recentlyPlayedItems
+        }
+        if filterOptions != self.filterOptions {
+            self.filterOptions = filterOptions
         }
         guard items != visibleItems else { return }
         visibleItems = items
     }
 
-    private var browseItems: [XboxCatalogItem] {
-        switch browseFilter {
-        case .all:
-            allItems
-        case .freeWithAds:
-            allItems.filter(\.supportsFreeWithAds)
+    func browsePreviewCount(for state: XboxCatalogFilterState) -> Int {
+        filter(search(allItems), state: state).count
+    }
+
+    func clearBrowseFilters() {
+        filterState.clear()
+    }
+
+    private func resetBrowsePagination() {
+        visibleItemLimit = 96
+        publishVisibleItems()
+    }
+
+    private func search(_ items: [XboxCatalogItem]) -> [XboxCatalogItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return items }
+        return items.filter { item in
+            item.title.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func filter(
+        _ items: [XboxCatalogItem],
+        state: XboxCatalogFilterState
+    ) -> [XboxCatalogItem] {
+        guard !state.isEmpty else { return items }
+        return items.filter { item in
+            if !state.collections.isEmpty {
+                let matchesCollection =
+                    state.collections.contains(.favorites)
+                        && favoriteIDs.contains(item.id)
+                if !matchesCollection {
+                    return false
+                }
+            }
+
+            if !state.access.isEmpty {
+                let matchesAccess = state.access.contains { access in
+                    switch access {
+                    case .standard:
+                        item.accessKinds.contains(.standard)
+                    case .freeWithAds:
+                        item.supportsFreeWithAds
+                    case .owned:
+                        item.isOwned
+                    }
+                }
+                if !matchesAccess {
+                    return false
+                }
+            }
+
+            if !state.inputTypes.isEmpty,
+               state.inputTypes.isDisjoint(with: item.supportedInputTypes)
+            {
+                return false
+            }
+
+            if !state.genres.isEmpty {
+                let itemGenres = Set(item.genres.compactMap(genreID))
+                if state.genres.isDisjoint(with: itemGenres) {
+                    return false
+                }
+            }
+
+            return true
+        }
+    }
+
+    private func sort(_ items: [XboxCatalogItem]) -> [XboxCatalogItem] {
+        switch sortOrder {
+        case .default:
+            items
+        case .titleAZ:
+            items.sorted {
+                $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
+        case .titleZA:
+            items.sorted {
+                $0.title.localizedStandardCompare($1.title) == .orderedDescending
+            }
+        case .recentFirst:
+            items.sorted { left, right in
+                let leftRank = recentlyPlayedIDs.firstIndex(of: left.id) ?? .max
+                let rightRank = recentlyPlayedIDs.firstIndex(of: right.id) ?? .max
+                if leftRank != rightRank {
+                    return leftRank < rightRank
+                }
+                return left.title.localizedStandardCompare(right.title)
+                    == .orderedAscending
+            }
+        }
+    }
+
+    private func makeFilterOptions() -> XboxCatalogFilterOptions {
+        var genreLabels: [String: String] = [:]
+        var genreCounts: [String: Int] = [:]
+        var inputTypeCounts: [XboxCloudInputType: Int] = [:]
+
+        for item in allItems {
+            for inputType in item.supportedInputTypes {
+                inputTypeCounts[inputType, default: 0] += 1
+            }
+            var itemGenreIDs: Set<String> = []
+            for genre in item.genres {
+                let label = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let id = genreID(label), itemGenreIDs.insert(id).inserted else {
+                    continue
+                }
+                genreLabels[id] = genreLabels[id] ?? label
+                genreCounts[id, default: 0] += 1
+            }
+        }
+
+        let genres = genreCounts.compactMap { id, count in
+            genreLabels[id].map {
+                XboxCatalogGenreFilterOption(id: id, label: $0, count: count)
+            }
+        }.sorted {
+            $0.label.localizedStandardCompare($1.label) == .orderedAscending
+        }
+
+        return XboxCatalogFilterOptions(
+            genres: genres,
+            inputTypeCounts: inputTypeCounts,
+            favoriteCount: allItems.count { favoriteIDs.contains($0.id) },
+            standardCount: allItems.count { $0.accessKinds.contains(.standard) },
+            freeWithAdsCount: allItems.count(where: \.supportsFreeWithAds),
+            ownedCount: allItems.count(where: \.isOwned)
+        )
+    }
+
+    private func genreID(_ genre: String) -> String? {
+        let genre = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !genre.isEmpty else { return nil }
+        return genre.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale.current
+        ).lowercased()
+    }
+
+    private func loadActivityIfNeeded() async {
+        guard !hasLoadedActivity else { return }
+        let generation = activityGeneration
+        let task: Task<CloudCatalogActivityLease, Never>
+        if let activityLoadTask {
+            task = activityLoadTask
+        } else {
+            let persistence = activityPersistence
+            let accountScope = account.activityScopeIdentifier
+            task = Task {
+                await persistence.loadXboxCatalogActivityLease(
+                    accountScope: accountScope
+                )
+            }
+            activityLoadTask = task
+        }
+
+        let lease = await task.value
+        guard generation == activityGeneration,
+              !Task.isCancelled
+        else {
+            return
+        }
+        activityLoadTask = nil
+        activityPersistenceGeneration = lease.generation
+        favoriteIDs = lease.snapshot.favoriteIDs
+        recentlyPlayedIDs = lease.snapshot.recentlyPlayedIDs
+        hasLoadedActivity = true
+        publishVisibleItems()
+    }
+
+    private func enqueueFavoriteSave() {
+        guard let expectedGeneration = activityPersistenceGeneration else {
+            return
+        }
+        let persistence = activityPersistence
+        let accountScope = account.activityScopeIdentifier
+        let favoriteIDs = favoriteIDs
+        enqueueActivitySave {
+            await persistence.saveXboxFavoriteIDs(
+                favoriteIDs,
+                accountScope: accountScope,
+                expectedGeneration: expectedGeneration
+            )
+        }
+    }
+
+    private func enqueueRecentlyPlayedSave() {
+        guard let expectedGeneration = activityPersistenceGeneration else {
+            return
+        }
+        let persistence = activityPersistence
+        let accountScope = account.activityScopeIdentifier
+        let recentlyPlayedIDs = recentlyPlayedIDs
+        enqueueActivitySave {
+            await persistence.saveXboxRecentlyPlayedIDs(
+                recentlyPlayedIDs,
+                accountScope: accountScope,
+                expectedGeneration: expectedGeneration
+            )
+        }
+    }
+
+    private func enqueueActivitySave(
+        _ operation: @escaping @Sendable () async -> Void
+    ) {
+        let previousTask = activitySaveTask
+        let generation = activityGeneration
+        activitySaveTask = Task { @MainActor [weak self] in
+            await previousTask?.value
+            guard let self,
+                  !Task.isCancelled,
+                  activityGeneration == generation
+            else {
+                return
+            }
+            await operation()
         }
     }
 
@@ -699,129 +1168,365 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
 }
 
 private struct XboxCatalogHome: View {
-    let standardItems: [XboxCatalogItem]
-    let freeWithAdsItems: [XboxCatalogItem]
+    let recentlyPlayedItems: [XboxCatalogItem]
+    let favoriteItems: [XboxCatalogItem]
     let phase: XboxCatalogViewModel.LoadPhase
     let showsRefreshWarning: Bool
+    let onBrowse: () -> Void
     let onRetry: () -> Void
     let onPlay: (XboxCatalogItem, XboxCloudTitleRoute) -> Void
-    @State private var selection: XboxCatalogSelection?
-    @State private var sourceFocusID: String?
-    @FocusState private var focusedCardID: String?
+    let onToggleFavorite: (String) -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var carouselRequest: XboxCatalogCarouselRequest?
+    @State private var carouselSourceFocus: XboxHomeGameFocus?
+    @State private var carouselRestoreFocus: XboxHomeGameFocus?
+    @State private var restoresHeroActionFocus = false
+    @State private var restoresEmptyActionFocus = false
+    @State private var restoreScrollTarget: XboxHomeGameFocus?
+    @FocusState private var focusedCard: XboxHomeGameFocus?
+    @FocusState private var heroActionFocused: Bool
+    @FocusState private var emptyActionFocused: Bool
+
+    private var heroSelection: XboxCatalogSelection? {
+        selection(for: recentlyPlayedItems.first)
+            ?? selection(for: favoriteItems.first)
+    }
+
+    private var emptyStateMessage: String {
+        L10n.text("xbox_empty_home_message")
+    }
+
+    private var recentlyPlayedWithoutHero: [XboxCatalogItem] {
+        recentlyPlayedItems.filter { $0.id != heroSelection?.item.id }
+    }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 34) {
-                Text(L10n.text("xbox_cloud_gaming"))
-                    .font(.largeTitle.bold())
-                    .padding(.horizontal, 70)
-
-                if showsRefreshWarning {
-                    XboxCatalogRefreshWarning()
-                        .padding(.horizontal, 70)
-                }
-
-                content
+        ZStack {
+            switch phase {
+            case .idle, .loading:
+                XboxCatalogHomeSkeleton()
+            case .failed:
+                emptyState
+                    .accessibilityIdentifier("xbox-home-empty")
+            case .loaded where heroSelection == nil:
+                emptyState
+                    .accessibilityIdentifier("xbox-home-empty")
+            case .loaded:
+                loadedContent
             }
-            .padding(.vertical, 50)
         }
-        .sheet(item: $selection, onDismiss: restoreSourceFocus) { selection in
-            XboxCatalogPreview(
-                selection: selection,
-                onPlay: {
-                    self.selection = nil
-                    Task { @MainActor in
-                        await Task.yield()
-                        onPlay(selection.item, selection.route)
-                    }
+        .fullScreenCover(
+            item: $carouselRequest,
+            onDismiss: restoreCarouselFocus
+        ) { request in
+            XboxCatalogCarousel(
+                request: request,
+                onPlay: onPlay,
+                onDismiss: { selectionID in
+                    dismissCarousel(request: request, after: selectionID)
                 }
             )
-            .blocksGlobalControllerNavigation()
+        }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.25),
+            value: carouselRequest?.id
+        )
+    }
+
+    private var emptyState: some View {
+        CloudCatalogHomeEmptyState(
+            message: emptyStateMessage,
+            actionTitle: L10n.text("browse"),
+            action: onBrowse,
+            actionFocus: $emptyActionFocused
+        )
+    }
+
+    private var loadedContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let heroSelection {
+                        CloudCatalogHeroBanner(
+                            artworkURL: heroSelection.item.heroArtworkURL?.absoluteString
+                                ?? heroSelection.item.artworkURL?.absoluteString,
+                            actionTitle: heroSelection.playTitle,
+                            actionSystemImage: heroSelection.route.isPlayable
+                                ? "play.fill"
+                                : "lock.fill",
+                            isActionEnabled: heroSelection.route.isPlayable,
+                            actionTint: heroSelection.route.isPlayable
+                                ? .green
+                                : .gray,
+                            actionFocus: $heroActionFocused,
+                            action: {
+                                onPlay(heroSelection.item, heroSelection.route)
+                            }
+                        )
+                    }
+
+                    if showsRefreshWarning {
+                        XboxCatalogRefreshWarning(onRetry: onRetry)
+                            .padding(.horizontal, 60)
+                            .padding(.top, 24)
+                    }
+
+                    VStack(alignment: .leading, spacing: 48) {
+                        if !recentlyPlayedWithoutHero.isEmpty {
+                            XboxCatalogRail(
+                                row: .recent,
+                                title: L10n.text("recently_played"),
+                                items: recentlyPlayedWithoutHero,
+                                focusedCard: $focusedCard,
+                                onPlay: onPlay,
+                                onShowInfo: showCarousel,
+                                onToggleFavorite: onToggleFavorite
+                            )
+                            .accessibilityIdentifier("xbox-home.recent")
+                        }
+
+                        if !favoriteItems.isEmpty {
+                            XboxCatalogRail(
+                                row: .favorites,
+                                title: L10n.text("favorites"),
+                                items: favoriteItems,
+                                isFavoritesRow: true,
+                                focusedCard: $focusedCard,
+                                onPlay: onPlay,
+                                onShowInfo: showCarousel,
+                                onToggleFavorite: onToggleFavorite
+                            )
+                            .accessibilityIdentifier("xbox-home.favorites")
+                        }
+                    }
+                    .padding(.top, 48)
+                    .padding(.bottom, 60)
+                }
+            }
+            .onChange(of: restoreScrollTarget) { _, target in
+                guard let target else { return }
+                if reduceMotion {
+                    proxy.scrollTo(target, anchor: .center)
+                } else {
+                    withAnimation {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
+                }
+                restoreScrollTarget = nil
+            }
         }
     }
 
-    @ViewBuilder private var content: some View {
-        switch phase {
-        case .idle, .loading:
-            ProgressView()
-                .frame(maxWidth: .infinity, minHeight: 360)
-        case .failed:
-            XboxCatalogFailureView(onRetry: onRetry)
-                .padding(.horizontal, 70)
-        case .loaded where standardItems.isEmpty && freeWithAdsItems.isEmpty:
-            XboxCatalogEmptyView()
-                .padding(.horizontal, 70)
-        case .loaded:
-            if !freeWithAdsItems.isEmpty {
-                XboxCatalogRail(
-                    title: L10n.text("stream_free_with_ads"),
-                    items: freeWithAdsItems,
-                    accessKind: .freeWithAds,
-                    focusedCardID: $focusedCardID,
-                    onSelect: select
-                )
-                .accessibilityIdentifier("xbox-home.free-with-ads")
-            }
-
-            if !standardItems.isEmpty {
-                XboxCatalogRail(
-                    title: L10n.text("xbox_cloud_catalog"),
-                    items: standardItems,
-                    accessKind: .standard,
-                    focusedCardID: $focusedCardID,
-                    onSelect: select
-                )
-                .accessibilityIdentifier("xbox-home.standard")
-            }
+    private func showCarousel(
+        selections: [XboxCatalogSelection],
+        sourceFocus: XboxHomeGameFocus
+    ) {
+        guard let start = selections.first(where: {
+            $0.item.id == sourceFocus.itemID
+        }) else {
+            return
         }
+        carouselSourceFocus = sourceFocus
+        carouselRequest = XboxCatalogCarouselRequest(
+            selections: selections,
+            startID: start.id
+        )
     }
 
-    private func select(_ selection: XboxCatalogSelection) {
-        sourceFocusID = selection.id
-        self.selection = selection
+    private func dismissCarousel(
+        request: XboxCatalogCarouselRequest,
+        after selectionID: String?
+    ) {
+        carouselRequest = nil
+        let source = carouselSourceFocus
+        carouselSourceFocus = nil
+        guard let source else { return }
+        let selectedItemID = request.selections.first(where: {
+            $0.id == selectionID
+        })?.item.id ?? source.itemID
+        let survivingIDs = Set(
+            (source.row == .recent
+                ? recentlyPlayedWithoutHero
+                : favoriteItems).map(\.id)
+        )
+        guard let itemID = nearestSurvivingCatalogItemID(
+            orderedIDs: request.selections.map(\.item.id),
+            preferredID: selectedItemID,
+            survivingIDs: survivingIDs
+        ) else {
+            if let itemID = recentlyPlayedWithoutHero.first?.id {
+                carouselRestoreFocus = XboxHomeGameFocus(
+                    row: .recent,
+                    itemID: itemID
+                )
+            } else if let itemID = favoriteItems.first?.id {
+                carouselRestoreFocus = XboxHomeGameFocus(
+                    row: .favorites,
+                    itemID: itemID
+                )
+            } else if heroSelection?.route.isPlayable == true {
+                restoresHeroActionFocus = true
+            } else if heroSelection != nil {
+                onBrowse()
+            } else {
+                restoresEmptyActionFocus = true
+            }
+            return
+        }
+        carouselRestoreFocus = XboxHomeGameFocus(
+            row: source.row,
+            itemID: itemID
+        )
     }
 
-    private func restoreSourceFocus() {
-        guard let sourceFocusID else { return }
-        self.sourceFocusID = nil
+    private func restoreCarouselFocus() {
+        if restoresHeroActionFocus {
+            restoresHeroActionFocus = false
+            Task { @MainActor in
+                await Task.yield()
+                guard carouselRequest == nil else { return }
+                heroActionFocused = true
+            }
+            return
+        }
+        if restoresEmptyActionFocus {
+            restoresEmptyActionFocus = false
+            Task { @MainActor in
+                await Task.yield()
+                guard carouselRequest == nil else { return }
+                emptyActionFocused = true
+            }
+            return
+        }
+        guard let target = carouselRestoreFocus else { return }
+        carouselRestoreFocus = nil
+        restoreScrollTarget = target
         Task { @MainActor in
             await Task.yield()
-            focusedCardID = sourceFocusID
+            try? await Task.sleep(for: .milliseconds(150))
+            guard carouselRequest == nil else { return }
+            focusedCard = nil
+            await Task.yield()
+            focusedCard = target
+        }
+    }
+
+    private func selection(
+        for item: XboxCatalogItem?
+    ) -> XboxCatalogSelection? {
+        guard let item, let route = item.preferredRoute else { return nil }
+        return XboxCatalogSelection(item: item, route: route)
+    }
+}
+
+private struct XboxCatalogHomeSkeleton: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.gray.opacity(0.2)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 420)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .shimmer()
+                    .padding(.horizontal, 60)
+
+                VStack(alignment: .leading, spacing: 48) {
+                    skeletonRail
+                    skeletonRail
+                }
+                .padding(.top, 48)
+                .padding(.bottom, 60)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityIdentifier("xbox-home-loading")
+    }
+
+    private var skeletonRail: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.gray.opacity(0.25))
+                .frame(width: 180, height: 24)
+                .shimmer()
+                .padding(.horizontal, 60)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 24) {
+                    ForEach(0 ..< 6, id: \.self) { _ in
+                        GameCardSkeleton()
+                            .frame(width: 200)
+                    }
+                }
+                .padding(.horizontal, 60)
+            }
         }
     }
 }
 
 private struct XboxCatalogRail: View {
+    let row: XboxHomeGameRow
     let title: String
     let items: [XboxCatalogItem]
-    let accessKind: XboxCloudAccessKind
-    var focusedCardID: FocusState<String?>.Binding
-    let onSelect: (XboxCatalogSelection) -> Void
+    var isFavoritesRow = false
+    var focusedCard: FocusState<XboxHomeGameFocus?>.Binding
+    let onPlay: (XboxCatalogItem, XboxCloudTitleRoute) -> Void
+    let onShowInfo: ([XboxCatalogSelection], XboxHomeGameFocus) -> Void
+    let onToggleFavorite: (String) -> Void
+
+    private var selections: [XboxCatalogSelection] {
+        items.compactMap { item in
+            item.preferredRoute.map {
+                XboxCatalogSelection(item: item, route: $0)
+            }
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             Text(title)
                 .font(.title2.weight(.semibold))
-                .padding(.horizontal, 70)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 60)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 26) {
-                    ForEach(items) { item in
-                        if let route = item.route(for: accessKind) {
-                            let selection = XboxCatalogSelection(item: item, route: route)
-                            XboxCatalogCard(
-                                item: item,
-                                route: route,
-                                onSelect: { onSelect(selection) }
-                            )
-                            .frame(width: 200)
-                            .id(selection.id)
-                            .focused(focusedCardID, equals: selection.id)
+                LazyHStack(spacing: 24) {
+                    ForEach(selections) { selection in
+                        let focus = XboxHomeGameFocus(
+                            row: row,
+                            itemID: selection.item.id
+                        )
+                        Button {
+                            onPlay(selection.item, selection.route)
+                        } label: {
+                            XboxCatalogCardLabel(selection: selection)
                         }
+                        .frame(width: 200)
+                        .buttonStyle(.card)
+                        .id(focus)
+                        .focused(focusedCard, equals: focus)
+                        .contextMenu {
+                            Button {
+                                onShowInfo(selections, focus)
+                            } label: {
+                                Label(L10n.text("info"), systemImage: "info.circle")
+                            }
+                            if isFavoritesRow {
+                                Button {
+                                    onToggleFavorite(selection.item.id)
+                                } label: {
+                                    Label(
+                                        L10n.text("remove_from_favorites"),
+                                        systemImage: "star.slash.fill"
+                                    )
+                                }
+                            }
+                        }
+                        .accessibilityIdentifier(selection.cardAccessibilityID)
                     }
                 }
                 .padding(.horizontal, 60)
-                .padding(.vertical, 18)
+                .padding(.vertical, 20)
             }
             .focusSection()
             .scrollClipDisabled()
@@ -829,270 +1534,953 @@ private struct XboxCatalogRail: View {
     }
 }
 
-private struct XboxCatalogGrid: View {
-    let title: String
-    let items: [XboxCatalogItem]
-    let phase: XboxCatalogViewModel.LoadPhase
-    let showsRefreshWarning: Bool
-    let filter: Binding<XboxCatalogBrowseFilter>?
-    let onItemVisible: (XboxCatalogItem) -> Void
-    let onRetry: () -> Void
-    let onPlay: (XboxCatalogItem, XboxCloudTitleRoute) -> Void
-    @State private var selection: XboxCatalogSelection?
-    @State private var sourceFocusID: String?
-    @FocusState private var focusedCardID: String?
-
-    private let columns = [
-        GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40),
-    ]
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 30) {
-                Text(title)
-                    .font(.largeTitle.bold())
-
-                if let filter {
-                    Picker(L10n.text("filters"), selection: filter) {
-                        Text(L10n.text("all"))
-                            .tag(XboxCatalogBrowseFilter.all)
-                        Text(L10n.text("free_with_ads"))
-                            .tag(XboxCatalogBrowseFilter.freeWithAds)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(maxWidth: 660)
-                    .focusSection()
-                    .accessibilityIdentifier("xbox-browse-filter")
-                }
-
-                if showsRefreshWarning {
-                    XboxCatalogRefreshWarning()
-                }
-
-                content
-            }
-            .padding(.horizontal, 70)
-            .padding(.vertical, 50)
-        }
-        .sheet(item: $selection, onDismiss: restoreSourceFocus) { selection in
-            XboxCatalogPreview(
-                selection: selection,
-                onPlay: {
-                    self.selection = nil
-                    Task { @MainActor in
-                        await Task.yield()
-                        onPlay(selection.item, selection.route)
-                    }
-                }
-            )
-            .blocksGlobalControllerNavigation()
-        }
-    }
-
-    @ViewBuilder private var content: some View {
-        switch phase {
-        case .idle, .loading:
-            ProgressView()
-                .frame(maxWidth: .infinity, minHeight: 360)
-        case .failed:
-            XboxCatalogFailureView(onRetry: onRetry)
-        case .loaded where items.isEmpty:
-            XboxCatalogEmptyView()
-        case .loaded:
-            LazyVGrid(columns: columns, spacing: 40) {
-                ForEach(items) { item in
-                    if let route = preferredRoute(for: item) {
-                        let selection = XboxCatalogSelection(item: item, route: route)
-                        XboxCatalogCard(
-                            item: item,
-                            route: route,
-                            onSelect: { select(selection) }
-                        )
-                        .focused($focusedCardID, equals: selection.id)
-                        .onAppear {
-                            onItemVisible(item)
-                        }
-                    }
-                }
-            }
-            .focusSection()
-        }
-    }
-
-    private func preferredRoute(for item: XboxCatalogItem) -> XboxCloudTitleRoute? {
-        if filter?.wrappedValue == .freeWithAds {
-            return item.route(for: .freeWithAds)
-        }
-        return item.preferredRoute
-    }
-
-    private func select(_ selection: XboxCatalogSelection) {
-        sourceFocusID = selection.id
-        self.selection = selection
-    }
-
-    private func restoreSourceFocus() {
-        guard let sourceFocusID else { return }
-        self.sourceFocusID = nil
-        Task { @MainActor in
-            await Task.yield()
-            focusedCardID = sourceFocusID
-        }
-    }
+private enum XboxHomeGameRow: Hashable {
+    case recent
+    case favorites
 }
 
-private struct XboxCatalogCard: View {
-    let item: XboxCatalogItem
-    let route: XboxCloudTitleRoute
-    let onSelect: () -> Void
+private struct XboxHomeGameFocus: Hashable {
+    let row: XboxHomeGameRow
+    let itemID: String
+}
+
+private struct XboxCatalogGrid: View {
+    let onRetry: () -> Void
+    let onPlay: (XboxCatalogItem, XboxCloudTitleRoute) -> Void
+    @Binding var playbackFocusRestoreID: String?
+
+    @Environment(XboxCatalogViewModel.self) private var viewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var carouselRequest: XboxCatalogCarouselRequest?
+    @State private var carouselRestoreFocusID: String?
+    @State private var restoresEmptyActionFocus = false
+    @State private var expandedSelection: XboxCatalogSelection?
+    @State private var detailRestoreFocusID: String?
+    @State private var detailRestoresEmptyActionFocus = false
+    @State private var detailSourceItemIDs: [String] = []
+    @FocusState private var focusedCardID: String?
+    @FocusState private var emptyActionFocused: Bool
 
     var body: some View {
-        Button(action: onSelect, label: {
-            ZStack(alignment: .bottomLeading) {
-                SharedArtworkImage(
-                    urlString: item.artworkURL?.absoluteString,
-                    maxPixelSize: ArtworkImagePipeline.boxArtPixelSize,
-                    networkCachePolicy: .ephemeral
-                )
-                .aspectRatio(2 / 3, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+        @Bindable var viewModel = viewModel
 
-                LinearGradient(
-                    colors: [.black.opacity(0.7), .clear],
-                    startPoint: .bottom,
-                    endPoint: .center
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+        ZStack {
+            switch viewModel.phase {
+            case .idle, .loading:
+                CloudCatalogLoadingGrid()
+            case .failed:
+                XboxCatalogFailureView(onRetry: onRetry)
+                    .padding(60)
+            case .loaded where viewModel.totalItemCount == 0:
+                XboxCatalogEmptyView()
+                    .padding(60)
+            case .loaded:
+                catalogGrid
+            }
+        }
+        .searchable(
+            text: $viewModel.searchText,
+            prompt: Text(
+                L10n.format("search_games_count", viewModel.totalItemCount)
+            )
+        )
+        .fullScreenCover(
+            item: $carouselRequest,
+            onDismiss: restoreCarouselFocus
+        ) { request in
+            XboxCatalogCarousel(
+                request: request,
+                onPlay: onPlay,
+                onDismiss: { selectionID in
+                    dismissCarousel(request: request, after: selectionID)
+                }
+            )
+        }
+        .fullScreenCover(
+            item: $expandedSelection,
+            onDismiss: restoreStandaloneDetailFocus
+        ) { selection in
+            XboxCatalogStandaloneDetail(
+                selection: selection,
+                onPlay: {
+                    expandedSelection = nil
+                    onPlay(selection.item, selection.route)
+                },
+                onDismiss: {
+                    detailRestoreFocusID = nearestSurvivingCatalogItemID(
+                        orderedIDs: detailSourceItemIDs,
+                        preferredID: selection.item.id,
+                        survivingIDs: Set(viewModel.visibleItems.map(\.id))
+                    )
+                    detailRestoresEmptyActionFocus = detailRestoreFocusID == nil
+                    detailSourceItemIDs.removeAll(keepingCapacity: false)
+                    expandedSelection = nil
+                }
+            )
+        }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.25),
+            value: carouselRequest?.id
+        )
+        .task(id: playbackFocusRestoreID) {
+            guard let itemID = playbackFocusRestoreID else { return }
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled, carouselRequest == nil else { return }
+            focusedCardID = nil
+            await Task.yield()
+            focusedCardID = itemID
+            playbackFocusRestoreID = nil
+        }
+    }
 
-                Text(item.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .padding(10)
+    private var catalogGrid: some View {
+        CloudCatalogGrid(
+            items: viewModel.visibleItems,
+            focusedId: $focusedCardID,
+            emptyActionFocus: $emptyActionFocused,
+            hasActiveFilters: viewModel.hasActiveBrowseFilters,
+            onClearFilters: viewModel.clearBrowseFilters,
+            onSelect: showCarousel(startingAt:),
+            onItemVisible: { item, _ in
+                viewModel.loadNextPageIfNeeded(item)
+            },
+            accessibilityIdentifier: { item in
+                selection(for: item)?.cardAccessibilityID ?? item.id
+            },
+            header: { filterHeader },
+            cardLabel: { item in
+                if let selection = selection(for: item) {
+                    XboxCatalogCardLabel(selection: selection)
+                }
+            },
+            menuContent: { item in
+                Button {
+                    detailSourceItemIDs = viewModel.visibleItems.map(\.id)
+                    expandedSelection = selection(for: item)
+                } label: {
+                    Label(L10n.text("info"), systemImage: "info.circle")
+                }
 
-                if route.accessKind == .freeWithAds {
-                    if route.isPlayable {
-                        Text(L10n.text("free_with_ads"))
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.green, in: Capsule())
-                            .padding(8)
-                            .frame(
-                                maxWidth: .infinity,
-                                maxHeight: .infinity,
-                                alignment: .topTrailing
-                            )
-                    } else {
-                        Label(L10n.text("not_eligible"), systemImage: "lock.fill")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.gray, in: Capsule())
-                            .padding(8)
-                            .frame(
-                                maxWidth: .infinity,
-                                maxHeight: .infinity,
-                                alignment: .topTrailing
-                            )
-                    }
+                Button {
+                    viewModel.toggleFavorite(item)
+                } label: {
+                    Label(
+                        viewModel.isFavorite(item)
+                            ? L10n.text("remove_from_favorites")
+                            : L10n.text("add_to_favorites"),
+                        systemImage: viewModel.isFavorite(item)
+                            ? "star.slash.fill"
+                            : "star"
+                    )
                 }
             }
-        })
-        .aspectRatio(2 / 3, contentMode: .fit)
-        .buttonStyle(.card)
-        .accessibilityLabel(item.title)
-        .accessibilityValue(accessibilityStatus)
-        .accessibilityIdentifier(
-            "xbox-game-card.\(item.id).\(route.accessKind).\(route.titleID)"
         )
     }
 
-    private var accessibilityStatus: String {
-        guard route.accessKind == .freeWithAds else { return "" }
-        return route.isPlayable
-            ? L10n.text("free_with_ads")
-            : L10n.text("not_eligible")
+    private var filterHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if viewModel.showsRefreshWarning {
+                XboxCatalogRefreshWarning(onRetry: onRetry)
+                    .padding(.horizontal, 60)
+                    .padding(.top, 24)
+            }
+            XboxCatalogFilterBar()
+        }
+    }
+
+    private func selection(for item: XboxCatalogItem) -> XboxCatalogSelection? {
+        let selectedAccess = viewModel.filterState.access
+        let route: XboxCloudTitleRoute? = if selectedAccess == [.standard] {
+            item.route(for: .standard)
+        } else if selectedAccess == [.freeWithAds] {
+            item.route(for: .freeWithAds)
+        } else {
+            item.preferredRoute
+        }
+        return route.map { XboxCatalogSelection(item: item, route: $0) }
+    }
+
+    private func showCarousel(startingAt item: XboxCatalogItem) {
+        let selections = viewModel.carouselItems.compactMap(selection(for:))
+        guard let start = selection(for: item) else { return }
+        carouselRequest = XboxCatalogCarouselRequest(
+            selections: selections,
+            startID: start.id
+        )
+    }
+
+    private func dismissCarousel(
+        request: XboxCatalogCarouselRequest,
+        after selectionID: String?
+    ) {
+        carouselRequest = nil
+        guard let selectionID else { return }
+        let selectedItemID = request.selections.first(where: {
+            $0.id == selectionID
+        })?.item.id
+        guard
+            let selectedItemID,
+            let itemID = nearestSurvivingCatalogItemID(
+                orderedIDs: request.selections.map(\.item.id),
+                preferredID: selectedItemID,
+                survivingIDs: Set(viewModel.visibleItems.map(\.id))
+            )
+        else {
+            restoresEmptyActionFocus = true
+            return
+        }
+        carouselRestoreFocusID = itemID
+    }
+
+    private func restoreCarouselFocus() {
+        if restoresEmptyActionFocus {
+            restoresEmptyActionFocus = false
+            restoreEmptyActionFocus()
+            return
+        }
+        guard let itemID = carouselRestoreFocusID else { return }
+        carouselRestoreFocusID = nil
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(150))
+            guard carouselRequest == nil else { return }
+            focusedCardID = nil
+            await Task.yield()
+            focusedCardID = itemID
+        }
+    }
+
+    private func restoreStandaloneDetailFocus() {
+        if detailRestoresEmptyActionFocus {
+            detailRestoresEmptyActionFocus = false
+            restoreEmptyActionFocus()
+            return
+        }
+        guard let itemID = detailRestoreFocusID else { return }
+        detailRestoreFocusID = nil
+        restoreFocus(to: itemID)
+    }
+
+    private func restoreFocus(to itemID: String) {
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(150))
+            guard carouselRequest == nil, expandedSelection == nil else {
+                return
+            }
+            focusedCardID = nil
+            await Task.yield()
+            focusedCardID = itemID
+        }
+    }
+
+    private func restoreEmptyActionFocus() {
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(150))
+            guard carouselRequest == nil, expandedSelection == nil else {
+                return
+            }
+            emptyActionFocused = true
+        }
     }
 }
 
-private struct XboxCatalogPreview: View {
-    @Environment(\.dismiss) private var dismiss
-    let selection: XboxCatalogSelection
-    let onPlay: () -> Void
-
-    private var item: XboxCatalogItem {
-        selection.item
+nonisolated func nearestSurvivingCatalogItemID(
+    orderedIDs: [String],
+    preferredID: String,
+    survivingIDs: Set<String>
+) -> String? {
+    guard !survivingIDs.isEmpty else { return nil }
+    guard let preferredIndex = orderedIDs.firstIndex(of: preferredID) else {
+        return orderedIDs.first(where: survivingIDs.contains)
     }
+    if survivingIDs.contains(preferredID) {
+        return preferredID
+    }
+    for offset in 1 ..< orderedIDs.count {
+        let nextIndex = preferredIndex + offset
+        if orderedIDs.indices.contains(nextIndex),
+           survivingIDs.contains(orderedIDs[nextIndex])
+        {
+            return orderedIDs[nextIndex]
+        }
+        let previousIndex = preferredIndex - offset
+        if orderedIDs.indices.contains(previousIndex),
+           survivingIDs.contains(orderedIDs[previousIndex])
+        {
+            return orderedIDs[previousIndex]
+        }
+    }
+    return orderedIDs.first(where: survivingIDs.contains)
+}
+
+private struct XboxCatalogFilterBar: View {
+    @Environment(XboxCatalogViewModel.self) private var viewModel
 
     var body: some View {
-        VStack(spacing: 30) {
-            SharedArtworkImage(
-                urlString: item.artworkURL?.absoluteString,
-                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize,
-                networkCachePolicy: .ephemeral
+        @Bindable var viewModel = viewModel
+
+        CloudCatalogFilterBar(
+            totalCount: viewModel.totalItemCount,
+            resultCount: viewModel.filteredItemCount,
+            sortOptions: XboxCatalogSortOrder.allCases.map {
+                CloudCatalogSortOption(value: $0, label: $0.label)
+            },
+            activeFilters: activeFilters,
+            activeSelectionCount: viewModel.activeBrowseFilterCount,
+            sortOrder: $viewModel.sortOrder,
+            refreshTitle: L10n.text("refresh_library"),
+            isRefreshDisabled: viewModel.phase == .loading
+                || viewModel.isRefreshing,
+            refreshAccessibilityIdentifier: "reloadXboxCloudCatalogButton",
+            onRefresh: {
+                Task { await viewModel.reload() }
+            },
+            filterSheet: { isPresented in
+                XboxCatalogFilterSheet(
+                    state: $viewModel.filterState,
+                    options: viewModel.filterOptions,
+                    totalCount: viewModel.browseFilterBaseCount,
+                    previewCount: viewModel.browsePreviewCount,
+                    onClose: { isPresented.wrappedValue = false }
+                )
+            }
+        )
+    }
+
+    private var activeFilters: [CloudCatalogActiveFilter] {
+        var filters: [CloudCatalogActiveFilter] = []
+
+        for collection in viewModel.filterState.collections {
+            filters.append(CloudCatalogActiveFilter(
+                id: "xbox-collection-\(collection.id)",
+                label: collection.label,
+                onRemove: { remove(collection) }
+            ))
+        }
+        for access in viewModel.filterState.access.sorted(by: {
+            $0.sortOrder < $1.sortOrder
+        }) {
+            filters.append(CloudCatalogActiveFilter(
+                id: "xbox-access-\(access.id)",
+                label: access.label,
+                onRemove: { remove(access) }
+            ))
+        }
+        for inputType in viewModel.filterState.inputTypes.sorted(by: {
+            $0.sortOrder < $1.sortOrder
+        }) {
+            filters.append(CloudCatalogActiveFilter(
+                id: "xbox-input-\(inputType.id)",
+                label: inputType.label,
+                onRemove: { remove(inputType) }
+            ))
+        }
+        for genreID in viewModel.filterState.genres.sorted() {
+            let label = viewModel.filterOptions.genres.first {
+                $0.id == genreID
+            }?.label ?? genreID
+            filters.append(CloudCatalogActiveFilter(
+                id: "xbox-genre-\(genreID)",
+                label: label,
+                onRemove: { removeGenre(genreID) }
+            ))
+        }
+        return filters
+    }
+
+    private func remove(_ collection: XboxCatalogCollectionFilter) {
+        var state = viewModel.filterState
+        state.collections.remove(collection)
+        viewModel.filterState = state
+    }
+
+    private func remove(_ access: XboxCatalogAccessFilter) {
+        var state = viewModel.filterState
+        state.access.remove(access)
+        viewModel.filterState = state
+    }
+
+    private func remove(_ inputType: XboxCloudInputType) {
+        var state = viewModel.filterState
+        state.inputTypes.remove(inputType)
+        viewModel.filterState = state
+    }
+
+    private func removeGenre(_ genreID: String) {
+        var state = viewModel.filterState
+        state.genres.remove(genreID)
+        viewModel.filterState = state
+    }
+}
+
+private struct XboxCatalogFilterSheet: View {
+    @Binding var state: XboxCatalogFilterState
+    let options: XboxCatalogFilterOptions
+    let totalCount: Int
+    let previewCount: (XboxCatalogFilterState) -> Int
+    let onClose: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var expandedSections: Set<XboxCatalogFilterSection> = [
+        .collections,
+        .access,
+        .input,
+        .genres,
+    ]
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: sheetBackgroundColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             )
-            .frame(width: 260, height: 320)
-            .clipped()
-            .clipShape(.rect(cornerRadius: 14))
+            .ignoresSafeArea()
 
-            Text(item.title)
-                .font(.largeTitle.bold())
-                .accessibilityIdentifier("xbox-game-preview")
+            VStack(spacing: 0) {
+                header
 
-            Text(description)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 760)
-
-            HStack(spacing: 24) {
-                Button {
-                    onPlay()
-                } label: {
-                    Label(
-                        playTitle,
-                        systemImage: selection.route.isPlayable ? "play.fill" : "lock.fill"
-                    )
+                ScrollView {
+                    VStack(spacing: 16) {
+                        collectionsSection
+                        accessSection
+                        if !availableInputTypes.isEmpty {
+                            inputSection
+                        }
+                        if !options.genres.isEmpty {
+                            genresSection
+                        }
+                    }
+                    .padding(.horizontal, 70)
+                    .padding(.vertical, 22)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(selection.route.isPlayable ? .green : .gray)
-                .disabled(!selection.route.isPlayable)
-                .accessibilityValue(
-                    selection.route.isPlayable ? "" : L10n.text("not_eligible")
-                )
-                .accessibilityHint(
-                    selection.route.isPlayable
-                        ? ""
-                        : L10n.text("xbox_free_with_ads_candidate_description")
-                )
-                .accessibilityIdentifier("xbox-game.play.\(item.id)")
-
-                Button(L10n.text("cancel")) {
-                    dismiss()
-                }
-                .buttonStyle(.bordered)
             }
         }
-        .padding(70)
+        .onExitCommand(perform: onClose)
+        .blocksGlobalControllerNavigation()
+        .accessibilityIdentifier("xbox-catalog-filter-sheet")
     }
 
-    private var description: String {
-        guard selection.route.accessKind == .freeWithAds else {
-            return L10n.text("requires_xbox_cloud_subscription")
+    private var header: some View {
+        HStack(spacing: 20) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.green)
+            Text(L10n.text("filters"))
+                .font(.title2.weight(.bold))
+
+            if !state.isEmpty {
+                Text("\(state.activeSelectionCount)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.green, in: Capsule())
+            }
+
+            Text(
+                L10n.format(
+                    "games_result_count",
+                    previewCount(state),
+                    totalCount
+                )
+            )
+            .font(.callout.monospacedDigit())
+            .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Button {
+                state.clear()
+            } label: {
+                Label(
+                    L10n.text("clear_all"),
+                    systemImage: "arrow.counterclockwise"
+                )
+            }
+            .buttonStyle(.bordered)
+            .disabled(state.isEmpty)
+
+            Button(action: onClose) {
+                Label(L10n.text("done"), systemImage: "checkmark")
+            }
+            .buttonStyle(.bordered)
         }
-        return selection.route.isPlayable
-            ? L10n.text("free_with_ads_session_description")
-            : L10n.text("xbox_free_with_ads_candidate_description")
+        .padding(.horizontal, 70)
+        .padding(.vertical, 18)
+        .background(Color.black.opacity(colorScheme == .dark ? 0.38 : 0.04))
+        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
     }
 
-    private var playTitle: String {
-        guard selection.route.isPlayable else { return L10n.text("not_eligible") }
-        return selection.route.accessKind == .freeWithAds
-            ? L10n.text("stream_free_with_ads")
-            : L10n.text("play")
+    private var sheetBackgroundColors: [Color] {
+        colorScheme == .dark
+            ? [Color(white: 0.055), Color(white: 0.11)]
+            : [Color(white: 0.98), Color(white: 0.9)]
     }
+
+    private var collectionsSection: some View {
+        FilterAccordionSection(
+            title: L10n.text("collections"),
+            selectedCount: state.collections.count,
+            isExpanded: expansionBinding(for: .collections)
+        ) {
+            WrappingFilterLayout(
+                horizontalSpacing: 14,
+                verticalSpacing: 14
+            ) {
+                FilterOptionButton(
+                    label: XboxCatalogCollectionFilter.favorites.label,
+                    count: options.favoriteCount,
+                    isSelected: state.collections.contains(.favorites),
+                    action: { toggle(.favorites) }
+                )
+            }
+        }
+    }
+
+    private var accessSection: some View {
+        FilterAccordionSection(
+            title: L10n.text("cloud_gaming_access"),
+            selectedCount: state.access.count,
+            isExpanded: expansionBinding(for: .access)
+        ) {
+            WrappingFilterLayout(
+                horizontalSpacing: 14,
+                verticalSpacing: 14
+            ) {
+                ForEach(availableAccessOptions, id: \.self) { option in
+                    FilterOptionButton(
+                        label: option.label,
+                        count: accessCount(option),
+                        isSelected: state.access.contains(option),
+                        action: { toggle(option) }
+                    )
+                }
+            }
+        }
+    }
+
+    private var genresSection: some View {
+        FilterAccordionSection(
+            title: L10n.text("genres"),
+            selectedCount: state.genres.count,
+            isExpanded: expansionBinding(for: .genres)
+        ) {
+            WrappingFilterLayout(
+                horizontalSpacing: 14,
+                verticalSpacing: 14
+            ) {
+                ForEach(options.genres) { option in
+                    FilterOptionButton(
+                        label: option.label,
+                        count: option.count,
+                        isSelected: state.genres.contains(option.id),
+                        action: { toggleGenre(option.id) }
+                    )
+                }
+            }
+        }
+    }
+
+    private var inputSection: some View {
+        FilterAccordionSection(
+            title: L10n.text("input"),
+            selectedCount: state.inputTypes.count,
+            isExpanded: expansionBinding(for: .input)
+        ) {
+            WrappingFilterLayout(
+                horizontalSpacing: 14,
+                verticalSpacing: 14
+            ) {
+                ForEach(availableInputTypes, id: \.self) { inputType in
+                    FilterOptionButton(
+                        label: inputType.label,
+                        count: options.inputTypeCounts[inputType] ?? 0,
+                        isSelected: state.inputTypes.contains(inputType),
+                        action: { toggle(inputType) }
+                    )
+                }
+            }
+        }
+    }
+
+    private var availableAccessOptions: [XboxCatalogAccessFilter] {
+        XboxCatalogAccessFilter.allCases.filter { accessCount($0) > 0 }
+    }
+
+    private var availableInputTypes: [XboxCloudInputType] {
+        XboxCloudInputType.allCases
+            .filter { (options.inputTypeCounts[$0] ?? 0) > 0 }
+            .sorted { $0.sortOrder < $1.sortOrder }
+    }
+
+    private func accessCount(_ option: XboxCatalogAccessFilter) -> Int {
+        switch option {
+        case .standard:
+            options.standardCount
+        case .freeWithAds:
+            options.freeWithAdsCount
+        case .owned:
+            options.ownedCount
+        }
+    }
+
+    private func toggle(_ collection: XboxCatalogCollectionFilter) {
+        if state.collections.contains(collection) {
+            state.collections.remove(collection)
+        } else {
+            state.collections.insert(collection)
+        }
+    }
+
+    private func toggle(_ access: XboxCatalogAccessFilter) {
+        if state.access.contains(access) {
+            state.access.remove(access)
+        } else {
+            state.access.insert(access)
+        }
+    }
+
+    private func toggle(_ inputType: XboxCloudInputType) {
+        if state.inputTypes.contains(inputType) {
+            state.inputTypes.remove(inputType)
+        } else {
+            state.inputTypes.insert(inputType)
+        }
+    }
+
+    private func toggleGenre(_ genreID: String) {
+        if state.genres.contains(genreID) {
+            state.genres.remove(genreID)
+        } else {
+            state.genres.insert(genreID)
+        }
+    }
+
+    private func expansionBinding(
+        for section: XboxCatalogFilterSection
+    ) -> Binding<Bool> {
+        Binding(
+            get: { expandedSections.contains(section) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedSections.insert(section)
+                } else {
+                    expandedSections.remove(section)
+                }
+            }
+        )
+    }
+}
+
+private enum XboxCatalogFilterSection: Hashable {
+    case collections
+    case access
+    case input
+    case genres
+}
+
+private struct XboxCatalogCardLabel: View {
+    let selection: XboxCatalogSelection
+
+    var body: some View {
+        CloudCatalogCardLabel(
+            title: selection.item.title,
+            artworkURL: selection.item.artworkURL?.absoluteString,
+            heroArtworkURL: selection.item.heroArtworkURL?.absoluteString,
+            badge: selection.badge
+        )
+        .accessibilityLabel(selection.item.title)
+        .accessibilityValue(selection.accessibilityStatus)
+    }
+}
+
+private struct XboxCatalogCarousel: View {
+    let request: XboxCatalogCarouselRequest
+    let onPlay: (XboxCatalogItem, XboxCloudTitleRoute) -> Void
+    let onDismiss: (String?) -> Void
+
+    @Environment(XboxCatalogViewModel.self) private var viewModel
+    @State private var detailItems: [String: XboxCatalogItem] = [:]
+    @State private var detailCacheOrder: [String] = []
+    @State private var detailLoadTokens: [String: UUID] = [:]
+    @State private var detailLoadFailures: Set<String> = []
+
+    private let maximumDetailCacheCount = 24
+
+    var body: some View {
+        CloudGameCarouselView(
+            items: request.selections,
+            startID: request.startID,
+            onDismiss: onDismiss
+        ) { context in
+            let item = detailItems[context.item.item.id]
+                ?? context.item.item
+            XboxCatalogCarouselCard(
+                selection: XboxCatalogSelection(
+                    item: item,
+                    route: context.item.route
+                ),
+                focusedID: context.focusedID,
+                isCurrent: context.isCurrent,
+                isExpanded: context.isExpanded,
+                isFavorite: viewModel.isFavorite(context.item.item),
+                isLoadingDetail: detailLoadTokens[context.item.item.id] != nil,
+                detailLoadFailed: detailLoadFailures.contains(
+                    context.item.item.id
+                ),
+                imageAlignment: context.imageAlignment,
+                onExpand: context.expand,
+                onCollapse: context.collapse,
+                onToggleFavorite: {
+                    viewModel.toggleFavorite(context.item.item)
+                },
+                onRetryDetail: {
+                    Task {
+                        await loadDetail(
+                            for: context.item.item,
+                            force: true
+                        )
+                    }
+                },
+                onPlay: {
+                    onDismiss(context.currentID)
+                    onPlay(context.item.item, context.item.route)
+                }
+            )
+            .task(id: context.isCurrent) {
+                guard context.isCurrent else { return }
+                await loadDetail(for: context.item.item)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("xbox-game-carousel")
+    }
+
+    private func loadDetail(
+        for item: XboxCatalogItem,
+        force: Bool = false
+    ) async {
+        guard detailItems[item.id] == nil,
+              force || !detailLoadFailures.contains(item.id)
+        else {
+            return
+        }
+        if force {
+            detailLoadFailures.remove(item.id)
+        }
+        let token = UUID()
+        detailLoadTokens[item.id] = token
+        defer {
+            if detailLoadTokens[item.id] == token {
+                detailLoadTokens.removeValue(forKey: item.id)
+            }
+        }
+
+        let detail = await viewModel.fetchDetail(for: item)
+        guard !Task.isCancelled,
+              detailLoadTokens[item.id] == token
+        else {
+            return
+        }
+        guard let detail else {
+            detailLoadFailures.insert(item.id)
+            return
+        }
+        detailLoadFailures.remove(item.id)
+        detailItems[item.id] = detail
+        detailCacheOrder.removeAll { $0 == item.id }
+        detailCacheOrder.append(item.id)
+
+        while detailCacheOrder.count > maximumDetailCacheCount {
+            let evictedID = detailCacheOrder.removeFirst()
+            detailItems.removeValue(forKey: evictedID)
+        }
+    }
+}
+
+private struct XboxCatalogStandaloneDetail: View {
+    let selection: XboxCatalogSelection
+    let onPlay: () -> Void
+    let onDismiss: () -> Void
+
+    @Environment(XboxCatalogViewModel.self) private var viewModel
+    @State private var detailItem: XboxCatalogItem?
+    @State private var isLoadingDetail = true
+    @State private var detailLoadFailed = false
+    @State private var detailLoadToken: UUID?
+
+    var body: some View {
+        let item = detailItem ?? selection.item
+        XboxCatalogDetailView(
+            item: item,
+            route: selection.route,
+            isFavorite: viewModel.isFavorite(selection.item),
+            isLoadingDetail: isLoadingDetail,
+            detailLoadFailed: detailLoadFailed,
+            presentationStyle: .fullScreen,
+            onPlay: onPlay,
+            onToggleFavorite: {
+                viewModel.toggleFavorite(selection.item)
+            },
+            onRetryDetail: {
+                Task { await loadDetail() }
+            },
+            onCollapse: onDismiss
+        )
+        .task(id: selection.item.id) {
+            await loadDetail()
+        }
+    }
+
+    private func loadDetail() async {
+        let token = UUID()
+        detailLoadToken = token
+        detailLoadFailed = false
+        isLoadingDetail = true
+        let detail = await viewModel.fetchDetail(for: selection.item)
+        guard !Task.isCancelled, detailLoadToken == token else { return }
+        detailItem = detail
+        detailLoadFailed = detail == nil
+        isLoadingDetail = false
+        detailLoadToken = nil
+    }
+}
+
+private struct XboxCatalogCarouselCard: View {
+    let selection: XboxCatalogSelection
+    var focusedID: FocusState<String?>.Binding
+    let isCurrent: Bool
+    let isExpanded: Bool
+    let isFavorite: Bool
+    let isLoadingDetail: Bool
+    let detailLoadFailed: Bool
+    let imageAlignment: HorizontalAlignment
+    let onExpand: () -> Void
+    let onCollapse: () -> Void
+    let onToggleFavorite: () -> Void
+    let onRetryDetail: () -> Void
+    let onPlay: () -> Void
+
+    var body: some View {
+        ZStack {
+            cardBody
+
+            if !isExpanded {
+                Button(action: onExpand) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PassthroughButtonStyle())
+                .focusEffectDisabled()
+                .focused(focusedID, equals: selection.id)
+                .accessibilityLabel(selection.item.title)
+                .accessibilityAddTraits(isCurrent ? .isSelected : [])
+                .accessibilityIdentifier(
+                    "xbox-carousel-card.\(selection.item.id)"
+                )
+            }
+        }
+        .focusSection()
+    }
+
+    private var cardBody: some View {
+        ZStack(alignment: .bottomLeading) {
+            if isExpanded {
+                XboxCatalogDetailView(
+                    item: selection.item,
+                    route: selection.route,
+                    isFavorite: isFavorite,
+                    isLoadingDetail: isLoadingDetail,
+                    detailLoadFailed: detailLoadFailed,
+                    presentationStyle: .carouselExpanded,
+                    onPlay: onPlay,
+                    onToggleFavorite: onToggleFavorite,
+                    onRetryDetail: onRetryDetail,
+                    onCollapse: onCollapse
+                )
+            } else {
+                carouselArtwork
+
+                GameDetailArtworkScrim()
+                    .opacity(isCurrent ? 1 : 0)
+
+                if isCurrent {
+                    XboxCatalogDetailView(
+                        item: selection.item,
+                        route: selection.route,
+                        isFavorite: isFavorite,
+                        isLoadingDetail: isLoadingDetail,
+                        detailLoadFailed: detailLoadFailed,
+                        presentationStyle: .embeddedCarousel,
+                        onPlay: onPlay,
+                        onToggleFavorite: onToggleFavorite,
+                        onRetryDetail: onRetryDetail,
+                        onCollapse: onCollapse
+                    )
+                }
+            }
+
+            if !isExpanded {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 20,
+                    bottomLeadingRadius: 0,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 20
+                )
+                .stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.65), .clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.5
+                )
+                .allowsHitTesting(false)
+            }
+        }
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: isExpanded ? 0 : 20,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: isExpanded ? 0 : 20
+            )
+        )
+        .shadow(
+            color: .black.opacity(isCurrent ? 0.5 : 0.15),
+            radius: isCurrent ? 20 : 4,
+            x: 0,
+            y: isCurrent ? 10 : 2
+        )
+    }
+
+    private var carouselArtwork: some View {
+        GeometryReader { geometry in
+            SharedArtworkImage(
+                urlString: selection.item.heroArtworkURL?.absoluteString
+                    ?? selection.item.artworkURL?.absoluteString,
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+            .frame(height: geometry.size.height)
+            .frame(
+                width: geometry.size.width,
+                alignment: Alignment(
+                    horizontal: imageAlignment,
+                    vertical: .center
+                )
+            )
+            .clipped()
+        }
+    }
+}
+
+private struct XboxCatalogCarouselRequest: Identifiable {
+    let id = UUID()
+    let selections: [XboxCatalogSelection]
+    let startID: String
 }
 
 private struct XboxCatalogSelection: Identifiable {
@@ -1102,16 +2490,149 @@ private struct XboxCatalogSelection: Identifiable {
     var id: String {
         "\(item.id)|\(route.titleID)|\(route.accessKind)"
     }
+
+    var badge: CloudCatalogCardBadge? {
+        guard route.accessKind == .freeWithAds else { return nil }
+        return route.isPlayable
+            ? CloudCatalogCardBadge(
+                title: L10n.text("free_with_ads"),
+                systemImage: nil,
+                foregroundColor: .black,
+                backgroundColor: .green
+            )
+            : CloudCatalogCardBadge(
+                title: L10n.text("not_eligible"),
+                systemImage: "lock.fill",
+                foregroundColor: .white,
+                backgroundColor: .gray
+            )
+    }
+
+    var accessibilityStatus: String {
+        if route.accessKind == .freeWithAds {
+            return route.isPlayable
+                ? L10n.text("free_with_ads")
+                : L10n.text("not_eligible")
+        }
+        return L10n.text("xbox_cloud_catalog")
+    }
+
+    var playTitle: String {
+        guard route.isPlayable else { return L10n.text("not_eligible") }
+        return route.accessKind == .freeWithAds
+            ? L10n.text("stream_free_with_ads")
+            : L10n.text("play")
+    }
+
+    var cardAccessibilityID: String {
+        "xbox-game-card.\(item.id).\(route.accessKind).\(route.titleID)"
+    }
+}
+
+private extension XboxCatalogCollectionFilter {
+    var id: String {
+        "favorites"
+    }
+
+    var label: String {
+        L10n.text("favorites")
+    }
+}
+
+private extension XboxCatalogAccessFilter {
+    var id: String {
+        switch self {
+        case .standard:
+            "game-pass"
+        case .freeWithAds:
+            "free-with-ads"
+        case .owned:
+            "owned"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .standard:
+            L10n.text("game_pass")
+        case .freeWithAds:
+            L10n.text("free_with_ads")
+        case .owned:
+            L10n.text("owned")
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .standard:
+            0
+        case .owned:
+            1
+        case .freeWithAds:
+            2
+        }
+    }
+}
+
+private extension XboxCloudInputType {
+    var id: String {
+        rawValue
+    }
+
+    var label: String {
+        switch self {
+        case .controller:
+            L10n.text("controller")
+        case .touch:
+            L10n.text("touch")
+        case .mouseAndKeyboard:
+            L10n.text("keyboard_and_mouse")
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .controller:
+            0
+        case .touch:
+            1
+        case .mouseAndKeyboard:
+            2
+        }
+    }
+}
+
+private extension XboxCatalogSortOrder {
+    var label: String {
+        switch self {
+        case .default:
+            L10n.text("default")
+        case .titleAZ:
+            L10n.text("title_az")
+        case .titleZA:
+            L10n.text("title_za")
+        case .recentFirst:
+            L10n.text("recently_played_sort")
+        }
+    }
 }
 
 private struct XboxCatalogRefreshWarning: View {
+    let onRetry: () -> Void
+
     var body: some View {
-        Label(
-            L10n.text("xbox_cloud_catalog_unavailable"),
-            systemImage: "exclamationmark.triangle.fill"
-        )
-        .font(.caption)
-        .foregroundStyle(.yellow)
+        HStack(spacing: 18) {
+            Label(
+                L10n.text("xbox_cloud_catalog_unavailable"),
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.yellow)
+
+            Button(L10n.text("try_again"), action: onRetry)
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("xbox-catalog.refresh-retry")
+        }
     }
 }
 
@@ -1323,7 +2844,7 @@ private struct XboxSettingsView: View {
     }
 
     private var cloudGamingAccessDescription: String {
-        let kinds = viewModel.availableAccessKinds
+        let kinds = viewModel.playableAccessKinds
         let hasStandard = kinds.contains(.standard)
         let hasFreeWithAds = kinds.contains(.freeWithAds)
         switch (hasStandard, hasFreeWithAds) {
@@ -1398,7 +2919,7 @@ private struct XboxSettingsView: View {
         isPerformingDataAction = true
         geForceNowAuthManager.prepareForDataReset()
         xboxAuthManager.prepareForDataReset()
-        viewModel.prepareForCacheClear()
+        viewModel.prepareForPersistentDataClear()
         modeViewModel.prepareForPersistentDataClear()
 
         Task {

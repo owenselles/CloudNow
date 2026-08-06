@@ -70,11 +70,28 @@
 
         private static let catalog = XboxCatalogSnapshot(
             items: [
-                XboxCatalogItem(id: "fixture-racer", title: "Fixture Racer", artworkURL: nil),
+                XboxCatalogItem(
+                    id: "fixture-racer",
+                    title: "Fixture Racer",
+                    longDescription: "A deterministic racing fixture for CloudNow catalog testing.",
+                    genres: ["Racing"],
+                    developer: "CloudNow Test Studio",
+                    publisher: "CloudNow",
+                    contentRating: "Everyone",
+                    artworkURL: nil,
+                    supportedInputTypes: [.controller],
+                    isOwned: true
+                ),
                 XboxCatalogItem(
                     id: "fixture-adventure",
                     title: "Fixture Adventure",
+                    longDescription: "A deterministic adventure fixture with an ad-supported route.",
+                    genres: ["Adventure"],
+                    developer: "CloudNow Test Studio",
+                    publisher: "CloudNow",
+                    contentRating: "Teen",
                     artworkURL: nil,
+                    supportedInputTypes: [.controller, .touch],
                     routes: [
                         XboxCloudTitleRoute(
                             titleID: "fixture-adventure",
@@ -85,7 +102,9 @@
                 XboxCatalogItem(
                     id: "fixture-preview-locked",
                     title: "Fixture Preview Locked",
+                    genres: ["Adventure"],
                     artworkURL: nil,
+                    supportedInputTypes: [.touch],
                     routes: [
                         XboxCloudTitleRoute(
                             titleID: "fixture-preview-locked",
@@ -94,7 +113,31 @@
                         ),
                     ]
                 ),
-                XboxCatalogItem(id: "fixture-puzzle", title: "Fixture Puzzle", artworkURL: nil),
+                XboxCatalogItem(
+                    id: "fixture-puzzle",
+                    title: "Fixture Puzzle",
+                    genres: ["Puzzle"],
+                    artworkURL: nil,
+                    supportedInputTypes: [.controller, .mouseAndKeyboard]
+                ),
+                XboxCatalogItem(
+                    id: "fixture-dual-route",
+                    title: "Fixture Dual Access",
+                    genres: ["Action"],
+                    artworkURL: nil,
+                    supportedInputTypes: [.controller, .mouseAndKeyboard],
+                    isOwned: true,
+                    routes: [
+                        XboxCloudTitleRoute(
+                            titleID: "fixture-dual-standard",
+                            accessKind: .standard
+                        ),
+                        XboxCloudTitleRoute(
+                            titleID: "fixture-dual-ads",
+                            accessKind: .freeWithAds
+                        ),
+                    ]
+                ),
             ],
             fetchedAt: .distantFuture
         )
@@ -171,7 +214,7 @@
             offeringID _: String
         ) -> XboxContentAccessSnapshot {
             XboxContentAccessSnapshot(
-                membershipTier: .pcGamePass,
+                membershipTier: .ultimate,
                 fetchedAt: .distantFuture
             )
         }

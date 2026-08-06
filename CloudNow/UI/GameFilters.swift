@@ -243,6 +243,146 @@ private enum GameStoreFilter {
     }
 }
 
+struct CloudCatalogSortOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let label: String
+
+    var id: Value {
+        value
+    }
+}
+
+struct CloudCatalogActiveFilter: Identifiable {
+    let id: String
+    let label: String
+    let onRemove: () -> Void
+}
+
+/// Provider-neutral CloudNow catalog controls. Providers retain their own
+/// filter semantics while sharing the exact result, chip, sort, and filter UI.
+struct CloudCatalogFilterBar<SortValue: Hashable, FilterSheet: View>: View {
+    let totalCount: Int
+    let resultCount: Int
+    let sortOptions: [CloudCatalogSortOption<SortValue>]
+    let activeFilters: [CloudCatalogActiveFilter]
+    let activeSelectionCount: Int
+    let refreshTitle: String?
+    let isRefreshDisabled: Bool
+    let refreshAccessibilityIdentifier: String?
+    @Binding var sortOrder: SortValue
+
+    private let onRefresh: (() -> Void)?
+    private let filterSheet: (Binding<Bool>) -> FilterSheet
+    @State private var isShowingFilters = false
+
+    init(
+        totalCount: Int,
+        resultCount: Int,
+        sortOptions: [CloudCatalogSortOption<SortValue>],
+        activeFilters: [CloudCatalogActiveFilter],
+        activeSelectionCount: Int,
+        sortOrder: Binding<SortValue>,
+        refreshTitle: String? = nil,
+        isRefreshDisabled: Bool = false,
+        refreshAccessibilityIdentifier: String? = nil,
+        onRefresh: (() -> Void)? = nil,
+        @ViewBuilder filterSheet: @escaping (Binding<Bool>) -> FilterSheet
+    ) {
+        self.totalCount = totalCount
+        self.resultCount = resultCount
+        self.sortOptions = sortOptions
+        self.activeFilters = activeFilters
+        self.activeSelectionCount = activeSelectionCount
+        self.refreshTitle = refreshTitle
+        self.isRefreshDisabled = isRefreshDisabled
+        self.refreshAccessibilityIdentifier = refreshAccessibilityIdentifier
+        _sortOrder = sortOrder
+        self.onRefresh = onRefresh
+        self.filterSheet = filterSheet
+    }
+
+    var body: some View {
+        HStack(spacing: 20) {
+            Text(L10n.format("games_result_count", resultCount, totalCount))
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(.primary)
+                .fixedSize()
+                .accessibilityIdentifier("catalog-result-count")
+
+            if !activeFilters.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(activeFilters) { filter in
+                            ActiveFilterChip(
+                                label: filter.label,
+                                onRemove: filter.onRemove
+                            )
+                        }
+                    }
+                }
+                .scrollClipDisabled()
+            }
+
+            Spacer(minLength: 12)
+
+            Menu {
+                Picker(L10n.text("sort"), selection: $sortOrder) {
+                    ForEach(sortOptions) { option in
+                        Text(option.label).tag(option.value)
+                    }
+                }
+            } label: {
+                Label(selectedSortLabel, systemImage: "line.3.horizontal.decrease")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("catalog-sort-menu")
+
+            Button {
+                isShowingFilters = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                    Text(L10n.text("filters"))
+                    if activeSelectionCount > 0 {
+                        Text("\(activeSelectionCount)")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.green, in: Capsule())
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("catalog-filter-button")
+
+            if let refreshTitle, let onRefresh {
+                Button(action: onRefresh) {
+                    Label(refreshTitle, systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRefreshDisabled)
+                .accessibilityIdentifier(
+                    refreshAccessibilityIdentifier
+                        ?? "catalog-refresh-button"
+                )
+            }
+        }
+        .padding(.horizontal, 60)
+        .padding(.vertical, 22)
+        .focusSection()
+        .fullScreenCover(isPresented: $isShowingFilters) {
+            filterSheet($isShowingFilters)
+        }
+    }
+
+    private var selectedSortLabel: String {
+        sortOptions.first { $0.value == sortOrder }?.label
+            ?? sortOptions.first?.label
+            ?? L10n.text("sort")
+    }
+}
+
 struct GameFilterBar: View {
     let totalCount: Int
     let resultCount: Int
@@ -255,102 +395,50 @@ struct GameFilterBar: View {
     @Binding var filterState: GameFilterState
     @Binding var sortOrder: LibrarySortOrder
 
-    @State private var isShowingFilters = false
-
     var body: some View {
-        let chips = activeChips
-
-        return HStack(spacing: 20) {
-            Text(L10n.format("games_result_count", resultCount, totalCount))
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(.primary)
-                .fixedSize()
-
-            if !chips.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(chips) { chip in
-                            ActiveFilterChip(label: chip.label, onRemove: chip.onRemove)
-                        }
-                    }
-                }
-                .scrollClipDisabled()
-            }
-
-            Spacer(minLength: 12)
-
-            Menu {
-                Picker(L10n.text("sort"), selection: $sortOrder) {
-                    ForEach(availableSortOrders, id: \.self) { order in
-                        Text(order.label).tag(order)
-                    }
-                }
-            } label: {
-                Label(sortOrder.label, systemImage: "line.3.horizontal.decrease")
-            }
-            .buttonStyle(.bordered)
-
-            Button {
-                isShowingFilters = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                    Text(L10n.text("filters"))
-                    if filterState.activeSelectionCount > 0 {
-                        Text("\(filterState.activeSelectionCount)")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(.green, in: Capsule())
-                    }
-                }
-            }
-            .buttonStyle(.bordered)
-        }
-        .padding(.horizontal, 60)
-        .padding(.vertical, 22)
-        .focusSection()
-        .fullScreenCover(isPresented: $isShowingFilters) {
+        CloudCatalogFilterBar(
+            totalCount: totalCount,
+            resultCount: resultCount,
+            sortOptions: availableSortOrders.map {
+                CloudCatalogSortOption(value: $0, label: $0.label)
+            },
+            activeFilters: activeChips,
+            activeSelectionCount: filterState.activeSelectionCount,
+            sortOrder: $sortOrder
+        ) { isPresented in
             GameFilterSheet(
                 state: $filterState,
                 context: context,
                 options: options,
                 totalCount: previewBaseCount,
                 previewCount: previewCount,
-                onClose: { isShowingFilters = false }
+                onClose: { isPresented.wrappedValue = false }
             )
         }
     }
 
-    private struct ActiveChip: Identifiable {
-        let id: String
-        let label: String
-        let onRemove: () -> Void
-    }
-
-    private var activeChips: [ActiveChip] {
-        var chips: [ActiveChip] = []
+    private var activeChips: [CloudCatalogActiveFilter] {
+        var chips: [CloudCatalogActiveFilter] = []
 
         for collection in filterState.collections.sorted(by: { $0.rawValue < $1.rawValue }) {
-            chips.append(ActiveChip(id: "collection-\(collection.rawValue)", label: collection.label) {
+            chips.append(CloudCatalogActiveFilter(id: "collection-\(collection.rawValue)", label: collection.label) {
                 filterState.collections.remove(collection)
             })
         }
         for genre in filterState.genres.sorted(by: {
             GameInfo.genreLabel($0).localizedStandardCompare(GameInfo.genreLabel($1)) == .orderedAscending
         }) {
-            chips.append(ActiveChip(id: "genre-\(genre)", label: GameInfo.genreLabel(genre)) {
+            chips.append(CloudCatalogActiveFilter(id: "genre-\(genre)", label: GameInfo.genreLabel(genre)) {
                 filterState.genres.remove(genre)
             })
         }
         for store in filterState.stores.sorted() {
-            chips.append(ActiveChip(id: "store-\(store)", label: L10n.storeName(for: store)) {
+            chips.append(CloudCatalogActiveFilter(id: "store-\(store)", label: L10n.storeName(for: store)) {
                 filterState.stores.remove(store)
             })
         }
         for feature in filterState.features.sorted(by: { $0.rawValue < $1.rawValue }) {
-            chips.append(ActiveChip(id: "feature-\(feature.rawValue)", label: feature.label) {
+            chips.append(CloudCatalogActiveFilter(id: "feature-\(feature.rawValue)", label: feature.label) {
                 filterState.features.remove(feature)
             })
         }
@@ -398,7 +486,7 @@ private enum GameFilterSection: String, Hashable {
     case features
 }
 
-private struct WrappingFilterLayout: Layout {
+struct WrappingFilterLayout: Layout {
     let horizontalSpacing: CGFloat
     let verticalSpacing: CGFloat
 
@@ -712,7 +800,7 @@ private struct GameFilterSheet: View {
     }
 }
 
-private struct FilterAccordionSection<Content: View>: View {
+struct FilterAccordionSection<Content: View>: View {
     let title: String
     let selectedCount: Int
     @Binding var isExpanded: Bool
@@ -759,7 +847,7 @@ private struct FilterAccordionSection<Content: View>: View {
     }
 }
 
-private struct FilterOptionButton: View {
+struct FilterOptionButton: View {
     let label: String
     let count: Int
     let isSelected: Bool
@@ -808,6 +896,7 @@ private struct FilterOptionButton: View {
 struct FilteredGamesEmptyView: View {
     let hasActiveFilters: Bool
     let onClearFilters: () -> Void
+    var clearFiltersFocus: FocusState<Bool>.Binding?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -819,16 +908,25 @@ struct FilteredGamesEmptyView: View {
             Text(L10n.text("adjust_search_or_filters"))
                 .foregroundStyle(.secondary)
             if hasActiveFilters {
-                Button {
-                    onClearFilters()
-                } label: {
-                    Label(L10n.text("clear_filters"), systemImage: "xmark.circle")
+                if let clearFiltersFocus {
+                    clearFiltersButton
+                        .focused(clearFiltersFocus)
+                } else {
+                    clearFiltersButton
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(60)
+    }
+
+    private var clearFiltersButton: some View {
+        Button {
+            onClearFilters()
+        } label: {
+            Label(L10n.text("clear_filters"), systemImage: "xmark.circle")
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.green)
     }
 }

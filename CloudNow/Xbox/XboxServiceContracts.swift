@@ -29,6 +29,91 @@ nonisolated enum XboxCloudRouteAvailability: Equatable, Hashable, Sendable {
     case requiresEligibility
 }
 
+nonisolated enum XboxCloudInputType: String, CaseIterable, Hashable, Sendable {
+    case controller
+    case touch
+    case mouseAndKeyboard
+
+    init?(serviceValue: String) {
+        let normalized = serviceValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .filter(\.isLetter)
+        switch normalized {
+        case "controller", "gamepad":
+            self = .controller
+        case "touch", "touchscreen":
+            self = .touch
+        case "keyboardandmouse", "keyboardmouse", "mkb", "mouseandkeyboard", "mousekeyboard":
+            self = .mouseAndKeyboard
+        default:
+            return nil
+        }
+    }
+}
+
+nonisolated enum XboxArtworkURLPolicy {
+    private static let maximumURLSize = 2048
+    private static let trustedHostSuffixes = [
+        "microsoft.com",
+        "s-microsoft.com",
+        "xboxlive.com",
+        "xboxservices.com",
+    ]
+    private static let sensitiveQueryFragments = [
+        "auth",
+        "credential",
+        "expires",
+        "key",
+        "policy",
+        "secret",
+        "sig",
+        "token",
+    ]
+
+    static func validatedURL(
+        from value: String,
+        allowsProtocolRelativeURL: Bool = false
+    ) -> URL? {
+        let absoluteValue: String
+        if value.hasPrefix("//") {
+            guard allowsProtocolRelativeURL else { return nil }
+            absoluteValue = "https:\(value)"
+        } else {
+            absoluteValue = value
+        }
+        guard absoluteValue.utf8.count <= maximumURLSize,
+              let url = URL(string: absoluteValue),
+              isApproved(url)
+        else {
+            return nil
+        }
+        return url
+    }
+
+    static func isApproved(_ url: URL) -> Bool {
+        guard url.absoluteString.utf8.count <= maximumURLSize,
+              url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              trustedHostSuffixes.contains(where: { suffix in
+                  host == suffix || host.hasSuffix(".\(suffix)")
+              }),
+              url.user == nil,
+              url.password == nil,
+              url.port == nil || url.port == 443
+        else {
+            return false
+        }
+        return URLComponents(
+            url: url,
+            resolvingAgainstBaseURL: false
+        )?.queryItems?.allSatisfy { queryItem in
+            let name = queryItem.name.lowercased()
+            return !sensitiveQueryFragments.contains { name.contains($0) }
+        } ?? true
+    }
+}
+
 /// The service title identifier and access path required to launch one catalog
 /// product. A product can expose more than one route without changing its
 /// stable catalog identity.
@@ -55,18 +140,45 @@ nonisolated struct XboxCloudTitleRoute: Equatable, Hashable, Sendable {
 nonisolated struct XboxCatalogItem: Equatable, Identifiable, Sendable {
     let id: String
     let title: String
+    let longDescription: String?
+    let genres: [String]
+    let developer: String?
+    let publisher: String?
+    let contentRating: String?
     let artworkURL: URL?
+    let heroArtworkURL: URL?
+    let screenshotURLs: [URL]
+    let supportedInputTypes: Set<XboxCloudInputType>
+    let isOwned: Bool
     let routes: [XboxCloudTitleRoute]
 
     init(
         id: String,
         title: String,
+        longDescription: String? = nil,
+        genres: [String] = [],
+        developer: String? = nil,
+        publisher: String? = nil,
+        contentRating: String? = nil,
         artworkURL: URL?,
+        heroArtworkURL: URL? = nil,
+        screenshotURLs: [URL] = [],
+        supportedInputTypes: Set<XboxCloudInputType> = [],
+        isOwned: Bool = false,
         routes: [XboxCloudTitleRoute]? = nil
     ) {
-        self.id = id
+        self.id = id.uppercased()
         self.title = title
+        self.longDescription = longDescription
+        self.genres = genres
+        self.developer = developer
+        self.publisher = publisher
+        self.contentRating = contentRating
         self.artworkURL = artworkURL
+        self.heroArtworkURL = heroArtworkURL
+        self.screenshotURLs = screenshotURLs
+        self.supportedInputTypes = supportedInputTypes
+        self.isOwned = isOwned
         self.routes = routes ?? [
             XboxCloudTitleRoute(
                 titleID: id,
@@ -95,46 +207,63 @@ nonisolated struct XboxCatalogItem: Equatable, Identifiable, Sendable {
         }
     }
 
+    fileprivate var normalizedIdentity: String {
+        id.uppercased()
+    }
+
     fileprivate var isSafeForPresentation: Bool {
         guard !id.isEmpty,
               id.utf8.count <= 512,
               !title.isEmpty,
               title.utf8.count <= 1024,
+              Self.isSafeText(
+                  longDescription,
+                  maximumSize: 32768,
+                  allowsNewlines: true
+              ),
+              genres.count <= 32,
+              genres.allSatisfy({ Self.isSafeText($0, maximumSize: 256) }),
+              Self.isSafeText(developer, maximumSize: 1024),
+              Self.isSafeText(publisher, maximumSize: 1024),
+              Self.isSafeText(contentRating, maximumSize: 256),
+              screenshotURLs.count <= 12,
               !routes.isEmpty,
               routes.count <= 16,
               routes.allSatisfy(\.isSafeForPresentation)
         else {
             return false
         }
-        guard let artworkURL else { return true }
-        guard artworkURL.absoluteString.utf8.count <= 2048,
-              artworkURL.scheme?.lowercased() == "https",
-              artworkURL.user == nil,
-              artworkURL.password == nil
-        else {
-            return false
-        }
-        let sensitiveQueryFragments = [
-            "auth",
-            "credential",
-            "expires",
-            "key",
-            "policy",
-            "secret",
-            "sig",
-            "token",
-        ]
-        return URLComponents(
-            url: artworkURL,
-            resolvingAgainstBaseURL: false
-        )?.queryItems?.allSatisfy { queryItem in
-            let name = queryItem.name.lowercased()
-            return !sensitiveQueryFragments.contains { name.contains($0) }
-        } ?? true
+        let isArtworkApproved = artworkURL.map(
+            XboxArtworkURLPolicy.isApproved
+        ) ?? true
+        let isHeroArtworkApproved = heroArtworkURL.map(
+            XboxArtworkURLPolicy.isApproved
+        ) ?? true
+        return isArtworkApproved
+            && isHeroArtworkApproved
+            && screenshotURLs.allSatisfy(XboxArtworkURLPolicy.isApproved)
+    }
+
+    private static func isSafeText(
+        _ value: String?,
+        maximumSize: Int,
+        allowsNewlines: Bool = false
+    ) -> Bool {
+        guard let value else { return true }
+        let disallowedControls = allowsNewlines
+            ? CharacterSet.controlCharacters.subtracting(
+                CharacterSet(charactersIn: "\r\n")
+            )
+            : CharacterSet.controlCharacters
+        return !value.isEmpty
+            && value.utf8.count <= maximumSize
+            && value.unicodeScalars.allSatisfy {
+                !disallowedControls.contains($0)
+            }
     }
 
     fileprivate func mergingRoutes(from other: XboxCatalogItem) -> XboxCatalogItem {
-        guard id == other.id else { return self }
+        guard normalizedIdentity == other.normalizedIdentity else { return self }
 
         var mergedRoutes = routes
         for route in other.routes {
@@ -152,7 +281,19 @@ nonisolated struct XboxCatalogItem: Equatable, Identifiable, Sendable {
         return XboxCatalogItem(
             id: id,
             title: title,
+            longDescription: longDescription ?? other.longDescription,
+            genres: genres.isEmpty ? other.genres : genres,
+            developer: developer ?? other.developer,
+            publisher: publisher ?? other.publisher,
+            contentRating: contentRating ?? other.contentRating,
             artworkURL: artworkURL ?? other.artworkURL,
+            heroArtworkURL: heroArtworkURL ?? other.heroArtworkURL,
+            screenshotURLs: screenshotURLs.isEmpty
+                ? other.screenshotURLs
+                : screenshotURLs,
+            supportedInputTypes: supportedInputTypes
+                .union(other.supportedInputTypes),
+            isOwned: isOwned || other.isOwned,
             routes: mergedRoutes
         )
     }
@@ -186,7 +327,7 @@ private extension XboxCloudTitleRoute {
 }
 
 nonisolated struct XboxCatalogSnapshot: Equatable, Sendable {
-    static let maximumRetainedItemCount = 512
+    static let maximumRetainedItemCount = 1024
 
     let items: [XboxCatalogItem]
     let fetchedAt: Date
@@ -198,7 +339,7 @@ nonisolated struct XboxCatalogSnapshot: Equatable, Sendable {
         )
         var retainedIndexesByID: [String: Int] = [:]
         for item in items where item.isSafeForPresentation {
-            if let retainedIndex = retainedIndexesByID[item.id] {
+            if let retainedIndex = retainedIndexesByID[item.normalizedIdentity] {
                 retainedItems[retainedIndex] = retainedItems[retainedIndex]
                     .mergingRoutes(from: item)
                 continue
@@ -206,7 +347,7 @@ nonisolated struct XboxCatalogSnapshot: Equatable, Sendable {
             guard retainedItems.count < Self.maximumRetainedItemCount else {
                 continue
             }
-            retainedIndexesByID[item.id] = retainedItems.count
+            retainedIndexesByID[item.normalizedIdentity] = retainedItems.count
             retainedItems.append(item)
         }
         self.items = retainedItems
@@ -218,8 +359,22 @@ nonisolated struct XboxCatalogSnapshot: Equatable, Sendable {
 /// generic Microsoft OAuth token is not enough to enter the Xbox runtime.
 nonisolated struct XboxCloudAuthorizedAccount: Equatable, Sendable {
     let authorizationIdentifier: String
+    let activityScopeIdentifier: String
     let displayName: String?
     let expiresAt: Date
+
+    init(
+        authorizationIdentifier: String,
+        activityScopeIdentifier: String? = nil,
+        displayName: String?,
+        expiresAt: Date
+    ) {
+        self.authorizationIdentifier = authorizationIdentifier
+        self.activityScopeIdentifier = activityScopeIdentifier
+            ?? authorizationIdentifier
+        self.displayName = displayName
+        self.expiresAt = expiresAt
+    }
 
     func isUsable(at date: Date) -> Bool {
         !authorizationIdentifier
@@ -253,9 +408,35 @@ nonisolated protocol XboxCatalogClient: Sendable {
         account: XboxCloudAuthorizedAccount
     ) async throws -> XboxCatalogSnapshot
 
+    /// Enriches one already-authorized catalog item on demand. The default
+    /// keeps lightweight or test clients source-compatible.
+    func fetchDetail(
+        for item: XboxCatalogItem,
+        request: XboxCatalogRequest
+    ) async throws -> XboxCatalogItem
+
+    /// Invalidates account-derived service state before an explicit refresh.
+    /// Stateless and test clients use the default no-op implementation.
+    func refreshAccountState(
+        for account: XboxCloudAuthorizedAccount
+    ) async
+
     /// Synchronously cancels provider-owned transport work and releases its
     /// heavy resources. Implementations must be idempotent and non-blocking.
     nonisolated func cancel()
+}
+
+extension XboxCatalogClient {
+    nonisolated func fetchDetail(
+        for item: XboxCatalogItem,
+        request _: XboxCatalogRequest
+    ) async throws -> XboxCatalogItem {
+        item
+    }
+
+    nonisolated func refreshAccountState(
+        for _: XboxCloudAuthorizedAccount
+    ) async {}
 }
 
 /// Provider clients required after Xbox identity has been established. The

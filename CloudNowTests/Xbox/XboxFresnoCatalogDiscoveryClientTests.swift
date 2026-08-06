@@ -88,6 +88,27 @@ struct XboxFresnoCatalogDiscoveryClientTests {
         #expect(snapshot.productIDs.isEmpty)
     }
 
+    @Test("Rail discovery uses the transport response-size boundary")
+    func usesBoundedTransport() async throws {
+        let transport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(json: Self.railJSON(ids: ["BOUNDED-PRODUCT"]))
+        }
+        let client = XboxFresnoCatalogDiscoveryClient(
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        let snapshot = try await client.fetchProductIDs(
+            market: "US",
+            localeIdentifier: "en-US",
+            activeSubscriptionProductIDs: []
+        )
+
+        #expect(snapshot.productIDs == ["BOUNDED-PRODUCT"])
+        #expect(await transport.maximumResponseSizes() == [1_048_576])
+        #expect(await transport.unboundedRequestCount() == 0)
+    }
+
     @Test("Malformed, oversized, HTTP, and transport responses fail closed")
     func responseFailures() async {
         let malformed = XboxFresnoCatalogDiscoveryClient(

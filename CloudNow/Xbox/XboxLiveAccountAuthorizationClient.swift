@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Credential boundary shared by future Xbox catalog and session adapters.
@@ -73,8 +74,11 @@ actor XboxLiveCredentialVault: XboxXSTSCredentialProviding, XboxLocalCredentialL
         let metadataCredentials = credentials.filter {
             metadataRelyingParties.contains($0.relyingParty)
         }
+        let metadataUserHashes = Set(metadataCredentials.map(\.userHash))
         guard !metadataRelyingParties.isEmpty,
               metadataCredentials.count == metadataRelyingParties.count,
+              metadataUserHashes.count == 1,
+              let metadataUserHash = metadataUserHashes.first,
               let expiresAt = metadataCredentials.map(\.expiresAt).min()
         else {
             throw XboxLiveAuthorizationError.invalidPayload
@@ -117,6 +121,9 @@ actor XboxLiveCredentialVault: XboxXSTSCredentialProviding, XboxLocalCredentialL
 
         return XboxCloudAuthorizedAccount(
             authorizationIdentifier: normalizedIdentifier,
+            activityScopeIdentifier: Self.activityScopeIdentifier(
+                for: metadataUserHash
+            ),
             displayName: displayName,
             expiresAt: expiresAt
         )
@@ -213,6 +220,16 @@ actor XboxLiveCredentialVault: XboxXSTSCredentialProviding, XboxLocalCredentialL
             authorizations[oldestIdentifier]?.pendingEnrichment?.task.cancel()
             authorizations.removeValue(forKey: oldestIdentifier)
         }
+    }
+
+    private static func activityScopeIdentifier(
+        for userHash: String
+    ) -> String {
+        let value = "cloudnow.xbox.activity.v1:\(userHash)"
+        let digest = SHA256.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "xbox-activity-\(digest)"
     }
 }
 

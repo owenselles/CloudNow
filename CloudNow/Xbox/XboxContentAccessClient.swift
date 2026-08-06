@@ -120,6 +120,18 @@ nonisolated protocol XboxContentAccessProviding: Sendable {
         market: String,
         offeringID: String
     ) async throws -> XboxContentAccessSnapshot
+
+    /// Removes account-scoped derived state before an explicit user refresh.
+    /// Stateless adapters use the default no-op implementation.
+    func invalidateContentAccess(
+        for account: XboxCloudAuthorizedAccount
+    ) async
+}
+
+extension XboxContentAccessProviding {
+    nonisolated func invalidateContentAccess(
+        for _: XboxCloudAuthorizedAccount
+    ) async {}
 }
 
 nonisolated enum XboxContentAccessError: Error, Equatable, Sendable, LocalizedError {
@@ -246,10 +258,15 @@ nonisolated struct XboxContentAccessClient: XboxContentAccessProviding, Sendable
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: maximumResponseBytes
+            )
             try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxContentAccessError.responseTooLarge
         } catch {
             throw XboxContentAccessError.transportFailure
         }

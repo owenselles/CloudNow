@@ -104,10 +104,15 @@ nonisolated struct XboxFresnoCatalogDiscoveryClient: XboxFresnoCatalogDiscoverin
         let response: URLResponse
         do {
             try Task.checkCancellation()
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: Self.maximumResponseBytes
+            )
             try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxFresnoCatalogDiscoveryError.responseTooLarge
         } catch {
             throw XboxFresnoCatalogDiscoveryError.transportFailure
         }

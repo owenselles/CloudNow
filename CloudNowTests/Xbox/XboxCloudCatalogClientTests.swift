@@ -39,9 +39,15 @@ struct XboxCloudCatalogClientTests {
         #expect(snapshot.fetchedAt == fixedDate)
         #expect(snapshot.items.map(\.id) == ["111", "222", "333"])
         #expect(snapshot.items.map(\.title) == ["Halo Infinite", "Forza Horizon", "Sea of Thieves"])
-        #expect(snapshot.items[0].artworkURL?.absoluteString == "https://images.example/halo-poster.jpg")
+        #expect(
+            snapshot.items[0].artworkURL?.absoluteString
+                == "https://images-eds-ssl.xboxlive.com/halo-poster.jpg"
+        )
         #expect(snapshot.items[1].artworkURL == nil)
-        #expect(snapshot.items[2].artworkURL?.absoluteString == "https://images.example/sea.jpg")
+        #expect(
+            snapshot.items[2].artworkURL?.absoluteString
+                == "https://images-eds-ssl.xboxlive.com/sea.jpg"
+        )
         #expect(snapshot.items.map(\.routes) == [
             [XboxCloudTitleRoute(titleID: "111", accessKind: .standard)],
             [XboxCloudTitleRoute(titleID: "222", accessKind: .standard)],
@@ -49,6 +55,64 @@ struct XboxCloudCatalogClientTests {
         ])
         #expect(await sessionProvider.requestCount() == 1)
         #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Catalog parsing accepts only Microsoft and Xbox artwork hosts")
+    func catalogArtworkHostAllowlist() async throws {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(json: #"""
+            {
+              "results": [
+                {
+                  "titleId": "trusted",
+                  "details": {
+                    "name": "Trusted",
+                    "hasEntitlement": true,
+                    "imageUrl": "https://store-images.s-microsoft.com/trusted.jpg"
+                  }
+                },
+                {
+                  "titleId": "localhost",
+                  "details": {
+                    "name": "Localhost",
+                    "hasEntitlement": true,
+                    "imageUrl": "https://localhost/private.jpg"
+                  }
+                },
+                {
+                  "titleId": "loopback",
+                  "details": {
+                    "name": "Loopback",
+                    "hasEntitlement": true,
+                    "imageUrl": "https://127.0.0.1/private.jpg"
+                  }
+                }
+              ]
+            }
+            """#)
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        let snapshot = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        #expect(snapshot.items.map(\.id) == [
+            "TRUSTED",
+            "LOCALHOST",
+            "LOOPBACK",
+        ])
+        #expect(
+            snapshot.items[0].artworkURL?.absoluteString
+                == "https://store-images.s-microsoft.com/trusted.jpg"
+        )
+        #expect(snapshot.items[1].artworkURL == nil)
+        #expect(snapshot.items[2].artworkURL == nil)
     }
 
     @Test("Separates product identity, classifies FERDINAND, and merges title routes")
@@ -67,12 +131,12 @@ struct XboxCloudCatalogClientTests {
             account: makeAccount()
         )
 
-        #expect(snapshot.items.map(\.id) == ["product-one", "product-two"])
+        #expect(snapshot.items.map(\.id) == ["PRODUCT-ONE", "PRODUCT-TWO"])
         let merged = try #require(snapshot.items.first)
         #expect(merged.title == "Standard Name")
         #expect(
             merged.artworkURL?.absoluteString
-                == "https://images.example/product-one.jpg"
+                == "https://images-eds-ssl.xboxlive.com/product-one.jpg"
         )
         #expect(merged.routes == [
             XboxCloudTitleRoute(
@@ -120,6 +184,571 @@ struct XboxCloudCatalogClientTests {
 
         #expect(snapshot.items.isEmpty)
         #expect(snapshot.fetchedAt == fixedDate)
+    }
+
+    @Test("Explicit refresh invalidates derived account state")
+    func refreshInvalidatesAccountState() async {
+        let account = makeAccount()
+        let sessionProvider = XboxCloudGSSessionProviderStub(session: makeSession())
+        let contentAccessProvider = XboxContentAccessInvalidationProbe()
+        let client = XboxCloudCatalogClient(
+            sessionProvider: sessionProvider,
+            contentAccessProvider: contentAccessProvider,
+            transport: RecordingHTTPTransport { _, _ in
+                throw TestTransportError.unexpectedRequest(
+                    "Refresh must not issue a catalog request"
+                )
+            },
+            now: { fixedDate }
+        )
+
+        await client.refreshAccountState(for: account)
+
+        #expect(
+            await sessionProvider.removedAccountIdentifiers()
+                == [account.authorizationIdentifier]
+        )
+        #expect(
+            await contentAccessProvider.invalidatedAccountIdentifiers()
+                == [account.authorizationIdentifier]
+        )
+    }
+
+    @Test("Hydrates entitled standard routes that omit inline display metadata")
+    func hydratesProductionShapedStandardRoutes() async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            switch request.url?.host {
+            case "wus.gssv-play-prod.xboxlive.com":
+                #expect(request.httpMethod == "GET")
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "results": [
+                    {
+                      "titleId": "standard-route",
+                      "details": {
+                        "productId": "STANDARD-PRODUCT",
+                        "hasEntitlement": true
+                      }
+                    }
+                  ]
+                }
+                """#)
+            case "catalog.gamepass.com":
+                #expect(request.httpMethod == "POST")
+                #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+                #expect(request.value(forHTTPHeaderField: "Cookie") == nil)
+                #expect(!request.httpShouldHandleCookies)
+                let body = try jsonObject(from: request)
+                #expect(body["Products"] as? [String] == ["STANDARD-PRODUCT"])
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "Products": {
+                    "STANDARD-PRODUCT": {
+                      "StoreId": "STANDARD-PRODUCT",
+                      "ProductTitle": "Hydrated Standard Game",
+                      "Image_Poster": {
+                        "URL": "https://store-images.s-microsoft.com/standard-poster.jpg"
+                      },
+                      "Image_SuperHeroArt": {
+                        "URL": "https://store-images.s-microsoft.com/standard-hero.jpg"
+                      },
+                      "LocalizedCategories": ["Action", "Shooter", "action"],
+                      "Categories": ["Fallback category"],
+                      "PublisherName": "Xbox Game Studios",
+                      "XCloudOfferings": {
+                        "xgpuweb": {
+                          "SupportedInputTypes": [
+                            "Controller",
+                            "Touch",
+                            "MKB",
+                            "Unknown"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "InvalidIds": []
+                }
+                """#)
+            default:
+                throw TestTransportError.unexpectedRequest(
+                    "Unexpected request \(request.url?.absoluteString ?? "nil")"
+                )
+            }
+        }
+        let contentAccess = XboxContentAccessSnapshot(
+            membershipTier: .ultimate,
+            fetchedAt: fixedDate,
+            productAccessByProductID: [
+                "STANDARD-PRODUCT": XboxProductCloudAccess(
+                    userAccessTypes: 1,
+                    aggregateAccessTypes: 0,
+                    streamingProgram: nil,
+                    remainingGameplayTimeInSeconds: nil,
+                    maxGameplayTimeInSeconds: nil
+                ),
+            ]
+        )
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            contentAccessProvider: XboxContentAccessProviderStub(snapshot: contentAccess),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        let snapshot = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        let item = try #require(snapshot.items.first)
+        #expect(snapshot.items.count == 1)
+        #expect(item.id == "STANDARD-PRODUCT")
+        #expect(item.title == "Hydrated Standard Game")
+        #expect(item.genres == ["Action", "Shooter"])
+        #expect(item.publisher == "Xbox Game Studios")
+        #expect(
+            item.artworkURL?.absoluteString
+                == "https://store-images.s-microsoft.com/standard-poster.jpg"
+        )
+        #expect(
+            item.heroArtworkURL?.absoluteString
+                == "https://store-images.s-microsoft.com/standard-hero.jpg"
+        )
+        #expect(item.supportedInputTypes == [.controller, .touch, .mouseAndKeyboard])
+        #expect(item.isOwned)
+        #expect(item.routes == [
+            XboxCloudTitleRoute(titleID: "standard-route", accessKind: .standard),
+        ])
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Rich detail hydration is public, lazy, bounded, and preserves access metadata")
+    func hydratesOnePublicRichDetail() async throws {
+        let imageValues: [[String: Any]] = [
+            [
+                "ImagePurpose": "SuperHeroArt",
+                "Uri": "//store-images.s-microsoft.com/rich-hero.jpg",
+            ],
+            [
+                "ImagePurpose": "Poster",
+                "Uri": "https://store-images.s-microsoft.com/rich-poster.jpg",
+            ],
+            [
+                "ImagePurpose": "Screenshot",
+                "Uri": "http://store-images.s-microsoft.com/insecure.jpg",
+            ],
+            [
+                "ImagePurpose": "Screenshot",
+                "Uri": "https://store-images.s-microsoft.com/signed.jpg?token=private",
+            ],
+        ] + (0 ..< 10).map { index in
+            [
+                "ImagePurpose": "Screenshot",
+                "Uri": "https://images-eds-ssl.xboxlive.com/screenshot-\(index).jpg",
+            ]
+        } + [
+            [
+                "ImagePurpose": "Screenshot",
+                "Uri": "https://images-eds-ssl.xboxlive.com/screenshot-0.jpg",
+            ],
+        ]
+        let response = try JSONSerialization.data(withJSONObject: [
+            "Products": [
+                [
+                    "ProductId": "DECOY-PRODUCT",
+                    "LocalizedProperties": [
+                        ["ProductDescription": "Wrong product"],
+                    ],
+                ],
+                [
+                    "ProductId": "RICH-PRODUCT",
+                    "LocalizedProperties": [
+                        [
+                            "ProductDescription": "A detailed description.\nSecond line.",
+                            "DeveloperName": "Cloud Developer",
+                            "PublisherName": "Cloud Publisher",
+                            "Images": imageValues,
+                        ],
+                    ],
+                    "MarketProperties": [
+                        [
+                            "MinimumUserAge": 13,
+                            "ContentRatings": [
+                                [
+                                    "RatingSystem": "ESRB",
+                                    "RatingId": "ESRB:M",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ])
+        let transport = RecordingHTTPTransport { request, index in
+            #expect(index == 0)
+            #expect(request.httpMethod == "GET")
+            #expect(request.httpBody == nil)
+            #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
+            #expect(request.value(forHTTPHeaderField: "Cache-Control") == "no-store")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+            #expect(request.value(forHTTPHeaderField: "Cookie") == nil)
+            #expect(!request.httpShouldHandleCookies)
+            let url = try #require(request.url)
+            let components = try #require(
+                URLComponents(url: url, resolvingAgainstBaseURL: false)
+            )
+            #expect(components.scheme == "https")
+            #expect(components.host == "displaycatalog.mp.microsoft.com")
+            #expect(components.path == "/v7.0/products")
+            let query = Dictionary(
+                uniqueKeysWithValues: (components.queryItems ?? []).map {
+                    ($0.name, $0.value ?? "")
+                }
+            )
+            #expect(query["bigIds"] == "RICH-PRODUCT")
+            #expect(query["market"] == "DE")
+            #expect(query["languages"] == "de-DE")
+            #expect(query["MS-CV"]?.hasSuffix(".0") == true)
+            #expect(!url.absoluteString.contains("fixture-account"))
+            #expect(!url.absoluteString.contains("fixture-gs-secret"))
+            return StubbedHTTPResponse(data: response)
+        }
+        let item = XboxCatalogItem(
+            id: "RICH-PRODUCT",
+            title: "Rich Game",
+            genres: ["Action", "Adventure"],
+            publisher: "Base Publisher",
+            artworkURL: URL(
+                string: "https://store-images.s-microsoft.com/base-poster.jpg"
+            ),
+            supportedInputTypes: [.controller, .touch],
+            isOwned: true,
+            routes: [
+                XboxCloudTitleRoute(
+                    titleID: "rich-route",
+                    accessKind: .standard
+                ),
+            ]
+        )
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        let hydrated = try await client.fetchDetail(
+            for: item,
+            request: XboxCatalogRequest(localeIdentifier: "de_DE", market: "DE")
+        )
+
+        #expect(hydrated.id == item.id)
+        #expect(hydrated.title == item.title)
+        #expect(hydrated.longDescription == "A detailed description.\nSecond line.")
+        #expect(hydrated.genres == item.genres)
+        #expect(hydrated.developer == "Cloud Developer")
+        #expect(hydrated.publisher == "Cloud Publisher")
+        #expect(hydrated.contentRating == "ESRB M")
+        #expect(hydrated.artworkURL == item.artworkURL)
+        #expect(
+            hydrated.heroArtworkURL?.absoluteString
+                == "https://store-images.s-microsoft.com/rich-hero.jpg"
+        )
+        #expect(hydrated.screenshotURLs.count == 8)
+        #expect(hydrated.screenshotURLs.map(\.absoluteString) == (0 ..< 8).map {
+            "https://images-eds-ssl.xboxlive.com/screenshot-\($0).jpg"
+        })
+        #expect(hydrated.supportedInputTypes == item.supportedInputTypes)
+        #expect(hydrated.isOwned)
+        #expect(hydrated.routes == item.routes)
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Rich detail accepts only Microsoft and Xbox artwork hosts")
+    func richDetailArtworkHostAllowlist() async throws {
+        let response = try JSONSerialization.data(withJSONObject: [
+            "Products": [
+                [
+                    "ProductId": "TRUSTED-ARTWORK",
+                    "LocalizedProperties": [
+                        [
+                            "Images": [
+                                [
+                                    "ImagePurpose": "SuperHeroArt",
+                                    "Uri": "//store-images.s-microsoft.com/hero.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Poster",
+                                    "Uri": "https://assets.xboxservices.com/poster.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Screenshot",
+                                    "Uri": "https://images-eds-ssl.xboxlive.com/one.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Screenshot",
+                                    "Uri": "https://store-images.s-microsoft.com/two.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Screenshot",
+                                    "Uri": "https://microsoft.com.attacker.example/spoofed.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Screenshot",
+                                    "Uri": "https://evil-s-microsoft.com/lookalike.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Screenshot",
+                                    "Uri": "https://127.0.0.1/loopback.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Screenshot",
+                                    "Uri": "https://10.0.0.1/private.jpg",
+                                ],
+                                [
+                                    "ImagePurpose": "Screenshot",
+                                    "Uri": "https://localhost/local.jpg",
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ])
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: response)
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let item = XboxCatalogItem(
+            id: "TRUSTED-ARTWORK",
+            title: "Trusted Artwork",
+            artworkURL: nil
+        )
+
+        let hydrated = try await client.fetchDetail(
+            for: item,
+            request: XboxCatalogRequest(localeIdentifier: "en-US", market: "US")
+        )
+
+        #expect(
+            hydrated.artworkURL?.absoluteString
+                == "https://assets.xboxservices.com/poster.jpg"
+        )
+        #expect(
+            hydrated.heroArtworkURL?.absoluteString
+                == "https://store-images.s-microsoft.com/hero.jpg"
+        )
+        #expect(hydrated.screenshotURLs.map(\.absoluteString) == [
+            "https://images-eds-ssl.xboxlive.com/one.jpg",
+            "https://store-images.s-microsoft.com/two.jpg",
+        ])
+    }
+
+    @Test("Rich detail rejects an unrequested product document")
+    func rejectsMismatchedDetailProduct() async throws {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(json: #"""
+            {
+              "Products": [
+                {
+                  "ProductId": "OTHER-PRODUCT",
+                  "LocalizedProperties": []
+                }
+              ]
+            }
+            """#)
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let item = XboxCatalogItem(
+            id: "EXPECTED-PRODUCT",
+            title: "Expected",
+            artworkURL: nil
+        )
+
+        await #expect(throws: XboxCloudCatalogError.invalidPayload(.metadata)) {
+            _ = try await client.fetchDetail(
+                for: item,
+                request: XboxCatalogRequest(localeIdentifier: "en-US", market: "US")
+            )
+        }
+    }
+
+    @Test("Rich detail validates its public URL before transport")
+    func rejectsUnsafeDetailProductID() async throws {
+        let transport = RecordingHTTPTransport { _, _ in
+            Issue.record("An invalid public detail URL must not reach transport")
+            return StubbedHTTPResponse()
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let item = XboxCatalogItem(
+            id: "unsafe/product?id=secret",
+            title: "Unsafe",
+            artworkURL: nil
+        )
+
+        await #expect(throws: XboxCloudCatalogError.invalidConfiguration) {
+            _ = try await client.fetchDetail(
+                for: item,
+                request: XboxCatalogRequest(localeIdentifier: "en-US", market: "US")
+            )
+        }
+        #expect(await transport.requests().isEmpty)
+    }
+
+    @Test("Rich detail bounds the response before decoding")
+    func richDetailResponseSizeBound() async throws {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: Data(repeating: 0x41, count: 4 * 1024 * 1024 + 1))
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let item = XboxCatalogItem(
+            id: "BOUNDED-PRODUCT",
+            title: "Bounded",
+            artworkURL: nil
+        )
+
+        await #expect(throws: XboxCloudCatalogError.responseTooLarge(.metadata)) {
+            _ = try await client.fetchDetail(
+                for: item,
+                request: XboxCatalogRequest(localeIdentifier: "en-US", market: "US")
+            )
+        }
+    }
+
+    @Test("Rich detail uses the transport response-size boundary")
+    func richDetailUsesBoundedTransport() async throws {
+        let response = try JSONSerialization.data(withJSONObject: [
+            "Products": [
+                [
+                    "ProductId": "BOUNDED-TRANSPORT",
+                    "LocalizedProperties": [],
+                ],
+            ],
+        ])
+        let transport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: response)
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let item = XboxCatalogItem(
+            id: "BOUNDED-TRANSPORT",
+            title: "Bounded Transport",
+            artworkURL: nil
+        )
+
+        _ = try await client.fetchDetail(
+            for: item,
+            request: XboxCatalogRequest(localeIdentifier: "en-US", market: "US")
+        )
+
+        #expect(await transport.maximumResponseSizes() == [4 * 1024 * 1024])
+        #expect(await transport.unboundedRequestCount() == 0)
+    }
+
+    @Test("Catalog and Fresno hydration use transport response-size boundaries")
+    func catalogAndFresnoUseBoundedTransport() async throws {
+        let transport = BoundedRecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(json: #"{"results":[]}"#)
+            }
+            switch request.url?.host {
+            case "wus.gssv-play-prod.xboxlive.com":
+                return StubbedHTTPResponse(json: #"{"results":[]}"#)
+            case "catalog.gamepass.com":
+                return StubbedHTTPResponse(json: #"{"Products":{},"InvalidIds":[]}"#)
+            default:
+                throw TestTransportError.unexpectedRequest(
+                    "Unexpected bounded request \(request.url?.absoluteString ?? "nil")"
+                )
+            }
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            fresnoDiscovery: XboxFresnoDiscoveryStub(productIDs: ["FRESNO-PRODUCT"]),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        _ = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        let requests = await transport.requests()
+        let maximumResponseSizes = await transport.maximumResponseSizes()
+        #expect(requests.count == 3)
+        #expect(maximumResponseSizes.count == 3)
+        #expect(await transport.unboundedRequestCount() == 0)
+        for (request, maximumResponseSize) in zip(requests, maximumResponseSizes) {
+            switch (request.httpMethod, request.url?.host) {
+            case ("GET", "wus.gssv-play-prod.xboxlive.com"),
+                 ("POST", "wus.gssv-play-prod.xboxlive.com"):
+                #expect(maximumResponseSize == 2_097_152)
+            case ("POST", "catalog.gamepass.com"):
+                #expect(maximumResponseSize == 2_097_152)
+            default:
+                Issue.record(
+                    "Unexpected bounded request \(request.url?.absoluteString ?? "nil")"
+                )
+            }
+        }
+    }
+
+    @Test("Catalog metadata maps transport response overflow")
+    func catalogMetadataResponseSizeBound() async throws {
+        let transport = BoundedRecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "results": [
+                    {
+                      "titleId": "bounded-metadata-title",
+                      "details": {
+                        "productId": "BOUNDED-METADATA-PRODUCT",
+                        "hasEntitlement": true
+                      }
+                    }
+                  ]
+                }
+                """#)
+            }
+            return StubbedHTTPResponse(
+                data: Data(repeating: 0x41, count: 2_097_153)
+            )
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        await #expect(throws: XboxCloudCatalogError.responseTooLarge(.metadata)) {
+            _ = try await client.fetchCatalog(
+                XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+                account: makeAccount()
+            )
+        }
+        #expect(await transport.maximumResponseSizes() == [2_097_152, 2_097_152])
+        #expect(await transport.unboundedRequestCount() == 0)
     }
 
     @Test("Discovers Fresno candidates and keeps server authorization separate")
@@ -230,7 +859,7 @@ struct XboxCloudCatalogClientTests {
         ])
         #expect(
             snapshot.items.first?.artworkURL?.absoluteString
-                == "https://images.example/playable-poster.jpg"
+                == "https://store-images.s-microsoft.com/playable-poster.jpg"
         )
         #expect(snapshot.items.allSatisfy { item in
             item.supportsFreeWithAds == true
@@ -323,6 +952,294 @@ struct XboxCloudCatalogClientTests {
         #expect(await transport.requests().count == 5)
     }
 
+    @Test("Top-level metadata batches fail atomically after mixed results")
+    func topLevelMetadataBatchFailureIsAtomic() async throws {
+        let productIDs = (0 ..< 401).map { "STANDARD-PRODUCT-\($0)" }
+        let catalogData = try JSONSerialization.data(withJSONObject: [
+            "results": productIDs.enumerated().map { index, productID in
+                var details: [String: Any] = [
+                    "productId": productID,
+                    "hasEntitlement": true,
+                ]
+                if index > 0 {
+                    details["name"] = "Inline Game \(index)"
+                }
+                return [
+                    "titleId": "standard-title-\(index)",
+                    "details": details,
+                ]
+            },
+        ])
+        let firstBatchData = try JSONSerialization.data(withJSONObject: [
+            "Products": [
+                productIDs[0]: [
+                    "StoreId": productIDs[0],
+                    "ProductTitle": "Hydrated First Game",
+                ],
+            ],
+            "InvalidIds": [],
+        ])
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(data: catalogData)
+            }
+            let body = try jsonObject(from: request)
+            let requestedProductIDs = try #require(body["Products"] as? [String])
+            switch requestedProductIDs.count {
+            case 400:
+                #expect(requestedProductIDs == Array(productIDs.prefix(400)))
+                return StubbedHTTPResponse(data: firstBatchData)
+            case 1:
+                #expect(requestedProductIDs == [productIDs[400]])
+                return StubbedHTTPResponse(
+                    statusCode: 503,
+                    json: #"{"code":"SecondBatchFailed"}"#
+                )
+            default:
+                throw TestTransportError.unexpectedRequest(
+                    "Unexpected metadata batch size \(requestedProductIDs.count)"
+                )
+            }
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        await #expect(throws: XboxCloudCatalogError.httpFailure(
+            operation: .metadata,
+            statusCode: 503,
+            serviceCode: "SecondBatchFailed"
+        )) {
+            _ = try await client.fetchCatalog(
+                XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+                account: makeAccount()
+            )
+        }
+        #expect(await transport.requests().count == 3)
+    }
+
+    @Test("Fallback metadata batches fail atomically after mixed results")
+    func fallbackMetadataBatchFailureIsAtomic() async throws {
+        let productIDs = (0 ..< 201).map { "STANDARD-PRODUCT-\($0)" }
+        let catalogData = try JSONSerialization.data(withJSONObject: [
+            "results": productIDs.enumerated().map { index, productID in
+                var details: [String: Any] = [
+                    "productId": productID,
+                    "hasEntitlement": true,
+                ]
+                if index > 0 {
+                    details["name"] = "Inline Game \(index)"
+                }
+                return [
+                    "titleId": "standard-title-\(index)",
+                    "details": details,
+                ]
+            },
+        ])
+        let firstBatchData = try JSONSerialization.data(withJSONObject: [
+            "Products": [
+                productIDs[0]: [
+                    "StoreId": productIDs[0],
+                    "ProductTitle": "Hydrated First Game",
+                ],
+            ],
+            "InvalidIds": [],
+        ])
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(data: catalogData)
+            }
+            let body = try jsonObject(from: request)
+            let requestedProductIDs = try #require(body["Products"] as? [String])
+            switch requestedProductIDs.count {
+            case 201:
+                return StubbedHTTPResponse(
+                    statusCode: 413,
+                    json: #"{"code":"TooLarge"}"#
+                )
+            case 200:
+                #expect(requestedProductIDs == Array(productIDs.prefix(200)))
+                return StubbedHTTPResponse(data: firstBatchData)
+            case 1:
+                #expect(requestedProductIDs == [productIDs[200]])
+                return StubbedHTTPResponse(
+                    statusCode: 503,
+                    json: #"{"code":"FallbackBatchFailed"}"#
+                )
+            default:
+                throw TestTransportError.unexpectedRequest(
+                    "Unexpected metadata batch size \(requestedProductIDs.count)"
+                )
+            }
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        await #expect(throws: XboxCloudCatalogError.httpFailure(
+            operation: .metadata,
+            statusCode: 503,
+            serviceCode: "FallbackBatchFailed"
+        )) {
+            _ = try await client.fetchCatalog(
+                XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+                account: makeAccount()
+            )
+        }
+        #expect(await transport.requests().count == 4)
+    }
+
+    @Test("Standard metadata hydration is bounded before preserving routes")
+    func standardMetadataHydrationIsPrebounded() async throws {
+        let policy = try XboxCloudCatalogPolicy(
+            maximumPageCount: 1,
+            maximumItemCount: 2,
+            maximumPageResponseSize: 2_097_152
+        )
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "results": [
+                    {
+                      "titleId": "standard-a",
+                      "details": {
+                        "productId": "PRODUCT-A",
+                        "name": "Game A",
+                        "hasEntitlement": true
+                      }
+                    },
+                    {
+                      "titleId": "standard-b",
+                      "details": {
+                        "productId": "PRODUCT-B",
+                        "name": "Game B",
+                        "hasEntitlement": true
+                      }
+                    },
+                    {
+                      "titleId": "standard-c",
+                      "details": {
+                        "productId": "PRODUCT-C",
+                        "name": "Game C",
+                        "hasEntitlement": true
+                      }
+                    },
+                    {
+                      "titleId": "free-a",
+                      "details": {
+                        "productId": "PRODUCT-A",
+                        "name": "Game A duplicate",
+                        "hasEntitlement": true,
+                        "userPrograms": ["FERDINAND"]
+                      }
+                    }
+                  ]
+                }
+                """#)
+            }
+            let body = try jsonObject(from: request)
+            #expect(body["Products"] as? [String] == [
+                "PRODUCT-A",
+                "PRODUCT-B",
+            ])
+            return StubbedHTTPResponse(json: #"{"Products":{},"InvalidIds":[]}"#)
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            policy: policy,
+            now: { fixedDate }
+        )
+
+        let snapshot = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        #expect(snapshot.items.map(\.id) == ["PRODUCT-A", "PRODUCT-B"])
+        #expect(snapshot.items[0].routes == [
+            XboxCloudTitleRoute(titleID: "standard-a", accessKind: .standard),
+            XboxCloudTitleRoute(titleID: "free-a", accessKind: .freeWithAds),
+        ])
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Product identity is case-insensitive before capping and route merging")
+    func productIdentityCaseNormalization() async throws {
+        let policy = try XboxCloudCatalogPolicy(
+            maximumPageCount: 1,
+            maximumItemCount: 2,
+            maximumPageResponseSize: 2_097_152
+        )
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "results": [
+                    {
+                      "titleId": "route-a-standard",
+                      "details": {
+                        "productId": "product-a",
+                        "name": "Game A",
+                        "hasEntitlement": true
+                      }
+                    },
+                    {
+                      "titleId": "route-a-ads",
+                      "details": {
+                        "productId": "PRODUCT-A",
+                        "name": "Game A duplicate",
+                        "hasEntitlement": true,
+                        "userPrograms": ["FERDINAND"]
+                      }
+                    },
+                    {
+                      "titleId": "route-b-standard",
+                      "details": {
+                        "productId": "Product-B",
+                        "name": "Game B",
+                        "hasEntitlement": true
+                      }
+                    }
+                  ]
+                }
+                """#)
+            }
+            let body = try jsonObject(from: request)
+            #expect(body["Products"] as? [String] == [
+                "product-a",
+                "Product-B",
+            ])
+            return StubbedHTTPResponse(json: #"{"Products":{},"InvalidIds":[]}"#)
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            policy: policy,
+            now: { fixedDate }
+        )
+
+        let snapshot = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        #expect(snapshot.items.map(\.id) == ["PRODUCT-A", "PRODUCT-B"])
+        #expect(snapshot.items[0].title == "Game A")
+        #expect(snapshot.items[0].routes == [
+            XboxCloudTitleRoute(titleID: "route-a-standard", accessKind: .standard),
+            XboxCloudTitleRoute(titleID: "route-a-ads", accessKind: .freeWithAds),
+        ])
+        #expect(snapshot.items[1].routes == [
+            XboxCloudTitleRoute(titleID: "route-b-standard", accessKind: .standard),
+        ])
+    }
+
     @Test("FERDINAND classification is normalized, exact, and bounded")
     func boundedUserProgramClassification() async throws {
         let oversizedPrograms = Array(repeating: "FERDINAND", count: 65)
@@ -368,7 +1285,7 @@ struct XboxCloudCatalogClientTests {
             account: makeAccount()
         )
 
-        #expect(snapshot.items.map(\.id) == ["normalized", "near-match"])
+        #expect(snapshot.items.map(\.id) == ["NORMALIZED", "NEAR-MATCH"])
         #expect(snapshot.items.map(\.preferredRoute?.accessKind) == [
             .freeWithAds,
             .standard,
@@ -391,7 +1308,7 @@ struct XboxCloudCatalogClientTests {
             account: makeAccount()
         )
 
-        #expect(snapshot.items.map(\.id) == ["entitled"])
+        #expect(snapshot.items.map(\.id) == ["ENTITLED"])
     }
 
     @Test("Remaining gameplay time permits missing, null, and positive finite numbers")
@@ -411,10 +1328,10 @@ struct XboxCloudCatalogClientTests {
         )
 
         #expect(snapshot.items.map(\.id) == [
-            "missing-time",
-            "null-time",
-            "positive-integer",
-            "positive-fraction",
+            "MISSING-TIME",
+            "NULL-TIME",
+            "POSITIVE-INTEGER",
+            "POSITIVE-FRACTION",
         ])
     }
 
@@ -485,7 +1402,7 @@ struct XboxCloudCatalogClientTests {
             account: makeAccount()
         )
 
-        #expect(snapshot.items.map(\.id) == ["product-a", "product-b"])
+        #expect(snapshot.items.map(\.id) == ["PRODUCT-A", "PRODUCT-B"])
         #expect(snapshot.items[0].routes == [
             XboxCloudTitleRoute(titleID: "a-standard", accessKind: .standard),
             XboxCloudTitleRoute(titleID: "a-ad", accessKind: .freeWithAds),
@@ -521,7 +1438,7 @@ struct XboxCloudCatalogClientTests {
             account: makeAccount()
         )
 
-        #expect(snapshot.items.map(\.id) == ["one-product"])
+        #expect(snapshot.items.map(\.id) == ["ONE-PRODUCT"])
         #expect(snapshot.items[0].routes == [
             XboxCloudTitleRoute(titleID: "standard-route", accessKind: .standard),
             XboxCloudTitleRoute(titleID: "ad-route", accessKind: .freeWithAds),
@@ -680,6 +1597,103 @@ struct XboxCloudCatalogClientTests {
         }
     }
 
+    @Test("Cancel synchronously terminates an active detail request")
+    func detailCancellation() async throws {
+        let started = XboxCloudCatalogStartSignal()
+        let transport = RecordingHTTPTransport { _, _ in
+            await started.signal()
+            try await Task.sleep(for: .seconds(60))
+            return StubbedHTTPResponse()
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let item = XboxCatalogItem(
+            id: "CANCEL-DETAIL",
+            title: "Cancel Detail",
+            artworkURL: nil
+        )
+        let task = Task {
+            try await client.fetchDetail(
+                for: item,
+                request: XboxCatalogRequest(localeIdentifier: "en-US", market: "US")
+            )
+        }
+        await started.wait()
+
+        client.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await task.value
+        }
+    }
+
+    @Test("Catalog and detail requests do not cancel each other")
+    func concurrentCatalogAndDetailRequests() async throws {
+        let catalogStarted = XboxCloudCatalogStartSignal()
+        let catalogGate = XboxCloudCatalogResponseGate()
+        let transport = RecordingHTTPTransport { request, _ in
+            switch request.url?.host {
+            case "wus.gssv-play-prod.xboxlive.com":
+                await catalogStarted.signal()
+                await catalogGate.wait()
+                return StubbedHTTPResponse(json: #"{"results":[]}"#)
+            case "displaycatalog.mp.microsoft.com":
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "Products": [
+                    {
+                      "ProductId": "CONCURRENT-DETAIL",
+                      "LocalizedProperties": []
+                    }
+                  ]
+                }
+                """#)
+            default:
+                throw TestTransportError.unexpectedRequest(
+                    "Unexpected request \(request.url?.absoluteString ?? "nil")"
+                )
+            }
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let catalogTask = Task {
+            try await client.fetchCatalog(
+                XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+                account: makeAccount()
+            )
+        }
+        await catalogStarted.wait()
+
+        do {
+            let detail = try await client.fetchDetail(
+                for: XboxCatalogItem(
+                    id: "CONCURRENT-DETAIL",
+                    title: "Concurrent Detail",
+                    artworkURL: nil
+                ),
+                request: XboxCatalogRequest(
+                    localeIdentifier: "en-US",
+                    market: "US"
+                )
+            )
+            #expect(detail.id == "CONCURRENT-DETAIL")
+            await catalogGate.release()
+            let snapshot = try await catalogTask.value
+            #expect(snapshot.items.isEmpty)
+        } catch {
+            await catalogGate.release()
+            catalogTask.cancel()
+            _ = try? await catalogTask.value
+            throw error
+        }
+    }
+
     @Test("Cancellation during Fresno enrichment cannot return a partial snapshot")
     func fresnoEnrichmentCancellation() async throws {
         let started = XboxCloudCatalogStartSignal()
@@ -804,8 +1818,8 @@ struct XboxCloudCatalogClientTests {
             "name": "Halo Infinite",
             "hasEntitlement": true,
             "images": [
-              {"type": "Tile", "url": "https://images.example/halo-tile.jpg"},
-              {"type": "Poster", "url": "https://images.example/halo-poster.jpg"}
+              {"type": "Tile", "url": "https://images-eds-ssl.xboxlive.com/halo-tile.jpg"},
+              {"type": "Poster", "url": "https://images-eds-ssl.xboxlive.com/halo-poster.jpg"}
             ]
           }
         },
@@ -831,7 +1845,7 @@ struct XboxCloudCatalogClientTests {
           "details": {
             "name": "Sea of Thieves",
             "hasEntitlement": true,
-            "imageUrl": "https://images.example/sea.jpg"
+            "imageUrl": "https://images-eds-ssl.xboxlive.com/sea.jpg"
           }
         }
       ]
@@ -856,7 +1870,7 @@ struct XboxCloudCatalogClientTests {
             "productId": "product-one",
             "name": "Duplicate Name",
             "hasEntitlement": true,
-            "imageUrl": "https://images.example/product-one.jpg",
+            "imageUrl": "https://images-eds-ssl.xboxlive.com/product-one.jpg",
             "userPrograms": ["FERDINAND"]
           }
         },
@@ -954,7 +1968,7 @@ struct XboxCloudCatalogClientTests {
         "PRODUCT-PLAYABLE": {
           "StoreId": "PRODUCT-PLAYABLE",
           "ProductTitle": "Playable Metadata",
-          "Image_Poster": {"URL":"//images.example/playable-poster.jpg"}
+          "Image_Poster": {"URL":"//store-images.s-microsoft.com/playable-poster.jpg"}
         },
         "PRODUCT-NOT-ENTITLED": {
           "StoreId": "PRODUCT-NOT-ENTITLED",
@@ -963,7 +1977,7 @@ struct XboxCloudCatalogClientTests {
         "PRODUCT-MIXED-PROGRAMS": {
           "StoreId": "PRODUCT-MIXED-PROGRAMS",
           "ProductTitle": "Mixed Programs Metadata",
-          "Image_Tile": {"URL":"https://images.example/mixed-tile.jpg"}
+          "Image_Tile": {"URL":"https://store-images.s-microsoft.com/mixed-tile.jpg"}
         }
       },
       "InvalidIds": []
@@ -980,6 +1994,28 @@ private nonisolated struct XboxContentAccessProviderStub: XboxContentAccessProvi
         offeringID _: String
     ) async throws -> XboxContentAccessSnapshot {
         snapshot
+    }
+}
+
+private actor XboxContentAccessInvalidationProbe: XboxContentAccessProviding {
+    private var invalidatedAccounts: [String] = []
+
+    func fetchContentAccess(
+        for _: XboxCloudAuthorizedAccount,
+        market _: String,
+        offeringID _: String
+    ) throws -> XboxContentAccessSnapshot {
+        throw XboxContentAccessError.transportFailure
+    }
+
+    func invalidateContentAccess(
+        for account: XboxCloudAuthorizedAccount
+    ) {
+        invalidatedAccounts.append(account.authorizationIdentifier)
+    }
+
+    func invalidatedAccountIdentifiers() -> [String] {
+        invalidatedAccounts
     }
 }
 
@@ -1015,6 +2051,7 @@ private nonisolated struct BlockingXboxFresnoDiscoveryStub: XboxFresnoCatalogDis
 private actor XboxCloudGSSessionProviderStub: XboxCloudGSSessionProviding {
     private let storedSession: XboxCloudGSSession
     private var requests = 0
+    private var removedAccounts: [String] = []
 
     init(session: XboxCloudGSSession) {
         storedSession = session
@@ -1025,12 +2062,18 @@ private actor XboxCloudGSSessionProviderStub: XboxCloudGSSessionProviding {
         return storedSession
     }
 
-    func removeSession(for _: XboxCloudAuthorizedAccount) {}
+    func removeSession(for account: XboxCloudAuthorizedAccount) {
+        removedAccounts.append(account.authorizationIdentifier)
+    }
 
     func clearSessions() {}
 
     func requestCount() -> Int {
         requests
+    }
+
+    func removedAccountIdentifiers() -> [String] {
+        removedAccounts
     }
 }
 
@@ -1052,5 +2095,23 @@ private actor XboxCloudCatalogStartSignal {
         await withCheckedContinuation { continuation in
             waiters.append(continuation)
         }
+    }
+}
+
+private actor XboxCloudCatalogResponseGate {
+    private var isReleased = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            waiter = continuation
+        }
+    }
+
+    func release() {
+        isReleased = true
+        waiter?.resume()
+        waiter = nil
     }
 }

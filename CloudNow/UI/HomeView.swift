@@ -277,19 +277,7 @@ struct HomeView: View {
     // MARK: Empty State
 
     private var emptyState: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "gamecontroller")
-                .font(.system(size: 60))
-                .foregroundStyle(.secondary)
-            Text(L10n.text("nothing_here_yet"))
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.primary)
-            Text(L10n.text("empty_home_message"))
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 500)
-        }
+        CloudCatalogHomeEmptyState()
     }
 }
 
@@ -320,38 +308,12 @@ private struct HeroBannerView: View {
     let onPlay: (GameInfo) -> Void
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            SharedArtworkImage(
-                urlString: game.heroBannerUrl,
-                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 420)
-
-            LinearGradient(
-                colors: [.black.opacity(0.85), .black.opacity(0.5), .clear],
-                startPoint: .bottom,
-                endPoint: UnitPoint(x: 0.5, y: 0.55)
-            )
-
-            HStack {
-                Button {
-                    onPlay(game)
-                } label: {
-                    Label(L10n.text("play"), systemImage: "play.fill")
-                        .prefetchHeroArtOnFocus(game.heroImageUrl ?? game.heroBannerUrl)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                Spacer()
-            }
-            .padding(.horizontal, 40)
-            .padding(.vertical, 28)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 420)
-        .clipShape(RoundedRectangle(cornerRadius: 20))
-        .padding(.horizontal, 60)
-        .focusSection()
+        CloudCatalogHeroBanner(
+            artworkURL: game.heroBannerUrl,
+            prefetchArtworkURL: game.heroImageUrl ?? game.heroBannerUrl,
+            actionTitle: L10n.text("play"),
+            actionSystemImage: "play.fill",
+            action: { onPlay(game) }
+        )
     }
 }

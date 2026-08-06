@@ -19,6 +19,7 @@ struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var carouselRequest: CarouselRequest?
+    @State private var carouselRestoreFocusID: String?
     @State private var expandedGame: GameInfo?
     @FocusState private var focusedGameId: String?
     private let columns = [
@@ -30,28 +31,20 @@ struct LibraryView: View {
 
         ZStack {
             if viewModel.libraryGames.isEmpty, viewModel.isLibraryLoading {
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 40) {
-                        ForEach(0 ..< 12, id: \.self) { _ in
-                            GameCardSkeleton()
-                        }
-                    }
-                    .padding(60)
-                }
-                .allowsHitTesting(false)
+                CloudCatalogLoadingGrid()
             } else if viewModel.libraryGames.isEmpty {
                 emptyState
             } else {
                 gameContent
             }
         }
-        .fullScreenCover(item: $carouselRequest) { req in
+        .fullScreenCover(
+            item: $carouselRequest,
+            onDismiss: restoreCarouselFocus
+        ) { req in
             GameCarouselView(request: req, onPlay: onPlay, onDismiss: { lastId in
+                carouselRestoreFocusID = lastId
                 carouselRequest = nil
-                Task { @MainActor in
-                    await Task.yield()
-                    focusedGameId = lastId
-                }
             })
             .environment(viewModel)
         }
@@ -81,6 +74,19 @@ struct LibraryView: View {
                 ? Text(L10n.text("loading_library"))
                 : Text(L10n.format("search_games_count", viewModel.libraryGames.count))
         )
+    }
+
+    private func restoreCarouselFocus() {
+        guard let carouselRestoreFocusID else { return }
+        self.carouselRestoreFocusID = nil
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(150))
+            guard carouselRequest == nil else { return }
+            focusedGameId = nil
+            await Task.yield()
+            focusedGameId = carouselRestoreFocusID
+        }
     }
 
     private var gameContent: some View {
@@ -177,34 +183,19 @@ struct GameCardLabel: View {
     var showLibraryBadge: Bool = false
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            GameBoxArt(url: game.boxArtUrl)
-
-            LinearGradient(
-                colors: [.black.opacity(0.7), .clear],
-                startPoint: .bottom,
-                endPoint: .center
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            Text(game.title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .padding(10)
-
-            if showLibraryBadge, game.isInLibrary {
-                Text("In Library")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.green.opacity(0.85), in: Capsule())
-                    .padding(8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
-        }
-        .prefetchHeroArtOnFocus(game.heroImageUrl ?? game.heroBannerUrl)
+        CloudCatalogCardLabel(
+            title: game.title,
+            artworkURL: game.boxArtUrl,
+            heroArtworkURL: game.heroImageUrl ?? game.heroBannerUrl,
+            badge: showLibraryBadge && game.isInLibrary
+                ? CloudCatalogCardBadge(
+                    title: "In Library",
+                    systemImage: nil,
+                    foregroundColor: .white,
+                    backgroundColor: .green.opacity(0.85)
+                )
+                : nil
+        )
     }
 }
 
@@ -224,100 +215,63 @@ struct GameGrid<Header: View>: View {
 
     @Environment(GamesViewModel.self) var viewModel
 
-    @State private var visibleGameCount = 0
-
-    private let columns = [GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 40)]
-
-    private var renderedGameCount: Int {
-        guard let pageSize else { return games.count }
-        return min(games.count, max(visibleGameCount, pageSize))
-    }
-
-    private var contentIdentity: [String] {
-        [String(games.count)]
-            + games.prefix(4).map(\.id)
-            + games.suffix(4).map(\.id)
-    }
-
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                header
-
-                if games.isEmpty {
-                    FilteredGamesEmptyView(
-                        hasActiveFilters: hasActiveFilters,
-                        onClearFilters: onClearFilters
-                    )
-                    .frame(minHeight: 620)
-                } else {
-                    LazyVGrid(columns: columns, spacing: 40) {
-                        ForEach(Array(games.prefix(renderedGameCount).enumerated()), id: \.element.id) { index, game in
-                            Button { onSelect(game) } label: {
-                                GameCardLabel(game: game, showLibraryBadge: showLibraryBadge)
-                            }
-                            .aspectRatio(2 / 3, contentMode: .fit)
-                            .buttonStyle(.card)
-                            .focused(focusedId, equals: game.id)
-                            .contextMenu {
+        CloudCatalogGrid(
+            items: games,
+            focusedId: focusedId,
+            pageSize: pageSize,
+            loadMoreDistance: boxArtPrefetchDistance,
+            hasActiveFilters: hasActiveFilters,
+            onClearFilters: onClearFilters,
+            onSelect: onSelect,
+            onItemVisible: { _, index in gameAppeared(at: index) },
+            header: { header },
+            cardLabel: { game in
+                GameCardLabel(game: game, showLibraryBadge: showLibraryBadge)
+            },
+            menuContent: { game in
+                Button {
+                    onExpand(game)
+                } label: {
+                    Label("Info", systemImage: "info.circle")
+                }
+                if game.isInLibrary {
+                    let isFav = viewModel.favoriteIds.contains(game.id)
+                    Button { viewModel.toggleFavorite(game.id) } label: {
+                        Label(
+                            isFav ? "Remove from Favorites" : "Add to Favorites",
+                            systemImage: isFav ? "star.slash.fill" : "star"
+                        )
+                    }
+                    if game.variants.count > 1 {
+                        Menu("Launch via...") {
+                            ForEach(game.variants, id: \.id) { variant in
                                 Button {
-                                    onExpand(game)
+                                    viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
                                 } label: {
-                                    Label("Info", systemImage: "info.circle")
-                                }
-                                if game.isInLibrary {
-                                    let isFav = viewModel.favoriteIds.contains(game.id)
-                                    Button { viewModel.toggleFavorite(game.id) } label: {
-                                        Label(
-                                            isFav ? "Remove from Favorites" : "Add to Favorites",
-                                            systemImage: isFav ? "star.slash.fill" : "star"
-                                        )
-                                    }
-                                    if game.variants.count > 1 {
-                                        Menu("Launch via...") {
-                                            ForEach(game.variants, id: \.id) { variant in
-                                                Button {
-                                                    viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
-                                                } label: {
-                                                    if viewModel.preferredVariantId(for: game) == variant.id {
-                                                        Label(variant.storeName, systemImage: "checkmark")
-                                                    } else {
-                                                        Text(variant.storeName)
-                                                    }
-                                                }
-                                            }
-                                        }
+                                    if viewModel.preferredVariantId(for: game) == variant.id {
+                                        Label(variant.storeName, systemImage: "checkmark")
+                                    } else {
+                                        Text(variant.storeName)
                                     }
                                 }
                             }
-                            .onAppear { gameAppeared(at: index) }
                         }
                     }
-                    .padding(60)
-                    .focusSection()
                 }
             }
-        }
-        .onChange(of: contentIdentity) {
-            visibleGameCount = pageSize ?? 0
-        }
+        )
     }
 
     private func gameAppeared(at index: Int) {
-        if boxArtPrefetchDistance > 0 {
-            let start = index + 1
-            let end = min(games.count, start + boxArtPrefetchDistance)
-            if start < end {
-                BoxArtPrefetcher.shared.prefetch(
-                    games[start ..< end].compactMap(\.boxArtUrl)
-                )
-            }
+        guard boxArtPrefetchDistance > 0 else { return }
+        let start = index + 1
+        let end = min(games.count, start + boxArtPrefetchDistance)
+        if start < end {
+            BoxArtPrefetcher.shared.prefetch(
+                games[start ..< end].compactMap(\.boxArtUrl)
+            )
         }
-
-        guard let pageSize, renderedGameCount < games.count else { return }
-        let loadMoreThreshold = max(0, renderedGameCount - max(boxArtPrefetchDistance, 12))
-        guard index >= loadMoreThreshold else { return }
-        visibleGameCount = min(games.count, renderedGameCount + pageSize)
     }
 }
 

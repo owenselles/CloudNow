@@ -6,7 +6,7 @@ import Testing
 struct XboxCatalogViewModelTests {
     private let fetchedAt = Date(timeIntervalSince1970: 1_700_000_000)
     private let account = XboxCloudAuthorizedAccount(
-        authorizationIdentifier: "fixture-account",
+        authorizationIdentifier: "fixture-account-\(UUID().uuidString)",
         displayName: "Fixture Player",
         expiresAt: .distantFuture
     )
@@ -37,6 +37,7 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems == items)
         #expect(viewModel.phase == .loaded)
         #expect(viewModel.availableAccessKinds == [.standard])
+        #expect(viewModel.playableAccessKinds == [.standard])
     }
 
     @MainActor
@@ -55,6 +56,7 @@ struct XboxCatalogViewModelTests {
         await viewModel.load()
 
         #expect(viewModel.visibleItems == Array(items.prefix(96)))
+        #expect(viewModel.carouselItems == items)
 
         viewModel.loadNextPageIfNeeded(items[94])
         #expect(viewModel.visibleItems.count == 96)
@@ -72,68 +74,326 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems.count == items.count)
     }
 
-    @MainActor
-    @Test("Home separates standard and free-with-ads titles into bounded rails")
-    func homeAccessBuckets() async {
-        let dualAccess = makeAccessItem(
-            id: "dual-access",
-            accessKinds: [.freeWithAds, .standard]
-        )
-        let standardOnly = (0 ..< 12).map { index in
-            makeAccessItem(
-                id: "standard-\(index)",
-                accessKinds: [.standard]
-            )
-        }
-        let freeWithAdsOnly = (0 ..< 12).map { index in
-            makeAccessItem(
-                id: "free-with-ads-\(index)",
-                accessKinds: [.freeWithAds]
-            )
-        }
-        let items = [dualAccess] + standardOnly + freeWithAdsOnly
-        let viewModel = XboxCatalogViewModel(
-            client: XboxCatalogClientProbe(
-                snapshot: XboxCatalogSnapshot(
-                    items: items,
-                    fetchedAt: fetchedAt
-                )
-            ),
-            account: account,
-            cache: XboxCatalogMemoryCache()
-        )
-
-        await viewModel.load()
+    @Test("Focus restoration selects the nearest surviving catalog card")
+    func nearestSurvivingFocusTarget() {
+        let orderedIDs = ["first", "second", "third", "fourth"]
 
         #expect(
-            viewModel.homeStandardItems
-                == [dualAccess] + Array(standardOnly.prefix(11))
+            nearestSurvivingCatalogItemID(
+                orderedIDs: orderedIDs,
+                preferredID: "second",
+                survivingIDs: ["first", "third", "fourth"]
+            ) == "third"
         )
         #expect(
-            viewModel.homeFreeWithAdsItems
-                == [dualAccess] + Array(freeWithAdsOnly.prefix(11))
+            nearestSurvivingCatalogItemID(
+                orderedIDs: orderedIDs,
+                preferredID: "fourth",
+                survivingIDs: ["first", "second"]
+            ) == "second"
         )
-        #expect(viewModel.visibleItems == items)
-        #expect(viewModel.phase == .loaded)
-        #expect(viewModel.availableAccessKinds == [.standard, .freeWithAds])
+        #expect(
+            nearestSurvivingCatalogItemID(
+                orderedIDs: orderedIDs,
+                preferredID: "second",
+                survivingIDs: []
+            ) == nil
+        )
     }
 
     @MainActor
-    @Test("Browse switches between all titles and free-with-ads titles")
-    func browseAccessFilter() async {
-        let standardOnly = makeAccessItem(
-            id: "standard-only",
+    @Test("Home exposes only account favorites and recent activity")
+    func homeActivityBuckets() async {
+        let scopedAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "transient-vault-handle",
+            activityScopeIdentifier: "stable-activity-scope",
+            displayName: "Fixture Player",
+            expiresAt: .distantFuture
+        )
+        let first = makeAccessItem(id: "first", accessKinds: [.standard])
+        let second = makeAccessItem(id: "second", accessKinds: [.freeWithAds])
+        let third = makeAccessItem(
+            id: "third",
+            accessKinds: [.freeWithAds, .standard]
+        )
+        let items = [first, second, third]
+        let persistence = XboxCatalogActivityPersistenceProbe(
+            snapshots: [
+                scopedAccount.activityScopeIdentifier: CloudCatalogActivitySnapshot(
+                    favoriteIDs: [first.id, third.id],
+                    recentlyPlayedIDs: [second.id, first.id]
+                ),
+            ]
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: items,
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: scopedAccount,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.favoriteItems == [first, third])
+        #expect(viewModel.recentlyPlayedItems == [second, first])
+        #expect(viewModel.favoriteIDs == [first.id, third.id])
+        #expect(viewModel.recentlyPlayedIDs == [second.id, first.id])
+        #expect(viewModel.visibleItems == items)
+        #expect(viewModel.carouselItems == items)
+        #expect(viewModel.phase == .loaded)
+        #expect(viewModel.availableAccessKinds == [.standard, .freeWithAds])
+        #expect(viewModel.playableAccessKinds == [.standard, .freeWithAds])
+        #expect(
+            await persistence.recordedLoadScopes()
+                == [scopedAccount.activityScopeIdentifier]
+        )
+    }
+
+    @MainActor
+    @Test("Favorite mutations update Home and persist to the active account")
+    func favoriteMutationsPersist() async {
+        let first = makeAccessItem(id: "first", accessKinds: [.standard])
+        let second = makeAccessItem(id: "second", accessKinds: [.standard])
+        let persistence = XboxCatalogActivityPersistenceProbe()
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: [first, second],
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await viewModel.load()
+        viewModel.toggleFavorite(second)
+
+        #expect(viewModel.isFavorite(second))
+        #expect(viewModel.isFavorite(second.id))
+        #expect(viewModel.favoriteItems == [second])
+        #expect(viewModel.filterOptions.favoriteCount == 1)
+
+        viewModel.toggleFavorite(second.id)
+        await viewModel.flushActivityPersistence()
+
+        #expect(!viewModel.isFavorite(second))
+        #expect(viewModel.favoriteItems.isEmpty)
+        #expect(
+            await persistence.snapshot(
+                accountScope: account.authorizationIdentifier
+            ).favoriteIDs.isEmpty
+        )
+        #expect(
+            await persistence.recordedFavoriteSaveScopes()
+                == [account.authorizationIdentifier, account.authorizationIdentifier]
+        )
+    }
+
+    @MainActor
+    @Test("A newly added favorite survives bounded persistence")
+    func newlyAddedFavoriteSurvivesBoundedPersistence() async {
+        let newFavorite = makeAccessItem(
+            id: "zz-new-favorite",
             accessKinds: [.standard]
         )
-        let freeWithAdsOnly = makeAccessItem(
-            id: "free-with-ads-only",
-            accessKinds: [.freeWithAds]
+        let existingFavorites = Set(
+            (0 ..< CloudCatalogActivitySnapshot.maximumFavoriteCount)
+                .map { "old-favorite-\($0)" }
         )
-        let dualAccess = makeAccessItem(
-            id: "dual-access",
-            accessKinds: [.standard, .freeWithAds]
+        let persistence = XboxCatalogActivityPersistenceProbe(
+            snapshots: [
+                account.activityScopeIdentifier: CloudCatalogActivitySnapshot(
+                    favoriteIDs: existingFavorites
+                ),
+            ]
         )
-        let items = [standardOnly, freeWithAdsOnly, dualAccess]
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: [newFavorite],
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await viewModel.load()
+        viewModel.toggleFavorite(newFavorite)
+        await viewModel.flushActivityPersistence()
+
+        let snapshot = await persistence.snapshot(
+            accountScope: account.activityScopeIdentifier
+        )
+        #expect(snapshot.favoriteIDs.count == CloudCatalogActivitySnapshot.maximumFavoriteCount)
+        #expect(snapshot.favoriteIDs.contains(newFavorite.id))
+    }
+
+    @MainActor
+    @Test("Catalog activity remains isolated between Xbox accounts")
+    func activityIsAccountScoped() async {
+        let first = makeAccessItem(id: "first", accessKinds: [.standard])
+        let second = makeAccessItem(id: "second", accessKinds: [.standard])
+        let secondAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "second-account-\(UUID().uuidString)",
+            displayName: "Second Fixture Player",
+            expiresAt: .distantFuture
+        )
+        let persistence = XboxCatalogActivityPersistenceProbe(
+            snapshots: [
+                account.authorizationIdentifier: CloudCatalogActivitySnapshot(
+                    favoriteIDs: [first.id]
+                ),
+                secondAccount.authorizationIdentifier: CloudCatalogActivitySnapshot(
+                    favoriteIDs: [second.id]
+                ),
+            ]
+        )
+        let snapshot = XboxCatalogSnapshot(
+            items: [first, second],
+            fetchedAt: fetchedAt
+        )
+        let firstViewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(snapshot: snapshot),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+        let secondViewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(snapshot: snapshot),
+            account: secondAccount,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await firstViewModel.load()
+        await secondViewModel.load()
+
+        #expect(firstViewModel.favoriteItems == [first])
+        #expect(secondViewModel.favoriteItems == [second])
+    }
+
+    @MainActor
+    @Test("Recent activity is deduplicated, bounded, ordered, and persisted")
+    func recentActivityIsBoundedAndPersisted() async {
+        let items = makeItems(count: 12)
+        let persistence = XboxCatalogActivityPersistenceProbe()
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(items: items, fetchedAt: fetchedAt)
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await viewModel.load()
+        for item in items {
+            viewModel.recordPlayed(item)
+        }
+        viewModel.recordPlayed(items[5])
+        await viewModel.flushActivityPersistence()
+
+        let expectedIDs = [items[5].id]
+            + (2 ... 11).reversed().map { items[$0].id }
+            .filter { $0 != items[5].id }
+        #expect(viewModel.recentlyPlayedIDs == expectedIDs)
+        #expect(viewModel.recentlyPlayedItems.map(\.id) == expectedIDs)
+        #expect(viewModel.recentlyPlayedIDs.count == 10)
+        #expect(
+            await persistence.snapshot(
+                accountScope: account.authorizationIdentifier
+            ).recentlyPlayedIDs == expectedIDs
+        )
+    }
+
+    @MainActor
+    @Test("Cache clearing preserves activity while full reset clears it")
+    func cacheAndPersistentResetActivitySemantics() async {
+        let item = makeAccessItem(id: "favorite", accessKinds: [.standard])
+        let persistence = XboxCatalogActivityPersistenceProbe(
+            snapshots: [
+                account.authorizationIdentifier: CloudCatalogActivitySnapshot(
+                    favoriteIDs: [item.id],
+                    recentlyPlayedIDs: [item.id]
+                ),
+            ]
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(items: [item], fetchedAt: fetchedAt)
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await viewModel.load()
+        viewModel.prepareForCacheClear()
+
+        #expect(viewModel.favoriteIDs == [item.id])
+        #expect(viewModel.recentlyPlayedIDs == [item.id])
+        #expect(viewModel.favoriteItems.isEmpty)
+        #expect(viewModel.recentlyPlayedItems.isEmpty)
+
+        viewModel.prepareForPersistentDataClear()
+
+        #expect(viewModel.favoriteIDs.isEmpty)
+        #expect(viewModel.recentlyPlayedIDs.isEmpty)
+        #expect(viewModel.favoriteItems.isEmpty)
+        #expect(viewModel.recentlyPlayedItems.isEmpty)
+    }
+
+    @MainActor
+    @Test("Browse combines filter sections with OR within each section")
+    func browseCombinableFilters() async throws {
+        let favoriteStandard = makeAccessItem(
+            id: "favorite-standard",
+            accessKinds: [.standard],
+            genres: ["Role-Playing"],
+            supportedInputTypes: [.controller]
+        )
+        let ownedFree = makeAccessItem(
+            id: "owned-free",
+            accessKinds: [.freeWithAds],
+            genres: ["Racing"],
+            supportedInputTypes: [.touch],
+            isOwned: true
+        )
+        let favoriteOwnedDual = makeAccessItem(
+            id: "favorite-owned-dual",
+            accessKinds: [.standard, .freeWithAds],
+            genres: ["role-playing", "Racing"],
+            supportedInputTypes: [.controller, .mouseAndKeyboard],
+            isOwned: true
+        )
+        let standardPuzzle = makeAccessItem(
+            id: "standard-puzzle",
+            accessKinds: [.standard],
+            genres: ["Puzzle"],
+            supportedInputTypes: [.mouseAndKeyboard]
+        )
+        let items = [
+            favoriteStandard,
+            ownedFree,
+            favoriteOwnedDual,
+            standardPuzzle,
+        ]
+        let persistence = XboxCatalogActivityPersistenceProbe(
+            snapshots: [
+                account.authorizationIdentifier: CloudCatalogActivitySnapshot(
+                    favoriteIDs: [favoriteStandard.id, favoriteOwnedDual.id]
+                ),
+            ]
+        )
         let viewModel = XboxCatalogViewModel(
             client: XboxCatalogClientProbe(
                 snapshot: XboxCatalogSnapshot(
@@ -142,21 +402,179 @@ struct XboxCatalogViewModelTests {
                 )
             ),
             account: account,
-            cache: XboxCatalogMemoryCache()
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
         )
 
         await viewModel.load()
 
-        #expect(viewModel.browseFilter == .all)
+        #expect(viewModel.filterState.isEmpty)
         #expect(viewModel.visibleItems == items)
+        #expect(viewModel.totalItemCount == 4)
+        #expect(viewModel.filteredItemCount == 4)
+        #expect(viewModel.filterOptions.favoriteCount == 2)
+        #expect(viewModel.filterOptions.standardCount == 3)
+        #expect(viewModel.filterOptions.freeWithAdsCount == 2)
+        #expect(viewModel.filterOptions.ownedCount == 2)
+        #expect(viewModel.filterOptions.inputTypeCounts[.controller] == 2)
+        #expect(viewModel.filterOptions.inputTypeCounts[.touch] == 1)
+        #expect(viewModel.filterOptions.inputTypeCounts[.mouseAndKeyboard] == 2)
+        #expect(!viewModel.hasActiveBrowseFilters)
 
-        viewModel.browseFilter = .freeWithAds
+        var state = XboxCatalogFilterState()
+        state.access = [.freeWithAds, .owned]
+        viewModel.filterState = state
 
-        #expect(viewModel.visibleItems == [freeWithAdsOnly, dualAccess])
+        #expect(viewModel.visibleItems == [ownedFree, favoriteOwnedDual])
+        #expect(viewModel.filteredItemCount == 2)
+        #expect(viewModel.activeBrowseFilterCount == 2)
+        #expect(viewModel.hasActiveBrowseFilters)
 
-        viewModel.browseFilter = .all
+        state.collections = [.favorites]
+        viewModel.filterState = state
+
+        #expect(viewModel.visibleItems == [favoriteOwnedDual])
+
+        let rolePlayingID = try #require(
+            viewModel.filterOptions.genres.first {
+                $0.label.localizedCaseInsensitiveContains("role")
+            }?.id
+        )
+        let racingID = try #require(
+            viewModel.filterOptions.genres.first {
+                $0.label.localizedCaseInsensitiveContains("racing")
+            }?.id
+        )
+        state = XboxCatalogFilterState(
+            access: [.standard],
+            genres: [rolePlayingID, racingID]
+        )
+        viewModel.filterState = state
+
+        #expect(viewModel.visibleItems == [favoriteStandard, favoriteOwnedDual])
+        #expect(viewModel.browsePreviewCount(for: state) == 2)
+        #expect(viewModel.activeBrowseFilterCount == 3)
+
+        state = XboxCatalogFilterState(
+            access: [.standard],
+            inputTypes: [.touch, .mouseAndKeyboard]
+        )
+        viewModel.filterState = state
+
+        #expect(viewModel.visibleItems == [favoriteOwnedDual, standardPuzzle])
+        #expect(viewModel.browsePreviewCount(for: state) == 2)
+        #expect(viewModel.activeBrowseFilterCount == 3)
+
+        viewModel.clearBrowseFilters()
 
         #expect(viewModel.visibleItems == items)
+        #expect(viewModel.filterState.isEmpty)
+        #expect(!viewModel.hasActiveBrowseFilters)
+    }
+
+    @MainActor
+    @Test("Browse search is trimmed and case-insensitive")
+    func browseSearch() async {
+        let haloInfinite = makeAccessItem(
+            id: "Halo Infinite",
+            accessKinds: [.standard]
+        )
+        let forza = makeAccessItem(
+            id: "Forza Horizon",
+            accessKinds: [.standard]
+        )
+        let haloWars = makeAccessItem(
+            id: "halo wars",
+            accessKinds: [.freeWithAds]
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: [haloInfinite, forza, haloWars],
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache()
+        )
+
+        await viewModel.load()
+        viewModel.searchText = "  HaLo\n"
+
+        #expect(viewModel.visibleItems == [haloInfinite, haloWars])
+        #expect(viewModel.totalItemCount == 3)
+        #expect(viewModel.browseFilterBaseCount == 2)
+        #expect(viewModel.filteredItemCount == 2)
+        #expect(
+            viewModel.browsePreviewCount(
+                for: XboxCatalogFilterState(access: [.standard])
+            ) == 1
+        )
+        #expect(
+            viewModel.browsePreviewCount(
+                for: XboxCatalogFilterState(access: [.freeWithAds])
+            ) == 1
+        )
+
+        viewModel.filterState.access = [.freeWithAds]
+
+        #expect(viewModel.visibleItems == [haloWars])
+        #expect(viewModel.browseFilterBaseCount == 2)
+        #expect(viewModel.filteredItemCount == 1)
+
+        viewModel.searchText = " \n\t "
+
+        #expect(viewModel.visibleItems == [haloWars])
+        #expect(viewModel.browseFilterBaseCount == 3)
+        #expect(viewModel.filteredItemCount == 1)
+    }
+
+    @MainActor
+    @Test("Browse sorts titles while preserving the service order by default")
+    func browseSortOrder() async {
+        let charlie = makeAccessItem(id: "Charlie", accessKinds: [.standard])
+        let alpha = makeAccessItem(id: "Alpha", accessKinds: [.standard])
+        let bravo = makeAccessItem(id: "Bravo", accessKinds: [.standard])
+        let serviceOrder = [charlie, alpha, bravo]
+        let persistence = XboxCatalogActivityPersistenceProbe(
+            snapshots: [
+                account.authorizationIdentifier: CloudCatalogActivitySnapshot(
+                    recentlyPlayedIDs: [bravo.id, charlie.id]
+                ),
+            ]
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: serviceOrder,
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.sortOrder == .default)
+        #expect(viewModel.visibleItems == serviceOrder)
+
+        viewModel.sortOrder = .titleAZ
+
+        #expect(viewModel.visibleItems == [alpha, bravo, charlie])
+
+        viewModel.sortOrder = .titleZA
+
+        #expect(viewModel.visibleItems == [charlie, bravo, alpha])
+
+        viewModel.sortOrder = .recentFirst
+
+        #expect(viewModel.visibleItems == [bravo, charlie, alpha])
+
+        viewModel.sortOrder = .default
+
+        #expect(viewModel.visibleItems == serviceOrder)
     }
 
     @MainActor
@@ -190,7 +608,7 @@ struct XboxCatalogViewModelTests {
         await viewModel.load()
 
         let launchCandidate = try #require(viewModel.visibleItems.first)
-        #expect(viewModel.browseFilter == .all)
+        #expect(viewModel.filterState.isEmpty)
         #expect(launchCandidate.preferredRoute == standardRoute)
     }
 
@@ -221,15 +639,36 @@ struct XboxCatalogViewModelTests {
 
         await viewModel.load()
 
-        #expect(viewModel.homeFreeWithAdsItems == [candidate])
         #expect(viewModel.availableAccessKinds == [.freeWithAds])
-        viewModel.browseFilter = .freeWithAds
+        #expect(viewModel.playableAccessKinds.isEmpty)
+        viewModel.filterState.access = [.freeWithAds]
         #expect(viewModel.visibleItems == [candidate])
         let selectedRoute = try #require(
             viewModel.visibleItems.first?.preferredRoute
         )
         #expect(selectedRoute == route)
         #expect(!route.isPlayable)
+    }
+
+    @MainActor
+    @Test("Detail failures remain retryable instead of caching sparse data")
+    func detailFailureRemainsRetryable() async {
+        let item = makeAccessItem(id: "detail", accessKinds: [.standard])
+        let client = XboxCatalogClientProbe(
+            snapshot: XboxCatalogSnapshot(items: [item], fetchedAt: fetchedAt),
+            failsDetailResponse: true
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: client,
+            account: account,
+            cache: XboxCatalogMemoryCache()
+        )
+
+        await viewModel.load()
+
+        #expect(await viewModel.fetchDetail(for: item) == nil)
+        #expect(await viewModel.fetchDetail(for: item) == nil)
+        #expect(await client.recordedDetailRequestCount() == 2)
     }
 
     @MainActor
@@ -262,7 +701,7 @@ struct XboxCatalogViewModelTests {
         viewModel.loadNextPageIfNeeded(allBoundary)
         #expect(viewModel.visibleItems == Array(items.prefix(192)))
 
-        viewModel.browseFilter = .freeWithAds
+        viewModel.filterState.access = [.freeWithAds]
 
         #expect(
             viewModel.visibleItems
@@ -274,9 +713,57 @@ struct XboxCatalogViewModelTests {
         viewModel.loadNextPageIfNeeded(freeWithAdsBoundary)
         #expect(viewModel.visibleItems == freeWithAdsItems)
 
-        viewModel.browseFilter = .all
+        viewModel.clearBrowseFilters()
 
         #expect(viewModel.visibleItems == Array(items.prefix(96)))
+    }
+
+    @MainActor
+    @Test("Changing search or sort resets browse pagination")
+    func searchAndSortResetPagination() async throws {
+        let items = (0 ..< 250).map { index in
+            makeAccessItem(
+                id: "Game \(index)",
+                accessKinds: [.standard]
+            )
+        }
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: items,
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache()
+        )
+
+        await viewModel.load()
+        let firstBoundary = try #require(viewModel.visibleItems.last)
+        viewModel.loadNextPageIfNeeded(firstBoundary)
+        #expect(viewModel.visibleItems.count == 192)
+
+        viewModel.sortOrder = .titleZA
+
+        let descending = items.sorted {
+            $0.title.localizedStandardCompare($1.title) == .orderedDescending
+        }
+        #expect(viewModel.visibleItems == Array(descending.prefix(96)))
+        #expect(viewModel.carouselItems == descending)
+        let sortedBoundary = try #require(viewModel.visibleItems.last)
+        viewModel.loadNextPageIfNeeded(sortedBoundary)
+        #expect(viewModel.visibleItems == Array(descending.prefix(192)))
+
+        viewModel.searchText = "  GAME 1  "
+
+        let matching = descending.filter {
+            $0.title.localizedCaseInsensitiveContains("GAME 1")
+        }
+        #expect(matching.count > 96)
+        #expect(viewModel.visibleItems == Array(matching.prefix(96)))
+        #expect(viewModel.carouselItems == matching)
+        #expect(viewModel.browseFilterBaseCount == matching.count)
+        #expect(viewModel.filteredItemCount == matching.count)
     }
 
     @MainActor
@@ -298,8 +785,9 @@ struct XboxCatalogViewModelTests {
 
         #expect(viewModel.phase == .loaded)
         #expect(viewModel.visibleItems.isEmpty)
-        #expect(viewModel.homeStandardItems.isEmpty)
-        #expect(viewModel.homeFreeWithAdsItems.isEmpty)
+        #expect(viewModel.carouselItems.isEmpty)
+        #expect(viewModel.favoriteItems.isEmpty)
+        #expect(viewModel.recentlyPlayedItems.isEmpty)
         #expect(!viewModel.showsRefreshWarning)
         #expect(await client.recordedRequests().count == 1)
     }
@@ -398,7 +886,7 @@ struct XboxCatalogViewModelTests {
     }
 
     @MainActor
-    @Test("Provider deactivation releases the client, rows, and account cache")
+    @Test("Provider deactivation releases rows but keeps the bounded re-entry cache")
     func providerDeactivationReleasesRuntimeCatalogState() async {
         let items = makeItems(count: 3)
         let snapshot = XboxCatalogSnapshot(items: items, fetchedAt: fetchedAt)
@@ -425,7 +913,54 @@ struct XboxCatalogViewModelTests {
         #expect(client.cancellationCount == 1)
         #expect(viewModel.visibleItems.isEmpty)
         #expect(viewModel.phase == .idle)
-        #expect(await cache.snapshot(for: cacheKey) == nil)
+        #expect(await cache.snapshot(for: cacheKey) == snapshot)
+    }
+
+    @MainActor
+    @Test("A reauthorized Xbox account reuses its stable scoped catalog cache")
+    func reauthorizationReusesStableScopedCache() async {
+        let stableScope = "stable-account-scope"
+        let firstAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "first-vault-handle",
+            activityScopeIdentifier: stableScope,
+            displayName: nil,
+            expiresAt: .distantFuture
+        )
+        let reauthorizedAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "replacement-vault-handle",
+            activityScopeIdentifier: stableScope,
+            displayName: nil,
+            expiresAt: .distantFuture
+        )
+        let items = makeItems(count: 3)
+        let snapshot = XboxCatalogSnapshot(items: items, fetchedAt: fetchedAt)
+        let cache = XboxCatalogMemoryCache()
+        let firstClient = XboxCatalogClientProbe(snapshot: snapshot)
+        let firstViewModel = XboxCatalogViewModel(
+            client: firstClient,
+            account: firstAccount,
+            cache: cache,
+            now: { fetchedAt }
+        )
+
+        await firstViewModel.load()
+        await firstViewModel.deactivateForInactiveProvider()
+
+        let replacementClient = XboxCatalogClientProbe(
+            snapshot: snapshot,
+            failsResponse: true
+        )
+        let replacementViewModel = XboxCatalogViewModel(
+            client: replacementClient,
+            account: reauthorizedAccount,
+            cache: cache,
+            now: { fetchedAt }
+        )
+        await replacementViewModel.load()
+
+        #expect(replacementViewModel.visibleItems == items)
+        #expect(replacementViewModel.phase == .loaded)
+        #expect(await replacementClient.recordedRequests().isEmpty)
     }
 
     @MainActor
@@ -454,6 +989,148 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems == items)
         #expect(viewModel.phase == .loaded)
         #expect(await client.recordedRequests().isEmpty)
+    }
+
+    @MainActor
+    @Test("Explicit reload invalidates account state and bypasses a fresh cache")
+    func reloadForcesCatalogRefresh() async {
+        let cachedItems = makeItems(count: 2)
+        let refreshedItems = [
+            makeAccessItem(id: "refreshed", accessKinds: [.standard]),
+        ]
+        let cachedSnapshot = XboxCatalogSnapshot(
+            items: cachedItems,
+            fetchedAt: fetchedAt
+        )
+        let refreshedSnapshot = XboxCatalogSnapshot(
+            items: refreshedItems,
+            fetchedAt: fetchedAt.addingTimeInterval(1)
+        )
+        let cache = XboxCatalogMemoryCache()
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.authorizationIdentifier,
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        await cache.store(cachedSnapshot, for: key)
+        let client = XboxCatalogClientProbe(snapshot: refreshedSnapshot)
+        let viewModel = XboxCatalogViewModel(
+            client: client,
+            account: account,
+            cache: cache,
+            now: { fetchedAt }
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.visibleItems == cachedItems)
+        #expect(await client.recordedRequests().isEmpty)
+
+        await viewModel.reload()
+
+        #expect(viewModel.visibleItems == refreshedItems)
+        #expect(viewModel.phase == .loaded)
+        #expect(await client.recordedRefreshAccounts() == [account])
+        #expect(await client.recordedRequests().count == 1)
+        #expect(await cache.snapshot(for: key) == refreshedSnapshot)
+    }
+
+    @MainActor
+    @Test("Explicit reload exposes progress, keeps content, and coalesces taps")
+    func reloadProgressKeepsLastGoodCatalog() async {
+        let cachedItems = makeItems(count: 2)
+        let refreshedItems = [
+            makeAccessItem(id: "refreshed", accessKinds: [.standard]),
+        ]
+        let cachedSnapshot = XboxCatalogSnapshot(
+            items: cachedItems,
+            fetchedAt: fetchedAt
+        )
+        let cache = XboxCatalogMemoryCache()
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        await cache.store(cachedSnapshot, for: key)
+        let client = XboxCatalogClientProbe(
+            snapshot: XboxCatalogSnapshot(
+                items: refreshedItems,
+                fetchedAt: fetchedAt.addingTimeInterval(1)
+            ),
+            suspendsResponse: true
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: client,
+            account: account,
+            cache: cache,
+            now: { fetchedAt }
+        )
+
+        await viewModel.load()
+        let reloadTask = Task { @MainActor in
+            await viewModel.reload()
+        }
+        await client.waitForRequestCount(1)
+
+        #expect(viewModel.isRefreshing)
+        #expect(viewModel.visibleItems == cachedItems)
+        #expect(viewModel.phase == .loaded)
+
+        await viewModel.reload()
+
+        #expect(await client.recordedRequests().count == 1)
+
+        await client.resolvePendingResponse()
+        await reloadTask.value
+
+        #expect(!viewModel.isRefreshing)
+        #expect(viewModel.visibleItems == refreshedItems)
+        #expect(viewModel.phase == .loaded)
+    }
+
+    @MainActor
+    @Test("Catalog cancellation immediately clears explicit reload progress")
+    func cancellationClearsReloadProgress() async {
+        let items = makeItems(count: 2)
+        let snapshot = XboxCatalogSnapshot(items: items, fetchedAt: fetchedAt)
+        let cache = XboxCatalogMemoryCache()
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        await cache.store(snapshot, for: key)
+        let client = XboxCatalogClientProbe(
+            snapshot: snapshot,
+            suspendsResponse: true
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: client,
+            account: account,
+            cache: cache,
+            now: { fetchedAt }
+        )
+
+        await viewModel.load()
+        let reloadTask = Task { @MainActor in
+            await viewModel.reload()
+        }
+        await client.waitForRequestCount(1)
+        #expect(viewModel.isRefreshing)
+
+        viewModel.prepareForCacheClear()
+
+        #expect(!viewModel.isRefreshing)
+        #expect(viewModel.phase == .idle)
+        #expect(viewModel.visibleItems.isEmpty)
+
+        await client.resolvePendingResponse()
+        await reloadTask.value
+
+        #expect(!viewModel.isRefreshing)
+        #expect(viewModel.phase == .idle)
+        #expect(viewModel.visibleItems.isEmpty)
     }
 
     @MainActor
@@ -487,6 +1164,40 @@ struct XboxCatalogViewModelTests {
         #expect(await client.recordedRequests().count == 1)
     }
 
+    @MainActor
+    @Test("A failed explicit reload retains the last good catalog")
+    func failedReloadRetainsLastGoodCatalog() async {
+        let items = makeItems(count: 4)
+        let snapshot = XboxCatalogSnapshot(items: items, fetchedAt: fetchedAt)
+        let cache = XboxCatalogMemoryCache()
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.authorizationIdentifier,
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        await cache.store(snapshot, for: key)
+        let client = XboxCatalogClientProbe(
+            snapshot: snapshot,
+            failsResponse: true
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: client,
+            account: account,
+            cache: cache,
+            now: { fetchedAt }
+        )
+
+        await viewModel.load()
+        await viewModel.reload()
+
+        #expect(viewModel.visibleItems == items)
+        #expect(viewModel.phase == .loaded)
+        #expect(viewModel.showsRefreshWarning)
+        #expect(await cache.snapshot(for: key) == snapshot)
+        #expect(await client.recordedRefreshAccounts() == [account])
+        #expect(await client.recordedRequests().count == 1)
+    }
+
     @Test("The catalog cache rejects oversized snapshots")
     func cacheRejectsOversizedSnapshots() async {
         let cache = XboxCatalogMemoryCache(maximumItemCount: 2)
@@ -517,20 +1228,22 @@ struct XboxCatalogViewModelTests {
                 XboxCatalogItem(
                     id: "insecure",
                     title: "Insecure",
-                    artworkURL: URL(string: "http://example.com/cover.jpg")
+                    artworkURL: URL(
+                        string: "http://store-images.s-microsoft.com/cover.jpg"
+                    )
                 ),
                 XboxCatalogItem(
                     id: "signed",
                     title: "Signed",
                     artworkURL: URL(
-                        string: "https://example.com/cover.jpg?signature=secret"
+                        string: "https://store-images.s-microsoft.com/cover.jpg?signature=secret"
                     )
                 ),
                 XboxCatalogItem(
                     id: "public",
                     title: "Public",
                     artworkURL: URL(
-                        string: "https://example.com/cover.jpg?width=640"
+                        string: "https://store-images.s-microsoft.com/cover.jpg?width=640"
                     )
                 ),
                 XboxCatalogItem(
@@ -551,7 +1264,7 @@ struct XboxCatalogViewModelTests {
             oversized.items.count
                 == XboxCatalogSnapshot.maximumRetainedItemCount
         )
-        #expect(validated.items.map(\.id) == ["public", "no-artwork"])
+        #expect(validated.items.map(\.id) == ["PUBLIC", "NO-ARTWORK"])
         #expect(validated.items.first?.title == "Public")
     }
 
@@ -899,12 +1612,18 @@ struct XboxCatalogViewModelTests {
 
     private func makeAccessItem(
         id: String,
-        accessKinds: [XboxCloudAccessKind]
+        accessKinds: [XboxCloudAccessKind],
+        genres: [String] = [],
+        supportedInputTypes: Set<XboxCloudInputType> = [],
+        isOwned: Bool = false
     ) -> XboxCatalogItem {
         XboxCatalogItem(
             id: id,
             title: id,
+            genres: genres,
             artworkURL: nil,
+            supportedInputTypes: supportedInputTypes,
+            isOwned: isOwned,
             routes: accessKinds.enumerated().map { index, accessKind in
                 XboxCloudTitleRoute(
                     titleID: "\(id)-route-\(index)",
@@ -922,6 +1641,66 @@ struct XboxCatalogViewModelTests {
             sessionProvider: XboxSuspendingGSSessionProvider(),
             transferToken: transferToken
         )
+    }
+}
+
+private actor XboxCatalogActivityPersistenceProbe: XboxCatalogActivityPersistence {
+    private let persistenceGeneration: UInt64 = 7
+    private var snapshots: [String: CloudCatalogActivitySnapshot]
+    private var loadScopes: [String?] = []
+    private var favoriteSaveScopes: [String?] = []
+
+    init(snapshots: [String: CloudCatalogActivitySnapshot] = [:]) {
+        self.snapshots = snapshots
+    }
+
+    func loadXboxCatalogActivityLease(
+        accountScope: String?
+    ) async -> CloudCatalogActivityLease {
+        loadScopes.append(accountScope)
+        let snapshot = accountScope.flatMap { snapshots[$0] }
+            ?? CloudCatalogActivitySnapshot()
+        return CloudCatalogActivityLease(
+            snapshot: snapshot,
+            generation: persistenceGeneration
+        )
+    }
+
+    func saveXboxFavoriteIDs(
+        _ favoriteIDs: Set<String>,
+        accountScope: String?,
+        expectedGeneration: UInt64
+    ) async {
+        guard expectedGeneration == persistenceGeneration else { return }
+        favoriteSaveScopes.append(accountScope)
+        guard let accountScope else { return }
+        var snapshot = snapshots[accountScope] ?? CloudCatalogActivitySnapshot()
+        snapshot.favoriteIDs = favoriteIDs
+        snapshots[accountScope] = snapshot
+    }
+
+    func saveXboxRecentlyPlayedIDs(
+        _ recentlyPlayedIDs: [String],
+        accountScope: String?,
+        expectedGeneration: UInt64
+    ) async {
+        guard expectedGeneration == persistenceGeneration else { return }
+        guard let accountScope else { return }
+        var snapshot = snapshots[accountScope] ?? CloudCatalogActivitySnapshot()
+        snapshot.recentlyPlayedIDs = recentlyPlayedIDs
+        snapshots[accountScope] = snapshot
+    }
+
+    func snapshot(accountScope: String) -> CloudCatalogActivitySnapshot {
+        snapshots[accountScope] ?? CloudCatalogActivitySnapshot()
+    }
+
+    func recordedLoadScopes() -> [String?] {
+        loadScopes
+    }
+
+    func recordedFavoriteSaveScopes() -> [String?] {
+        favoriteSaveScopes
     }
 }
 
@@ -1046,8 +1825,11 @@ private actor XboxCatalogClientProbe: XboxCatalogClient {
     private let snapshot: XboxCatalogSnapshot
     private let suspendsResponse: Bool
     private let failsResponse: Bool
+    private let failsDetailResponse: Bool
     private var requests: [XboxCatalogRequest] = []
+    private var detailRequestCount = 0
     private var accounts: [XboxCloudAuthorizedAccount] = []
+    private var refreshAccounts: [XboxCloudAuthorizedAccount] = []
     private var pendingResponse: CheckedContinuation<XboxCatalogSnapshot, Error>?
     private var requestWaiters: [(
         target: Int,
@@ -1057,11 +1839,13 @@ private actor XboxCatalogClientProbe: XboxCatalogClient {
     init(
         snapshot: XboxCatalogSnapshot,
         suspendsResponse: Bool = false,
-        failsResponse: Bool = false
+        failsResponse: Bool = false,
+        failsDetailResponse: Bool = false
     ) {
         self.snapshot = snapshot
         self.suspendsResponse = suspendsResponse
         self.failsResponse = failsResponse
+        self.failsDetailResponse = failsDetailResponse
     }
 
     func fetchCatalog(
@@ -1091,6 +1875,29 @@ private actor XboxCatalogClientProbe: XboxCatalogClient {
 
     func recordedAccounts() -> [XboxCloudAuthorizedAccount] {
         accounts
+    }
+
+    func fetchDetail(
+        for item: XboxCatalogItem,
+        request _: XboxCatalogRequest
+    ) async throws -> XboxCatalogItem {
+        detailRequestCount += 1
+        if failsDetailResponse {
+            throw XboxCatalogClientProbeError.unavailable
+        }
+        return item
+    }
+
+    func recordedDetailRequestCount() -> Int {
+        detailRequestCount
+    }
+
+    func refreshAccountState(for account: XboxCloudAuthorizedAccount) async {
+        refreshAccounts.append(account)
+    }
+
+    func recordedRefreshAccounts() -> [XboxCloudAuthorizedAccount] {
+        refreshAccounts
     }
 
     func waitForRequestCount(_ count: Int) async {

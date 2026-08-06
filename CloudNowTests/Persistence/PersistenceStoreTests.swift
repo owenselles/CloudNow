@@ -112,6 +112,146 @@ struct PersistenceStoreTests {
         )
     }
 
+    @Test("Xbox favorites and history are account scoped and isolated from GeForce NOW")
+    func xboxCatalogActivityIsolation() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let accountA = "xbox-account-a"
+        let accountB = "xbox-account-b"
+
+        await harness.store.saveFavoriteIds(["gfn-favorite"])
+        await harness.store.saveRecentlyPlayedIds(["gfn-recent"])
+        await harness.store.saveXboxFavoriteIDs(
+            ["xbox-favorite-a"],
+            accountScope: accountA
+        )
+        await harness.store.saveXboxRecentlyPlayedIDs(
+            ["xbox-recent-a"],
+            accountScope: accountA
+        )
+        await harness.store.saveXboxFavoriteIDs(
+            ["xbox-favorite-b"],
+            accountScope: accountB
+        )
+
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: accountA
+            ) == CloudCatalogActivitySnapshot(
+                favoriteIDs: ["xbox-favorite-a"],
+                recentlyPlayedIDs: ["xbox-recent-a"]
+            )
+        )
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: accountB
+            ) == CloudCatalogActivitySnapshot(
+                favoriteIDs: ["xbox-favorite-b"],
+                recentlyPlayedIDs: []
+            )
+        )
+        let geForceNowSnapshot = await harness.store.loadGamesSnapshot(
+            accountScope: nil
+        )
+        #expect(geForceNowSnapshot.favoriteIds == ["gfn-favorite"])
+        #expect(geForceNowSnapshot.recentlyPlayedIds == ["gfn-recent"])
+        #expect(
+            harness.preferences.keys().filter {
+                $0.hasPrefix("cloudnow.catalog.activity.v1.")
+            }.allSatisfy {
+                $0.contains(".xbox-cloud-gaming.")
+                    && !$0.contains(accountA)
+                    && !$0.contains(accountB)
+            }
+        )
+    }
+
+    @Test("Xbox history is normalized, bounded, and follows reset semantics")
+    func xboxCatalogActivityBoundsAndReset() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let accountScope = " account-with-whitespace "
+        let recentIDs = ["game-0", " game-1 ", "game-0", ""]
+            + (2 ... 12).map { "game-\($0)" }
+
+        await harness.store.saveXboxFavoriteIDs(
+            [" favorite ", "", String(repeating: "x", count: 513)],
+            accountScope: accountScope
+        )
+        await harness.store.saveXboxRecentlyPlayedIDs(
+            recentIDs,
+            accountScope: accountScope
+        )
+
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: "account-with-whitespace"
+            ) == CloudCatalogActivitySnapshot(
+                favoriteIDs: ["favorite"],
+                recentlyPlayedIDs: (0 ... 9).map { "GAME-\($0)" }
+            )
+        )
+
+        _ = await harness.store.clearCachedData()
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: accountScope
+            ).recentlyPlayedIDs == (0 ... 9).map { "GAME-\($0)" }
+        )
+
+        _ = await harness.store.clearPersistentData()
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: accountScope
+            ) == CloudCatalogActivitySnapshot()
+        )
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: nil
+            ) == CloudCatalogActivitySnapshot()
+        )
+    }
+
+    @Test("Xbox favorites are bounded and stale saves cannot cross reset")
+    func xboxCatalogActivityGenerationFence() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let accountScope = "stable-xbox-activity-scope"
+        let favoriteIDs = Set(
+            (0 ..< CloudCatalogActivitySnapshot.maximumFavoriteCount + 32)
+                .map { String(format: "game-%04d", $0) }
+        )
+
+        await harness.store.saveXboxFavoriteIDs(
+            favoriteIDs,
+            accountScope: accountScope
+        )
+        let lease = await harness.store.loadXboxCatalogActivityLease(
+            accountScope: accountScope
+        )
+        #expect(
+            lease.snapshot.favoriteIDs
+                == Set(
+                    favoriteIDs.map { $0.uppercased() }.sorted().prefix(
+                        CloudCatalogActivitySnapshot.maximumFavoriteCount
+                    )
+                )
+        )
+
+        _ = await harness.store.clearPersistentData()
+        await harness.store.saveXboxFavoriteIDs(
+            ["must-not-return"],
+            accountScope: accountScope,
+            expectedGeneration: lease.generation
+        )
+
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: accountScope
+            ).favoriteIDs.isEmpty
+        )
+    }
+
     @Test("Settings, favorites, history, and library data round-trip in isolated storage")
     func snapshotRoundTrip() async throws {
         let harness = try PersistenceHarness()

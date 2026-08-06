@@ -65,6 +65,51 @@ struct XboxContentAccessStoreTests {
         #expect(await upstream.requests().count == 1)
     }
 
+    @Test("Account refresh bypasses its cache without evicting other accounts")
+    func accountRefreshIsScoped() async throws {
+        let firstAccountSnapshot = makeSnapshot(tier: .pcGamePass)
+        let secondAccountSnapshot = makeSnapshot(tier: .essential)
+        let refreshedAccountSnapshot = makeSnapshot(tier: .ultimate)
+        let upstream = XboxContentAccessUpstreamProbe(responses: [
+            .success(firstAccountSnapshot),
+            .success(secondAccountSnapshot),
+            .success(refreshedAccountSnapshot),
+        ])
+        let store = makeStore(upstream: upstream)
+        let firstAccount = makeAccount(identifier: "account-a")
+        let secondAccount = makeAccount(identifier: "account-b")
+
+        _ = try await store.fetchContentAccess(
+            for: firstAccount,
+            market: "US",
+            offeringID: "xgpuweb"
+        )
+        _ = try await store.fetchContentAccess(
+            for: secondAccount,
+            market: "US",
+            offeringID: "xgpuweb"
+        )
+
+        await store.invalidateContentAccess(for: firstAccount)
+
+        #expect(
+            try await store.fetchContentAccess(
+                for: secondAccount,
+                market: "US",
+                offeringID: "xgpuweb"
+            ) == secondAccountSnapshot
+        )
+        #expect(
+            try await store.fetchContentAccess(
+                for: firstAccount,
+                market: "US",
+                offeringID: "xgpuweb"
+            ) == refreshedAccountSnapshot
+        )
+        #expect(await upstream.requests().count == 3)
+        #expect(await upstream.invalidatedAccountIdentifiers() == ["account-a"])
+    }
+
     @Test("An expired entry is replaced by a new upstream snapshot")
     func expiryRefetches() async throws {
         let firstSnapshot = makeSnapshot(tier: .pcGamePass)
@@ -257,6 +302,7 @@ private actor XboxContentAccessUpstreamProbe: XboxContentAccessProviding {
 
     private var responses: [Result<XboxContentAccessSnapshot, XboxContentAccessStoreProbeError>]
     private var recordedRequests: [Request] = []
+    private var invalidatedAccounts: [String] = []
     private var requestWaiters: [RequestWaiter] = []
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
     private var holdsRequests: Bool
@@ -291,6 +337,12 @@ private actor XboxContentAccessUpstreamProbe: XboxContentAccessProviding {
         return try responses.removeFirst().get()
     }
 
+    func invalidateContentAccess(
+        for account: XboxCloudAuthorizedAccount
+    ) {
+        invalidatedAccounts.append(account.authorizationIdentifier)
+    }
+
     func waitForRequestCount(_ count: Int) async {
         guard recordedRequests.count < count else { return }
         await withCheckedContinuation { continuation in
@@ -312,6 +364,10 @@ private actor XboxContentAccessUpstreamProbe: XboxContentAccessProviding {
 
     func requests() -> [Request] {
         recordedRequests
+    }
+
+    func invalidatedAccountIdentifiers() -> [String] {
+        invalidatedAccounts
     }
 
     private func resumeSatisfiedRequestWaiters() {

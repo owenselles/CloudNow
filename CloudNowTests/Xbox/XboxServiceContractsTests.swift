@@ -59,7 +59,7 @@ struct XboxServiceContractsTests {
     @Test("Catalog snapshots merge duplicate product routes deterministically")
     func duplicateProductRoutes() throws {
         let artworkURL = try #require(
-            URL(string: "https://example.invalid/fixture.png")
+            URL(string: "https://store-images.s-microsoft.com/fixture.png")
         )
         let firstRoute = XboxCloudTitleRoute(
             titleID: "free-title",
@@ -89,13 +89,96 @@ struct XboxServiceContractsTests {
 
         let item = try #require(snapshot.items.first)
         #expect(snapshot.items.count == 1)
-        #expect(item.id == "fixture-product")
+        #expect(item.id == "FIXTURE-PRODUCT")
         #expect(item.title == "First Title")
         #expect(item.artworkURL == artworkURL)
         #expect(item.routes == [firstRoute, secondRoute])
         #expect(item.accessKinds == [.standard, .freeWithAds])
         #expect(item.supportsFreeWithAds)
         #expect(item.preferredRoute == secondRoute)
+    }
+
+    @Test("Product and activity identity remains stable across refresh casing changes")
+    func canonicalIdentityAcrossRefreshes() throws {
+        let firstRoute = XboxCloudTitleRoute(
+            titleID: "wire-route-first",
+            accessKind: .standard
+        )
+        let refreshedRoute = XboxCloudTitleRoute(
+            titleID: "WIRE-ROUTE-REFRESHED",
+            accessKind: .standard
+        )
+        let firstSnapshot = XboxCatalogSnapshot(
+            items: [
+                XboxCatalogItem(
+                    id: "product-a",
+                    title: "First Refresh",
+                    artworkURL: nil,
+                    routes: [firstRoute]
+                ),
+            ],
+            fetchedAt: .distantPast
+        )
+        let refreshedSnapshot = XboxCatalogSnapshot(
+            items: [
+                XboxCatalogItem(
+                    id: "PRODUCT-A",
+                    title: "Second Refresh",
+                    artworkURL: nil,
+                    routes: [refreshedRoute]
+                ),
+            ],
+            fetchedAt: .distantFuture
+        )
+        let firstItem = try #require(firstSnapshot.items.first)
+        let refreshedItem = try #require(refreshedSnapshot.items.first)
+        let activity = CloudCatalogActivitySnapshot(
+            favoriteIDs: ["product-a"],
+            recentlyPlayedIDs: ["Product-A"]
+        )
+
+        #expect(firstItem.id == "PRODUCT-A")
+        #expect(refreshedItem.id == firstItem.id)
+        #expect(firstItem.routes == [firstRoute])
+        #expect(refreshedItem.routes == [refreshedRoute])
+        #expect(activity.favoriteIDs == [refreshedItem.id])
+        #expect(activity.recentlyPlayedIDs == [refreshedItem.id])
+    }
+
+    @Test("Catalog snapshots reject loopback and localhost artwork")
+    func catalogArtworkPolicy() throws {
+        let trustedArtworkURL = try #require(
+            URL(string: "https://store-images.s-microsoft.com/trusted.png")
+        )
+        let localhostArtworkURL = try #require(
+            URL(string: "https://localhost/private.png")
+        )
+        let loopbackArtworkURL = try #require(
+            URL(string: "https://127.0.0.1/private.png")
+        )
+        let snapshot = XboxCatalogSnapshot(
+            items: [
+                XboxCatalogItem(
+                    id: "trusted",
+                    title: "Trusted",
+                    artworkURL: trustedArtworkURL
+                ),
+                XboxCatalogItem(
+                    id: "localhost",
+                    title: "Localhost",
+                    artworkURL: localhostArtworkURL
+                ),
+                XboxCatalogItem(
+                    id: "loopback",
+                    title: "Loopback",
+                    artworkURL: loopbackArtworkURL
+                ),
+            ],
+            fetchedAt: .distantPast
+        )
+
+        #expect(snapshot.items.map(\.id) == ["TRUSTED"])
+        #expect(snapshot.items.first?.artworkURL == trustedArtworkURL)
     }
 
     @Test("Playable availability replaces eligibility without duplicating a route")
@@ -211,7 +294,9 @@ struct XboxServiceContractsTests {
                 XboxCatalogItem(
                     id: "fixture-game",
                     title: "Fixture Game",
-                    artworkURL: URL(string: "https://example.invalid/artwork.png")
+                    artworkURL: URL(
+                        string: "https://store-images.s-microsoft.com/artwork.png"
+                    )
                 ),
             ],
             fetchedAt: requestedAt

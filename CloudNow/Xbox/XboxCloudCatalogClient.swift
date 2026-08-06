@@ -43,8 +43,8 @@ nonisolated struct XboxCloudCatalogPolicy: Equatable, Sendable {
 
 /// Authenticated Xbox Cloud title enumeration. It owns no credential storage;
 /// the small GS-session provider is injected and shared with the stream client.
-/// `cancel()` synchronously cancels the one active catalog load and is safe to
-/// call repeatedly from provider-switch and app-lifecycle paths.
+/// `cancel()` synchronously cancels all active catalog and detail loads and is
+/// safe to call repeatedly from provider-switch and app-lifecycle paths.
 final nonisolated class XboxCloudCatalogClient: XboxCatalogClient, Sendable {
     private let sessionProvider: any XboxCloudGSSessionProviding
     private let contentAccessProvider: (any XboxContentAccessProviding)?
@@ -85,7 +85,7 @@ final nonisolated class XboxCloudCatalogClient: XboxCatalogClient, Sendable {
             )
             return try await loader.fetchCatalog(request, account: account)
         }
-        let identifier = cancellationState.replaceCurrentOperation(with: operation)
+        let identifier = cancellationState.registerOperation(operation)
 
         return try await withTaskCancellationHandler {
             defer { cancellationState.clearOperation(identifier: identifier) }
@@ -105,8 +105,36 @@ final nonisolated class XboxCloudCatalogClient: XboxCatalogClient, Sendable {
         }
     }
 
+    func fetchDetail(
+        for item: XboxCatalogItem,
+        request: XboxCatalogRequest
+    ) async throws -> XboxCatalogItem {
+        let loader = XboxCloudCatalogDetailLoader(
+            transport: transport
+        )
+        let operation = Task<XboxCatalogItem, Error> {
+            try await loader.fetchDetail(for: item, request: request)
+        }
+        let identifier = cancellationState.registerOperation(operation)
+
+        return try await withTaskCancellationHandler {
+            defer { cancellationState.clearOperation(identifier: identifier) }
+            return try await operation.value
+        } onCancel: {
+            cancellationState.cancelOperation(identifier: identifier)
+        }
+    }
+
+    func refreshAccountState(
+        for account: XboxCloudAuthorizedAccount
+    ) async {
+        cancel()
+        await sessionProvider.removeSession(for: account)
+        await contentAccessProvider?.invalidateContentAccess(for: account)
+    }
+
     nonisolated func cancel() {
-        cancellationState.cancelCurrentOperation()
+        cancellationState.cancelAllOperations()
     }
 }
 
@@ -266,9 +294,13 @@ private nonisolated struct XboxFresnoCatalogFailureMetadata {
     }
 }
 
-private nonisolated struct XboxFresnoProductMetadata: Sendable {
+private nonisolated struct XboxCatalogProductMetadata: Sendable {
     let title: String
+    let genres: [String]
+    let publisher: String?
     let artworkURL: URL?
+    let heroArtworkURL: URL?
+    let supportedInputTypes: Set<XboxCloudInputType>
 }
 
 private nonisolated struct XboxCloudCatalogLoader: Sendable {
@@ -321,8 +353,8 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         var continuationToken: String?
         var seenContinuationTokens = Set<String>()
         var rawItemCount = 0
-        var wireItems: [XboxCatalogItem] = []
-        wireItems.reserveCapacity(min(Self.maximumWireResultCount, 128))
+        var wireCandidates: [XboxCloudCatalogCandidate] = []
+        wireCandidates.reserveCapacity(min(Self.maximumWireResultCount, 128))
 
         for pageIndex in 0 ..< policy.maximumPageCount {
             try Task.checkCancellation()
@@ -336,10 +368,17 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
                 throw XboxCloudCatalogError.itemLimitExceeded(Self.maximumWireResultCount)
             }
             rawItemCount += page.rawResultCount
-            wireItems.append(contentsOf: page.items)
+            wireCandidates.append(contentsOf: page.candidates)
 
             guard let nextToken = page.continuationToken else {
                 let contentAccess = await contentAccessLoad
+                try Task.checkCancellation()
+                let wireItems = try await hydrateStandardCandidates(
+                    wireCandidates,
+                    market: market,
+                    localeIdentifier: request.localeIdentifier,
+                    contentAccess: contentAccess
+                )
                 try Task.checkCancellation()
                 let fresnoItems = await fetchFresnoItems(
                     session: session,
@@ -392,6 +431,103 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         }
     }
 
+    private func hydrateStandardCandidates(
+        _ unboundedCandidates: [XboxCloudCatalogCandidate],
+        market: String,
+        localeIdentifier: String,
+        contentAccess: XboxContentAccessSnapshot?
+    ) async throws -> [XboxCatalogItem] {
+        let candidates = retainedStandardCandidates(unboundedCandidates)
+        var seenProductIDs = Set<String>()
+        let productIDs = candidates.compactMap { candidate -> String? in
+            guard let productID = candidate.productID,
+                  let normalizedProductID = candidate.normalizedProductID,
+                  seenProductIDs.insert(normalizedProductID).inserted
+            else {
+                return nil
+            }
+            return productID
+        }
+        let requiresMetadata = candidates.contains { $0.title == nil }
+        let metadataByProductID: [String: XboxCatalogProductMetadata]
+        do {
+            metadataByProductID = try await fetchProductMetadata(
+                market: market,
+                localeIdentifier: localeIdentifier,
+                productIDs: productIDs
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            guard !requiresMetadata else { throw error }
+            xboxCatalogLog.info(
+                "Optional standard artwork hydration unavailable; retaining inline catalog"
+            )
+            metadataByProductID = [:]
+        }
+        try Task.checkCancellation()
+
+        var missingMetadataCount = 0
+        let items = candidates.compactMap { candidate -> XboxCatalogItem? in
+            let metadata = candidate.normalizedProductID.flatMap {
+                metadataByProductID[$0]
+            }
+            guard let title = candidate.title ?? metadata?.title else {
+                missingMetadataCount += 1
+                return nil
+            }
+            return XboxCatalogItem(
+                id: candidate.productID ?? candidate.titleID,
+                title: title,
+                genres: metadata?.genres ?? [],
+                publisher: metadata?.publisher,
+                artworkURL: candidate.artworkURL ?? metadata?.artworkURL,
+                heroArtworkURL: candidate.heroArtworkURL ?? metadata?.heroArtworkURL,
+                supportedInputTypes: metadata?.supportedInputTypes ?? [],
+                isOwned: candidate.normalizedProductID.flatMap {
+                    contentAccess?.productAccessByProductID[$0]
+                }?.isOwned == true,
+                routes: [
+                    XboxCloudTitleRoute(
+                        titleID: candidate.titleID,
+                        accessKind: candidate.accessKind
+                    ),
+                ]
+            )
+        }
+        xboxCatalogLog.info(
+            "Standard hydration candidates=\(candidates.count, privacy: .public) metadataRequests=\(productIDs.count, privacy: .public) hydrated=\(items.count, privacy: .public) missingMetadata=\(missingMetadataCount, privacy: .public)"
+        )
+        return items
+    }
+
+    private func retainedStandardCandidates(
+        _ candidates: [XboxCloudCatalogCandidate]
+    ) -> [XboxCloudCatalogCandidate] {
+        var retainedProductIDs = Set<String>()
+        var retainedCandidates: [XboxCloudCatalogCandidate] = []
+        retainedCandidates.reserveCapacity(
+            min(candidates.count, policy.maximumItemCount)
+        )
+        for candidate in candidates {
+            if retainedProductIDs.contains(candidate.normalizedIdentity) {
+                retainedCandidates.append(candidate)
+                continue
+            }
+            guard retainedProductIDs.count < policy.maximumItemCount else {
+                continue
+            }
+            retainedProductIDs.insert(candidate.normalizedIdentity)
+            retainedCandidates.append(candidate)
+        }
+        if retainedCandidates.count < candidates.count {
+            xboxCatalogLog.info(
+                "Standard hydration bounded rawCandidates=\(candidates.count, privacy: .public) retainedCandidates=\(retainedCandidates.count, privacy: .public) retainedProducts=\(retainedProductIDs.count, privacy: .public)"
+            )
+        }
+        return retainedCandidates
+    }
+
     private func fetchFresnoItems(
         session: XboxCloudGSSession,
         market: String,
@@ -419,7 +555,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
                 productIDs: productIDs,
                 gsToken: session.gsToken
             )
-            async let metadataLoad = fetchFresnoProductMetadata(
+            async let metadataLoad = fetchProductMetadata(
                 market: market,
                 localeIdentifier: localeIdentifier,
                 productIDs: productIDs
@@ -454,11 +590,50 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         }
     }
 
-    private func fetchFresnoProductMetadata(
+    private func fetchProductMetadata(
         market: String,
         localeIdentifier: String,
         productIDs: [String]
-    ) async throws -> [String: XboxFresnoProductMetadata] {
+    ) async throws -> [String: XboxCatalogProductMetadata] {
+        guard !productIDs.isEmpty else { return [:] }
+
+        var combinedMetadata: [String: XboxCatalogProductMetadata] = [:]
+        var completedBatchCount = 0
+        for start in stride(
+            from: 0,
+            to: productIDs.count,
+            by: Self.maximumFresnoProductCount
+        ) {
+            try Task.checkCancellation()
+            let batch = Array(
+                productIDs[
+                    start ..< min(
+                        start + Self.maximumFresnoProductCount,
+                        productIDs.count
+                    )
+                ]
+            )
+            let metadata = try await fetchProductMetadataBatch(
+                market: market,
+                localeIdentifier: localeIdentifier,
+                productIDs: batch
+            )
+            combinedMetadata.merge(metadata) { existing, _ in existing }
+            completedBatchCount += 1
+        }
+        if productIDs.count > Self.maximumFresnoProductCount {
+            xboxCatalogLog.info(
+                "Product metadata batches=\(completedBatchCount, privacy: .public) requestedProducts=\(productIDs.count, privacy: .public) hydratedProducts=\(combinedMetadata.count, privacy: .public)"
+            )
+        }
+        return combinedMetadata
+    }
+
+    private func fetchProductMetadataBatch(
+        market: String,
+        localeIdentifier: String,
+        productIDs: [String]
+    ) async throws -> [String: XboxCatalogProductMetadata] {
         do {
             let data = try await fetchFresnoProductMetadataData(
                 market: market,
@@ -475,8 +650,8 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
                 throw error
             }
 
-            var combinedMetadata: [String: XboxFresnoProductMetadata] = [:]
-            var successfulBatchCount = 0
+            var combinedMetadata: [String: XboxCatalogProductMetadata] = [:]
+            var completedBatchCount = 0
             for start in stride(
                 from: 0,
                 to: productIDs.count,
@@ -491,26 +666,17 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
                         )
                     ]
                 )
-                do {
-                    let data = try await fetchFresnoProductMetadataData(
-                        market: market,
-                        localeIdentifier: localeIdentifier,
-                        productIDs: batch
-                    )
-                    let metadata = try Self.parseFresnoProductMetadata(data)
-                    combinedMetadata.merge(metadata) { existing, _ in existing }
-                    successfulBatchCount += 1
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    continue
-                }
-            }
-            guard successfulBatchCount > 0 else {
-                throw error
+                let data = try await fetchFresnoProductMetadataData(
+                    market: market,
+                    localeIdentifier: localeIdentifier,
+                    productIDs: batch
+                )
+                let metadata = try Self.parseFresnoProductMetadata(data)
+                combinedMetadata.merge(metadata) { existing, _ in existing }
+                completedBatchCount += 1
             }
             xboxCatalogLog.info(
-                "Fresno metadata retried batchSize=\(Self.fallbackFresnoMetadataBatchSize, privacy: .public) successfulBatches=\(successfulBatchCount, privacy: .public) products=\(combinedMetadata.count, privacy: .public)"
+                "Fresno metadata retried batchSize=\(Self.fallbackFresnoMetadataBatchSize, privacy: .public) completedBatches=\(completedBatchCount, privacy: .public) products=\(combinedMetadata.count, privacy: .public)"
             )
             return combinedMetadata
         }
@@ -546,6 +712,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.httpBody = body
+        request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(gsToken)", forHTTPHeaderField: "Authorization")
@@ -555,10 +722,15 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         let response: URLResponse
         do {
             try Task.checkCancellation()
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: policy.maximumPageResponseSize
+            )
             try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxCloudCatalogError.responseTooLarge(.titles)
         } catch {
             throw XboxCloudCatalogError.transportFailure(.titles)
         }
@@ -641,6 +813,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.httpBody = body
+        request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(
@@ -658,10 +831,15 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         let response: URLResponse
         do {
             try Task.checkCancellation()
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: Self.maximumFresnoMetadataResponseSize
+            )
             try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxCloudCatalogError.responseTooLarge(.metadata)
         } catch {
             throw XboxCloudCatalogError.transportFailure(.metadata)
         }
@@ -683,7 +861,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
 
     private static func parseFresnoProductMetadata(
         _ data: Data
-    ) throws -> [String: XboxFresnoProductMetadata] {
+    ) throws -> [String: XboxCatalogProductMetadata] {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let products = object["Products"] as? [String: Any],
               products.count <= Self.maximumFresnoProductCount
@@ -691,7 +869,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             throw XboxCloudCatalogError.invalidPayload(.metadata)
         }
 
-        var metadataByProductID: [String: XboxFresnoProductMetadata] = [:]
+        var metadataByProductID: [String: XboxCatalogProductMetadata] = [:]
         metadataByProductID.reserveCapacity(products.count)
         for (wireProductID, value) in products {
             guard let product = value as? [String: Any],
@@ -706,9 +884,34 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             ) ?? safeGamePassCatalogArtworkURL(
                 (product["Image_Tile"] as? [String: Any])?["URL"]
             )
-            metadataByProductID[productID.uppercased()] = XboxFresnoProductMetadata(
+            let heroArtworkURL = safeGamePassCatalogArtworkURL(
+                (product["Image_SuperHeroArt"] as? [String: Any])?["URL"]
+            ) ?? safeGamePassCatalogArtworkURL(
+                (product["Image_Hero"] as? [String: Any])?["URL"]
+            ) ?? safeGamePassCatalogArtworkURL(
+                (product["Image_Landscape"] as? [String: Any])?["URL"]
+            )
+            let localizedGenres = safeStringArray(
+                product["LocalizedCategories"],
+                maximumCount: 32,
+                maximumValueSize: 256
+            )
+            let genres = localizedGenres.isEmpty
+                ? safeStringArray(
+                    product["Categories"],
+                    maximumCount: 32,
+                    maximumValueSize: 256
+                )
+                : localizedGenres
+            let publisher = safeTitle(product["PublisherName"])
+            let supportedInputTypes = supportedInputTypes(from: product)
+            metadataByProductID[productID.uppercased()] = XboxCatalogProductMetadata(
                 title: title,
-                artworkURL: artworkURL
+                genres: genres,
+                publisher: publisher,
+                artworkURL: artworkURL,
+                heroArtworkURL: heroArtworkURL,
+                supportedInputTypes: supportedInputTypes
             )
         }
         return metadataByProductID
@@ -732,7 +935,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         _ data: Data,
         orderedProductIDs: [String],
         productAccessByProductID: [String: XboxProductCloudAccess],
-        metadataByProductID: [String: XboxFresnoProductMetadata]
+        metadataByProductID: [String: XboxCatalogProductMetadata]
     ) throws -> [XboxCatalogItem] {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let results = object["results"] as? [Any],
@@ -795,8 +998,14 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
                 XboxCatalogItem(
                     id: productID,
                     title: metadata.title,
+                    genres: metadata.genres,
+                    publisher: metadata.publisher,
                     artworkURL: metadata.artworkURL
                         ?? artworkURL(from: object, details: details),
+                    heroArtworkURL: metadata.heroArtworkURL
+                        ?? heroArtworkURL(from: object, details: details),
+                    supportedInputTypes: metadata.supportedInputTypes,
+                    isOwned: access?.isOwned == true,
                     routes: [
                         XboxCloudTitleRoute(
                             titleID: titleID,
@@ -868,10 +1077,15 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         let response: URLResponse
         do {
             try Task.checkCancellation()
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: policy.maximumPageResponseSize
+            )
             try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxCloudCatalogError.responseTooLarge(.titles)
         } catch {
             throw XboxCloudCatalogError.transportFailure(.titles)
         }
@@ -901,23 +1115,23 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         }
 
         var diagnostics = XboxCloudCatalogParseDiagnostics()
-        var items: [XboxCatalogItem] = []
-        items.reserveCapacity(results.count)
+        var candidates: [XboxCloudCatalogCandidate] = []
+        candidates.reserveCapacity(results.count)
         for result in results {
             switch parseItem(result) {
-            case let .accepted(item):
-                diagnostics.record(item)
-                items.append(item)
+            case let .accepted(candidate):
+                diagnostics.record(candidate)
+                candidates.append(candidate)
             case let .rejected(reason):
                 diagnostics.record(reason)
             }
         }
         xboxCatalogLog.info(
-            "Catalog page raw=\(results.count, privacy: .public) accepted=\(items.count, privacy: .public) standard=\(diagnostics.standardCount, privacy: .public) freeWithAds=\(diagnostics.freeWithAdsCount, privacy: .public) rejectedShape=\(diagnostics.invalidShapeCount, privacy: .public) rejectedEntitlement=\(diagnostics.entitlementCount, privacy: .public) rejectedTime=\(diagnostics.remainingTimeCount, privacy: .public) rejectedIdentity=\(diagnostics.identityCount, privacy: .public) rejectedPrograms=\(diagnostics.accessMetadataCount, privacy: .public)"
+            "Catalog page raw=\(results.count, privacy: .public) accepted=\(candidates.count, privacy: .public) standard=\(diagnostics.standardCount, privacy: .public) freeWithAds=\(diagnostics.freeWithAdsCount, privacy: .public) rejectedShape=\(diagnostics.invalidShapeCount, privacy: .public) rejectedEntitlement=\(diagnostics.entitlementCount, privacy: .public) rejectedTime=\(diagnostics.remainingTimeCount, privacy: .public) rejectedIdentity=\(diagnostics.identityCount, privacy: .public) rejectedPrograms=\(diagnostics.accessMetadataCount, privacy: .public)"
         )
         let continuationToken = try parseContinuationToken(from: object)
         return XboxCloudCatalogPage(
-            items: items,
+            candidates: candidates,
             rawResultCount: results.count,
             continuationToken: continuationToken
         )
@@ -945,7 +1159,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             ?? safeTitle(object["name"])
             ?? safeTitle(object["title"])
         guard let titleID,
-              let title
+              title != nil || productID != nil
         else {
             return .rejected(.identity)
         }
@@ -953,19 +1167,14 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             return .rejected(.accessMetadata)
         }
 
-        return .accepted(
-            XboxCatalogItem(
-                id: productID ?? titleID,
-                title: title,
-                artworkURL: artworkURL(from: object, details: details),
-                routes: [
-                    XboxCloudTitleRoute(
-                        titleID: titleID,
-                        accessKind: accessKind
-                    ),
-                ]
-            )
-        )
+        return .accepted(XboxCloudCatalogCandidate(
+            productID: productID,
+            titleID: titleID,
+            title: title,
+            artworkURL: artworkURL(from: object, details: details),
+            heroArtworkURL: heroArtworkURL(from: object, details: details),
+            accessKind: accessKind
+        ))
     }
 
     private static func hasPlayableEntitlement(_ value: Any?) -> Bool {
@@ -1078,6 +1287,33 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         }?.url
     }
 
+    private static func heroArtworkURL(
+        from object: [String: Any],
+        details: [String: Any]?
+    ) -> URL? {
+        let imageValues = details?["images"] as? [Any]
+            ?? object["images"] as? [Any]
+            ?? []
+        guard imageValues.count <= maximumImageCountPerTitle else { return nil }
+
+        let preferredTypes = ["superheroart", "hero", "landscape", "banner"]
+        let images = imageValues.compactMap { value -> (type: String, url: URL)? in
+            guard let image = value as? [String: Any],
+                  let url = safeArtworkURL(image["url"] ?? image["uri"])
+            else {
+                return nil
+            }
+            return ((image["type"] as? String)?.lowercased() ?? "", url)
+        }
+        return images.min { left, right in
+            let leftRank = preferredTypes.firstIndex(of: left.type) ?? preferredTypes.count
+            let rightRank = preferredTypes.firstIndex(of: right.type) ?? preferredTypes.count
+            return leftRank < rightRank
+        }.flatMap { image in
+            preferredTypes.contains(image.type) ? image.url : nil
+        }
+    }
+
     private static func parseContinuationToken(
         from object: [String: Any]
     ) throws -> String? {
@@ -1188,24 +1424,76 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         return normalized
     }
 
-    private static func safeArtworkURL(_ value: Any?) -> URL? {
-        guard let string = value as? String,
-              string.utf8.count <= 2048,
-              let url = URL(string: string),
-              url.scheme?.lowercased() == "https",
-              url.host != nil,
-              url.user == nil,
-              url.password == nil
-        else {
-            return nil
+    private static func safeStringArray(
+        _ value: Any?,
+        maximumCount: Int,
+        maximumValueSize: Int
+    ) -> [String] {
+        guard let values = value as? [Any], values.count <= maximumCount else {
+            return []
         }
-        return url
+        var seen = Set<String>()
+        return values.compactMap { value in
+            guard let string = value as? String else { return nil }
+            let normalized = string.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            guard !normalized.isEmpty,
+                  normalized.utf8.count <= maximumValueSize,
+                  normalized.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0)
+                  }),
+                  seen.insert(normalized.localizedLowercase).inserted
+            else {
+                return nil
+            }
+            return normalized
+        }
+    }
+
+    private static func supportedInputTypes(
+        from product: [String: Any]
+    ) -> Set<XboxCloudInputType> {
+        guard let offerings = product["XCloudOfferings"] as? [String: Any],
+              offerings.count <= 32
+        else {
+            return []
+        }
+        var normalizedOfferings: [String: Any] = [:]
+        for (key, value) in offerings {
+            let normalizedKey = key.uppercased()
+            if normalizedOfferings[normalizedKey] == nil {
+                normalizedOfferings[normalizedKey] = value
+            }
+        }
+        let preferredOfferingKeys = ["XGPUWEB", "CLOUDGAMING", "XGPU"]
+        let selectedOfferings = preferredOfferingKeys.compactMap {
+            normalizedOfferings[$0] as? [String: Any]
+        }
+        let candidateOfferings = selectedOfferings.isEmpty
+            ? offerings.values.compactMap { $0 as? [String: Any] }
+            : selectedOfferings
+        let rawValues = candidateOfferings.flatMap { offering in
+            safeStringArray(
+                offering["SupportedInputTypes"],
+                maximumCount: 16,
+                maximumValueSize: 64
+            )
+        }
+        return Set(rawValues.compactMap(XboxCloudInputType.init(serviceValue:)))
+    }
+
+    private static func safeArtworkURL(_ value: Any?) -> URL? {
+        guard let string = value as? String else { return nil }
+        return XboxArtworkURLPolicy.validatedURL(from: string)
     }
 
     private static func safeGamePassCatalogArtworkURL(_ value: Any?) -> URL? {
         guard let string = value as? String else { return nil }
-        let absoluteString = string.hasPrefix("//") ? "https:\(string)" : string
-        return safeArtworkURL(absoluteString)
+        return XboxArtworkURLPolicy.validatedURL(
+            from: string,
+            allowsProtocolRelativeURL: true
+        )
     }
 
     private static func newCorrelationVector() -> String {
@@ -1247,8 +1535,25 @@ private nonisolated enum XboxCloudCatalogItemRejection: Sendable {
 }
 
 private nonisolated enum XboxCloudCatalogItemParseResult: Sendable {
-    case accepted(XboxCatalogItem)
+    case accepted(XboxCloudCatalogCandidate)
     case rejected(XboxCloudCatalogItemRejection)
+}
+
+private nonisolated struct XboxCloudCatalogCandidate: Sendable {
+    let productID: String?
+    let titleID: String
+    let title: String?
+    let artworkURL: URL?
+    let heroArtworkURL: URL?
+    let accessKind: XboxCloudAccessKind
+
+    var normalizedProductID: String? {
+        productID?.uppercased()
+    }
+
+    var normalizedIdentity: String {
+        normalizedProductID ?? titleID.uppercased()
+    }
 }
 
 private nonisolated struct XboxCloudCatalogParseDiagnostics: Sendable {
@@ -1260,14 +1565,12 @@ private nonisolated struct XboxCloudCatalogParseDiagnostics: Sendable {
     private(set) var identityCount = 0
     private(set) var accessMetadataCount = 0
 
-    mutating func record(_ item: XboxCatalogItem) {
-        for route in item.routes {
-            switch route.accessKind {
-            case .standard:
-                standardCount += 1
-            case .freeWithAds:
-                freeWithAdsCount += 1
-            }
+    mutating func record(_ candidate: XboxCloudCatalogCandidate) {
+        switch candidate.accessKind {
+        case .standard:
+            standardCount += 1
+        case .freeWithAds:
+            freeWithAdsCount += 1
         }
     }
 
@@ -1288,57 +1591,52 @@ private nonisolated struct XboxCloudCatalogParseDiagnostics: Sendable {
 }
 
 private nonisolated struct XboxCloudCatalogPage: Sendable {
-    let items: [XboxCatalogItem]
+    let candidates: [XboxCloudCatalogCandidate]
     let rawResultCount: Int
     let continuationToken: String?
 }
 
 private final nonisolated class XboxCloudCatalogCancellationState: Sendable {
     private struct State: Sendable {
-        var identifier: UUID?
-        var operation: Task<XboxCatalogSnapshot, Error>?
+        var cancellations: [UUID: @Sendable () -> Void] = [:]
     }
 
     private let state = Mutex(State())
 
-    func replaceCurrentOperation(
-        with operation: Task<XboxCatalogSnapshot, Error>
+    func registerOperation(
+        _ operation: Task<some Sendable, Error>
     ) -> UUID {
         let identifier = UUID()
-        let previousOperation = state.withLock { state in
-            let previousOperation = state.operation
-            state.identifier = identifier
-            state.operation = operation
-            return previousOperation
+        let cancellation: @Sendable () -> Void = {
+            operation.cancel()
         }
-        previousOperation?.cancel()
+        state.withLock { state in
+            state.cancellations[identifier] = cancellation
+        }
         return identifier
     }
 
     func clearOperation(identifier: UUID) {
         state.withLock { state in
-            guard state.identifier == identifier else { return }
-            state.identifier = nil
-            state.operation = nil
+            _ = state.cancellations.removeValue(forKey: identifier)
         }
     }
 
     func cancelOperation(identifier: UUID) {
-        let operation = state.withLock { state -> Task<XboxCatalogSnapshot, Error>? in
-            guard state.identifier == identifier else { return nil }
-            state.identifier = nil
-            defer { state.operation = nil }
-            return state.operation
+        let cancellation = state.withLock { state in
+            state.cancellations.removeValue(forKey: identifier)
         }
-        operation?.cancel()
+        cancellation?()
     }
 
-    func cancelCurrentOperation() {
-        let operation = state.withLock { state -> Task<XboxCatalogSnapshot, Error>? in
-            state.identifier = nil
-            defer { state.operation = nil }
-            return state.operation
+    func cancelAllOperations() {
+        let cancellations = state.withLock { state in
+            let cancellations = Array(state.cancellations.values)
+            state.cancellations.removeAll(keepingCapacity: true)
+            return cancellations
         }
-        operation?.cancel()
+        for cancellation in cancellations {
+            cancellation()
+        }
     }
 }

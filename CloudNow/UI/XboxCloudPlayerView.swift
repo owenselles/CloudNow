@@ -10,11 +10,13 @@ struct XboxCloudPlayerView: View {
     let account: XboxCloudAuthorizedAccount
     let settings: XboxCloudStreamSettings
     let controller: XboxCloudStreamController
+    let onStreamStarted: () -> Void
     let onDismiss: () -> Void
 
     @State private var showsOverlay = true
     @State private var launchAttempt: UInt64 = 0
     @State private var isEnding = false
+    @State private var hasRecordedPlayback = false
 
     var body: some View {
         ZStack {
@@ -57,6 +59,10 @@ struct XboxCloudPlayerView: View {
             if state == .streaming {
                 showsOverlay = true
                 MemoryLifecycleCoordinator.shared.streamDidStart()
+                if !hasRecordedPlayback {
+                    hasRecordedPlayback = true
+                    onStreamStarted()
+                }
             } else if previousState == .streaming {
                 MemoryLifecycleCoordinator.shared.streamDidLeavePlayback()
             }

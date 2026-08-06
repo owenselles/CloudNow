@@ -185,7 +185,7 @@ final class XboxAuthManager {
     @ObservationIgnored private var xboxAuthorizationTaskGeneration: UInt64 = 0
     @ObservationIgnored private var authorizedAccountRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var authorizedAccountRefreshGeneration: UInt64 = 0
-    @ObservationIgnored private var catalogAccountAuthorizationIdentifier: String?
+    @ObservationIgnored private var catalogAccountScopeIdentifier: String?
     @ObservationIgnored private var isDeletingCredentials = false
     @ObservationIgnored private var isDataResetInProgress = false
 
@@ -226,8 +226,8 @@ final class XboxAuthManager {
             ? nil
             : initialAuthorizedAccount
         authorizedAccount = restoredAuthorizedAccount
-        catalogAccountAuthorizationIdentifier = restoredAuthorizedAccount?
-            .authorizationIdentifier
+        catalogAccountScopeIdentifier = restoredAuthorizedAccount?
+            .activityScopeIdentifier
         startupPhase = startsReady || initialSession != nil ? .ready : .pending
         if let restoredAuthorizedAccount {
             scheduleAuthorizedAccountRefresh(for: restoredAuthorizedAccount)
@@ -442,7 +442,7 @@ final class XboxAuthManager {
         guard !isCredentialMutationInProgress else { return }
         isDeletingCredentials = true
         defer { isDeletingCredentials = false }
-        let accountAuthorizationIdentifier = catalogAccountAuthorizationIdentifier
+        let accountScopeIdentifier = catalogAccountScopeIdentifier
         invalidateAuthenticationWork()
         let generation = credentialGeneration
         do {
@@ -462,14 +462,14 @@ final class XboxAuthManager {
         guard credentialGeneration == generation else { return }
         session = nil
         authorizedAccount = nil
-        catalogAccountAuthorizationIdentifier = nil
+        catalogAccountScopeIdentifier = nil
         authorization = nil
         publish(.idle)
         releaseRuntimeClients()
         await credentialLifecycle?.clearLocalCredentials()
-        if let accountAuthorizationIdentifier {
+        if let accountScopeIdentifier {
             await catalogCache.remove(
-                accountAuthorizationIdentifier: accountAuthorizationIdentifier
+                accountAuthorizationIdentifier: accountScopeIdentifier
             )
         }
     }
@@ -501,11 +501,11 @@ final class XboxAuthManager {
                 scheduleAuthorizedAccountRefresh(for: authorizedAccount)
                 return
             }
-            let expiredCatalogAccount = catalogAccountAuthorizationIdentifier
-                ?? authorizedAccount.authorizationIdentifier
+            let expiredCatalogAccount = catalogAccountScopeIdentifier
+                ?? authorizedAccount.activityScopeIdentifier
             cancelAuthorizedAccountRefresh()
             self.authorizedAccount = nil
-            catalogAccountAuthorizationIdentifier = nil
+            catalogAccountScopeIdentifier = nil
             await catalogCache.remove(
                 accountAuthorizationIdentifier: expiredCatalogAccount
             )
@@ -593,7 +593,7 @@ final class XboxAuthManager {
         invalidateAuthenticationWork()
         session = nil
         authorizedAccount = nil
-        catalogAccountAuthorizationIdentifier = nil
+        catalogAccountScopeIdentifier = nil
         authorization = nil
         publish(.idle)
         releaseRuntimeClients()
@@ -646,18 +646,18 @@ final class XboxAuthManager {
             isDeletingCredentials = true
             defer { isDeletingCredentials = false }
             self.session = nil
-            let accountAuthorizationIdentifier = catalogAccountAuthorizationIdentifier
+            let accountScopeIdentifier = catalogAccountScopeIdentifier
             cancelAuthorizedAccountRefresh()
             authorizedAccount = nil
-            catalogAccountAuthorizationIdentifier = nil
+            catalogAccountScopeIdentifier = nil
             releaseRuntimeClients()
             await credentialLifecycle?.clearLocalCredentials()
             try? await persistence.deleteXboxAuthSession(
                 generation: generation
             )
-            if let accountAuthorizationIdentifier {
+            if let accountScopeIdentifier {
                 await catalogCache.remove(
-                    accountAuthorizationIdentifier: accountAuthorizationIdentifier
+                    accountAuthorizationIdentifier: accountScopeIdentifier
                 )
             }
         }
@@ -833,13 +833,13 @@ final class XboxAuthManager {
                 throw CancellationError()
             }
             self.session = updated
-            let accountAuthorizationIdentifier = catalogAccountAuthorizationIdentifier
+            let accountScopeIdentifier = catalogAccountScopeIdentifier
             cancelAuthorizedAccountRefresh()
             authorizedAccount = nil
-            catalogAccountAuthorizationIdentifier = nil
-            if let accountAuthorizationIdentifier {
+            catalogAccountScopeIdentifier = nil
+            if let accountScopeIdentifier {
                 await catalogCache.remove(
-                    accountAuthorizationIdentifier: accountAuthorizationIdentifier
+                    accountAuthorizationIdentifier: accountScopeIdentifier
                 )
             }
             return updated
@@ -938,11 +938,11 @@ final class XboxAuthManager {
     private func acceptAuthorizedAccount(
         _ account: XboxCloudAuthorizedAccount
     ) -> String? {
-        let replacedCatalogAccount = catalogAccountAuthorizationIdentifier
+        let replacedCatalogAccount = catalogAccountScopeIdentifier
         authorizedAccount = account
-        catalogAccountAuthorizationIdentifier = account.authorizationIdentifier
+        catalogAccountScopeIdentifier = account.activityScopeIdentifier
         scheduleAuthorizedAccountRefresh(for: account)
-        guard replacedCatalogAccount != account.authorizationIdentifier else {
+        guard replacedCatalogAccount != account.activityScopeIdentifier else {
             return nil
         }
         return replacedCatalogAccount
@@ -955,6 +955,7 @@ final class XboxAuthManager {
         guard !isCredentialMutationInProgress else { return }
         let delay = max(0, account.expiresAt.timeIntervalSince(now()))
         let accountIdentifier = account.authorizationIdentifier
+        let accountScopeIdentifier = account.activityScopeIdentifier
         let sleep = sleep
         authorizedAccountRefreshGeneration &+= 1
         let generation = authorizedAccountRefreshGeneration
@@ -978,9 +979,9 @@ final class XboxAuthManager {
                 return
             }
             authorizedAccount = nil
-            catalogAccountAuthorizationIdentifier = nil
+            catalogAccountScopeIdentifier = nil
             await catalogCache.remove(
-                accountAuthorizationIdentifier: accountIdentifier
+                accountAuthorizationIdentifier: accountScopeIdentifier
             )
             await activateXboxCloudAccess()
         }
@@ -999,19 +1000,19 @@ final class XboxAuthManager {
         guard credentialGeneration == generation else { return }
         isDeletingCredentials = true
         defer { isDeletingCredentials = false }
-        let accountAuthorizationIdentifier = catalogAccountAuthorizationIdentifier
+        let accountScopeIdentifier = catalogAccountScopeIdentifier
         credentialGeneration &+= 1
         let deletionGeneration = credentialGeneration
         cancelAuthorizedAccountRefresh()
         session = nil
         authorizedAccount = nil
-        catalogAccountAuthorizationIdentifier = nil
+        catalogAccountScopeIdentifier = nil
         authorization = nil
         releaseRuntimeClients()
         await credentialLifecycle?.clearLocalCredentials()
-        if let accountAuthorizationIdentifier {
+        if let accountScopeIdentifier {
             await catalogCache.remove(
-                accountAuthorizationIdentifier: accountAuthorizationIdentifier
+                accountAuthorizationIdentifier: accountScopeIdentifier
             )
         }
         do {

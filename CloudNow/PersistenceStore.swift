@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 nonisolated protocol SecureCredentialStore: Sendable {
@@ -13,6 +14,66 @@ nonisolated protocol PreferencesStore: Sendable {
     func setString(_ value: String, forKey key: String)
     func removeObject(forKey key: String)
     func keys() -> [String]
+}
+
+nonisolated struct CloudCatalogActivitySnapshot: Codable, Equatable, Sendable {
+    static let maximumFavoriteCount = XboxCatalogSnapshot.maximumRetainedItemCount
+    static let maximumRecentlyPlayedCount = 10
+
+    var favoriteIDs: Set<String> = []
+    var recentlyPlayedIDs: [String] = []
+
+    init(
+        favoriteIDs: Set<String> = [],
+        recentlyPlayedIDs: [String] = []
+    ) {
+        var seenRecentlyPlayedIDs: Set<String> = []
+        let normalizedFavoriteIDs = favoriteIDs
+            .compactMap(Self.normalizedGameID)
+            .sorted()
+        self.favoriteIDs = Set(
+            normalizedFavoriteIDs.prefix(Self.maximumFavoriteCount)
+        )
+        self.recentlyPlayedIDs = recentlyPlayedIDs
+            .compactMap(Self.normalizedGameID)
+            .filter { seenRecentlyPlayedIDs.insert($0).inserted }
+            .prefix(Self.maximumRecentlyPlayedCount)
+            .map { $0 }
+    }
+
+    fileprivate var normalized: Self {
+        Self(
+            favoriteIDs: favoriteIDs,
+            recentlyPlayedIDs: recentlyPlayedIDs
+        )
+    }
+
+    private static func normalizedGameID(_ gameID: String) -> String? {
+        let gameID = gameID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !gameID.isEmpty, gameID.utf8.count <= 512 else { return nil }
+        return gameID.uppercased()
+    }
+}
+
+nonisolated struct CloudCatalogActivityLease: Equatable, Sendable {
+    let snapshot: CloudCatalogActivitySnapshot
+    let generation: UInt64
+}
+
+nonisolated protocol XboxCatalogActivityPersistence: Sendable {
+    func loadXboxCatalogActivityLease(
+        accountScope: String?
+    ) async -> CloudCatalogActivityLease
+    func saveXboxFavoriteIDs(
+        _ favoriteIDs: Set<String>,
+        accountScope: String?,
+        expectedGeneration: UInt64
+    ) async
+    func saveXboxRecentlyPlayedIDs(
+        _ recentlyPlayedIDs: [String],
+        accountScope: String?,
+        expectedGeneration: UInt64
+    ) async
 }
 
 nonisolated struct PersistentDataClearResult: Equatable, Sendable {
@@ -131,6 +192,7 @@ actor AppPersistenceStore {
     private enum Key {
         static let selectedCloudGamingProvider = "cloudnow.provider.selected.v1"
         static let xboxCloudStreamSettings = "xbox.streamSettings.v1"
+        static let cloudCatalogActivityPrefix = "cloudnow.catalog.activity.v1"
         static let favoriteIds = "gfn.favoriteIds"
         static let preferredStores = "gfn.preferredStores"
         static let recentlyPlayed = "gfn.recentlyPlayed"
@@ -153,6 +215,7 @@ actor AppPersistenceStore {
     private var authCredentialGeneration: UInt64 = 0
     private var xboxAuthCredentialGeneration: UInt64 = 0
     private var cloudGamingProviderGeneration: UInt64 = 0
+    private var cloudCatalogActivityGeneration: UInt64 = 0
 
     init(
         preferences: any PreferencesStore = UserDefaultsPreferencesStore(),
@@ -236,6 +299,90 @@ actor AppPersistenceStore {
 
     func saveXboxCloudStreamSettings(_ settings: XboxCloudStreamSettings) {
         encode(settings, forKey: Key.xboxCloudStreamSettings)
+    }
+
+    func loadXboxCatalogActivity(
+        accountScope: String?
+    ) -> CloudCatalogActivitySnapshot {
+        guard let key = cloudCatalogActivityKey(
+            provider: .xboxCloudGaming,
+            accountScope: accountScope
+        ) else {
+            return CloudCatalogActivitySnapshot()
+        }
+        return (
+            decode(CloudCatalogActivitySnapshot.self, forKey: key)
+                ?? CloudCatalogActivitySnapshot()
+        ).normalized
+    }
+
+    func loadXboxCatalogActivityLease(
+        accountScope: String?
+    ) -> CloudCatalogActivityLease {
+        CloudCatalogActivityLease(
+            snapshot: loadXboxCatalogActivity(accountScope: accountScope),
+            generation: cloudCatalogActivityGeneration
+        )
+    }
+
+    func saveXboxFavoriteIDs(
+        _ favoriteIDs: Set<String>,
+        accountScope: String?
+    ) {
+        saveXboxFavoriteIDs(
+            favoriteIDs,
+            accountScope: accountScope,
+            expectedGeneration: cloudCatalogActivityGeneration
+        )
+    }
+
+    func saveXboxFavoriteIDs(
+        _ favoriteIDs: Set<String>,
+        accountScope: String?,
+        expectedGeneration: UInt64
+    ) {
+        guard expectedGeneration == cloudCatalogActivityGeneration else {
+            return
+        }
+        guard let key = cloudCatalogActivityKey(
+            provider: .xboxCloudGaming,
+            accountScope: accountScope
+        ) else {
+            return
+        }
+        var snapshot = loadXboxCatalogActivity(accountScope: accountScope)
+        snapshot.favoriteIDs = favoriteIDs
+        encode(snapshot.normalized, forKey: key)
+    }
+
+    func saveXboxRecentlyPlayedIDs(
+        _ recentlyPlayedIDs: [String],
+        accountScope: String?
+    ) {
+        saveXboxRecentlyPlayedIDs(
+            recentlyPlayedIDs,
+            accountScope: accountScope,
+            expectedGeneration: cloudCatalogActivityGeneration
+        )
+    }
+
+    func saveXboxRecentlyPlayedIDs(
+        _ recentlyPlayedIDs: [String],
+        accountScope: String?,
+        expectedGeneration: UInt64
+    ) {
+        guard expectedGeneration == cloudCatalogActivityGeneration else {
+            return
+        }
+        guard let key = cloudCatalogActivityKey(
+            provider: .xboxCloudGaming,
+            accountScope: accountScope
+        ) else {
+            return
+        }
+        var snapshot = loadXboxCatalogActivity(accountScope: accountScope)
+        snapshot.recentlyPlayedIDs = recentlyPlayedIDs
+        encode(snapshot.normalized, forKey: key)
     }
 
     func saveFavoriteIds(_ ids: Set<String>) {
@@ -529,6 +676,7 @@ actor AppPersistenceStore {
     /// restoring data after this deletion completes.
     func clearPersistentData() -> PersistentDataClearResult {
         ownershipCacheGeneration &+= 1
+        cloudCatalogActivityGeneration &+= 1
         authCredentialGeneration &+= 1
         xboxAuthCredentialGeneration &+= 1
         cloudGamingProviderGeneration &+= 1
@@ -563,6 +711,23 @@ actor AppPersistenceStore {
     private func encode(_ value: some Encodable, forKey key: String) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         preferences.setData(data, forKey: key)
+    }
+
+    private func cloudCatalogActivityKey(
+        provider: CloudGamingProvider,
+        accountScope: String?
+    ) -> String? {
+        guard let accountScope = accountScope?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !accountScope.isEmpty,
+            accountScope.utf8.count <= 1024
+        else {
+            return nil
+        }
+        let accountHash = SHA256.hash(data: Data(accountScope.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "\(Key.cloudCatalogActivityPrefix).\(provider.rawValue).\(accountHash)"
     }
 
     private func catalogCacheURL(
@@ -730,3 +895,5 @@ actor AppPersistenceStore {
         return name[start ..< end].contains(".")
     }
 }
+
+extension AppPersistenceStore: XboxCatalogActivityPersistence {}

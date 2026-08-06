@@ -372,6 +372,28 @@ struct XboxContentAccessClientTests {
         }
     }
 
+    @Test("Content Access uses the transport response-size boundary")
+    func usesBoundedTransport() async throws {
+        let fixtureResponse = Self.response(passes: [(Self.ultimateProductID, 0)])
+        let transport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: fixtureResponse)
+        }
+        let client = makeClient(
+            transport: transport,
+            maximumResponseBytes: 1024
+        )
+
+        let snapshot = try await client.fetchContentAccess(
+            for: makeAccount(),
+            market: "US",
+            offeringID: "xgpuweb"
+        )
+
+        #expect(snapshot.membershipTier == .ultimate)
+        #expect(await transport.maximumResponseSizes() == [1024])
+        #expect(await transport.unboundedRequestCount() == 0)
+    }
+
     @Test("Product, access, and subscription maps enforce entry limits")
     func productMapBounds() async throws {
         let excessiveProducts = (0 ... XboxContentAccessSnapshot.maximumProductAccessCount)

@@ -1,6 +1,8 @@
 import Foundation
 
 nonisolated struct XboxCatalogCacheKey: Hashable, Sendable {
+    /// Stable, privacy-preserving account scope. The legacy field name is
+    /// retained to avoid widening the cache API during the Xbox integration.
     let accountAuthorizationIdentifier: String
     let localeIdentifier: String
     let market: String?
@@ -102,7 +104,17 @@ actor XboxCatalogMemoryCache: XboxCatalogCaching {
             cost += 128
             cost += item.id.utf8.count
             cost += item.title.utf8.count
+            cost += item.longDescription?.utf8.count ?? 0
+            cost += item.genres.reduce(0) { $0 + $1.utf8.count }
+            cost += item.developer?.utf8.count ?? 0
+            cost += item.publisher?.utf8.count ?? 0
+            cost += item.contentRating?.utf8.count ?? 0
             cost += item.artworkURL?.absoluteString.utf8.count ?? 0
+            cost += item.heroArtworkURL?.absoluteString.utf8.count ?? 0
+            cost += item.screenshotURLs.reduce(0) {
+                $0 + $1.absoluteString.utf8.count
+            }
+            cost += item.supportedInputTypes.count * 8
             for route in item.routes {
                 cost += 16
                 cost += route.titleID.utf8.count

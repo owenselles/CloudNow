@@ -51,6 +51,68 @@ actor RecordingHTTPTransport {
 /// Kept separate so Sendable isolation inference does not apply to the actor declaration.
 extension RecordingHTTPTransport: HTTPTransport {}
 
+/// A transport probe that fails any unbounded request and records the limits
+/// supplied by clients using the streaming response-size boundary.
+actor BoundedRecordingHTTPTransport {
+    typealias Handler = @Sendable (URLRequest, Int) async throws -> StubbedHTTPResponse
+
+    private let handler: Handler
+    private var recordedRequests: [URLRequest] = []
+    private var recordedMaximumResponseSizes: [Int] = []
+    private var unboundedRequests = 0
+
+    init(handler: @escaping Handler) {
+        self.handler = handler
+    }
+
+    func data(for _: URLRequest) async throws -> (Data, URLResponse) {
+        unboundedRequests += 1
+        throw TestTransportError.unexpectedRequest(
+            "Expected the bounded transport API"
+        )
+    }
+
+    func data(
+        for request: URLRequest,
+        maximumResponseSize: Int
+    ) async throws -> (Data, URLResponse) {
+        guard maximumResponseSize >= 0 else {
+            throw HTTPTransportError.invalidResponseSizeLimit
+        }
+        let index = recordedRequests.count
+        recordedRequests.append(request)
+        recordedMaximumResponseSizes.append(maximumResponseSize)
+        let stub = try await handler(request, index)
+        guard stub.data.count <= maximumResponseSize else {
+            throw HTTPTransportError.responseTooLarge
+        }
+        guard let response = HTTPURLResponse(
+            url: request.url ?? URL(fileURLWithPath: "/"),
+            statusCode: stub.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: stub.headers
+        ) else {
+            throw TestTransportError.invalidHTTPResponse
+        }
+        return (stub.data, response)
+    }
+
+    func requests() -> [URLRequest] {
+        recordedRequests
+    }
+
+    func maximumResponseSizes() -> [Int] {
+        recordedMaximumResponseSizes
+    }
+
+    func unboundedRequestCount() -> Int {
+        unboundedRequests
+    }
+}
+
+/// Kept separate so Sendable isolation inference does not apply to the actor declaration.
+extension BoundedRecordingHTTPTransport: HTTPTransport {}
+
 nonisolated enum TestTransportError: Error, Equatable {
     case unexpectedRequest(String)
     case invalidHTTPResponse
