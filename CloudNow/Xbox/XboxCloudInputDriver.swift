@@ -1,17 +1,31 @@
 import Foundation
 @preconcurrency import GameController
 import Observation
+import os
+
+private nonisolated let xboxInputLog = Logger(
+    subsystem: "com.owenselles.CloudNow2",
+    category: "XboxInput"
+)
 
 nonisolated enum XboxCloudChannelProtocolError: Error, Equatable, Sendable {
     case invalidCorrelationVector
     case invalidHandshake
-    case invalidResolution
     case encodingFailed
 }
 
 nonisolated enum XboxCloudChannelProtocolCodec {
+    /// Public access key sent by Microsoft's Xbox web client after its input
+    /// registration. Authorized quality updates follow on the same channel.
+    private static let controlAccessKey =
+        "4BDB3609-C1F1-4195-9B37-FEFF45DA8B8E"
     private static let messageProtocolVersion = "messageV1"
     private static let maximumCorrelationVectorLength = 126
+
+    private struct AuthorizationRequest: Encodable {
+        let message = "authorizationRequest"
+        let accessKey = XboxCloudChannelProtocolCodec.controlAccessKey
+    }
 
     private struct Handshake: Encodable {
         let type = "Handshake"
@@ -31,37 +45,9 @@ nonisolated enum XboxCloudChannelProtocolCodec {
         let wasAdded: Bool
     }
 
-    private struct Dimensions: Encodable {
-        let width: Int
-        let height: Int
-    }
-
-    private struct VideoPreference: Encodable {
-        let message = "VideoPreference"
-        let type = "VideoPreference"
-        let resolution: Dimensions
-        let dimensions: Dimensions
-        let maxFPS: Int
-    }
-
-    private struct StreamDimensions: Encodable {
-        let horizontal: Int
-        let vertical: Int
-        let preferredWidth: Int
-        let preferredHeight: Int
-        let safeAreaLeft = 0
-        let safeAreaTop = 0
-        let safeAreaRight: Int
-        let safeAreaBottom: Int
-        let supportsCustomResolution = true
-    }
-
-    private struct DimensionsChanged: Encodable {
-        let type = "Message"
-        let target = "/streaming/characteristics/dimensionschanged"
-        let id: String
-        let cv: String
-        let content: String
+    private struct UserRequestedResolutionUpdate: Encodable {
+        let message = "userRequestedResolutionUpdate"
+        let resolutionAlias: String
     }
 
     static func messageHandshake(
@@ -73,6 +59,14 @@ nonisolated enum XboxCloudChannelProtocolCodec {
             return try JSONEncoder().encode(
                 Handshake(id: id.uuidString, cv: cv)
             )
+        } catch {
+            throw XboxCloudChannelProtocolError.encodingFailed
+        }
+    }
+
+    static func authorizationRequest() throws -> Data {
+        do {
+            return try JSONEncoder().encode(AuthorizationRequest())
         } catch {
             throw XboxCloudChannelProtocolError.encodingFailed
         }
@@ -91,65 +85,15 @@ nonisolated enum XboxCloudChannelProtocolCodec {
         }
     }
 
-    static func videoPreference(
-        resolution: XboxCloudDisplayResolution,
-        maximumFrameRate: Int
+    static func userRequestedResolutionUpdate(
+        resolution: XboxCloudDisplayResolution
     ) throws -> Data {
-        guard let width = resolution.width,
-              let height = resolution.height,
-              (1 ... 120).contains(maximumFrameRate)
-        else {
-            throw XboxCloudChannelProtocolError.invalidResolution
-        }
-        let dimensions = Dimensions(width: width, height: height)
         do {
             return try JSONEncoder().encode(
-                VideoPreference(
-                    resolution: dimensions,
-                    dimensions: dimensions,
-                    maxFPS: maximumFrameRate
+                UserRequestedResolutionUpdate(
+                    resolutionAlias: resolution.rawValue
                 )
             )
-        } catch {
-            throw XboxCloudChannelProtocolError.encodingFailed
-        }
-    }
-
-    static func dimensionsChanged(
-        resolution: XboxCloudDisplayResolution,
-        id: UUID,
-        correlationVector: String
-    ) throws -> Data {
-        guard let width = resolution.width,
-              let height = resolution.height
-        else {
-            throw XboxCloudChannelProtocolError.invalidResolution
-        }
-        let streamDimensions = StreamDimensions(
-            horizontal: width,
-            vertical: height,
-            preferredWidth: width,
-            preferredHeight: height,
-            safeAreaRight: width,
-            safeAreaBottom: height
-        )
-        do {
-            let contentData = try JSONEncoder().encode(streamDimensions)
-            guard let content = String(data: contentData, encoding: .utf8) else {
-                throw XboxCloudChannelProtocolError.encodingFailed
-            }
-            return try JSONEncoder().encode(
-                DimensionsChanged(
-                    id: id.uuidString,
-                    cv: extendedCorrelationVector(
-                        correlationVector,
-                        component: 2
-                    ),
-                    content: content
-                )
-            )
-        } catch let error as XboxCloudChannelProtocolError {
-            throw error
         } catch {
             throw XboxCloudChannelProtocolError.encodingFailed
         }
@@ -202,8 +146,194 @@ nonisolated enum XboxCloudChannelProtocolCodec {
     }
 }
 
+/// Tracks accepted sends for one control-channel lifecycle. The bootstrap
+/// predicate below supplies the ordering and backpressure dependencies.
+nonisolated struct XboxCloudControlSendState: Sendable {
+    private(set) var isOpen = false
+    private(set) var didSendAuthorization = false
+    private(set) var didSendResolutionUpdate = false
+
+    var shouldSendAuthorization: Bool {
+        isOpen && !didSendAuthorization
+    }
+
+    var shouldSendResolutionUpdate: Bool {
+        isOpen && !didSendResolutionUpdate
+    }
+
+    mutating func channelStateChanged(isOpen: Bool) {
+        guard self.isOpen != isOpen else { return }
+        self.isOpen = isOpen
+        didSendAuthorization = false
+        didSendResolutionUpdate = false
+    }
+
+    mutating func recordAuthorization(
+        disposition: XboxCloudDataSendDisposition
+    ) {
+        guard shouldSendAuthorization, disposition == .accepted else { return }
+        didSendAuthorization = true
+    }
+
+    mutating func recordResolutionUpdate(
+        disposition: XboxCloudDataSendDisposition
+    ) {
+        guard shouldSendResolutionUpdate, disposition == .accepted else {
+            return
+        }
+        didSendResolutionUpdate = true
+    }
+
+    mutating func reset() {
+        self = Self()
+    }
+}
+
+/// Pure bootstrap predicate shared by the worker and focused tests. Each
+/// accepted frame unlocks only the next protocol phase. Controller bootstrap
+/// precedes authorization; the preferred resolution is an authorized update.
+nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
+    var isTransportReady: Bool
+    var hasInputVersion: Bool
+    var isInputChannelOpen: Bool
+    var didSendClientMetadata: Bool
+    var hasPendingControlUpdates: Bool
+    var hasAttachedController: Bool
+    var didSendInitialControllerReport: Bool
+    var didSendAuthorization: Bool
+    var didSendResolutionUpdate: Bool
+
+    var canSendControlUpdates: Bool {
+        isTransportReady && didSendClientMetadata
+    }
+
+    var canSendControllerReport: Bool {
+        canSendControlUpdates && !hasPendingControlUpdates
+    }
+
+    var initialControllerReportSatisfied: Bool {
+        !hasAttachedController || didSendInitialControllerReport
+    }
+
+    var canSendResolutionUpdate: Bool {
+        canSendAuthorization && didSendAuthorization
+    }
+
+    var canSendAuthorization: Bool {
+        isTransportReady
+            && hasInputVersion
+            && isInputChannelOpen
+            && didSendClientMetadata
+            && !hasPendingControlUpdates
+            && initialControllerReportSatisfied
+    }
+
+    func isPublishedReady(
+        isMessageChannelOpen: Bool,
+        didReceiveMessageHandshake: Bool
+    ) -> Bool {
+        canSendAuthorization
+            && didSendAuthorization
+            && didSendResolutionUpdate
+            && isMessageChannelOpen
+            && didReceiveMessageHandshake
+    }
+}
+
+nonisolated enum XboxCloudControllerRegistrationPolicy {
+    static func pendingUpdate(
+        isAttached: Bool,
+        isRegistered: Bool
+    ) -> Bool? {
+        if isAttached {
+            return isRegistered ? nil : true
+        }
+        return isRegistered ? false : nil
+    }
+}
+
+nonisolated enum XboxModernPausedInputPolicy {
+    static func shouldAttemptSend(
+        needsNeutralSnapshot: Bool,
+        hasUnacknowledgedFrame: Bool
+    ) -> Bool {
+        needsNeutralSnapshot || hasUnacknowledgedFrame
+    }
+}
+
+nonisolated enum XboxModernControllerSlotPolicy {
+    static func selectedSlot(
+        current: Int?,
+        occupiedSlots: [Bool]
+    ) -> Int? {
+        if let current,
+           occupiedSlots.indices.contains(current),
+           occupiedSlots[current]
+        {
+            return current
+        }
+        return occupiedSlots.firstIndex(of: true)
+    }
+}
+
+nonisolated struct XboxCloudInboundMessageBudget: Sendable {
+    private(set) var pendingCount = 0
+    private(set) var hasPendingHandshake = false
+    private(set) var activeGeneration: UInt64?
+    private let capacity: Int
+
+    init(capacity: Int = 128) {
+        self.capacity = max(1, capacity)
+    }
+
+    mutating func activate(generation: UInt64) {
+        activeGeneration = generation
+        pendingCount = 0
+        hasPendingHandshake = false
+    }
+
+    mutating func deactivate(generation: UInt64) {
+        guard activeGeneration == generation else { return }
+        activeGeneration = nil
+        pendingCount = 0
+        hasPendingHandshake = false
+    }
+
+    mutating func reserve(generation: UInt64) -> Bool {
+        guard activeGeneration == generation,
+              pendingCount < capacity
+        else {
+            return false
+        }
+        pendingCount += 1
+        return true
+    }
+
+    mutating func complete(generation: UInt64) {
+        guard activeGeneration == generation else { return }
+        pendingCount = max(0, pendingCount - 1)
+    }
+
+    mutating func reserveHandshake(generation: UInt64) -> Bool {
+        guard activeGeneration == generation,
+              !hasPendingHandshake
+        else {
+            return false
+        }
+        hasPendingHandshake = true
+        return true
+    }
+
+    mutating func completeHandshake(generation: UInt64) {
+        guard activeGeneration == generation else { return }
+        hasPendingHandshake = false
+    }
+}
+
 private nonisolated struct XboxCloudInputDataSink: Sendable {
     let sendInput: @Sendable (Data) -> XboxCloudDataSendDisposition
+    let sendReliableInput: @Sendable (Data) -> XboxCloudDataSendDisposition
+    let sendUnreliableInput: @Sendable (Data) -> XboxCloudDataSendDisposition
     let sendControl: @Sendable (Data) -> XboxCloudDataSendDisposition
     let sendMessage: @Sendable (Data) -> XboxCloudDataSendDisposition
 }
@@ -273,10 +403,19 @@ nonisolated struct XboxCloudInputStateCache: Sendable {
 /// The unchecked conformance is safe because every mutable field below is
 /// accessed only by `queue`; public entry points enqueue or synchronize work.
 private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
+    private struct ClaimedSystemGesture {
+        let element: GCControllerElement
+        let previousState: GCControllerElement.SystemGestureState
+    }
+
     private struct ControllerSlot {
         let controller: GCController
         let identifier: ObjectIdentifier
         let haptics: ControllerHaptics?
+        let previousHandlerQueue: DispatchQueue
+        let previousPlayerIndex: GCControllerPlayerIndex
+        let previousValueChangedHandler: GCExtendedGamepadValueChangedHandler?
+        let claimedSystemGestures: [ClaimedSystemGesture]
     }
 
     private enum RumblePhase {
@@ -301,11 +440,13 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         XboxCloudInputStateCache.minimumSendIntervalNanoseconds
     )
     private static let maximumRumbleIterations = 8
-    private static let maximumXboxStreamFrameRate = 60
 
     private let queue = DispatchQueue(
         label: "com.cloudnow.xbox-input",
         qos: .userInteractive
+    )
+    private let inboundMessageBudget = OSAllocatedUnfairLock(
+        initialState: XboxCloudInboundMessageBudget()
     )
     private let deadzone: Float
     private let rumbleEnabled: Bool
@@ -324,6 +465,10 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         repeating: nil,
         count: controllerCapacity
     )
+    private var registeredControllerPresence = Array(
+        repeating: false,
+        count: controllerCapacity
+    )
     private var rumblePlaybacks: [RumblePlayback?] = Array(
         repeating: nil,
         count: controllerCapacity
@@ -331,20 +476,31 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var rumbleSequence: UInt64 = 0
     private var sampledStates: [XboxGamepadState] = []
     private var inputStateCache = XboxCloudInputStateCache()
+    private var modernInputState = XboxModernInputStateTracker()
+    private var modernInputSendCadence = XboxModernInputSendCadence()
+    private var modernControllerSlotIndex: Int?
     private var encoder = XboxLegacyInputEncoder()
-    private var inputVersion: Int?
+    private var inputMode: XboxCloudInputTransportMode?
+    private var controlAuthorizationData: Data?
     private var messageHandshakeData: Data?
-    private var videoPreferenceData: Data?
-    private var dimensionsChangedData: Data?
-    private var isControlChannelOpen = false
+    private var resolutionUpdateData: Data?
+    private var controlSendState = XboxCloudControlSendState()
+    private var isTransportReady = false
     private var isInputChannelOpen = false
+    private var isReliableInputChannelOpen = false
+    private var isUnreliableInputChannelOpen = false
     private var isMessageChannelOpen = false
     private var didSendClientMetadata = false
+    private var didSendInitialControllerReport = false
     private var didSendMessageHandshake = false
     private var didReceiveMessageHandshake = false
-    private var didSendVideoPreference = false
-    private var didSendDimensionsChanged = false
     private var lastReportedReadiness = false
+    private var isPaused = false
+    private var needsPausedNeutralSnapshot = false
+    private var didLogAuthorizationDeferred = false
+    private var didLogFirstControllerActivity = false
+    private var didLogFirstInputReport = false
+    private var didLogFirstModernAcknowledgement = false
 
     init(
         deadzone: Float,
@@ -369,26 +525,24 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         queue.sync {
             stopLocked()
             self.generation = generation
+            inboundMessageBudget.withLock {
+                $0.activate(generation: generation)
+            }
             self.sink = sink
             self.readinessChanged = readinessChanged
+            controlAuthorizationData = try? XboxCloudChannelProtocolCodec
+                .authorizationRequest()
             messageHandshakeData = try? XboxCloudChannelProtocolCodec
                 .messageHandshake(
                     id: UUID(),
                     correlationVector: correlationVector
                 )
-            videoPreferenceData = try? XboxCloudChannelProtocolCodec
-                .videoPreference(
-                    resolution: preferredResolution,
-                    maximumFrameRate: Self.maximumXboxStreamFrameRate
-                )
-            dimensionsChangedData = try? XboxCloudChannelProtocolCodec
-                .dimensionsChanged(
-                    resolution: preferredResolution,
-                    id: UUID(),
-                    correlationVector: correlationVector
+            resolutionUpdateData = try? XboxCloudChannelProtocolCodec
+                .userRequestedResolutionUpdate(
+                    resolution: preferredResolution
                 )
             controllers.forEach(attachControllerLocked)
-            flushControlUpdatesLocked()
+            sampleAndFlushLocked()
 
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(
@@ -410,28 +564,86 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
-    func setNegotiatedInputVersion(
-        _ version: Int,
+    func setNegotiatedInputMode(
+        _ mode: XboxCloudInputTransportMode,
         generation expectedGeneration: UInt64
     ) {
         queue.async { [weak self] in
             guard let self, generation == expectedGeneration else { return }
-            inputVersion = version
+            inputMode = mode
             didSendClientMetadata = false
+            didSendInitialControllerReport = false
             inputStateCache.reset()
+            if case .unreliable = mode {
+                resetModernInputStateLocked()
+            } else {
+                modernInputState.reset()
+                modernInputSendCadence.reset()
+                modernControllerSlotIndex = nil
+            }
+            resetControllerRegistrationLocked(
+                controlIsOpen: controlSendState.isOpen
+            )
+            xboxInputLog.notice(
+                "[Input] selected mode=\(mode.diagnosticName, privacy: .public) version=\(mode.reportVersion, privacy: .public)"
+            )
             sampleAndFlushLocked()
         }
     }
 
-    /// Forces one bounded controller snapshot through the existing sampler.
-    /// Xbox uses input traffic alongside the REST heartbeat to keep an idle
-    /// play session active. Invalidating slot zero avoids synthesizing input:
-    /// the next report contains the controller's unchanged physical state.
+    func setTransportReady(
+        _ isReady: Bool,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self, generation == expectedGeneration else { return }
+            isTransportReady = isReady
+            sampleAndFlushLocked()
+        }
+    }
+
+    /// Keeps the controller path alive alongside the REST heartbeat. Legacy
+    /// input invalidates its cache; V2 emits Xbox's bounded virtual-axis pulse.
     func sendKeepAlive(generation expectedGeneration: UInt64) {
         queue.async { [weak self] in
             guard let self, generation == expectedGeneration else { return }
-            inputStateCache.invalidate(index: 0)
-            sendGamepadSnapshotLocked()
+            guard !isPaused else {
+                sendPausedNeutralSnapshotLocked()
+                return
+            }
+            if case let .unreliable(_, version) = inputMode {
+                _ = modernInputState.recordVirtualKeepAlive()
+                sendPendingModernGamepadSnapshotLocked(version: version)
+            } else {
+                inputStateCache.invalidate(index: 0)
+                sendGamepadSnapshotLocked()
+            }
+        }
+    }
+
+    func setPaused(
+        _ paused: Bool,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self,
+                  generation == expectedGeneration,
+                  isPaused != paused
+            else {
+                return
+            }
+            isPaused = paused
+            if paused {
+                needsPausedNeutralSnapshot = true
+                for index in rumblePlaybacks.indices {
+                    cancelRumbleLocked(index: index)
+                }
+                sendPausedNeutralSnapshotLocked()
+            } else {
+                needsPausedNeutralSnapshot = false
+                inputStateCache.reset()
+                sendGamepadSnapshotLocked()
+            }
         }
     }
 
@@ -444,29 +656,66 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             guard let self, generation == expectedGeneration else { return }
             switch kind {
             case .control:
-                isControlChannelOpen = isOpen
-                if isOpen {
-                    didSendVideoPreference = false
-                    for index in controllerSlots.indices
-                        where controllerSlots[index] != nil
-                    {
-                        pendingControlUpdates[index] = true
+                if !isOpen {
+                    isTransportReady = false
+                }
+                let wasOpen = controlSendState.isOpen
+                controlSendState.channelStateChanged(isOpen: isOpen)
+                if wasOpen != isOpen {
+                    didLogAuthorizationDeferred = false
+                    resetControllerRegistrationLocked(controlIsOpen: isOpen)
+                    if isOpen {
+                        didSendInitialControllerReport = false
+                        inputStateCache.reset()
+                        if case .unreliable = inputMode {
+                            resetModernInputStateLocked()
+                        } else {
+                            modernInputState.reset()
+                            modernInputSendCadence.reset()
+                            modernControllerSlotIndex = nil
+                        }
+                        needsPausedNeutralSnapshot = isPaused
                     }
                 }
             case .input:
+                if !isOpen {
+                    isTransportReady = false
+                }
                 isInputChannelOpen = isOpen
-                if isOpen {
+                if isOpen, case .legacy = inputMode {
                     didSendClientMetadata = false
+                    didSendInitialControllerReport = false
                     inputStateCache.reset()
+                    needsPausedNeutralSnapshot = isPaused
+                }
+            case .reliableInput:
+                if !isOpen, case .unreliable = inputMode {
+                    isTransportReady = false
+                }
+                isReliableInputChannelOpen = isOpen
+                if isOpen, case .unreliable = inputMode {
+                    didSendClientMetadata = false
+                }
+            case .unreliableInput:
+                if !isOpen, case .unreliable = inputMode {
+                    isTransportReady = false
+                }
+                isUnreliableInputChannelOpen = isOpen
+                if isOpen, case .unreliable = inputMode {
+                    didSendInitialControllerReport = false
+                    resetModernInputStateLocked()
+                    needsPausedNeutralSnapshot = isPaused
                 }
             case .message:
+                if !isOpen {
+                    isTransportReady = false
+                }
                 isMessageChannelOpen = isOpen
                 if isOpen {
                     didSendMessageHandshake = false
                     didReceiveMessageHandshake = false
-                    didSendDimensionsChanged = false
                 }
-            case .chat, .unreliableInput, .reliableInput:
+            case .chat:
                 break
             }
             sampleAndFlushLocked()
@@ -478,8 +727,37 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         on kind: XboxCloudDataChannelKind,
         generation expectedGeneration: UInt64
     ) {
+        let isHandshakeAcknowledgement: Bool
+        if kind == .message {
+            guard XboxCloudChannelProtocolCodec
+                .isHandshakeAcknowledgement(data)
+            else { return }
+            isHandshakeAcknowledgement = true
+        } else {
+            isHandshakeAcknowledgement = false
+        }
+        let didReserve = inboundMessageBudget.withLock { budget in
+            if isHandshakeAcknowledgement {
+                budget.reserveHandshake(generation: expectedGeneration)
+            } else {
+                budget.reserve(generation: expectedGeneration)
+            }
+        }
+        guard didReserve else { return }
         queue.async { [weak self] in
-            guard let self, generation == expectedGeneration else { return }
+            guard let self else { return }
+            defer {
+                inboundMessageBudget.withLock { budget in
+                    if isHandshakeAcknowledgement {
+                        budget.completeHandshake(
+                            generation: expectedGeneration
+                        )
+                    } else {
+                        budget.complete(generation: expectedGeneration)
+                    }
+                }
+            }
+            guard generation == expectedGeneration else { return }
             switch kind {
             case .message:
                 if XboxCloudChannelProtocolCodec
@@ -489,16 +767,32 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                     sampleAndFlushLocked()
                 }
             case .input, .unreliableInput, .reliableInput:
-                guard let inputVersion,
+                guard let inputMode,
                       let feedback = try? XboxLegacyInputFeedbackDecoder.decode(
                           data,
-                          version: inputVersion
+                          version: Self.feedbackVersion(
+                              for: kind,
+                              mode: inputMode
+                          )
                       )
                 else {
                     return
                 }
-                if case let .rumble(command) = feedback {
+                switch feedback {
+                case let .rumble(command):
                     applyRumbleLocked(command)
+                case let .unreliableInputAcknowledgement(frameID):
+                    guard modernInputState.acknowledge(frameID: frameID) else {
+                        return
+                    }
+                    if !didLogFirstModernAcknowledgement {
+                        didLogFirstModernAcknowledgement = true
+                        xboxInputLog.notice(
+                            "[Input] first modern acknowledgement received"
+                        )
+                    }
+                case .serverMetadata:
+                    break
                 }
             case .chat, .control:
                 break
@@ -513,7 +807,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self, generation == expectedGeneration else { return }
             attachControllerLocked(controller)
-            flushControlUpdatesLocked()
+            sampleAndFlushLocked()
         }
     }
 
@@ -524,14 +818,14 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self, generation == expectedGeneration else { return }
             detachControllerLocked(controller)
-            flushControlUpdatesLocked()
+            sampleAndFlushLocked()
         }
     }
 
     private func stopLocked() {
-        if isControlChannelOpen {
+        if controlSendState.isOpen {
             for index in controllerSlots.indices
-                where controllerSlots[index] != nil
+                where registeredControllerPresence[index]
             {
                 sendControlUpdateLocked(index: index, wasAdded: false)
             }
@@ -543,33 +837,47 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
 
         for index in controllerSlots.indices {
             cancelRumbleLocked(index: index)
-            controllerSlots[index]?.haptics?.cleanup()
-            controllerSlots[index] = nil
+            releaseControllerLocked(index: index)
             pendingControlUpdates[index] = nil
+            registeredControllerPresence[index] = false
         }
         sampledStates.removeAll(keepingCapacity: true)
         inputStateCache.reset()
         sink = nil
         readinessChanged = nil
+        inboundMessageBudget.withLock {
+            $0.deactivate(generation: generation)
+        }
         generation = 0
-        inputVersion = nil
+        inputMode = nil
+        controlAuthorizationData = nil
         messageHandshakeData = nil
-        videoPreferenceData = nil
-        dimensionsChangedData = nil
-        isControlChannelOpen = false
+        resolutionUpdateData = nil
+        controlSendState.reset()
+        isTransportReady = false
         isInputChannelOpen = false
+        isReliableInputChannelOpen = false
+        isUnreliableInputChannelOpen = false
         isMessageChannelOpen = false
         didSendClientMetadata = false
+        didSendInitialControllerReport = false
         didSendMessageHandshake = false
         didReceiveMessageHandshake = false
-        didSendVideoPreference = false
-        didSendDimensionsChanged = false
         lastReportedReadiness = false
+        isPaused = false
+        needsPausedNeutralSnapshot = false
+        didLogAuthorizationDeferred = false
+        didLogFirstControllerActivity = false
+        didLogFirstInputReport = false
+        didLogFirstModernAcknowledgement = false
         encoder = XboxLegacyInputEncoder()
+        modernInputState.reset()
+        modernInputSendCadence.reset()
+        modernControllerSlotIndex = nil
     }
 
     private func attachControllerLocked(_ controller: GCController) {
-        guard controller.extendedGamepad != nil else { return }
+        guard let gamepad = controller.extendedGamepad else { return }
         let identifier = ObjectIdentifier(controller)
         guard !controllerSlots.contains(where: {
             $0?.identifier == identifier
@@ -579,6 +887,17 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             return
         }
 
+        let previousHandlerQueue = controller.handlerQueue
+        let previousPlayerIndex = controller.playerIndex
+        let previousValueChangedHandler = gamepad.valueChangedHandler
+        controller.handlerQueue = queue
+        controller.playerIndex = Self.playerIndex(for: index)
+        let claimedSystemGestures = claimControllerInputLocked(gamepad)
+        gamepad.valueChangedHandler = { [weak self, weak controller] _, _ in
+            guard let self, let controller else { return }
+            controllerValueChangedLocked(controller)
+        }
+
         let haptics = rumbleEnabled
             ? ControllerHaptics(controller: controller)
             : nil
@@ -586,10 +905,38 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         controllerSlots[index] = ControllerSlot(
             controller: controller,
             identifier: identifier,
-            haptics: haptics
+            haptics: haptics,
+            previousHandlerQueue: previousHandlerQueue,
+            previousPlayerIndex: previousPlayerIndex,
+            previousValueChangedHandler: previousValueChangedHandler,
+            claimedSystemGestures: claimedSystemGestures
         )
         inputStateCache.invalidate(index: index)
-        pendingControlUpdates[index] = true
+        if case .unreliable = inputMode {
+            let previousSlot = modernControllerSlotIndex
+            selectModernControllerSlotLocked()
+            if previousSlot == nil, modernControllerSlotIndex != nil {
+                modernInputState.attach()
+                pendingControlUpdates[0] =
+                    XboxCloudControllerRegistrationPolicy.pendingUpdate(
+                        isAttached: true,
+                        isRegistered: registeredControllerPresence[0]
+                    )
+            }
+        } else {
+            pendingControlUpdates[index] = XboxCloudControllerRegistrationPolicy
+                .pendingUpdate(
+                    isAttached: true,
+                    isRegistered: registeredControllerPresence[index]
+                )
+        }
+        if isPaused {
+            needsPausedNeutralSnapshot = true
+        }
+        let controllerCount = attachedControllerCount
+        xboxInputLog.notice(
+            "[Controller] attached slot=\(index, privacy: .public) total=\(controllerCount, privacy: .public)"
+        )
     }
 
     private func detachControllerLocked(_ controller: GCController) {
@@ -600,25 +947,60 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             return
         }
 
+        let wasModernActiveController = if case .unreliable = inputMode {
+            modernControllerSlotIndex == index
+        } else {
+            false
+        }
         cancelRumbleLocked(index: index)
-        controllerSlots[index]?.haptics?.cleanup()
-        controllerSlots[index] = nil
+        releaseControllerLocked(index: index)
         inputStateCache.invalidate(index: index)
-        pendingControlUpdates[index] = false
+        if case .unreliable = inputMode {
+            selectModernControllerSlotLocked()
+            if modernControllerSlotIndex == nil {
+                modernInputState.detach()
+                pendingControlUpdates[0] =
+                    XboxCloudControllerRegistrationPolicy.pendingUpdate(
+                        isAttached: false,
+                        isRegistered: registeredControllerPresence[0]
+                    )
+            } else if wasModernActiveController {
+                recordActiveModernControllerStateLocked()
+            }
+        } else {
+            pendingControlUpdates[index] = XboxCloudControllerRegistrationPolicy
+                .pendingUpdate(
+                    isAttached: false,
+                    isRegistered: registeredControllerPresence[index]
+                )
+        }
+        let controllerCount = attachedControllerCount
+        xboxInputLog.notice(
+            "[Controller] detached slot=\(index, privacy: .public) total=\(controllerCount, privacy: .public)"
+        )
     }
 
     private func sampleAndFlushLocked() {
-        flushVideoPreferenceLocked()
-        flushControlUpdatesLocked()
         flushMessageHandshakeLocked()
-        flushDimensionsChangedLocked()
         flushClientMetadataLocked()
-        sendGamepadSnapshotLocked()
+        flushControlUpdatesLocked()
+        if isPaused {
+            sendPausedNeutralSnapshotLocked()
+        } else {
+            sendGamepadSnapshotLocked()
+        }
+        flushControlAuthorizationLocked()
+        flushResolutionUpdateLocked()
         updateReadinessLocked()
     }
 
     private func flushControlUpdatesLocked() {
-        guard isControlChannelOpen, let sink else { return }
+        guard bootstrapState.canSendControlUpdates,
+              controlSendState.isOpen,
+              let sink
+        else {
+            return
+        }
         for index in pendingControlUpdates.indices {
             guard let wasAdded = pendingControlUpdates[index],
                   let data = try? XboxCloudChannelProtocolCodec.gamepadChanged(
@@ -629,25 +1011,53 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 continue
             }
             if sink.sendControl(data) == .accepted {
+                registeredControllerPresence[index] = wasAdded
                 pendingControlUpdates[index] = nil
             }
         }
     }
 
-    private func flushVideoPreferenceLocked() {
-        guard isControlChannelOpen,
-              !didSendVideoPreference,
+    private func flushResolutionUpdateLocked() {
+        guard bootstrapState.canSendResolutionUpdate,
+              controlSendState.shouldSendResolutionUpdate,
               let sink,
-              let videoPreferenceData
+              let resolutionUpdateData
         else {
             return
         }
-        didSendVideoPreference =
-            sink.sendControl(videoPreferenceData) == .accepted
+        controlSendState.recordResolutionUpdate(
+            disposition: sink.sendControl(resolutionUpdateData)
+        )
+        if controlSendState.didSendResolutionUpdate {
+            let resolutionAlias = preferredResolution.rawValue
+            xboxInputLog.notice(
+                "[Control] preferred resolution queued alias=\(resolutionAlias, privacy: .public) authorized=true"
+            )
+        }
+    }
+
+    private func flushControlAuthorizationLocked() {
+        guard bootstrapState.canSendAuthorization,
+              controlSendState.shouldSendAuthorization,
+              let sink,
+              let controlAuthorizationData
+        else {
+            return
+        }
+        let disposition = sink.sendControl(controlAuthorizationData)
+        controlSendState.recordAuthorization(disposition: disposition)
+        if disposition == .accepted {
+            xboxInputLog.notice("[Control] authorization queued")
+            didLogAuthorizationDeferred = false
+        } else if !didLogAuthorizationDeferred {
+            xboxInputLog.info("[Control] authorization deferred; retrying")
+            didLogAuthorizationDeferred = true
+        }
     }
 
     private func sendControlUpdateLocked(index: Int, wasAdded: Bool) {
-        guard let sink,
+        guard controlSendState.isOpen,
+              let sink,
               let data = try? XboxCloudChannelProtocolCodec.gamepadChanged(
                   index: UInt8(index),
                   wasAdded: wasAdded
@@ -670,45 +1080,54 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             sink.sendMessage(messageHandshakeData) == .accepted
     }
 
-    private func flushDimensionsChangedLocked() {
-        guard isMessageChannelOpen,
-              didReceiveMessageHandshake,
-              !didSendDimensionsChanged,
-              let sink,
-              let dimensionsChangedData
-        else {
-            return
-        }
-        didSendDimensionsChanged =
-            sink.sendMessage(dimensionsChangedData) == .accepted
-    }
-
     private func flushClientMetadataLocked() {
-        guard isInputChannelOpen,
+        guard metadataChannelIsOpen,
               !didSendClientMetadata,
-              let inputVersion,
+              let inputMode,
               let sink
         else {
             return
         }
         do {
             guard let data = try encoder.encodeClientMetadata(
-                version: inputVersion,
+                version: inputMode.metadataVersion,
                 timestampMilliseconds: Self.timestampMilliseconds()
             ) else {
                 didSendClientMetadata = true
                 return
             }
-            didSendClientMetadata = sink.sendInput(data) == .accepted
+            let disposition = switch inputMode {
+            case .legacy:
+                sink.sendInput(data)
+            case .unreliable:
+                sink.sendReliableInput(data)
+            }
+            didSendClientMetadata = disposition == .accepted
+            if didSendClientMetadata {
+                xboxInputLog.notice(
+                    "[Input] client metadata queued mode=\(inputMode.diagnosticName, privacy: .public)"
+                )
+            }
         } catch {
             didSendClientMetadata = false
         }
     }
 
     private func sendGamepadSnapshotLocked() {
-        guard isInputChannelOpen,
+        guard let inputMode else { return }
+        switch inputMode {
+        case let .legacy(version):
+            sendLegacyGamepadSnapshotLocked(version: version)
+        case let .unreliable(_, unreliableVersion):
+            sendModernGamepadSnapshotLocked(version: unreliableVersion)
+        }
+    }
+
+    private func sendLegacyGamepadSnapshotLocked(version: Int) {
+        guard !isPaused,
+              bootstrapState.canSendControllerReport,
+              isInputChannelOpen,
               didSendClientMetadata,
-              let inputVersion,
               let sink
         else {
             return
@@ -732,40 +1151,333 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             }
             inputStateCache.appendIfDirty(state, to: &sampledStates)
         }
-        guard !sampledStates.isEmpty,
-              let data = try? encoder.encodeGamepads(
-                  sampledStates,
-                  version: inputVersion,
-                  timestampMilliseconds: Double(timestampNanoseconds)
-                      / 1_000_000
-              )
-        else {
+        guard !sampledStates.isEmpty else {
+            didSendInitialControllerReport = true
             return
         }
+        guard let data = try? encoder.encodeGamepads(
+            sampledStates,
+            version: version,
+            timestampMilliseconds: Double(timestampNanoseconds) / 1_000_000
+        ) else { return }
         let disposition = sink.sendInput(data)
         inputStateCache.recordSendAttempt(
             sampledStates,
             at: timestampNanoseconds,
             accepted: disposition == .accepted
         )
+        if disposition == .accepted {
+            didSendInitialControllerReport = true
+        }
+        if disposition == .accepted, !didLogFirstInputReport {
+            didLogFirstInputReport = true
+            let reportCount = sampledStates.count
+            xboxInputLog.notice(
+                "[Input] first controller report queued count=\(reportCount, privacy: .public)"
+            )
+        }
+    }
+
+    private func sendModernGamepadSnapshotLocked(version: Int) {
+        guard !isPaused,
+              bootstrapState.canSendControllerReport,
+              isUnreliableInputChannelOpen,
+              didSendClientMetadata
+        else {
+            return
+        }
+        if let modernControllerSlotIndex,
+           controllerSlots.indices.contains(modernControllerSlotIndex),
+           let controller = controllerSlots[modernControllerSlotIndex]?.controller,
+           let state = XboxCloudInputValueMapper.gamepadState(
+               controller: controller,
+               index: 0,
+               deadzone: deadzone
+           )
+        {
+            _ = modernInputState.record(state)
+        }
+        sendPendingModernGamepadSnapshotLocked(version: version)
+    }
+
+    private func sendPendingModernGamepadSnapshotLocked(version: Int) {
+        guard !isPaused,
+              bootstrapState.canSendControllerReport,
+              isUnreliableInputChannelOpen,
+              didSendClientMetadata,
+              let sink
+        else {
+            return
+        }
+        let timestampNanoseconds = DispatchTime.now().uptimeNanoseconds
+        guard let frame = modernInputState.frameForTransmission(),
+              modernInputSendCadence.canAttempt(
+                  frameID: frame.frameID,
+                  at: timestampNanoseconds
+              ),
+              let data = try? XboxModernInputEncoder.encode(
+                  frame,
+                  version: version,
+                  inputToken: encoder.reserveInputToken(),
+                  timestampMilliseconds: Double(timestampNanoseconds) / 1_000_000
+              )
+        else {
+            if attachedControllerCount == 0 {
+                didSendInitialControllerReport = true
+            }
+            return
+        }
+        let disposition = sink.sendUnreliableInput(data)
+        guard disposition == .accepted else { return }
+        modernInputSendCadence.recordAccepted(
+            frameID: frame.frameID,
+            at: timestampNanoseconds
+        )
+        didSendInitialControllerReport = true
+        if !didLogFirstInputReport {
+            didLogFirstInputReport = true
+            xboxInputLog.notice(
+                "[Input] first modern controller report queued bytes=\(data.count, privacy: .public)"
+            )
+        }
+    }
+
+    private func sendPausedNeutralSnapshotLocked() {
+        guard let inputMode else { return }
+        switch inputMode {
+        case let .legacy(version):
+            sendLegacyPausedNeutralSnapshotLocked(version: version)
+        case let .unreliable(_, unreliableVersion):
+            sendModernPausedNeutralSnapshotLocked(version: unreliableVersion)
+        }
+    }
+
+    private func sendLegacyPausedNeutralSnapshotLocked(version: Int) {
+        guard isPaused,
+              needsPausedNeutralSnapshot,
+              bootstrapState.canSendControllerReport,
+              isInputChannelOpen,
+              didSendClientMetadata,
+              let sink
+        else {
+            return
+        }
+        sampledStates.removeAll(keepingCapacity: true)
+        for index in controllerSlots.indices
+            where controllerSlots[index] != nil
+        {
+            sampledStates.append(XboxGamepadState(index: UInt8(index)))
+        }
+        guard !sampledStates.isEmpty else {
+            needsPausedNeutralSnapshot = false
+            return
+        }
+        let timestampNanoseconds = DispatchTime.now().uptimeNanoseconds
+        guard let data = try? encoder.encodeGamepads(
+            sampledStates,
+            version: version,
+            timestampMilliseconds: Double(timestampNanoseconds) / 1_000_000
+        ) else {
+            return
+        }
+        guard sink.sendInput(data) == .accepted else { return }
+        inputStateCache.recordSendAttempt(
+            sampledStates,
+            at: timestampNanoseconds,
+            accepted: true
+        )
+        didSendInitialControllerReport = true
+        needsPausedNeutralSnapshot = false
+        let reportCount = sampledStates.count
+        xboxInputLog.notice(
+            "[Input] paused neutral queued count=\(reportCount, privacy: .public)"
+        )
+    }
+
+    private func sendModernPausedNeutralSnapshotLocked(version: Int) {
+        guard isPaused,
+              bootstrapState.canSendControllerReport,
+              isUnreliableInputChannelOpen,
+              didSendClientMetadata,
+              let sink
+        else {
+            return
+        }
+        guard attachedControllerCount > 0 else {
+            needsPausedNeutralSnapshot = false
+            return
+        }
+        guard XboxModernPausedInputPolicy.shouldAttemptSend(
+            needsNeutralSnapshot: needsPausedNeutralSnapshot,
+            hasUnacknowledgedFrame: modernInputState.frameForTransmission() != nil
+        ) else {
+            return
+        }
+        let shouldCreateNeutralSnapshot = needsPausedNeutralSnapshot
+        if shouldCreateNeutralSnapshot {
+            _ = modernInputState.record(XboxGamepadState(index: 0))
+            needsPausedNeutralSnapshot = false
+        }
+        guard let frame = modernInputState.frameForTransmission() else {
+            return
+        }
+        let timestampNanoseconds = DispatchTime.now().uptimeNanoseconds
+        guard modernInputSendCadence.canAttempt(
+            frameID: frame.frameID,
+            at: timestampNanoseconds
+        ),
+            let data = try? XboxModernInputEncoder.encode(
+                frame,
+                version: version,
+                inputToken: encoder.reserveInputToken(),
+                timestampMilliseconds: Double(timestampNanoseconds) / 1_000_000
+            )
+        else {
+            return
+        }
+        guard sink.sendUnreliableInput(data) == .accepted else { return }
+        modernInputSendCadence.recordAccepted(
+            frameID: frame.frameID,
+            at: timestampNanoseconds
+        )
+        didSendInitialControllerReport = true
+        if shouldCreateNeutralSnapshot {
+            xboxInputLog.notice("[Input] paused modern neutral queued")
+        }
     }
 
     private func updateReadinessLocked() {
-        let nextValue = inputVersion != nil
-            && isInputChannelOpen
-            && didSendClientMetadata
-            && isMessageChannelOpen
-            && didReceiveMessageHandshake
+        let nextValue = bootstrapState.isPublishedReady(
+            isMessageChannelOpen: isMessageChannelOpen,
+            didReceiveMessageHandshake: didReceiveMessageHandshake
+        )
         guard nextValue != lastReportedReadiness else { return }
         lastReportedReadiness = nextValue
         readinessChanged?(generation, nextValue)
     }
 
+    private var bootstrapState: XboxCloudInputBootstrapState {
+        XboxCloudInputBootstrapState(
+            isTransportReady: isTransportReady,
+            hasInputVersion: inputMode != nil,
+            isInputChannelOpen: negotiatedInputChannelsAreOpen,
+            didSendClientMetadata: didSendClientMetadata,
+            hasPendingControlUpdates: pendingControlUpdates.contains {
+                $0 != nil
+            },
+            hasAttachedController: attachedControllerCount > 0,
+            didSendInitialControllerReport: didSendInitialControllerReport,
+            didSendAuthorization: controlSendState.didSendAuthorization,
+            didSendResolutionUpdate: controlSendState.didSendResolutionUpdate
+        )
+    }
+
+    private var metadataChannelIsOpen: Bool {
+        switch inputMode {
+        case .legacy:
+            isInputChannelOpen
+        case .unreliable:
+            isReliableInputChannelOpen
+        case nil:
+            false
+        }
+    }
+
+    private var negotiatedInputChannelsAreOpen: Bool {
+        switch inputMode {
+        case .legacy:
+            isInputChannelOpen
+        case .unreliable:
+            isReliableInputChannelOpen && isUnreliableInputChannelOpen
+        case nil:
+            false
+        }
+    }
+
+    private func resetModernInputStateLocked() {
+        modernInputState.reset()
+        modernInputSendCadence.reset()
+        selectModernControllerSlotLocked()
+        if modernControllerSlotIndex != nil {
+            modernInputState.attach()
+        }
+    }
+
+    private func selectModernControllerSlotLocked() {
+        modernControllerSlotIndex = XboxModernControllerSlotPolicy.selectedSlot(
+            current: modernControllerSlotIndex,
+            occupiedSlots: controllerSlots.map { $0 != nil }
+        )
+    }
+
+    private func recordActiveModernControllerStateLocked() {
+        guard let modernControllerSlotIndex,
+              controllerSlots.indices.contains(modernControllerSlotIndex),
+              let controller = controllerSlots[modernControllerSlotIndex]?.controller
+        else {
+            return
+        }
+        if !modernInputState.isAttached {
+            modernInputState.attach()
+        }
+        if isPaused {
+            _ = modernInputState.record(XboxGamepadState(index: 0))
+        } else if let state = XboxCloudInputValueMapper.gamepadState(
+            controller: controller,
+            index: 0,
+            deadzone: deadzone
+        ) {
+            _ = modernInputState.record(state)
+        }
+    }
+
+    private func resetControllerRegistrationLocked(controlIsOpen: Bool) {
+        for index in controllerSlots.indices {
+            registeredControllerPresence[index] = false
+            pendingControlUpdates[index] = nil
+        }
+        guard controlIsOpen else { return }
+        if case .unreliable = inputMode {
+            pendingControlUpdates[0] =
+                XboxCloudControllerRegistrationPolicy.pendingUpdate(
+                    isAttached: attachedControllerCount > 0,
+                    isRegistered: false
+                )
+            return
+        }
+        for index in controllerSlots.indices {
+            pendingControlUpdates[index] =
+                XboxCloudControllerRegistrationPolicy.pendingUpdate(
+                    isAttached: controllerSlots[index] != nil,
+                    isRegistered: false
+                )
+        }
+    }
+
+    private static func feedbackVersion(
+        for channel: XboxCloudDataChannelKind,
+        mode: XboxCloudInputTransportMode
+    ) -> Int {
+        switch (channel, mode) {
+        case (.reliableInput, .unreliable):
+            mode.metadataVersion
+        case (.unreliableInput, .unreliable):
+            mode.reportVersion
+        case (.input, .legacy):
+            mode.reportVersion
+        default:
+            mode.reportVersion
+        }
+    }
+
     private func applyRumbleLocked(_ command: XboxRumbleCommand) {
-        let index = Int(command.gamepadIndex)
-        guard rumbleEnabled,
-              rumblePlaybacks.indices.contains(index),
-              let haptics = controllerSlots[index]?.haptics
+        guard let index = controllerSlotIndex(
+            forWireIndex: command.gamepadIndex
+        ),
+            !isPaused,
+            rumbleEnabled,
+            rumblePlaybacks.indices.contains(index),
+            let haptics = controllerSlots[index]?.haptics
         else {
             return
         }
@@ -809,6 +1521,17 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         timer.resume()
     }
 
+    private func controllerSlotIndex(forWireIndex index: UInt8) -> Int? {
+        if case .unreliable = inputMode {
+            guard index == 0 else { return nil }
+            return modernControllerSlotIndex
+        }
+        let physicalIndex = Int(index)
+        return controllerSlots.indices.contains(physicalIndex)
+            ? physicalIndex
+            : nil
+    }
+
     private func advanceRumbleLocked(index: Int, ownership: UInt64) {
         guard var playback = rumblePlaybacks[index],
               playback.ownership == ownership
@@ -846,6 +1569,81 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         playback.timer.cancel()
         playback.haptics.stop()
         rumblePlaybacks[index] = nil
+    }
+
+    private func controllerValueChangedLocked(_ controller: GCController) {
+        guard !isPaused else { return }
+        let identifier = ObjectIdentifier(controller)
+        guard controllerSlots.contains(where: {
+            $0?.identifier == identifier
+        }) else {
+            return
+        }
+        if !didLogFirstControllerActivity {
+            didLogFirstControllerActivity = true
+            xboxInputLog.notice("[Controller] first input observed")
+        }
+        sendGamepadSnapshotLocked()
+    }
+
+    private func claimControllerInputLocked(
+        _ gamepad: GCExtendedGamepad
+    ) -> [ClaimedSystemGesture] {
+        let elements: [GCControllerButtonInput?] = [
+            gamepad.buttonA,
+            gamepad.buttonB,
+            gamepad.buttonX,
+            gamepad.buttonY,
+            gamepad.buttonMenu,
+            gamepad.buttonOptions,
+            gamepad.leftShoulder,
+            gamepad.rightShoulder,
+            gamepad.leftTrigger,
+            gamepad.rightTrigger,
+            gamepad.leftThumbstickButton,
+            gamepad.rightThumbstickButton,
+        ]
+        return elements.compactMap { element in
+            guard let element else { return nil }
+            let claim = ClaimedSystemGesture(
+                element: element,
+                previousState: element.preferredSystemGestureState
+            )
+            element.preferredSystemGestureState = .disabled
+            return claim
+        }
+    }
+
+    private func releaseControllerLocked(index: Int) {
+        guard let slot = controllerSlots[index] else { return }
+        let gamepad = slot.controller.extendedGamepad
+        gamepad?.valueChangedHandler = nil
+        for claim in slot.claimedSystemGestures {
+            claim.element.preferredSystemGestureState = claim.previousState
+        }
+        slot.haptics?.cleanup()
+        slot.controller.playerIndex = slot.previousPlayerIndex
+        slot.controller.handlerQueue = slot.previousHandlerQueue
+        gamepad?.valueChangedHandler = slot.previousValueChangedHandler
+        controllerSlots[index] = nil
+    }
+
+    private var attachedControllerCount: Int {
+        controllerSlots.reduce(into: 0) { count, slot in
+            if slot != nil {
+                count += 1
+            }
+        }
+    }
+
+    private static func playerIndex(for slot: Int) -> GCControllerPlayerIndex {
+        switch slot {
+        case 0: .index1
+        case 1: .index2
+        case 2: .index3
+        case 3: .index4
+        default: .indexUnset
+        }
     }
 
     private static func timestampMilliseconds() -> Double {
@@ -924,18 +1722,18 @@ nonisolated enum XboxCloudInputValueMapper {
             y: pad.rightThumbstick.yAxis.value,
             deadzone: deadzone
         )
-        if leftThumb.x != 0 {
-            physicality.insert(.leftThumbXAxis)
-        }
-        if leftThumb.y != 0 {
-            physicality.insert(.leftThumbYAxis)
-        }
-        if rightThumb.x != 0 {
-            physicality.insert(.rightThumbXAxis)
-        }
-        if rightThumb.y != 0 {
-            physicality.insert(.rightThumbYAxis)
-        }
+        physicality.formUnion(thumbstickPhysicality(
+            x: leftThumb.x,
+            y: leftThumb.y,
+            xAxis: .leftThumbXAxis,
+            yAxis: .leftThumbYAxis
+        ))
+        physicality.formUnion(thumbstickPhysicality(
+            x: rightThumb.x,
+            y: rightThumb.y,
+            xAxis: .rightThumbXAxis,
+            yAxis: .rightThumbYAxis
+        ))
 
         return XboxGamepadState(
             index: index,
@@ -956,6 +1754,10 @@ nonisolated enum XboxCloudInputValueMapper {
         deadzone: Float
     ) -> (x: Int16, y: Int16) {
         let clampedX = min(max(x, -1), 1)
+        // Xbox's wire format uses XInput orientation (up is positive). Browser
+        // clients negate their negative-up Gamepad axis while encoding; Apple
+        // GameController is already positive-up, so no second inversion belongs
+        // here.
         let clampedY = min(max(y, -1), 1)
         let magnitude = (clampedX * clampedX + clampedY * clampedY)
             .squareRoot()
@@ -982,6 +1784,15 @@ nonisolated enum XboxCloudInputValueMapper {
         UInt16(clamping: Int(min(max(value, 0), 1) * Float(UInt16.max)))
     }
 
+    static func thumbstickPhysicality(
+        x: Int16,
+        y: Int16,
+        xAxis: XboxGamepadPhysicality,
+        yAxis: XboxGamepadPhysicality
+    ) -> XboxGamepadPhysicality {
+        x == 0 && y == 0 ? [] : [xAxis, yAxis]
+    }
+
     static func rumbleMagnitude(_ percent: UInt8) -> UInt16 {
         UInt16((UInt32(percent) * UInt32(UInt16.max)) / 100)
     }
@@ -999,6 +1810,7 @@ final class XboxCloudInputDriver {
     @ObservationIgnored private let worker: XboxCloudInputWorker
     @ObservationIgnored private var observerTokens: [NSObjectProtocol] = []
     @ObservationIgnored private var attachmentGeneration: UInt64 = 0
+    @ObservationIgnored private var hasDecodedVideo = false
 
     init(
         notificationCenter: NotificationCenter = .default,
@@ -1033,24 +1845,44 @@ final class XboxCloudInputDriver {
         let generation = attachmentGeneration
         self.transport = transport
         isReady = false
+        hasDecodedVideo = false
 
-        transport.onChannelStateChanged = { [weak self] kind, isOpen in
-            guard let self, attachmentGeneration == generation else { return }
+        transport.onChannelStateChanged = { [weak self, weak transport] kind, isOpen in
+            guard let self,
+                  let transport,
+                  attachmentGeneration == generation
+            else {
+                return
+            }
             worker.channelStateChanged(
                 kind,
                 isOpen: isOpen,
                 generation: generation
             )
+            worker.setTransportReady(
+                hasDecodedVideo && transport.readiness.isReady,
+                generation: generation
+            )
         }
-        transport.onChannelMessage = { [weak self] kind, data, _ in
-            guard let self, attachmentGeneration == generation else { return }
-            worker.received(data, on: kind, generation: generation)
+        transport.onChannelMessage = { [worker] kind, data, _ in
+            switch kind {
+            case .message, .input, .unreliableInput, .reliableInput:
+                worker.received(data, on: kind, generation: generation)
+            case .chat, .control:
+                break
+            }
         }
         installControllerObservers(generation: generation)
 
         let sink = XboxCloudInputDataSink(
             sendInput: { [weak transport] data in
                 transport?.sendInput(data) ?? .channelUnavailable
+            },
+            sendReliableInput: { [weak transport] data in
+                transport?.sendReliableInput(data) ?? .channelUnavailable
+            },
+            sendUnreliableInput: { [weak transport] data in
+                transport?.sendUnreliableInput(data) ?? .channelUnavailable
             },
             sendControl: { [weak transport] data in
                 transport?.sendControl(data) ?? .channelUnavailable
@@ -1077,18 +1909,32 @@ final class XboxCloudInputDriver {
         )
     }
 
-    func setNegotiatedInputVersion(_ version: Int?) throws {
-        guard let version, (1 ... 10).contains(version) else {
+    func setNegotiatedInputMode(_ mode: XboxCloudInputTransportMode?) throws {
+        guard let mode else {
             throw XboxLegacyInputCodecError.unsupportedVersion
         }
-        worker.setNegotiatedInputVersion(
-            version,
+        worker.setNegotiatedInputMode(
+            mode,
+            generation: attachmentGeneration
+        )
+    }
+
+    /// Microsoft's input manager starts only after video packets are flowing.
+    /// A decoded-frame callback is stronger than the early RTP-track callback.
+    func setVideoFlowing() {
+        hasDecodedVideo = true
+        worker.setTransportReady(
+            transport?.readiness.isReady == true,
             generation: attachmentGeneration
         )
     }
 
     func sendKeepAlive() {
         worker.sendKeepAlive(generation: attachmentGeneration)
+    }
+
+    func setPaused(_ paused: Bool) {
+        worker.setPaused(paused, generation: attachmentGeneration)
     }
 
     func stop() {
@@ -1100,6 +1946,7 @@ final class XboxCloudInputDriver {
             transport.onChannelMessage = nil
         }
         transport = nil
+        hasDecodedVideo = false
         worker.stop()
         isReady = false
     }

@@ -244,6 +244,9 @@ struct XboxMainTabView: View {
                 onStreamStarted: {
                     modeViewModel.catalogViewModel.recordPlayed(request.item)
                 },
+                onStatsModeChanged: { mode in
+                    modeViewModel.streamSettings.statsMode = mode
+                },
                 onDismiss: { playbackRequest = nil }
             )
             .blocksGlobalControllerNavigation(mode: .streaming)
@@ -595,6 +598,13 @@ nonisolated enum XboxCatalogSortOrder: CaseIterable, Hashable, Sendable {
 @Observable
 @MainActor
 final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
+    private struct DetailLoad {
+        let token: UUID
+        let task: Task<XboxCatalogItem?, Never>
+    }
+
+    private static let maximumDetailCacheCount = 32
+
     enum LoadPhase: Equatable {
         case idle
         case loading
@@ -662,6 +672,9 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     @ObservationIgnored private var activityPersistenceGeneration: UInt64?
     @ObservationIgnored private var activityLoadTask: Task<CloudCatalogActivityLease, Never>?
     @ObservationIgnored private var activitySaveTask: Task<Void, Never>?
+    @ObservationIgnored private var detailItems: [String: XboxCatalogItem] = [:]
+    @ObservationIgnored private var detailCacheOrder: [String] = []
+    @ObservationIgnored private var detailLoads: [String: DetailLoad] = [:]
 
     init(
         client: any XboxCatalogClient,
@@ -834,20 +847,40 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     }
 
     func fetchDetail(for item: XboxCatalogItem) async -> XboxCatalogItem? {
+        if let detail = detailItems[item.id] {
+            touchCachedDetail(item.id)
+            return detail
+        }
+        if let load = detailLoads[item.id] {
+            return await load.task.value
+        }
+
         let request = XboxCatalogRequest(
             localeIdentifier: L10n.localeCode,
             market: Locale.current.region?.identifier
         )
-        do {
-            let detail = try await resolvedClient().fetchDetail(
-                for: item,
-                request: request
-            )
-            guard detail.id == item.id else { return nil }
-            return detail
-        } catch {
-            return nil
+        let client = resolvedClient()
+        let token = UUID()
+        let task = Task<XboxCatalogItem?, Never> {
+            do {
+                let detail = try await client.fetchDetail(
+                    for: item,
+                    request: request
+                )
+                return detail.id == item.id ? detail : nil
+            } catch {
+                return nil
+            }
         }
+        detailLoads[item.id] = DetailLoad(token: token, task: task)
+        let detail = await task.value
+        if detailLoads[item.id]?.token == token {
+            detailLoads.removeValue(forKey: item.id)
+            if let detail {
+                cacheDetail(detail)
+            }
+        }
+        return detail
     }
 
     func flushActivityPersistence() async {
@@ -857,6 +890,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     func cancel() {
         refreshGeneration &+= 1
         isRefreshing = false
+        cancelDetailLoads()
         cancelCatalogRequest()
     }
 
@@ -868,6 +902,8 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
 
     func prepareForCacheClear() {
         cancel()
+        detailItems.removeAll(keepingCapacity: false)
+        detailCacheOrder.removeAll(keepingCapacity: false)
         allItems.removeAll(keepingCapacity: false)
         visibleItems.removeAll(keepingCapacity: false)
         carouselItems.removeAll(keepingCapacity: false)
@@ -1167,6 +1203,53 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         self.client = client
         return client
     }
+
+    private func cacheDetail(_ detail: XboxCatalogItem) {
+        detailItems[detail.id] = detail
+        touchCachedDetail(detail.id)
+        while detailCacheOrder.count > Self.maximumDetailCacheCount {
+            let evictedID = detailCacheOrder.removeFirst()
+            detailItems.removeValue(forKey: evictedID)
+        }
+    }
+
+    private func touchCachedDetail(_ itemID: String) {
+        detailCacheOrder.removeAll { $0 == itemID }
+        detailCacheOrder.append(itemID)
+    }
+
+    private func cancelDetailLoads() {
+        detailLoads.values.forEach { $0.task.cancel() }
+        detailLoads.removeAll(keepingCapacity: false)
+    }
+}
+
+nonisolated struct XboxHomeHeroPresentation: Equatable, Sendable {
+    let item: XboxCatalogItem
+    let artworkURL: URL?
+    let usesHeroArtwork: Bool
+
+    static func requiresDetailEnrichment(_ item: XboxCatalogItem) -> Bool {
+        item.heroArtworkURL == nil
+    }
+
+    init(
+        catalogItem: XboxCatalogItem,
+        detailItem: XboxCatalogItem?
+    ) {
+        item = if let detailItem, detailItem.id == catalogItem.id {
+            detailItem
+        } else {
+            catalogItem
+        }
+        if let heroArtworkURL = item.heroArtworkURL {
+            artworkURL = heroArtworkURL
+            usesHeroArtwork = true
+        } else {
+            artworkURL = item.artworkURL
+            usesHeroArtwork = false
+        }
+    }
 }
 
 private struct XboxCatalogHome: View {
@@ -1180,9 +1263,11 @@ private struct XboxCatalogHome: View {
     let onToggleFavorite: (String) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(XboxCatalogViewModel.self) private var viewModel
     @State private var carouselRequest: XboxCatalogCarouselRequest?
     @State private var carouselSourceFocus: XboxHomeGameFocus?
     @State private var carouselRestoreFocus: XboxHomeGameFocus?
+    @State private var heroDetailItem: XboxCatalogItem?
     @State private var restoresHeroActionFocus = false
     @State private var restoresEmptyActionFocus = false
     @State private var restoreScrollTarget: XboxHomeGameFocus?
@@ -1193,6 +1278,14 @@ private struct XboxCatalogHome: View {
     private var heroSelection: XboxCatalogSelection? {
         selection(for: recentlyPlayedItems.first)
             ?? selection(for: favoriteItems.first)
+    }
+
+    private var heroPresentation: XboxHomeHeroPresentation? {
+        guard let heroSelection else { return nil }
+        return XboxHomeHeroPresentation(
+            catalogItem: heroSelection.item,
+            detailItem: heroDetailItem
+        )
     }
 
     private var emptyStateMessage: String {
@@ -1234,6 +1327,9 @@ private struct XboxCatalogHome: View {
             reduceMotion ? nil : .easeInOut(duration: 0.25),
             value: carouselRequest?.id
         )
+        .task(id: heroSelection?.item) {
+            await loadHeroDetail(for: heroSelection?.item)
+        }
     }
 
     private var emptyState: some View {
@@ -1249,15 +1345,12 @@ private struct XboxCatalogHome: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    if let heroSelection {
-                        let heroArtworkURL = heroSelection.item
-                            .heroArtworkURL?.absoluteString
+                    if let heroSelection, let heroPresentation {
                         CloudCatalogHeroBanner(
-                            artworkURL: heroArtworkURL
-                                ?? heroSelection.item.artworkURL?.absoluteString,
-                            artworkContentMode: heroArtworkURL == nil
-                                ? .fit
-                                : .fill,
+                            artworkURL: heroPresentation.artworkURL?.absoluteString,
+                            artworkContentMode: heroPresentation.usesHeroArtwork
+                                ? .fill
+                                : .fit,
                             artworkAlignment: .center,
                             actionTitle: heroSelection.playTitle,
                             actionSystemImage: heroSelection.route.isPlayable
@@ -1269,7 +1362,7 @@ private struct XboxCatalogHome: View {
                                 : .gray,
                             actionFocus: $heroActionFocused,
                             action: {
-                                onPlay(heroSelection.item, heroSelection.route)
+                                onPlay(heroPresentation.item, heroSelection.route)
                             }
                         )
                         .accessibilityIdentifier("xbox-home.hero")
@@ -1325,6 +1418,22 @@ private struct XboxCatalogHome: View {
                 restoreScrollTarget = nil
             }
         }
+    }
+
+    private func loadHeroDetail(for item: XboxCatalogItem?) async {
+        heroDetailItem = nil
+        guard let item,
+              XboxHomeHeroPresentation.requiresDetailEnrichment(item)
+        else {
+            return
+        }
+        let detailItem = await viewModel.fetchDetail(for: item)
+        guard !Task.isCancelled,
+              heroSelection?.item.id == item.id
+        else {
+            return
+        }
+        heroDetailItem = detailItem
     }
 
     private func showCarousel(
@@ -2709,24 +2818,19 @@ private struct XboxSettingsView: View {
                     onSelectProvider: switchProvider
                 )
 
-                CloudNowStreamQualitySection {
+                Section {
                     CloudNowStreamQualityPicker(
                         L10n.text("resolution"),
                         selection: $modeViewModel.streamSettings.displayResolution,
                         accessibilityIdentifier: "settings.stream-quality.resolution",
-                        options: xboxAutomaticResolutionOption,
                         groups: xboxResolutionGroups
                     )
+                } header: {
+                    Text(L10n.text("stream_quality"))
+                }
+                .disabled(isBusy)
 
-                    CloudNowStreamQualityPicker(
-                        L10n.text("codec"),
-                        selection: $modeViewModel.streamSettings.codecPreference,
-                        accessibilityIdentifier: "settings.stream-quality.codec",
-                        options: modeViewModel.streamCapabilities.codecs.map {
-                            CloudNowStreamQualityOption(value: $0, title: $0.label)
-                        }
-                    )
-
+                Section(L10n.text("game")) {
                     CloudNowGameLanguagePicker(
                         selection: $modeViewModel.streamSettings.gameLanguage
                     )
@@ -2865,39 +2969,36 @@ private struct XboxSettingsView: View {
             || providerCoordinator.isProviderInteractionBlocked
     }
 
-    private var xboxAutomaticResolutionOption: [
-        CloudNowStreamQualityOption<XboxCloudDisplayResolution>
-    ] {
-        guard modeViewModel.streamCapabilities.resolutions.contains(.automatic) else {
-            return []
-        }
-        return [
-            CloudNowStreamQualityOption(
-                value: .automatic,
-                title: XboxCloudDisplayResolution.automatic.label
-            ),
-        ]
-    }
-
     private var xboxResolutionGroups: [
         CloudNowStreamQualityOptionGroup<XboxCloudDisplayResolution>
     ] {
-        let options: [CloudNowStreamQualityOption<XboxCloudDisplayResolution>] = modeViewModel
-            .streamCapabilities.resolutions.compactMap { resolution in
-                guard resolution != .automatic else { return nil }
-                return CloudNowStreamQualityOption(
-                    value: resolution,
-                    title: resolution.label,
-                    badge: resolution.badge,
-                    systemImage: resolution.systemImage
-                )
-            }
-        return [
+        let capabilities = modeViewModel.streamCapabilities
+        var groups = [
             CloudNowStreamQualityOptionGroup(
-                title: L10n.text("tv_standards"),
-                options: options
+                title: L10n.text("standard"),
+                options: capabilities.standardResolutions.map(resolutionOption)
             ),
         ]
+        if !capabilities.higherQualityResolutions.isEmpty {
+            groups.append(
+                CloudNowStreamQualityOptionGroup(
+                    title: XboxMembershipTier.ultimate.displayName,
+                    options: capabilities.higherQualityResolutions.map(resolutionOption)
+                )
+            )
+        }
+        return groups
+    }
+
+    private func resolutionOption(
+        _ resolution: XboxCloudDisplayResolution
+    ) -> CloudNowStreamQualityOption<XboxCloudDisplayResolution> {
+        CloudNowStreamQualityOption(
+            value: resolution,
+            title: resolution.label,
+            badge: resolution.badge,
+            systemImage: resolution.systemImage
+        )
     }
 
     private var membershipDescription: String {

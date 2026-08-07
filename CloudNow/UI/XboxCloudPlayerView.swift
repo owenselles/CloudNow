@@ -5,15 +5,18 @@ import SwiftUI
 /// signaling, input, and WebRTC state stay below this coarse observable seam.
 struct XboxCloudPlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
     let item: XboxCatalogItem
     let route: XboxCloudTitleRoute
     let account: XboxCloudAuthorizedAccount
     let settings: XboxCloudStreamSettings
     let controller: XboxCloudStreamController
     let onStreamStarted: () -> Void
+    let onStatsModeChanged: (StreamStatsMode) -> Void
     let onDismiss: () -> Void
 
-    @State private var showsOverlay = true
+    @State private var showsOverlay = false
+    @State private var showExitConfirmation = false
     @State private var launchAttempt: UInt64 = 0
     @State private var isEnding = false
     @State private var hasRecordedPlayback = false
@@ -23,16 +26,7 @@ struct XboxCloudPlayerView: View {
             launchBackdrop
 
             if controller.state == .streaming {
-                XboxVideoSurfaceView(
-                    videoTrack: controller.videoTrack,
-                    showsOverlay: showsOverlay,
-                    onMenuPress: toggleOverlay
-                )
-                .ignoresSafeArea()
-
-                if showsOverlay {
-                    playerOverlay
-                }
+                streamingView
             } else {
                 launchStatus
             }
@@ -59,7 +53,8 @@ struct XboxCloudPlayerView: View {
         }
         .onChange(of: controller.state) { previousState, state in
             if state == .streaming {
-                showsOverlay = true
+                showsOverlay = false
+                controller.setInputPaused(false)
                 MemoryLifecycleCoordinator.shared.streamDidStart()
                 if !hasRecordedPlayback {
                     hasRecordedPlayback = true
@@ -80,7 +75,12 @@ struct XboxCloudPlayerView: View {
                 endSession()
             }
         }
+        .onPlayPauseCommand {
+            guard controller.state == .streaming else { return }
+            toggleOverlay()
+        }
         .onDisappear {
+            controller.setInputPaused(false)
             MemoryLifecycleCoordinator.shared.streamDidClose()
             Task {
                 await controller.stop()
@@ -173,57 +173,118 @@ struct XboxCloudPlayerView: View {
         .padding(80)
     }
 
-    private var playerOverlay: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(item.title)
-                        .font(.title2.bold())
-                    Text(
-                        route.accessKind == .freeWithAds
-                            ? L10n.text("free_with_ads")
-                            : L10n.text("xbox_cloud_gaming")
-                    )
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+    private var streamingView: some View {
+        XboxVideoSurfaceView(
+            videoTrack: controller.videoTrack,
+            showsOverlay: showsOverlay,
+            onMenuPress: toggleOverlay,
+            onDecodedVideoFormatChanged: { format in
+                Task { @MainActor in
+                    controller.recordDecodedVideoFormat(format)
+                }
+            }
+        )
+        .ignoresSafeArea()
+        .overlay {
+            ZStack {
+                if showsOverlay {
+                    pauseMenu
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                 }
 
-                Spacer()
-
-                Label(L10n.text("live"), systemImage: "dot.radiowaves.left.and.right")
-                    .font(.caption.bold())
-                    .foregroundStyle(.green)
+                if controller.statsMode != .off {
+                    StatsHUDView(snapshot: statsSnapshot)
+                        .fixedSize()
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .topTrailing
+                        )
+                        .transition(.opacity)
+                }
             }
-            .padding(.horizontal, 58)
-            .padding(.vertical, 32)
-            .background(.ultraThinMaterial)
+        }
+        .animation(.easeInOut(duration: 0.2), value: showsOverlay)
+        .animation(.easeInOut(duration: 0.2), value: controller.statsMode)
+        .onChange(of: showsOverlay) { _, showing in
+            controller.setInputPaused(showing)
+        }
+        .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
+            Button(L10n.text("end_session"), role: .destructive) { endSession() }
+            Button(L10n.text("keep_playing"), role: .cancel) {}
+        } message: {
+            Text(L10n.text("end_session_message"))
+        }
+    }
+
+    private var pauseMenu: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button {
+                toggleOverlay()
+            } label: {
+                Label(L10n.text("resume"), systemImage: "play.fill")
+                    .foregroundStyle(Color.black.opacity(0.84))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .tint(.green)
+            .accessibilityIdentifier("xbox-stream.resume")
+
+            Button {
+                let next = controller.statsMode.nextHUDLevel
+                controller.setStatsMode(next)
+                onStatsModeChanged(next)
+            } label: {
+                Label(
+                    L10n.format("statistics_level", controller.statsMode.label),
+                    systemImage: "chart.bar.xaxis"
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("xbox-stream.statistics")
+
+            Button(role: .destructive) {
+                showExitConfirmation = true
+            } label: {
+                Label(L10n.text("end_session"), systemImage: "xmark.circle")
+                    .foregroundStyle(Color.black.opacity(0.84))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .disabled(isEnding)
+            .accessibilityIdentifier("xbox-stream.end-session")
 
             Spacer()
-
-            HStack {
-                Button {
-                    toggleOverlay()
-                } label: {
-                    Label(L10n.text("resume"), systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .accessibilityIdentifier("xbox-stream.resume")
-
-                Spacer()
-
-                Button(role: .destructive, action: endSession) {
-                    Label(L10n.text("end_session"), systemImage: "xmark.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isEnding)
-                .accessibilityIdentifier("xbox-stream.end-session")
-            }
-            .padding(.horizontal, 58)
-            .padding(.vertical, 34)
-            .background(.ultraThinMaterial)
         }
-        .transition(.opacity)
+        .padding(.horizontal, 48)
+        .padding(.vertical, 80)
+        .frame(width: 480)
+        .frame(maxHeight: .infinity)
+        .background(pauseMenuBackgroundColor)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .ignoresSafeArea()
+    }
+
+    private var statsSnapshot: StatsHUDSnapshot {
+        let location = controller.serverLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        return StatsHUDSnapshot(
+            mode: controller.statsMode,
+            stats: controller.stats,
+            audioStats: controller.audioStats,
+            colorState: controller.colorState,
+            streamingStartedAt: controller.streamingStartedAt,
+            microphoneEnabled: false,
+            headerTitle: L10n.text("xbox_cloud_gaming"),
+            serverLocation: location.isEmpty ? L10n.text("unknown") : location,
+            diagnosticsEnabled: false,
+            rtcEventLogActive: false
+        )
+    }
+
+    private var pauseMenuBackgroundColor: Color {
+        colorScheme == .dark ? .black.opacity(0.75) : .white.opacity(0.82)
     }
 
     private var statusTitle: String {
@@ -338,6 +399,7 @@ struct XboxCloudPlayerView: View {
     private func endSession() {
         guard !isEnding else { return }
         isEnding = true
+        controller.setInputPaused(false)
         Task {
             await controller.stop()
             onDismiss()

@@ -1,44 +1,114 @@
 import SwiftUI
 
+/// Provider-neutral values rendered by CloudNow's in-stream statistics HUD.
+/// Providers own metric collection; this value keeps the presentation shared.
+nonisolated struct StatsHUDSnapshot: Equatable {
+    var mode: StreamStatsMode
+    var stats: StreamStats
+    var audioStats: AudioStats
+    var colorState: StreamColorState
+    var streamingStartedAt: Date?
+    var microphoneEnabled: Bool
+    var headerTitle: String
+    var serverLocation: String
+    var diagnosticsEnabled: Bool
+    var rtcEventLogActive: Bool
+}
+
 /// In-game statistics HUD mirroring the official GeForce NOW overlay. Compact shows
 /// the three headline metrics and server, while Standard adds the release statistics
 /// in one narrow column. Developer diagnostics append a final section to that column.
 struct StatsHUDView: View {
-    let streamController: GFNStreamController
-    let microphoneEnabled: Bool
-    let automaticServerId: String?
+    private enum Source {
+        case geForceNow(
+            controller: GFNStreamController,
+            microphoneEnabled: Bool,
+            automaticServerId: String?
+        )
+        case snapshot(StatsHUDSnapshot)
+    }
+
+    private let source: Source
+
+    init(
+        streamController: GFNStreamController,
+        microphoneEnabled: Bool,
+        automaticServerId: String?
+    ) {
+        source = .geForceNow(
+            controller: streamController,
+            microphoneEnabled: microphoneEnabled,
+            automaticServerId: automaticServerId
+        )
+    }
+
+    init(snapshot: StatsHUDSnapshot) {
+        source = .snapshot(snapshot)
+    }
 
     var body: some View {
+        let snapshot = resolvedSnapshot
+
         Group {
-            switch streamController.statsMode {
+            switch snapshot.mode {
             case .off:
                 EmptyView()
             case .compact:
                 CompactStatsPanel(
-                    stats: streamController.stats,
-                    microphoneEnabled: microphoneEnabled,
-                    serverLocation: serverLocation
+                    stats: snapshot.stats,
+                    microphoneEnabled: snapshot.microphoneEnabled,
+                    headerTitle: snapshot.headerTitle,
+                    serverLocation: snapshot.serverLocation
                 )
             case .standard:
                 StandardStatsPanel(
-                    stats: streamController.stats,
-                    audioStats: streamController.audioStats,
-                    colorState: streamController.colorState,
-                    streamingStartedAt: streamController.streamingStartedAt,
-                    microphoneEnabled: microphoneEnabled,
-                    serverLocation: serverLocation,
-                    diagnosticsEnabled: streamController.diagnosticsEnabled,
-                    rtcEventLogActive: streamController.rtcEventLogURL != nil
+                    stats: snapshot.stats,
+                    audioStats: snapshot.audioStats,
+                    colorState: snapshot.colorState,
+                    streamingStartedAt: snapshot.streamingStartedAt,
+                    microphoneEnabled: snapshot.microphoneEnabled,
+                    headerTitle: snapshot.headerTitle,
+                    serverLocation: snapshot.serverLocation,
+                    diagnosticsEnabled: snapshot.diagnosticsEnabled,
+                    rtcEventLogActive: snapshot.rtcEventLogActive
                 )
             }
         }
         .allowsHitTesting(false)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(L10n.format("statistics_level", streamController.statsMode.label))
+        .accessibilityLabel(L10n.format("statistics_level", snapshot.mode.label))
     }
 
-    private var serverLocation: String {
-        let routedLocation = streamController.stats.serverZone.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var resolvedSnapshot: StatsHUDSnapshot {
+        switch source {
+        case let .snapshot(snapshot):
+            snapshot
+        case let .geForceNow(controller, microphoneEnabled, automaticServerId):
+            StatsHUDSnapshot(
+                mode: controller.statsMode,
+                stats: controller.stats,
+                audioStats: controller.audioStats,
+                colorState: controller.colorState,
+                streamingStartedAt: controller.streamingStartedAt,
+                microphoneEnabled: microphoneEnabled,
+                headerTitle: controller.stats.gpuType.isEmpty
+                    ? L10n.text("gpu")
+                    : controller.stats.gpuType,
+                serverLocation: Self.serverLocation(
+                    stats: controller.stats,
+                    automaticServerId: automaticServerId
+                ),
+                diagnosticsEnabled: controller.diagnosticsEnabled,
+                rtcEventLogActive: controller.rtcEventLogURL != nil
+            )
+        }
+    }
+
+    private static func serverLocation(
+        stats: StreamStats,
+        automaticServerId: String?
+    ) -> String {
+        let routedLocation = stats.serverZone.trimmingCharacters(in: .whitespacesAndNewlines)
         if !routedLocation.isEmpty {
             return routedLocation
         }
@@ -53,11 +123,12 @@ struct StatsHUDView: View {
 private struct CompactStatsPanel: View {
     let stats: StreamStats
     let microphoneEnabled: Bool
+    let headerTitle: String
     let serverLocation: String
 
     var body: some View {
         StatsPanel(contentWidth: StatsHUDLayout.columnWidth) {
-            StatsPanelHeader(gpuName: gpuName, microphoneEnabled: microphoneEnabled)
+            StatsPanelHeader(title: headerTitle, microphoneEnabled: microphoneEnabled)
             HeadlineMetricsView(stats: stats, contentWidth: StatsHUDLayout.columnWidth)
             Text(serverLocation)
                 .font(.system(size: 12, weight: .semibold))
@@ -70,10 +141,6 @@ private struct CompactStatsPanel: View {
                 .accessibilityValue(serverLocation)
         }
     }
-
-    private var gpuName: String {
-        stats.gpuType.isEmpty ? L10n.text("gpu") : stats.gpuType
-    }
 }
 
 private struct StandardStatsPanel: View {
@@ -82,13 +149,14 @@ private struct StandardStatsPanel: View {
     let colorState: StreamColorState
     let streamingStartedAt: Date?
     let microphoneEnabled: Bool
+    let headerTitle: String
     let serverLocation: String
     let diagnosticsEnabled: Bool
     let rtcEventLogActive: Bool
 
     var body: some View {
         StatsPanel(contentWidth: StatsHUDLayout.columnWidth) {
-            StatsPanelHeader(gpuName: gpuName, microphoneEnabled: microphoneEnabled)
+            StatsPanelHeader(title: headerTitle, microphoneEnabled: microphoneEnabled)
             HeadlineMetricsView(stats: stats, contentWidth: StatsHUDLayout.columnWidth)
             VStack(alignment: .leading, spacing: 0) {
                 CoreStatsColumn(
@@ -122,10 +190,6 @@ private struct StandardStatsPanel: View {
             false
         #endif
     }
-
-    private var gpuName: String {
-        stats.gpuType.isEmpty ? L10n.text("gpu") : stats.gpuType
-    }
 }
 
 private struct StatsPanel<Content: View>: View {
@@ -144,7 +208,7 @@ private struct StatsPanel<Content: View>: View {
 }
 
 private struct StatsPanelHeader: View {
-    let gpuName: String
+    let title: String
     let microphoneEnabled: Bool
 
     var body: some View {
@@ -154,7 +218,7 @@ private struct StatsPanelHeader: View {
                 .frame(width: 6, height: 32)
                 .accessibilityHidden(true)
 
-            Text(gpuName)
+            Text(title)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(StatsHUDPalette.primaryText)
                 .lineLimit(1)

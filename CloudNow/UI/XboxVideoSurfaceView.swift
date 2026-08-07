@@ -9,11 +9,13 @@ struct XboxVideoSurfaceView: UIViewControllerRepresentable {
     let videoTrack: LKRTCVideoTrack?
     let showsOverlay: Bool
     let onMenuPress: () -> Void
+    let onDecodedVideoFormatChanged: @Sendable (DecodedVideoFormat) -> Void
 
     func makeUIViewController(context _: Context) -> StreamingViewController {
         let controller = StreamingViewController()
         controller.videoSurface.gamepadModeActive = true
         controller.videoSurface.menuPressHandler = onMenuPress
+        controller.videoSurface.onDecodedVideoFormatChanged = onDecodedVideoFormatChanged
         return controller
     }
 
@@ -24,6 +26,7 @@ struct XboxVideoSurfaceView: UIViewControllerRepresentable {
         controller.videoSurface.videoTrack = videoTrack
         controller.videoSurface.gamepadModeActive = true
         controller.videoSurface.menuPressHandler = onMenuPress
+        controller.videoSurface.onDecodedVideoFormatChanged = onDecodedVideoFormatChanged
         controller.controllerUserInteractionEnabled = showsOverlay
         controller.videoSurface.overlayVisible = showsOverlay
     }

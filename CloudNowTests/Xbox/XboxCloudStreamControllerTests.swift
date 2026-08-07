@@ -6,6 +6,12 @@ import Testing
 @Suite("Xbox Cloud stream controller")
 @MainActor
 struct XboxCloudStreamControllerTests {
+    struct ResolutionAliasCase: Sendable {
+        let persistedValue: String
+        let expected: XboxCloudDisplayResolution
+        let encodedValue: String
+    }
+
     @Test("Xbox settings stay separate, bounded, and resilient")
     func xboxSettings() throws {
         let defaults = try JSONDecoder().decode(
@@ -13,11 +19,13 @@ struct XboxCloudStreamControllerTests {
             from: Data("{}".utf8)
         )
         #expect(defaults == XboxCloudStreamSettings())
+        #expect(defaults.statsMode == .off)
 
         let settings = XboxCloudStreamSettings(
             displayResolution: .qhd,
             codecPreference: .h265,
             gameLanguage: "fr_FR",
+            statsMode: .standard,
             controllerDeadzone: 4,
             rumbleIntensity: -2,
             enableTextToSpeech: true,
@@ -34,6 +42,7 @@ struct XboxCloudStreamControllerTests {
         #expect(roundTrip == settings)
         #expect(roundTrip.displayResolution == .qhd)
         #expect(roundTrip.codecPreference == .h265)
+        #expect(roundTrip.statsMode == .standard)
         #expect(roundTrip.effectiveGameLanguage(defaultLocale: "en-US") == "fr-FR")
 
         let futureValues = try JSONDecoder().decode(
@@ -47,35 +56,121 @@ struct XboxCloudStreamControllerTests {
         )
     }
 
-    @Test("Xbox quality capabilities preserve unknown membership and gate 1440p")
+    @Test(
+        "Xbox quality aliases decode current and legacy persisted values",
+        arguments: [
+            ResolutionAliasCase(
+                persistedValue: "Auto",
+                expected: .automatic,
+                encodedValue: "Auto"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "automatic",
+                expected: .automatic,
+                encodedValue: "Auto"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "720",
+                expected: .hd,
+                encodedValue: "720"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1280x720",
+                expected: .hd,
+                encodedValue: "720"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "720HQ",
+                expected: .hdHighQuality,
+                encodedValue: "720HQ"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1080",
+                expected: .fullHD,
+                encodedValue: "1080"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1920x1080",
+                expected: .fullHD,
+                encodedValue: "1080"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1080HQ",
+                expected: .fullHDHighQuality,
+                encodedValue: "1080HQ"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1440",
+                expected: .qhd,
+                encodedValue: "1440"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "2560x1440",
+                expected: .qhd,
+                encodedValue: "1440"
+            ),
+        ]
+    )
+    func xboxQualityAliasMigration(testCase: ResolutionAliasCase) throws {
+        let decoded = try JSONDecoder().decode(
+            XboxCloudDisplayResolution.self,
+            from: Data("\"\(testCase.persistedValue)\"".utf8)
+        )
+        #expect(decoded == testCase.expected)
+
+        let encoded = try JSONDecoder().decode(
+            String.self,
+            from: JSONEncoder().encode(decoded)
+        )
+        #expect(encoded == testCase.encodedValue)
+    }
+
+    @Test("Xbox quality capabilities use standard and Ultimate quality groups")
     func xboxQualityCapabilities() {
         let unknown = XboxCloudStreamCapabilities.resolved(
             for: nil,
             isMembershipKnown: false
         )
-        #expect(unknown.resolutions.contains(.qhd))
-        #expect(
-            unknown.normalized(
-                XboxCloudStreamSettings(displayResolution: .qhd)
-            ).displayResolution == .qhd
-        )
+        #expect(unknown.standardResolutions == [.automatic, .fullHD, .hd])
+        #expect(unknown.higherQualityResolutions.isEmpty)
+        #expect(unknown.resolutions == [.automatic, .fullHD, .hd])
 
         let ultimate = XboxCloudStreamCapabilities.resolved(
             for: .ultimate,
             isMembershipKnown: true
         )
-        #expect(ultimate.resolutions == [.automatic, .hd, .fullHD, .qhd])
+        #expect(ultimate.standardResolutions == [.automatic, .fullHD, .hd])
+        #expect(
+            ultimate.higherQualityResolutions == [
+                .qhd,
+                .fullHDHighQuality,
+                .hdHighQuality,
+            ]
+        )
+        #expect(
+            ultimate.resolutions == [
+                .automatic,
+                .fullHD,
+                .hd,
+                .qhd,
+                .fullHDHighQuality,
+                .hdHighQuality,
+            ]
+        )
 
         let pcGamePass = XboxCloudStreamCapabilities.resolved(
             for: .pcGamePass,
             isMembershipKnown: true
         )
-        #expect(pcGamePass.resolutions == [.automatic, .hd, .fullHD])
-        #expect(
-            pcGamePass.normalized(
-                XboxCloudStreamSettings(displayResolution: .qhd)
-            ).displayResolution == .automatic
+        #expect(pcGamePass.resolutions == [.automatic, .fullHD, .hd])
+        let normalized = pcGamePass.normalized(
+            XboxCloudStreamSettings(
+                displayResolution: .qhd,
+                codecPreference: .h265
+            )
         )
+        #expect(normalized.displayResolution == .automatic)
+        #expect(normalized.codecPreference == .automatic)
     }
 
     @Test("Start composes access, allocation, media, settings, and teardown")
@@ -111,8 +206,8 @@ struct XboxCloudStreamControllerTests {
         #expect(controller.videoTrack === runtime.videoTrack)
         #expect(runtimeFactory.receivedSettings == [settings])
         let access = try #require(lifecycleFactory.receivedAccess.first)
-        #expect(access.deviceInformation.displayWidthInPixels == 2560)
-        #expect(access.deviceInformation.displayHeightInPixels == 1440)
+        #expect(access.deviceInformation.displayWidthInPixels == 1920)
+        #expect(access.deviceInformation.displayHeightInPixels == 1080)
         let request = try #require(await lifecycle.requests().first)
         #expect(request.titleID == "fixture-title")
         #expect(request.settings.locale == "en-US")
@@ -129,6 +224,58 @@ struct XboxCloudStreamControllerTests {
         #expect(controller.activeGameID == nil)
         #expect(runtime.disconnectCount == 1)
         #expect(await lifecycle.deleteCount() == 1)
+    }
+
+    @Test("Xbox runtime drives the shared HUD and input pause state")
+    func statisticsAndInputPause() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub()
+        var snapshot = XboxCloudRTCStatsSnapshot()
+        snapshot.stream.fps = 60
+        snapshot.stream.rttMs = 24
+        snapshot.audio.codecName = "opus"
+        snapshot.audio.codecChannels = 2
+        runtime.statistics = snapshot
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime])
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings(statsMode: .compact)
+        )
+
+        #expect(await waitUntil { controller.stats.fps == 60 })
+        #expect(controller.stats.rttMs == 24)
+        #expect(controller.stats.serverZone == "West US")
+        #expect(controller.audioStats.codecName == "opus")
+        #expect(controller.statsMode == .compact)
+        controller.recordDecodedVideoFormat(DecodedVideoFormat(
+            mode: .sdr8,
+            width: 1920,
+            height: 1080,
+            pixelFormat: 0,
+            pixelFormatName: "fixture",
+            bitDepth: 8,
+            transferFunction: nil,
+            colorPrimaries: nil,
+            yCbCrMatrix: nil,
+            colorRange: nil,
+            hasDisplayColorVolumeMetadata: false,
+            hasContentLightLevelMetadata: false,
+            decoderPath: .hardware
+        ))
+        #expect(runtime.decodedVideoFrameCount == 1)
+        controller.setInputPaused(true)
+        controller.setInputPaused(false)
+        #expect(runtime.inputPausedStates == [true, false])
+
+        controller.setStatsMode(.off)
+        #expect(controller.statsMode == .off)
+        await controller.stop()
     }
 
     @Test("A replacement launch releases the previous provider runtime first")
@@ -543,7 +690,10 @@ private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
     private(set) var connectCount = 0
     private(set) var disconnectCount = 0
     private(set) var inputKeepAliveCount = 0
+    private(set) var decodedVideoFrameCount = 0
+    private(set) var inputPausedStates: [Bool] = []
     private(set) var connectionState: XboxCloudWebRTCConnectionState = .connected
+    var statistics = XboxCloudRTCStatsSnapshot()
     let videoTrack: LKRTCVideoTrack?
 
     init() {
@@ -565,6 +715,18 @@ private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
     func disconnect() {
         disconnectCount += 1
         connectionState = .idle
+    }
+
+    func sampleStatistics() async -> XboxCloudRTCStatsSnapshot {
+        statistics
+    }
+
+    func recordDecodedVideoFrame() {
+        decodedVideoFrameCount += 1
+    }
+
+    func setInputPaused(_ isPaused: Bool) {
+        inputPausedStates.append(isPaused)
     }
 
     func sendInputKeepAlive() {

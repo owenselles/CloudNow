@@ -64,24 +64,96 @@ struct XboxLegacyInputCodecTests {
         #expect(data == expected)
     }
 
+    @Test("Version 10 encodes an exact single-controller report")
+    func encodesVersionTenGamepad() throws {
+        var encoder = XboxLegacyInputEncoder()
+        let timestamp = 123.5
+        _ = try encoder.encodeClientMetadata(
+            version: 10,
+            timestampMilliseconds: timestamp
+        )
+
+        let data = try encoder.encodeGamepads(
+            [
+                XboxGamepadState(
+                    index: 0,
+                    buttons: [.a, .dpadUp, .rightShoulder],
+                    leftThumbX: 1,
+                    leftThumbY: -1,
+                    rightThumbX: .max,
+                    rightThumbY: -32767,
+                    leftTrigger: 32768,
+                    rightTrigger: .max,
+                    physicalPhysicality: [.a, .dpadUp, .rightShoulder]
+                ),
+            ],
+            version: 10,
+            timestampMilliseconds: timestamp
+        )
+
+        var expected = Data([
+            0x02, 0x00,
+            0x02, 0x00, 0x00, 0x00,
+        ])
+        expected.append(contentsOf: littleEndianBytes(timestamp.bitPattern))
+        expected.append(contentsOf: [
+            0x01,
+            0x00,
+            0x10, 0x21,
+            0x01, 0x00,
+            0xFF, 0xFF,
+            0xFF, 0x7F,
+            0x01, 0x80,
+            0x00, 0x80,
+            0xFF, 0xFF,
+            0x01, 0x12, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ])
+
+        #expect(data == expected)
+    }
+
     @Test("Client metadata starts at protocol version 3")
     func encodesClientMetadata() throws {
         var encoder = XboxLegacyInputEncoder()
 
         #expect(try encoder.encodeClientMetadata(
             version: 2,
-            maximumTouchPoints: 0,
             timestampMilliseconds: 1
         ) == nil)
         #expect(try encoder.encodeClientMetadata(
             version: 3,
-            maximumTouchPoints: 0,
             timestampMilliseconds: 1
         ) == Data([
             0x08,
             0x01, 0x00, 0x00, 0x00,
             0x00,
         ]))
+        #expect(try encoder.encodeClientMetadata(
+            version: 3,
+            maximumTouchPoints: 1,
+            timestampMilliseconds: 1
+        )?.last == 1)
+    }
+
+    @Test("Version 10 client metadata advertises no touch input")
+    func encodesVersionTenClientMetadata() throws {
+        var encoder = XboxLegacyInputEncoder()
+        let timestamp = 123.5
+
+        let optionalData = try encoder.encodeClientMetadata(
+            version: 10,
+            timestampMilliseconds: timestamp
+        )
+        let data = try #require(optionalData)
+        var expected = Data([
+            0x08, 0x00,
+            0x01, 0x00, 0x00, 0x00,
+        ])
+        expected.append(contentsOf: littleEndianBytes(timestamp.bitPattern))
+        expected.append(0)
+
+        #expect(data == expected)
     }
 
     @Test("Decoder accepts server metadata and four-motor rumble")

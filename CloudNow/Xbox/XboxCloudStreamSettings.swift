@@ -1,18 +1,20 @@
 import Foundation
 
-nonisolated enum XboxCloudDisplayResolution: String, Codable, CaseIterable, Sendable {
-    case automatic
-    case hd = "1280x720"
-    case fullHD = "1920x1080"
-    case qhd = "2560x1440"
+nonisolated enum XboxCloudDisplayResolution: String, CaseIterable, Sendable {
+    case automatic = "Auto"
+    case hd = "720"
+    case hdHighQuality = "720HQ"
+    case fullHD = "1080"
+    case fullHDHighQuality = "1080HQ"
+    case qhd = "1440"
 
     var width: Int? {
         switch self {
         case .automatic:
             nil
-        case .hd:
+        case .hd, .hdHighQuality:
             1280
-        case .fullHD:
+        case .fullHD, .fullHDHighQuality:
             1920
         case .qhd:
             2560
@@ -23,9 +25,9 @@ nonisolated enum XboxCloudDisplayResolution: String, Codable, CaseIterable, Send
         switch self {
         case .automatic:
             nil
-        case .hd:
+        case .hd, .hdHighQuality:
             720
-        case .fullHD:
+        case .fullHD, .fullHDHighQuality:
             1080
         case .qhd:
             1440
@@ -36,8 +38,12 @@ nonisolated enum XboxCloudDisplayResolution: String, Codable, CaseIterable, Send
         switch self {
         case .automatic:
             L10n.text("automatic")
-        case .hd, .fullHD, .qhd:
-            rawValue
+        case .hd, .hdHighQuality:
+            "1280x720"
+        case .fullHD, .fullHDHighQuality:
+            "1920x1080"
+        case .qhd:
+            "2560x1440"
         }
     }
 
@@ -47,10 +53,14 @@ nonisolated enum XboxCloudDisplayResolution: String, Codable, CaseIterable, Send
             nil
         case .hd:
             "HD"
+        case .hdHighQuality:
+            "HD · HQ"
         case .fullHD:
             "Full HD"
+        case .fullHDHighQuality:
+            "Full HD · HQ"
         case .qhd:
-            "QHD"
+            "QHD · HQ"
         }
     }
 
@@ -58,51 +68,80 @@ nonisolated enum XboxCloudDisplayResolution: String, Codable, CaseIterable, Send
         switch self {
         case .automatic:
             nil
-        case .hd, .fullHD, .qhd:
+        case .hd, .hdHighQuality, .fullHD, .fullHDHighQuality, .qhd:
             "tv"
         }
     }
 }
 
-nonisolated enum XboxCloudVideoCodecPreference: String, Codable, CaseIterable, Sendable {
-    case automatic
-    case h264 = "H264"
-    case h265 = "H265"
-
-    @MainActor var label: String {
-        switch self {
-        case .automatic:
-            L10n.text("automatic")
-        case .h264:
-            "H264"
-        case .h265:
-            "H265"
+extension XboxCloudDisplayResolution: Codable {
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        self = switch value {
+        case "Auto", "automatic":
+            .automatic
+        case "720", "1280x720":
+            .hd
+        case "720HQ":
+            .hdHighQuality
+        case "1080", "1920x1080":
+            .fullHD
+        case "1080HQ":
+            .fullHDHighQuality
+        case "1440", "2560x1440":
+            .qhd
+        default:
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown Xbox Cloud quality alias"
+            )
         }
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
-/// Account-visible Xbox capabilities. These are request ceilings rather than
-/// promises: Microsoft can still lower the negotiated result for a title,
-/// region, device, or live network condition.
+/// Legacy persistence shape retained so settings written by earlier builds
+/// remain decodable. Xbox now manages codec negotiation automatically.
+nonisolated enum XboxCloudVideoCodecPreference: String, Codable, Sendable {
+    case automatic
+    case h264 = "H264"
+    case h265 = "H265"
+}
+
+/// Account-visible Xbox quality aliases. These are preferences rather than
+/// promises: Microsoft can still adapt the negotiated stream for the title,
+/// region, device, and live network condition.
 nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
-    let resolutions: [XboxCloudDisplayResolution]
-    let codecs: [XboxCloudVideoCodecPreference]
+    let standardResolutions: [XboxCloudDisplayResolution]
+    let higherQualityResolutions: [XboxCloudDisplayResolution]
+
+    var resolutions: [XboxCloudDisplayResolution] {
+        standardResolutions + higherQualityResolutions
+    }
 
     static func resolved(
         for membershipTier: XboxMembershipTier?,
         isMembershipKnown: Bool
     ) -> Self {
-        var resolutions: [XboxCloudDisplayResolution] = [
+        let standardResolutions: [XboxCloudDisplayResolution] = [
             .automatic,
-            .hd,
             .fullHD,
+            .hd,
         ]
-        if !isMembershipKnown || membershipTier == .ultimate {
-            resolutions.append(.qhd)
+        let hasHigherQuality = isMembershipKnown && membershipTier == .ultimate
+        let higherQualityResolutions: [XboxCloudDisplayResolution] = if hasHigherQuality {
+            [.qhd, .fullHDHighQuality, .hdHighQuality]
+        } else {
+            []
         }
         return Self(
-            resolutions: resolutions,
-            codecs: XboxCloudVideoCodecPreference.allCases
+            standardResolutions: standardResolutions,
+            higherQualityResolutions: higherQualityResolutions
         )
     }
 
@@ -111,9 +150,9 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
         if !resolutions.contains(normalized.displayResolution) {
             normalized.displayResolution = .automatic
         }
-        if !codecs.contains(normalized.codecPreference) {
-            normalized.codecPreference = .automatic
-        }
+        // Xbox selects the negotiated WebRTC codec. Retain this legacy field
+        // only so older persisted settings remain decodable.
+        normalized.codecPreference = .automatic
         return normalized
     }
 }
@@ -130,6 +169,7 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
     var displayResolution: XboxCloudDisplayResolution = .automatic
     var codecPreference: XboxCloudVideoCodecPreference = .automatic
     var gameLanguage = Self.automaticGameLanguage
+    var statsMode: StreamStatsMode = .off
 
     var controllerDeadzone: Double = 0.15 {
         didSet {
@@ -161,6 +201,7 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
         displayResolution: XboxCloudDisplayResolution = .automatic,
         codecPreference: XboxCloudVideoCodecPreference = .automatic,
         gameLanguage: String = Self.automaticGameLanguage,
+        statsMode: StreamStatsMode = .off,
         controllerDeadzone: Double = 0.15,
         rumbleEnabled: Bool = true,
         rumbleIntensity: Double = 1,
@@ -172,6 +213,7 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
         self.displayResolution = displayResolution
         self.codecPreference = codecPreference
         self.gameLanguage = gameLanguage
+        self.statsMode = statsMode
         self.controllerDeadzone = Self.bounded(
             controllerDeadzone,
             default: 0.15,
@@ -213,6 +255,7 @@ extension XboxCloudStreamSettings {
         case displayResolution
         case codecPreference
         case gameLanguage
+        case statsMode
         case controllerDeadzone
         case rumbleEnabled
         case rumbleIntensity
@@ -238,6 +281,10 @@ extension XboxCloudStreamSettings {
                 String.self,
                 forKey: .gameLanguage
             )) ?? defaults.gameLanguage,
+            statsMode: (try? values.decodeIfPresent(
+                StreamStatsMode.self,
+                forKey: .statsMode
+            )) ?? defaults.statsMode,
             controllerDeadzone: values.decodeIfPresent(
                 Double.self,
                 forKey: .controllerDeadzone
@@ -274,6 +321,7 @@ extension XboxCloudStreamSettings {
         try values.encode(displayResolution, forKey: .displayResolution)
         try values.encode(codecPreference, forKey: .codecPreference)
         try values.encode(gameLanguage, forKey: .gameLanguage)
+        try values.encode(statsMode, forKey: .statsMode)
         try values.encode(controllerDeadzone, forKey: .controllerDeadzone)
         try values.encode(rumbleEnabled, forKey: .rumbleEnabled)
         try values.encode(rumbleIntensity, forKey: .rumbleIntensity)

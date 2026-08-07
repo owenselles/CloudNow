@@ -25,7 +25,7 @@ struct XboxCloudSignalingAPITests {
                 let configuration = try #require(
                     object["configuration"] as? [String: Any]
                 )
-                #expect(configuration["useUnreliableInput"] as? Bool == false)
+                #expect(configuration["useUnreliableInput"] as? Bool == true)
                 return signalingResponse(statusCode: 204)
             }
             if index == 1 {

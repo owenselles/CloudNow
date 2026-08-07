@@ -153,6 +153,9 @@ protocol XboxCloudStreamRuntime: AnyObject, Sendable {
         configuration: XboxCloudSessionConfiguration,
         signalingContext: XboxCloudSignalingContext
     ) async throws
+    func sampleStatistics() async -> XboxCloudRTCStatsSnapshot
+    func recordDecodedVideoFrame()
+    func setInputPaused(_ isPaused: Bool)
     func sendInputKeepAlive()
     func disconnect()
 }
@@ -194,6 +197,7 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
     ) async throws {
         disconnect()
         inputDriver.attach(to: transport, signalingContext: signalingContext)
+        inputDriver.setPaused(false)
 
         do {
             try await transport.connect(
@@ -201,14 +205,13 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
                 signalingContext: signalingContext
             )
             try Task.checkCancellation()
-            try inputDriver.setNegotiatedInputVersion(
-                transport.negotiatedInputVersion
+            try inputDriver.setNegotiatedInputMode(
+                transport.negotiatedInputMode
             )
 
             for check in 0 ..< readinessPolicy.maximumChecks {
                 try Task.checkCancellation()
                 if transport.readiness.isReady,
-                   inputDriver.isReady,
                    transport.videoTrack != nil
                 {
                     return
@@ -232,6 +235,18 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
     func disconnect() {
         inputDriver.stop()
         transport.disconnect()
+    }
+
+    func sampleStatistics() async -> XboxCloudRTCStatsSnapshot {
+        await transport.sampleStatistics()
+    }
+
+    func recordDecodedVideoFrame() {
+        inputDriver.setVideoFlowing()
+    }
+
+    func setInputPaused(_ isPaused: Bool) {
+        inputDriver.setPaused(isPaused)
     }
 
     func sendInputKeepAlive() {
@@ -265,6 +280,9 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
             return error
         }
         if let error = error as? XboxLegacyInputCodecError {
+            return error
+        }
+        if let error = error as? XboxModernInputCodecError {
             return error
         }
         return XboxCloudStreamLifecycleError.mediaConnectionFailed(

@@ -513,18 +513,24 @@ final class CloudNowUITests: XCTestCase {
         let geForceNowApp = makeApp()
         geForceNowApp.launch()
         openSettings(in: geForceNowApp)
-        XCTAssertTrue(
-            element("settings.stream-quality.resolution", in: geForceNowApp)
-                .waitForExistence(timeout: 3)
+        let geForceNowResolution = element(
+            "settings.stream-quality.resolution",
+            in: geForceNowApp
         )
-        XCTAssertTrue(
-            element("settings.stream-quality.codec", in: geForceNowApp)
-                .waitForExistence(timeout: 3)
+        let geForceNowCodec = element(
+            "settings.stream-quality.codec",
+            in: geForceNowApp
         )
-        XCTAssertTrue(
-            element("settings.stream-quality.game-language", in: geForceNowApp)
-                .waitForExistence(timeout: 3)
+        let geForceNowLanguage = element(
+            "settings.stream-quality.game-language",
+            in: geForceNowApp
         )
+        XCTAssertTrue(geForceNowResolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(geForceNowResolution.isEnabled)
+        XCTAssertTrue(geForceNowCodec.waitForExistence(timeout: 3))
+        XCTAssertTrue(geForceNowCodec.isEnabled)
+        XCTAssertTrue(geForceNowLanguage.waitForExistence(timeout: 3))
+        XCTAssertTrue(geForceNowLanguage.isEnabled)
         geForceNowApp.terminate()
 
         let xboxApp = makeApp(extraArguments: [
@@ -541,22 +547,96 @@ final class CloudNowUITests: XCTestCase {
         let xboxSettings = xboxApp.buttons["Settings"]
         XCTAssertTrue(xboxSettings.waitForExistence(timeout: 5))
         selectTab(xboxSettings, movingRight: 2)
-        XCTAssertTrue(
-            element("settings.stream-quality.resolution", in: xboxApp)
-                .waitForExistence(timeout: 3)
+        let xboxResolution = element(
+            "settings.stream-quality.resolution",
+            in: xboxApp
         )
-        XCTAssertTrue(
-            element("settings.stream-quality.codec", in: xboxApp)
-                .waitForExistence(timeout: 3)
+        let xboxLanguage = element(
+            "settings.stream-quality.game-language",
+            in: xboxApp
         )
-        XCTAssertTrue(
-            element("settings.stream-quality.game-language", in: xboxApp)
-                .waitForExistence(timeout: 3)
+        XCTAssertTrue(xboxResolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(xboxResolution.isEnabled)
+        XCTAssertTrue(xboxLanguage.waitForExistence(timeout: 3))
+        XCTAssertTrue(xboxLanguage.isEnabled)
+        XCTAssertFalse(
+            element("settings.stream-quality.frame-rate", in: xboxApp).exists
+        )
+        XCTAssertFalse(
+            element("settings.stream-quality.codec", in: xboxApp).exists
         )
         XCTAssertFalse(xboxApp.buttons["Frame Rate"].exists)
+        XCTAssertFalse(xboxApp.buttons["Codec"].exists)
         XCTAssertFalse(xboxApp.buttons["Color Mode"].exists)
         XCTAssertFalse(xboxApp.buttons["Audio Format"].exists)
         XCTAssertFalse(xboxApp.buttons["Max Bitrate"].exists)
+
+        let currentResolutionText =
+            "\(xboxResolution.label) \(accessibilityValue(of: xboxResolution))"
+        let targetResolution = currentResolutionText.contains("1920x1080")
+            ? "1280x720"
+            : "1920x1080"
+
+        // SwiftUI's native tvOS Picker does not expose `hasFocus` on its
+        // identified accessibility node. The deterministic Settings fixture
+        // places it one focus move below the selected Settings tab.
+        XCUIRemote.shared.press(.down)
+        XCUIRemote.shared.press(.select)
+
+        let fullHDOption = xboxApp.cells
+            .matching(NSPredicate(format: "label CONTAINS %@", "1920x1080"))
+            .firstMatch
+        let hdOption = xboxApp.cells
+            .matching(NSPredicate(format: "label CONTAINS %@", "1280x720"))
+            .firstMatch
+        XCTAssertTrue(fullHDOption.waitForExistence(timeout: 3))
+        XCTAssertTrue(hdOption.waitForExistence(timeout: 3))
+
+        let targetOption = targetResolution == "1280x720" ? hdOption : fullHDOption
+        XCTAssertTrue(targetOption.isEnabled)
+        focus(
+            targetOption,
+            directions: [.down, .up],
+            pressesPerDirection: 12
+        )
+        XCUIRemote.shared.press(.select)
+
+        let selectedResolution = element(
+            "settings.stream-quality.resolution",
+            in: xboxApp
+        )
+        XCTAssertTrue(selectedResolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            waitForAccessibilityText(
+                targetResolution,
+                in: selectedResolution
+            )
+        )
+
+        xboxApp.terminate()
+        xboxApp.launch()
+
+        let relaunchedXboxChoice = xboxApp.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(relaunchedXboxChoice.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(relaunchedXboxChoice.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        let relaunchedXboxSettings = xboxApp.buttons["Settings"]
+        XCTAssertTrue(relaunchedXboxSettings.waitForExistence(timeout: 5))
+        selectTab(relaunchedXboxSettings, movingRight: 2)
+
+        let persistedResolution = element(
+            "settings.stream-quality.resolution",
+            in: xboxApp
+        )
+        XCTAssertTrue(persistedResolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            waitForAccessibilityText(
+                targetResolution,
+                in: persistedResolution
+            )
+        )
     }
 
     @MainActor
@@ -1082,6 +1162,23 @@ final class CloudNowUITests: XCTestCase {
     @MainActor
     private func accessibilityValue(of element: XCUIElement) -> String {
         element.value as? String ?? ""
+    }
+
+    @MainActor
+    private func waitForAccessibilityText(
+        _ text: String,
+        in element: XCUIElement,
+        timeout: TimeInterval = 3
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let element = object as? XCUIElement else { return false }
+                let value = element.value as? String ?? ""
+                return "\(element.label) \(value)".contains(text)
+            },
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     @MainActor

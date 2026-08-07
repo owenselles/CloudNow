@@ -51,23 +51,121 @@ nonisolated struct XboxCloudDataChannelDescriptor: Equatable, Sendable {
     }
 }
 
-nonisolated struct XboxCloudWebRTCReadiness: Equatable, Sendable {
-    static let requiredChannels: Set<XboxCloudDataChannelKind> = [
-        .control,
-        .message,
-        .input,
-    ]
+nonisolated enum XboxCloudIncomingDataPolicy {
+    private static let maximumInputFeedbackBytes = 4096
+    private static let maximumProtocolMessageBytes = 64 * 1024
+    private static let maximumChatBytes = 256 * 1024
 
+    static func channelKind(for label: String) -> XboxCloudDataChannelKind? {
+        switch label {
+        case "chat": .chat
+        case "control": .control
+        case "message": .message
+        case "input": .input
+        case "unreliableinput": .unreliableInput
+        case "reliableinput": .reliableInput
+        default: nil
+        }
+    }
+
+    static func accepts(label: String, byteCount: Int) -> Bool {
+        guard byteCount >= 0,
+              let kind = channelKind(for: label)
+        else {
+            return false
+        }
+        let maximum = switch kind {
+        case .input, .reliableInput, .unreliableInput:
+            maximumInputFeedbackBytes
+        case .control, .message:
+            maximumProtocolMessageBytes
+        case .chat:
+            maximumChatBytes
+        }
+        return byteCount <= maximum
+    }
+}
+
+/// Input transport selected by Microsoft's SDP answer. New Xbox sessions use
+/// the reliable/unreliable channel pair; the original reliable channel remains
+/// a bounded fallback for servers that do not negotiate the newer pair.
+nonisolated enum XboxCloudInputTransportMode: Equatable, Sendable {
+    case legacy(version: Int)
+    case unreliable(reliableVersion: Int, unreliableVersion: Int)
+
+    var reportVersion: Int {
+        switch self {
+        case let .legacy(version):
+            version
+        case let .unreliable(_, unreliableVersion):
+            unreliableVersion
+        }
+    }
+
+    var metadataVersion: Int {
+        // Microsoft's V2 reporter encodes reliable-channel metadata and
+        // feedback using the unreliable report channel's negotiated version.
+        reportVersion
+    }
+
+    var requiredChannels: Set<XboxCloudDataChannelKind> {
+        switch self {
+        case .legacy:
+            [.control, .message, .input]
+        case .unreliable:
+            [.control, .message, .unreliableInput, .reliableInput]
+        }
+    }
+
+    var diagnosticName: String {
+        switch self {
+        case .legacy:
+            "legacy"
+        case .unreliable:
+            "unreliable"
+        }
+    }
+
+    init(answer: XboxCloudSDPAnswer) throws {
+        guard (1 ... 10).contains(answer.input) else {
+            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
+                answer.input
+            )
+        }
+        if let unreliableVersion = answer.unreliableinput,
+           let reliableVersion = answer.reliableinput
+        {
+            guard (9 ... 10).contains(unreliableVersion) else {
+                throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
+                    unreliableVersion
+                )
+            }
+            guard (9 ... 10).contains(reliableVersion) else {
+                throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
+                    reliableVersion
+                )
+            }
+            self = .unreliable(
+                reliableVersion: reliableVersion,
+                unreliableVersion: unreliableVersion
+            )
+        } else {
+            self = .legacy(version: answer.input)
+        }
+    }
+}
+
+nonisolated struct XboxCloudWebRTCReadiness: Equatable, Sendable {
     private(set) var isPeerConnected = false
     private(set) var hasActiveMedia = false
     private(set) var openChannels: Set<XboxCloudDataChannelKind> = []
-    private(set) var negotiatedInputVersion: Int?
+    private(set) var negotiatedInputMode: XboxCloudInputTransportMode?
 
     var isReady: Bool {
-        isPeerConnected
+        guard let negotiatedInputMode else { return false }
+        return isPeerConnected
             && hasActiveMedia
-            && negotiatedInputVersion != nil
-            && Self.requiredChannels.isSubset(of: openChannels)
+            && negotiatedInputMode.requiredChannels.isSubset(of: openChannels)
     }
 
     mutating func setPeerConnected(_ isConnected: Bool) {
@@ -86,8 +184,8 @@ nonisolated struct XboxCloudWebRTCReadiness: Equatable, Sendable {
         }
     }
 
-    mutating func setNegotiatedInputVersion(_ version: Int?) {
-        negotiatedInputVersion = version
+    mutating func setNegotiatedInputMode(_ mode: XboxCloudInputTransportMode?) {
+        negotiatedInputMode = mode
     }
 }
 
@@ -180,11 +278,9 @@ struct XboxCloudWebRTCNegotiationPipeline {
         let answer = try await signaling.exchangeSDP(
             offer: offer,
             context: context,
-            configuration: .legacyInput
+            configuration: .webInput
         )
-        guard (1 ... 10).contains(answer.input) else {
-            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(answer.input)
-        }
+        _ = try XboxCloudInputTransportMode(answer: answer)
 
         try Task.checkCancellation()
         try await peer.setRemoteAnswer(answer)

@@ -30,10 +30,14 @@ nonisolated enum XboxCloudWebRTCConnectionState: Equatable, Sendable {
 nonisolated enum XboxCloudRequiredChannelClosurePolicy {
     static func shouldTerminate(
         channel: XboxCloudDataChannelKind,
-        state: XboxCloudWebRTCConnectionState
+        state: XboxCloudWebRTCConnectionState,
+        inputMode: XboxCloudInputTransportMode?
     ) -> Bool {
-        state.hasActivePeer
-            && XboxCloudWebRTCReadiness.requiredChannels.contains(channel)
+        guard state.hasActivePeer else { return false }
+        if channel == .control || channel == .message {
+            return true
+        }
+        return inputMode?.requiredChannels.contains(channel) == true
     }
 }
 
@@ -45,42 +49,16 @@ nonisolated enum XboxCloudDataSendDisposition: Equatable, Sendable {
     case rejected
 }
 
-nonisolated struct XboxCloudCodecDescriptor: Equatable, Sendable {
-    let name: String
-    let payloadType: Int?
-    let associatedPayloadType: Int?
-}
-
-nonisolated enum XboxCloudCodecPreferenceOrdering {
-    static func indices(
-        for codecs: [XboxCloudCodecDescriptor],
-        preferredName: String?
-    ) -> [Int] {
-        let allIndices = Array(codecs.indices)
-        guard let preferredName else { return allIndices }
-        let preferredPrimaryIndices = Set(allIndices.filter {
-            codecs[$0].name.caseInsensitiveCompare(preferredName) == .orderedSame
-        })
-        guard !preferredPrimaryIndices.isEmpty else { return allIndices }
-
-        let preferredPayloadTypes = Set(preferredPrimaryIndices.compactMap {
-            codecs[$0].payloadType
-        })
-        let preferredIndices = Set(allIndices.filter { index in
-            if preferredPrimaryIndices.contains(index) {
-                return true
-            }
-            let codec = codecs[index]
-            return codec.name.caseInsensitiveCompare("rtx") == .orderedSame
-                && codec.associatedPayloadType.map(preferredPayloadTypes.contains) == true
-        })
-        return allIndices.filter(preferredIndices.contains)
-            + allIndices.filter { !preferredIndices.contains($0) }
-    }
-}
-
 private nonisolated struct XboxCloudChannelSendState {
     var channels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
+}
+
+private nonisolated struct XboxCloudChannelReceiveState {
+    var onMessage: (@Sendable (
+        XboxCloudDataChannelKind,
+        Data,
+        Bool
+    ) -> Void)?
 }
 
 @MainActor
@@ -199,21 +177,32 @@ final class XboxCloudWebRTCTransport: NSObject {
     private(set) var state: XboxCloudWebRTCConnectionState = .idle
     private(set) var readiness = XboxCloudWebRTCReadiness()
     private(set) var videoTrack: LKRTCVideoTrack?
-    private(set) var negotiatedInputVersion: Int?
+    private(set) var negotiatedInputMode: XboxCloudInputTransportMode?
+
+    var negotiatedInputVersion: Int? {
+        negotiatedInputMode?.reportVersion
+    }
 
     @ObservationIgnored var onChannelStateChanged: (@MainActor (
         _ channel: XboxCloudDataChannelKind,
         _ isOpen: Bool
     ) -> Void)?
 
-    @ObservationIgnored var onChannelMessage: (@MainActor (
+    @ObservationIgnored var onChannelMessage: (@Sendable (
         _ channel: XboxCloudDataChannelKind,
         _ data: Data,
         _ isBinary: Bool
-    ) -> Void)?
+    ) -> Void)? {
+        didSet {
+            let handler = onChannelMessage
+            channelReceiveState.withLock { state in
+                state.onMessage = handler
+            }
+        }
+    }
 
     @ObservationIgnored private let negotiationPipeline: XboxCloudWebRTCNegotiationPipeline
-    @ObservationIgnored private let codecPreference: XboxCloudVideoCodecPreference
+    @ObservationIgnored private let statsSampler = XboxCloudRTCStatsSampler()
     @ObservationIgnored private var peerConnection: LKRTCPeerConnection?
     @ObservationIgnored private var videoReceiver: LKRTCRtpReceiver?
     @ObservationIgnored private var channels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
@@ -239,10 +228,12 @@ final class XboxCloudWebRTCTransport: NSObject {
     @ObservationIgnored private nonisolated let channelSendState = OSAllocatedUnfairLock(
         initialState: XboxCloudChannelSendState()
     )
+    @ObservationIgnored private nonisolated let channelReceiveState = OSAllocatedUnfairLock(
+        initialState: XboxCloudChannelReceiveState()
+    )
 
     init(
         signaling: any XboxCloudSignalingProviding = XboxCloudSignalingAPI(),
-        codecPreference: XboxCloudVideoCodecPreference = .automatic,
         disconnectGracePeriod: Duration = standardDisconnectGracePeriod,
         peerOperationTimeout: Duration = standardPeerOperationTimeout,
         sleep: @escaping XboxCloudBoundedCallback<Void>.Sleep = { duration in
@@ -250,7 +241,6 @@ final class XboxCloudWebRTCTransport: NSObject {
         }
     ) {
         negotiationPipeline = XboxCloudWebRTCNegotiationPipeline(signaling: signaling)
-        self.codecPreference = codecPreference
         self.disconnectGracePeriod = disconnectGracePeriod
         self.peerOperationTimeout = peerOperationTimeout
         self.sleep = sleep
@@ -285,10 +275,14 @@ final class XboxCloudWebRTCTransport: NSObject {
                 throw CancellationError()
             }
 
-            negotiatedInputVersion = answer.input
+            let inputMode = try XboxCloudInputTransportMode(answer: answer)
+            negotiatedInputMode = inputMode
             updateReadiness { readiness in
-                readiness.setNegotiatedInputVersion(answer.input)
+                readiness.setNegotiatedInputMode(inputMode)
             }
+            xboxWebRTCLog.notice(
+                "Xbox Cloud negotiated input mode=\(inputMode.diagnosticName, privacy: .public) version=\(inputMode.reportVersion, privacy: .public)"
+            )
             state = .connecting
             synchronizeReadinessFromPeer()
         } catch {
@@ -328,6 +322,14 @@ final class XboxCloudWebRTCTransport: NSObject {
         terminalPeerFailure = nil
         releasePeerResources(resumingICEWaiterWith: CancellationError())
         resetPublishedConnectionState(to: .idle)
+    }
+
+    func sampleStatistics() async -> XboxCloudRTCStatsSnapshot {
+        guard let peerConnection else { return XboxCloudRTCStatsSnapshot() }
+        return await statsSampler.sample(
+            peerConnection: peerConnection,
+            videoReceiver: videoReceiver
+        )
     }
 
     @discardableResult
@@ -398,6 +400,7 @@ final class XboxCloudWebRTCTransport: NSObject {
         localICEWaiter?.resume(throwing: CancellationError())
         pendingPeerOperation?.cancel(with: CancellationError())
         channelSendState.withLock { $0.channels.removeAll() }
+        channelReceiveState.withLock { $0.onMessage = nil }
         for channel in channels.values {
             channel.delegate = nil
             channel.close()
@@ -444,19 +447,14 @@ final class XboxCloudWebRTCTransport: NSObject {
 
         let video = LKRTCRtpTransceiverInit()
         video.direction = .recvOnly
-        guard let videoTransceiver = peerConnection.addTransceiver(
+        guard peerConnection.addTransceiver(
             of: .video,
             init: video
-        ) else {
+        ) != nil else {
             throw XboxCloudWebRTCTransportError.unableToCreateTransceiver(
                 media: "video"
             )
         }
-        applyCodecPreference(
-            to: videoTransceiver,
-            configuration: configuration
-        )
-
         var createdChannels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
         for descriptor in XboxCloudDataChannelDescriptor.microsoftWebRTCChannels {
             let channelConfiguration = LKRTCDataChannelConfiguration()
@@ -481,51 +479,6 @@ final class XboxCloudWebRTCTransport: NSObject {
         let registeredChannels = createdChannels
         channelSendState.withLock { $0.channels = registeredChannels }
         xboxWebRTCLog.info("Prepared one Xbox Cloud peer with six data channels")
-    }
-
-    private func applyCodecPreference(
-        to transceiver: LKRTCRtpTransceiver,
-        configuration: XboxCloudSessionConfiguration
-    ) {
-        let preferredName: String? = switch codecPreference {
-        case .automatic:
-            nil
-        case .h264:
-            kLKRTCVideoCodecH264Name
-        case .h265 where configuration.permitsHEVC:
-            kLKRTCVideoCodecH265Name
-        case .h265:
-            nil
-        }
-        guard let preferredName else { return }
-
-        let capabilities = CloudRTCRuntime.peerConnectionFactory
-            .rtpReceiverCapabilities(
-                forKind: kLKRTCMediaStreamTrackKindVideo
-            )
-        let codecs = capabilities.codecs
-        let descriptors = codecs.map {
-            XboxCloudCodecDescriptor(
-                name: $0.name,
-                payloadType: $0.preferredPayloadType?.intValue,
-                associatedPayloadType: $0.parameters["apt"].flatMap(Int.init)
-            )
-        }
-        let indices = XboxCloudCodecPreferenceOrdering.indices(
-            for: descriptors,
-            preferredName: preferredName
-        )
-        guard indices != Array(codecs.indices) else { return }
-        do {
-            try transceiver.setCodecPreferences(
-                indices.map { codecs[$0] },
-                error: ()
-            )
-        } catch {
-            xboxWebRTCLog.error(
-                "Xbox Cloud codec preference was unavailable; using WebRTC defaults"
-            )
-        }
     }
 
     private func synchronizeReadinessFromPeer() {
@@ -580,6 +533,7 @@ final class XboxCloudWebRTCTransport: NSObject {
         peerConnection = nil
         videoReceiver = nil
         videoTrack = nil
+        statsSampler.reset()
         localICECandidates.removeAll(keepingCapacity: true)
         localICECandidateKeys.removeAll(keepingCapacity: true)
         localICECollectionError = nil
@@ -591,7 +545,7 @@ final class XboxCloudWebRTCTransport: NSObject {
     ) {
         self.state = state
         readiness = XboxCloudWebRTCReadiness()
-        negotiatedInputVersion = nil
+        negotiatedInputMode = nil
         videoTrack = nil
     }
 
@@ -1206,7 +1160,8 @@ extension XboxCloudWebRTCTransport: LKRTCDataChannelDelegate {
                dataChannel.readyState == .closed,
                XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
                    channel: kind,
-                   state: state
+                   state: state,
+                   inputMode: negotiatedInputMode
                )
             {
                 terminateActivePeer(reason: "An Xbox Cloud session channel closed.")
@@ -1224,12 +1179,18 @@ extension XboxCloudWebRTCTransport: LKRTCDataChannelDelegate {
         didReceiveMessageWith buffer: LKRTCDataBuffer
     ) {
         let data = buffer.data
-        let isBinary = buffer.isBinary
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let kind = dataChannelKind(for: dataChannel)
-            else { return }
-            onChannelMessage?(kind, data, isBinary)
+        guard let kind = XboxCloudIncomingDataPolicy.channelKind(
+            for: dataChannel.label
+        ),
+            XboxCloudIncomingDataPolicy.accepts(
+                label: dataChannel.label,
+                byteCount: data.count
+            )
+        else {
+            return
         }
+        let isBinary = buffer.isBinary
+        let handler = channelReceiveState.withLock { $0.onMessage }
+        handler?(kind, data, isBinary)
     }
 }

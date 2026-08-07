@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+import UIKit
 
 /// Owns production-only Xbox dependencies without loading their transports on
 /// GeForce NOW launches. The environment retains this lightweight context;
@@ -126,11 +127,15 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
     ) -> XboxCloudStreamController {
         let graph = resolvedGraph()
         let transport = graph.transport
+        let display = Self.currentDisplayMetadata
         return XboxCloudStreamController(
             sessionProvider: graph.gsSessionProvider,
             transferToken: transferToken,
             deviceInformation: .cloudNowTV(
-                sdkInstallID: graph.installationIdentity.loadOrCreateSDKInstallID()
+                sdkInstallID: graph.installationIdentity.loadOrCreateSDKInstallID(),
+                displayWidthInPixels: display.widthInPixels,
+                displayHeightInPixels: display.heightInPixels,
+                pixelDensity: display.pixelDensity
             ),
             makeSessionLifecycle: { access in
                 XboxCloudSessionLifecycleClient(
@@ -145,8 +150,7 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                     transport: XboxCloudWebRTCTransport(
                         signaling: XboxCloudSignalingAPI(
                             transport: transport
-                        ),
-                        codecPreference: settings.codecPreference
+                        )
                     ),
                     inputDriver: XboxCloudInputDriver(
                         deadzone: Float(settings.controllerDeadzone),
@@ -156,6 +160,26 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                     )
                 )
             }
+        )
+    }
+
+    @MainActor
+    private static var currentDisplayMetadata: (
+        widthInPixels: Int,
+        heightInPixels: Int,
+        pixelDensity: Double
+    ) {
+        let screen = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }?
+            .screen
+        guard let screen else {
+            return (1920, 1080, 1)
+        }
+        return (
+            max(Int(screen.nativeBounds.width.rounded()), 1),
+            max(Int(screen.nativeBounds.height.rounded()), 1),
+            max(Double(screen.nativeScale), 1)
         )
     }
 

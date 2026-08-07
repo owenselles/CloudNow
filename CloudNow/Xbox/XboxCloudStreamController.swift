@@ -87,6 +87,19 @@ final class XboxCloudStreamController {
     private(set) var state: XboxCloudStreamState = .idle
     private(set) var videoTrack: LKRTCVideoTrack?
     private(set) var activeGameID: String?
+    private(set) var stats = StreamStats()
+    private(set) var audioStats = AudioStats()
+    private(set) var statsMode: StreamStatsMode = .off
+    private(set) var streamingStartedAt: Date?
+    private(set) var serverLocation = ""
+    private(set) var colorState = StreamColorState(
+        preference: .automatic,
+        requestedMode: .sdr8,
+        negotiatedMode: nil,
+        detectedMode: nil,
+        displayHDRSupport: .unknown,
+        fallbackReason: nil
+    )
 
     var isStreaming: Bool {
         state == .streaming
@@ -111,6 +124,8 @@ final class XboxCloudStreamController {
     @ObservationIgnored private var launchTaskGeneration: UInt64?
     @ObservationIgnored private var keepAliveTask: Task<Void, Never>?
     @ObservationIgnored private var mediaMonitorTask: Task<Void, Never>?
+    @ObservationIgnored private var statisticsTask: Task<Void, Never>?
+    @ObservationIgnored private var statisticsGeneration: UInt64 = 0
     @ObservationIgnored private var activeOperation: ActiveOperation?
 
     init(
@@ -166,6 +181,7 @@ final class XboxCloudStreamController {
         launchTask?.cancel()
         keepAliveTask?.cancel()
         mediaMonitorTask?.cancel()
+        statisticsTask?.cancel()
         activeOperation?.runtime?.disconnect()
         if let activeOperation {
             let lifecycle = activeOperation.lifecycle
@@ -187,6 +203,7 @@ final class XboxCloudStreamController {
         generation &+= 1
         let operationGeneration = generation
         activeGameID = gameID
+        resetStatistics(settings: settings)
         state = .requestingAccess
 
         let task = Task { @MainActor [weak self] in
@@ -250,10 +267,9 @@ final class XboxCloudStreamController {
         do {
             let gsSession = try await sessionProvider.session(for: account)
             try ensureCurrent(operationGeneration)
+            serverLocation = gsSession.defaultRegion.name
             let access = try gsSession.makeSessionAccessContext(
-                deviceInformation: deviceInformation.withDisplayResolution(
-                    settings.displayResolution
-                ),
+                deviceInformation: deviceInformation,
                 msaTransferToken: transferToken
             )
             let lifecycle = makeSessionLifecycle(access)
@@ -318,6 +334,7 @@ final class XboxCloudStreamController {
 
             videoTrack = track
             state = .streaming
+            streamingStartedAt = Date()
             startKeepAlive(
                 lifecycle: lifecycle,
                 token: token,
@@ -331,6 +348,12 @@ final class XboxCloudStreamController {
                 runtime: runtime,
                 generation: operationGeneration
             )
+            if statsMode != .off {
+                startStatisticsMonitor(
+                    runtime: runtime,
+                    generation: operationGeneration
+                )
+            }
         } catch is CancellationError {
             guard generation == operationGeneration else {
                 throw CancellationError()
@@ -445,6 +468,109 @@ final class XboxCloudStreamController {
         }
     }
 
+    func setStatsMode(_ mode: StreamStatsMode) {
+        guard statsMode != mode else { return }
+        statsMode = mode
+        if mode == .off {
+            stopStatisticsMonitor()
+            return
+        }
+        guard state == .streaming,
+              let operation = activeOperation,
+              let runtime = operation.runtime
+        else {
+            return
+        }
+        startStatisticsMonitor(
+            runtime: runtime,
+            generation: operation.generation
+        )
+    }
+
+    func setInputPaused(_ isPaused: Bool) {
+        activeOperation?.runtime?.setInputPaused(isPaused)
+    }
+
+    func recordDecodedVideoFormat(_ format: DecodedVideoFormat) {
+        colorState.detectedMode = format.mode
+        activeOperation?.runtime?.recordDecodedVideoFrame()
+    }
+
+    private func startStatisticsMonitor(
+        runtime: any XboxCloudStreamRuntime,
+        generation operationGeneration: UInt64
+    ) {
+        statisticsTask?.cancel()
+        statisticsGeneration &+= 1
+        let monitorGeneration = statisticsGeneration
+        statisticsTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard self?.isCollectingStatistics(
+                    operationGeneration,
+                    monitorGeneration: monitorGeneration
+                ) == true else {
+                    return
+                }
+                let snapshot = await runtime.sampleStatistics()
+                guard self?.isCollectingStatistics(
+                    operationGeneration,
+                    monitorGeneration: monitorGeneration
+                ) == true else {
+                    return
+                }
+                self?.applyStatistics(snapshot)
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopStatisticsMonitor() {
+        statisticsGeneration &+= 1
+        statisticsTask?.cancel()
+        statisticsTask = nil
+    }
+
+    private func isCollectingStatistics(
+        _ operationGeneration: UInt64,
+        monitorGeneration: UInt64
+    ) -> Bool {
+        statisticsGeneration == monitorGeneration
+            && isActive(operationGeneration)
+            && statsMode != .off
+    }
+
+    private func applyStatistics(_ snapshot: XboxCloudRTCStatsSnapshot) {
+        var nextStats = snapshot.stream
+        nextStats.serverZone = serverLocation
+        if nextStats != stats {
+            stats = nextStats
+        }
+        if snapshot.audio != audioStats {
+            audioStats = snapshot.audio
+        }
+    }
+
+    private func resetStatistics(settings: XboxCloudStreamSettings) {
+        stopStatisticsMonitor()
+        stats = StreamStats()
+        audioStats = AudioStats()
+        statsMode = settings.statsMode
+        streamingStartedAt = nil
+        serverLocation = ""
+        colorState = StreamColorState(
+            preference: .automatic,
+            requestedMode: .sdr8,
+            negotiatedMode: nil,
+            detectedMode: nil,
+            displayHDRSupport: .unknown,
+            fallbackReason: nil
+        )
+    }
+
     private func backgroundFailure(
         _ error: XboxCloudStreamControllerError,
         generation operationGeneration: UInt64
@@ -465,11 +591,13 @@ final class XboxCloudStreamController {
         keepAliveTask = nil
         mediaMonitorTask?.cancel()
         mediaMonitorTask = nil
+        stopStatisticsMonitor()
         activeOperation?.runtime?.disconnect()
         let operation = activeOperation
         activeOperation = nil
         videoTrack = nil
         activeGameID = nil
+        streamingStartedAt = nil
         return operation
     }
 

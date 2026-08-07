@@ -5,16 +5,6 @@ import Testing
 @Suite("Xbox Cloud native WebRTC transport")
 @MainActor
 struct XboxCloudWebRTCTransportTests {
-    struct CodecOrderCase: Sendable {
-        let preferredName: String
-        let expectedIndices: [Int]
-    }
-
-    struct HEVCOverrideCase: Sendable {
-        let overrides: XboxCloudJSONValue?
-        let expected: Bool
-    }
-
     @Test("Microsoft end-of-candidates marker is omitted from native WebRTC")
     func endOfCandidatesMarker() {
         let marker = XboxCloudICECandidate.endOfCandidates
@@ -70,12 +60,41 @@ struct XboxCloudWebRTCTransportTests {
         ])
     }
 
-    @Test("Readiness requires peer, media, input version, and gameplay channels")
+    @Test("Incoming data is bounded by channel purpose")
+    func incomingDataBounds() {
+        #expect(
+            XboxCloudIncomingDataPolicy.channelKind(for: "reliableinput")
+                == .reliableInput
+        )
+        #expect(XboxCloudIncomingDataPolicy.channelKind(for: "unexpected") == nil)
+        #expect(XboxCloudIncomingDataPolicy.accepts(
+            label: "reliableinput",
+            byteCount: 4096
+        ))
+        #expect(!XboxCloudIncomingDataPolicy.accepts(
+            label: "reliableinput",
+            byteCount: 4097
+        ))
+        #expect(XboxCloudIncomingDataPolicy.accepts(
+            label: "message",
+            byteCount: 64 * 1024
+        ))
+        #expect(!XboxCloudIncomingDataPolicy.accepts(
+            label: "message",
+            byteCount: 64 * 1024 + 1
+        ))
+        #expect(!XboxCloudIncomingDataPolicy.accepts(
+            label: "unexpected",
+            byteCount: 1
+        ))
+    }
+
+    @Test("Readiness requires the channels selected by the input mode")
     func readinessGate() {
         var readiness = XboxCloudWebRTCReadiness()
         readiness.setPeerConnected(true)
         readiness.setActiveMedia(true)
-        readiness.setNegotiatedInputVersion(10)
+        readiness.setNegotiatedInputMode(.legacy(version: 10))
         readiness.setChannel(.control, isOpen: true)
         readiness.setChannel(.message, isOpen: true)
         #expect(!readiness.isReady)
@@ -90,8 +109,49 @@ struct XboxCloudWebRTCTransportTests {
         readiness.setChannel(.reliableInput, isOpen: false)
         #expect(readiness.isReady)
 
+        readiness.setNegotiatedInputMode(.unreliable(
+            reliableVersion: 10,
+            unreliableVersion: 10
+        ))
+        #expect(!readiness.isReady)
+        readiness.setChannel(.unreliableInput, isOpen: true)
+        readiness.setChannel(.reliableInput, isOpen: true)
+        #expect(readiness.isReady)
+        readiness.setChannel(.input, isOpen: false)
+        #expect(readiness.isReady)
+
         readiness.setActiveMedia(false)
         #expect(!readiness.isReady)
+    }
+
+    @Test("SDP selects modern input only when both V2 channels negotiate")
+    func negotiatedInputMode() throws {
+        #expect(
+            try XboxCloudInputTransportMode(answer: Self.answer())
+                == .unreliable(
+                    reliableVersion: 10,
+                    unreliableVersion: 10
+                )
+        )
+        #expect(
+            try XboxCloudInputTransportMode(answer: Self.answer(
+                unreliableInputVersion: nil,
+                reliableInputVersion: 10
+            )) == .legacy(version: 10)
+        )
+        #expect(
+            try XboxCloudInputTransportMode(answer: Self.answer(
+                unreliableInputVersion: 10,
+                reliableInputVersion: nil
+            )) == .legacy(version: 10)
+        )
+
+        let mixedVersionMode = XboxCloudInputTransportMode.unreliable(
+            reliableVersion: 9,
+            unreliableVersion: 10
+        )
+        #expect(mixedVersionMode.reportVersion == 10)
+        #expect(mixedVersionMode.metadataVersion == 10)
     }
 
     @Test("Required channel closure is terminal throughout active setup")
@@ -106,7 +166,11 @@ struct XboxCloudWebRTCTransportTests {
             #expect(
                 XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
                     channel: .control,
-                    state: state
+                    state: state,
+                    inputMode: .unreliable(
+                        reliableVersion: 10,
+                        unreliableVersion: 10
+                    )
                 )
             )
         }
@@ -114,19 +178,49 @@ struct XboxCloudWebRTCTransportTests {
         #expect(
             !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
                 channel: .chat,
-                state: .connected
+                state: .connected,
+                inputMode: .legacy(version: 10)
+            )
+        )
+        #expect(
+            XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                channel: .unreliableInput,
+                state: .connected,
+                inputMode: .unreliable(
+                    reliableVersion: 10,
+                    unreliableVersion: 10
+                )
+            )
+        )
+        #expect(
+            !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                channel: .input,
+                state: .connected,
+                inputMode: .unreliable(
+                    reliableVersion: 10,
+                    unreliableVersion: 10
+                )
+            )
+        )
+        #expect(
+            XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                channel: .input,
+                state: .connected,
+                inputMode: .legacy(version: 10)
             )
         )
         #expect(
             !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
                 channel: .control,
-                state: .idle
+                state: .idle,
+                inputMode: .legacy(version: 10)
             )
         )
         #expect(
             !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
                 channel: .control,
-                state: .failed(message: "fixture")
+                state: .failed(message: "fixture"),
+                inputMode: .legacy(version: 10)
             )
         )
     }
@@ -147,90 +241,6 @@ struct XboxCloudWebRTCTransportTests {
                 "https://example.com/relay",
             ])
         }
-    }
-
-    @Test("Automatic codec preference preserves WebRTC's original order")
-    func automaticCodecPreferenceOrdering() {
-        let codecs = Self.codecOrderingFixture
-
-        #expect(
-            XboxCloudCodecPreferenceOrdering.indices(
-                for: codecs,
-                preferredName: nil
-            ) == Array(codecs.indices)
-        )
-    }
-
-    @Test(
-        "Preferred video codec and its RTX stay together ahead of stable fallbacks",
-        arguments: [
-            CodecOrderCase(
-                preferredName: "H264",
-                expectedIndices: [2, 3, 0, 1, 4, 5, 6, 7]
-            ),
-            CodecOrderCase(
-                preferredName: "H265",
-                expectedIndices: [6, 7, 0, 1, 2, 3, 4, 5]
-            ),
-        ]
-    )
-    func preferredCodecOrdering(testCase: CodecOrderCase) {
-        #expect(
-            XboxCloudCodecPreferenceOrdering.indices(
-                for: Self.codecOrderingFixture,
-                preferredName: testCase.preferredName
-            ) == testCase.expectedIndices
-        )
-    }
-
-    @Test("Missing preferred codec preserves every fallback and repair codec")
-    func missingPreferredCodecOrdering() {
-        let codecs = Self.codecOrderingFixture
-
-        #expect(
-            XboxCloudCodecPreferenceOrdering.indices(
-                for: codecs,
-                preferredName: "AV1"
-            ) == Array(codecs.indices)
-        )
-    }
-
-    @Test(
-        "HEVC permission requires an explicitly enabled video override",
-        arguments: [
-            HEVCOverrideCase(
-                overrides: .object([
-                    "videoConfiguration": .object([
-                        "enableHevc": .boolean(true),
-                    ]),
-                ]),
-                expected: true
-            ),
-            HEVCOverrideCase(
-                overrides: .object([
-                    "videoConfiguration": .object([
-                        "enableHevc": .boolean(false),
-                    ]),
-                ]),
-                expected: false
-            ),
-            HEVCOverrideCase(
-                overrides: .object([
-                    "videoConfiguration": .object([:]),
-                ]),
-                expected: false
-            ),
-            HEVCOverrideCase(overrides: nil, expected: false),
-        ]
-    )
-    func hevcPermission(testCase: HEVCOverrideCase) {
-        let configuration = XboxCloudSessionConfiguration(
-            serverDetails: Self.sessionConfiguration.serverDetails,
-            keepAlivePulse: Self.sessionConfiguration.keepAlivePulse,
-            clientStreamingConfigOverrides: testCase.overrides
-        )
-
-        #expect(configuration.permitsHEVC == testCase.expected)
     }
 
     @Test("Negotiation orders offer, SDP, ICE, and remote candidate application")
@@ -529,51 +539,10 @@ struct XboxCloudWebRTCTransportTests {
         clientStreamingConfigOverrides: nil
     )
 
-    private nonisolated static let codecOrderingFixture = [
-        XboxCloudCodecDescriptor(
-            name: "VP8",
-            payloadType: 96,
-            associatedPayloadType: nil
-        ),
-        XboxCloudCodecDescriptor(
-            name: "rtx",
-            payloadType: 97,
-            associatedPayloadType: 96
-        ),
-        XboxCloudCodecDescriptor(
-            name: "H264",
-            payloadType: 102,
-            associatedPayloadType: nil
-        ),
-        XboxCloudCodecDescriptor(
-            name: "RTX",
-            payloadType: 103,
-            associatedPayloadType: 102
-        ),
-        XboxCloudCodecDescriptor(
-            name: "red",
-            payloadType: 116,
-            associatedPayloadType: nil
-        ),
-        XboxCloudCodecDescriptor(
-            name: "ulpfec",
-            payloadType: 117,
-            associatedPayloadType: nil
-        ),
-        XboxCloudCodecDescriptor(
-            name: "H265",
-            payloadType: 104,
-            associatedPayloadType: nil
-        ),
-        XboxCloudCodecDescriptor(
-            name: "rtx",
-            payloadType: 105,
-            associatedPayloadType: 104
-        ),
-    ]
-
     fileprivate nonisolated static func answer(
-        inputVersion: Int = 10
+        inputVersion: Int = 10,
+        unreliableInputVersion: Int? = 10,
+        reliableInputVersion: Int? = 10
     ) -> XboxCloudSDPAnswer {
         XboxCloudSDPAnswer(
             status: "success",
@@ -582,8 +551,8 @@ struct XboxCloudWebRTCTransportTests {
             chatStream: 1,
             control: 3,
             input: inputVersion,
-            unreliableinput: 10,
-            reliableinput: 10,
+            unreliableinput: unreliableInputVersion,
+            reliableinput: reliableInputVersion,
             message: 1,
             chat: 1
         )
@@ -707,7 +676,7 @@ private actor XboxWebRTCSignalingStub: XboxCloudSignalingProviding {
     ) async throws -> XboxCloudSDPAnswer {
         await events.record("signaling.sdp")
         #expect(offer == "fixture-offer")
-        #expect(configuration == .legacyInput)
+        #expect(configuration == .webInput)
         if cancelsSDP {
             throw CancellationError()
         }

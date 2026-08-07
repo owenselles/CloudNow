@@ -101,6 +101,89 @@ struct XboxCatalogViewModelTests {
         )
     }
 
+    @Test("Home hero prefers matching rich landscape artwork")
+    func homeHeroPrefersMatchingRichArtwork() throws {
+        let posterURL = try #require(
+            URL(string: "https://store-images.s-microsoft.com/poster.jpg")
+        )
+        let heroURL = try #require(
+            URL(string: "https://store-images.s-microsoft.com/hero.jpg")
+        )
+        let catalogItem = XboxCatalogItem(
+            id: "hero-game",
+            title: "Hero Game",
+            artworkURL: posterURL
+        )
+        let detailItem = XboxCatalogItem(
+            id: "hero-game",
+            title: "Hero Game",
+            artworkURL: posterURL,
+            heroArtworkURL: heroURL
+        )
+
+        let presentation = XboxHomeHeroPresentation(
+            catalogItem: catalogItem,
+            detailItem: detailItem
+        )
+
+        #expect(presentation.item == detailItem)
+        #expect(presentation.artworkURL == heroURL)
+        #expect(presentation.usesHeroArtwork)
+    }
+
+    @Test("Home hero rejects stale detail and retains portrait fallback")
+    func homeHeroRejectsStaleDetail() throws {
+        let posterURL = try #require(
+            URL(string: "https://store-images.s-microsoft.com/poster.jpg")
+        )
+        let staleHeroURL = try #require(
+            URL(string: "https://store-images.s-microsoft.com/stale-hero.jpg")
+        )
+        let catalogItem = XboxCatalogItem(
+            id: "current-game",
+            title: "Current Game",
+            artworkURL: posterURL
+        )
+        let staleDetailItem = XboxCatalogItem(
+            id: "previous-game",
+            title: "Previous Game",
+            artworkURL: nil,
+            heroArtworkURL: staleHeroURL
+        )
+
+        let stalePresentation = XboxHomeHeroPresentation(
+            catalogItem: catalogItem,
+            detailItem: staleDetailItem
+        )
+        let failedPresentation = XboxHomeHeroPresentation(
+            catalogItem: catalogItem,
+            detailItem: nil
+        )
+
+        #expect(stalePresentation.item == catalogItem)
+        #expect(stalePresentation.artworkURL == posterURL)
+        #expect(!stalePresentation.usesHeroArtwork)
+        #expect(failedPresentation == stalePresentation)
+    }
+
+    @Test("Home hero skips enrichment when landscape artwork already exists")
+    func homeHeroWithLandscapeArtworkNeedsNoEnrichment() throws {
+        let posterURL = try #require(
+            URL(string: "https://store-images.s-microsoft.com/poster.jpg")
+        )
+        let heroURL = try #require(
+            URL(string: "https://store-images.s-microsoft.com/hero.jpg")
+        )
+        let item = XboxCatalogItem(
+            id: "rich-hero-game",
+            title: "Rich Hero Game",
+            artworkURL: posterURL,
+            heroArtworkURL: heroURL
+        )
+
+        #expect(!XboxHomeHeroPresentation.requiresDetailEnrichment(item))
+    }
+
     @MainActor
     @Test("Home exposes only account favorites and recent activity")
     func homeActivityBuckets() async {
@@ -728,6 +811,26 @@ struct XboxCatalogViewModelTests {
         #expect(await viewModel.fetchDetail(for: item) == nil)
         #expect(await viewModel.fetchDetail(for: item) == nil)
         #expect(await client.recordedDetailRequestCount() == 2)
+    }
+
+    @MainActor
+    @Test("Successful detail responses are reused across Xbox surfaces")
+    func successfulDetailResponseIsCached() async {
+        let item = makeAccessItem(id: "cached-detail", accessKinds: [.standard])
+        let client = XboxCatalogClientProbe(
+            snapshot: XboxCatalogSnapshot(items: [item], fetchedAt: fetchedAt)
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: client,
+            account: account,
+            cache: XboxCatalogMemoryCache()
+        )
+
+        await viewModel.load()
+
+        #expect(await viewModel.fetchDetail(for: item) == item)
+        #expect(await viewModel.fetchDetail(for: item) == item)
+        #expect(await client.recordedDetailRequestCount() == 1)
     }
 
     @MainActor

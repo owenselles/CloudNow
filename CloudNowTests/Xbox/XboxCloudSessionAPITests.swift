@@ -6,6 +6,20 @@ import Testing
 struct XboxCloudSessionAPITests {
     private let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test("Device information keeps physical output metadata")
+    func physicalDisplayMetadata() {
+        let information = XboxCloudDeviceInformation.cloudNowTV(
+            sdkInstallID: "fixture-install-id",
+            displayWidthInPixels: 3840,
+            displayHeightInPixels: 2160,
+            pixelDensity: 2
+        )
+
+        #expect(information.displayWidthInPixels == 3840)
+        #expect(information.displayHeightInPixels == 2160)
+        #expect(information.pixelDensity == 2)
+    }
+
     @Test("Create sends the cloud play contract with redacted credentials")
     func createSession() async throws {
         let access = try makeAccessContext()

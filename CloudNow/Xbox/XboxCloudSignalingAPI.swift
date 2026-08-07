@@ -121,12 +121,12 @@ nonisolated struct XboxCloudSDPConfiguration: Codable, Equatable, Sendable {
         let sampleFrequencyHz: Int
     }
 
-    static let legacyInput = XboxCloudSDPConfiguration(
+    static let webInput = XboxCloudSDPConfiguration(
         chatStream: VersionRange(minVersion: 1, maxVersion: 1),
         control: VersionRange(minVersion: 1, maxVersion: 3),
         input: VersionRange(minVersion: 1, maxVersion: 10),
         unreliableinput: VersionRange(minVersion: 9, maxVersion: 10),
-        useUnreliableInput: false,
+        useUnreliableInput: true,
         reliableinput: VersionRange(minVersion: 9, maxVersion: 10),
         message: VersionRange(minVersion: 1, maxVersion: 1),
         chatConfiguration: ChatConfiguration(
@@ -322,7 +322,7 @@ actor XboxCloudSignalingAPI {
     func exchangeSDP(
         offer: String,
         context: XboxCloudSignalingContext,
-        configuration: XboxCloudSDPConfiguration = .legacyInput
+        configuration: XboxCloudSDPConfiguration = .webInput
     ) async throws -> XboxCloudSDPAnswer {
         guard !offer.isEmpty,
               offer.utf8.count <= Self.maximumResponseBytes

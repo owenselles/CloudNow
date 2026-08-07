@@ -185,6 +185,12 @@ nonisolated struct XboxLegacyInputEncoder {
         return data
     }
 
+    /// Reserves the next token for the modern unreliable-input encoder while
+    /// keeping reliable metadata and state reports on one sequence.
+    mutating func reserveInputToken() -> UInt32 {
+        nextInputToken()
+    }
+
     private mutating func appendHeader(
         flags: UInt16,
         version: Int,

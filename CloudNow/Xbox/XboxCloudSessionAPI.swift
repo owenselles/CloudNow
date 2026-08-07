@@ -124,7 +124,12 @@ nonisolated struct XboxCloudDeviceInformation: Codable, Equatable, Sendable, Cus
     let displayHeightInPixels: Int
     let pixelDensity: Double
 
-    static func cloudNowTV(sdkInstallID: String = UUID().uuidString) -> Self {
+    static func cloudNowTV(
+        sdkInstallID: String = UUID().uuidString,
+        displayWidthInPixels: Int = 1920,
+        displayHeightInPixels: Int = 1080,
+        pixelDensity: Double = 1
+    ) -> Self {
         Self(
             clientAppID: "CloudNow",
             clientAppType: "native",
@@ -137,38 +142,14 @@ nonisolated struct XboxCloudDeviceInformation: Codable, Equatable, Sendable, Cus
             sdkType: "native",
             operatingSystemName: "tvOS",
             operatingSystemVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-            displayWidthInPixels: 1920,
-            displayHeightInPixels: 1080,
-            pixelDensity: 1
+            displayWidthInPixels: displayWidthInPixels,
+            displayHeightInPixels: displayHeightInPixels,
+            pixelDensity: pixelDensity
         )
     }
 
     var description: String {
         "XboxCloudDeviceInformation(app: \(clientAppID), platform: \(platformType), model: \(model))"
-    }
-
-    func withDisplayResolution(_ resolution: XboxCloudDisplayResolution) -> Self {
-        guard let width = resolution.width,
-              let height = resolution.height
-        else {
-            return self
-        }
-        return Self(
-            clientAppID: clientAppID,
-            clientAppType: clientAppType,
-            clientAppVersion: clientAppVersion,
-            clientSDKVersion: clientSDKVersion,
-            sdkInstallID: sdkInstallID,
-            make: make,
-            model: model,
-            platformType: platformType,
-            sdkType: sdkType,
-            operatingSystemName: operatingSystemName,
-            operatingSystemVersion: operatingSystemVersion,
-            displayWidthInPixels: width,
-            displayHeightInPixels: height,
-            pixelDensity: pixelDensity
-        )
     }
 
     fileprivate func validated() throws -> Self {
@@ -414,16 +395,6 @@ nonisolated struct XboxCloudSessionConfiguration: Equatable, Sendable, CustomStr
 
     var description: String {
         "XboxCloudSessionConfiguration(serverDetails: \(serverDetails), keepAlivePulse: \(keepAlivePulse), clientStreamingConfigOverrides: \(clientStreamingConfigOverrides == nil ? "nil" : "<redacted>"))"
-    }
-
-    var permitsHEVC: Bool {
-        guard case let .object(overrides) = clientStreamingConfigOverrides,
-              case let .object(videoConfiguration) = overrides["videoConfiguration"],
-              case .boolean(true) = videoConfiguration["enableHevc"]
-        else {
-            return false
-        }
-        return true
     }
 }
 
