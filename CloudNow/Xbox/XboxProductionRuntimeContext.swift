@@ -145,12 +145,14 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                     transport: XboxCloudWebRTCTransport(
                         signaling: XboxCloudSignalingAPI(
                             transport: transport
-                        )
+                        ),
+                        codecPreference: settings.codecPreference
                     ),
                     inputDriver: XboxCloudInputDriver(
                         deadzone: Float(settings.controllerDeadzone),
                         rumbleEnabled: settings.rumbleEnabled,
-                        rumbleIntensity: Float(settings.rumbleIntensity)
+                        rumbleIntensity: Float(settings.rumbleIntensity),
+                        preferredResolution: settings.displayResolution
                     )
                 )
             }

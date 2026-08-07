@@ -46,7 +46,9 @@ struct XboxCloudPlayerView: View {
                     // request has no separate free-with-ads or ad-receipt parameter.
                     gameID: route.titleID,
                     account: account,
-                    locale: L10n.localeCode,
+                    locale: settings.effectiveGameLanguage(
+                        defaultLocale: L10n.localeCode
+                    ),
                     settings: settings
                 )
             } catch is CancellationError {

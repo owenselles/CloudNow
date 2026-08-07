@@ -5,6 +5,7 @@ import Observation
 nonisolated enum XboxCloudChannelProtocolError: Error, Equatable, Sendable {
     case invalidCorrelationVector
     case invalidHandshake
+    case invalidResolution
     case encodingFailed
 }
 
@@ -28,6 +29,39 @@ nonisolated enum XboxCloudChannelProtocolCodec {
         let message = "gamepadChanged"
         let gamepadIndex: UInt8
         let wasAdded: Bool
+    }
+
+    private struct Dimensions: Encodable {
+        let width: Int
+        let height: Int
+    }
+
+    private struct VideoPreference: Encodable {
+        let message = "VideoPreference"
+        let type = "VideoPreference"
+        let resolution: Dimensions
+        let dimensions: Dimensions
+        let maxFPS: Int
+    }
+
+    private struct StreamDimensions: Encodable {
+        let horizontal: Int
+        let vertical: Int
+        let preferredWidth: Int
+        let preferredHeight: Int
+        let safeAreaLeft = 0
+        let safeAreaTop = 0
+        let safeAreaRight: Int
+        let safeAreaBottom: Int
+        let supportsCustomResolution = true
+    }
+
+    private struct DimensionsChanged: Encodable {
+        let type = "Message"
+        let target = "/streaming/characteristics/dimensionschanged"
+        let id: String
+        let cv: String
+        let content: String
     }
 
     static func messageHandshake(
@@ -57,6 +91,70 @@ nonisolated enum XboxCloudChannelProtocolCodec {
         }
     }
 
+    static func videoPreference(
+        resolution: XboxCloudDisplayResolution,
+        maximumFrameRate: Int
+    ) throws -> Data {
+        guard let width = resolution.width,
+              let height = resolution.height,
+              (1 ... 120).contains(maximumFrameRate)
+        else {
+            throw XboxCloudChannelProtocolError.invalidResolution
+        }
+        let dimensions = Dimensions(width: width, height: height)
+        do {
+            return try JSONEncoder().encode(
+                VideoPreference(
+                    resolution: dimensions,
+                    dimensions: dimensions,
+                    maxFPS: maximumFrameRate
+                )
+            )
+        } catch {
+            throw XboxCloudChannelProtocolError.encodingFailed
+        }
+    }
+
+    static func dimensionsChanged(
+        resolution: XboxCloudDisplayResolution,
+        id: UUID,
+        correlationVector: String
+    ) throws -> Data {
+        guard let width = resolution.width,
+              let height = resolution.height
+        else {
+            throw XboxCloudChannelProtocolError.invalidResolution
+        }
+        let streamDimensions = StreamDimensions(
+            horizontal: width,
+            vertical: height,
+            preferredWidth: width,
+            preferredHeight: height,
+            safeAreaRight: width,
+            safeAreaBottom: height
+        )
+        do {
+            let contentData = try JSONEncoder().encode(streamDimensions)
+            guard let content = String(data: contentData, encoding: .utf8) else {
+                throw XboxCloudChannelProtocolError.encodingFailed
+            }
+            return try JSONEncoder().encode(
+                DimensionsChanged(
+                    id: id.uuidString,
+                    cv: extendedCorrelationVector(
+                        correlationVector,
+                        component: 2
+                    ),
+                    content: content
+                )
+            )
+        } catch let error as XboxCloudChannelProtocolError {
+            throw error
+        } catch {
+            throw XboxCloudChannelProtocolError.encodingFailed
+        }
+    }
+
     static func isHandshakeAcknowledgement(_ data: Data) -> Bool {
         guard data.count <= 4096,
               let text = String(data: data, encoding: .utf8)
@@ -79,11 +177,13 @@ nonisolated enum XboxCloudChannelProtocolCodec {
     }
 
     private static func extendedCorrelationVector(
-        _ value: String
+        _ value: String,
+        component: Int = 1
     ) throws -> String {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let incremented = normalized + ".1"
+        let incremented = normalized + ".\(component)"
         guard !normalized.isEmpty,
+              component > 0,
               incremented.utf8.count <= maximumCorrelationVectorLength,
               normalized.utf8.allSatisfy(isAllowedCorrelationVectorByte)
         else {
@@ -201,6 +301,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         XboxCloudInputStateCache.minimumSendIntervalNanoseconds
     )
     private static let maximumRumbleIterations = 8
+    private static let maximumXboxStreamFrameRate = 60
 
     private let queue = DispatchQueue(
         label: "com.cloudnow.xbox-input",
@@ -209,6 +310,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private let deadzone: Float
     private let rumbleEnabled: Bool
     private let rumbleIntensity: Float
+    private let preferredResolution: XboxCloudDisplayResolution
 
     private var generation: UInt64 = 0
     private var sink: XboxCloudInputDataSink?
@@ -232,22 +334,28 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var encoder = XboxLegacyInputEncoder()
     private var inputVersion: Int?
     private var messageHandshakeData: Data?
+    private var videoPreferenceData: Data?
+    private var dimensionsChangedData: Data?
     private var isControlChannelOpen = false
     private var isInputChannelOpen = false
     private var isMessageChannelOpen = false
     private var didSendClientMetadata = false
     private var didSendMessageHandshake = false
     private var didReceiveMessageHandshake = false
+    private var didSendVideoPreference = false
+    private var didSendDimensionsChanged = false
     private var lastReportedReadiness = false
 
     init(
         deadzone: Float,
         rumbleEnabled: Bool,
-        rumbleIntensity: Float
+        rumbleIntensity: Float,
+        preferredResolution: XboxCloudDisplayResolution
     ) {
         self.deadzone = deadzone
         self.rumbleEnabled = rumbleEnabled
         self.rumbleIntensity = rumbleIntensity
+        self.preferredResolution = preferredResolution
         sampledStates.reserveCapacity(Self.controllerCapacity)
     }
 
@@ -265,6 +373,17 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             self.readinessChanged = readinessChanged
             messageHandshakeData = try? XboxCloudChannelProtocolCodec
                 .messageHandshake(
+                    id: UUID(),
+                    correlationVector: correlationVector
+                )
+            videoPreferenceData = try? XboxCloudChannelProtocolCodec
+                .videoPreference(
+                    resolution: preferredResolution,
+                    maximumFrameRate: Self.maximumXboxStreamFrameRate
+                )
+            dimensionsChangedData = try? XboxCloudChannelProtocolCodec
+                .dimensionsChanged(
+                    resolution: preferredResolution,
                     id: UUID(),
                     correlationVector: correlationVector
                 )
@@ -327,6 +446,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             case .control:
                 isControlChannelOpen = isOpen
                 if isOpen {
+                    didSendVideoPreference = false
                     for index in controllerSlots.indices
                         where controllerSlots[index] != nil
                     {
@@ -344,6 +464,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 if isOpen {
                     didSendMessageHandshake = false
                     didReceiveMessageHandshake = false
+                    didSendDimensionsChanged = false
                 }
             case .chat, .unreliableInput, .reliableInput:
                 break
@@ -365,7 +486,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                     .isHandshakeAcknowledgement(data)
                 {
                     didReceiveMessageHandshake = true
-                    updateReadinessLocked()
+                    sampleAndFlushLocked()
                 }
             case .input, .unreliableInput, .reliableInput:
                 guard let inputVersion,
@@ -433,12 +554,16 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         generation = 0
         inputVersion = nil
         messageHandshakeData = nil
+        videoPreferenceData = nil
+        dimensionsChangedData = nil
         isControlChannelOpen = false
         isInputChannelOpen = false
         isMessageChannelOpen = false
         didSendClientMetadata = false
         didSendMessageHandshake = false
         didReceiveMessageHandshake = false
+        didSendVideoPreference = false
+        didSendDimensionsChanged = false
         lastReportedReadiness = false
         encoder = XboxLegacyInputEncoder()
     }
@@ -483,8 +608,10 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     }
 
     private func sampleAndFlushLocked() {
+        flushVideoPreferenceLocked()
         flushControlUpdatesLocked()
         flushMessageHandshakeLocked()
+        flushDimensionsChangedLocked()
         flushClientMetadataLocked()
         sendGamepadSnapshotLocked()
         updateReadinessLocked()
@@ -505,6 +632,18 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 pendingControlUpdates[index] = nil
             }
         }
+    }
+
+    private func flushVideoPreferenceLocked() {
+        guard isControlChannelOpen,
+              !didSendVideoPreference,
+              let sink,
+              let videoPreferenceData
+        else {
+            return
+        }
+        didSendVideoPreference =
+            sink.sendControl(videoPreferenceData) == .accepted
     }
 
     private func sendControlUpdateLocked(index: Int, wasAdded: Bool) {
@@ -529,6 +668,19 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
         didSendMessageHandshake =
             sink.sendMessage(messageHandshakeData) == .accepted
+    }
+
+    private func flushDimensionsChangedLocked() {
+        guard isMessageChannelOpen,
+              didReceiveMessageHandshake,
+              !didSendDimensionsChanged,
+              let sink,
+              let dimensionsChangedData
+        else {
+            return
+        }
+        didSendDimensionsChanged =
+            sink.sendMessage(dimensionsChangedData) == .accepted
     }
 
     private func flushClientMetadataLocked() {
@@ -852,13 +1004,15 @@ final class XboxCloudInputDriver {
         notificationCenter: NotificationCenter = .default,
         deadzone: Float = 0.15,
         rumbleEnabled: Bool = true,
-        rumbleIntensity: Float = 1
+        rumbleIntensity: Float = 1,
+        preferredResolution: XboxCloudDisplayResolution = .automatic
     ) {
         self.notificationCenter = notificationCenter
         worker = XboxCloudInputWorker(
             deadzone: min(max(deadzone, 0), 0.95),
             rumbleEnabled: rumbleEnabled,
-            rumbleIntensity: min(max(rumbleIntensity, 0), 1)
+            rumbleIntensity: min(max(rumbleIntensity, 0), 1),
+            preferredResolution: preferredResolution
         )
     }
 

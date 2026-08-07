@@ -15,6 +15,9 @@ struct XboxCloudStreamControllerTests {
         #expect(defaults == XboxCloudStreamSettings())
 
         let settings = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            codecPreference: .h265,
+            gameLanguage: "fr_FR",
             controllerDeadzone: 4,
             rumbleIntensity: -2,
             enableTextToSpeech: true,
@@ -24,10 +27,55 @@ struct XboxCloudStreamControllerTests {
         )
         #expect(settings.controllerDeadzone == 0.95)
         #expect(settings.rumbleIntensity == 0)
-        #expect(try JSONDecoder().decode(
+        let roundTrip = try JSONDecoder().decode(
             XboxCloudStreamSettings.self,
             from: JSONEncoder().encode(settings)
-        ) == settings)
+        )
+        #expect(roundTrip == settings)
+        #expect(roundTrip.displayResolution == .qhd)
+        #expect(roundTrip.codecPreference == .h265)
+        #expect(roundTrip.effectiveGameLanguage(defaultLocale: "en-US") == "fr-FR")
+
+        let futureValues = try JSONDecoder().decode(
+            XboxCloudStreamSettings.self,
+            from: Data(#"{"displayResolution":"future","codecPreference":"future"}"#.utf8)
+        )
+        #expect(futureValues.displayResolution == .automatic)
+        #expect(futureValues.codecPreference == .automatic)
+        #expect(
+            futureValues.effectiveGameLanguage(defaultLocale: "de-DE") == "de-DE"
+        )
+    }
+
+    @Test("Xbox quality capabilities preserve unknown membership and gate 1440p")
+    func xboxQualityCapabilities() {
+        let unknown = XboxCloudStreamCapabilities.resolved(
+            for: nil,
+            isMembershipKnown: false
+        )
+        #expect(unknown.resolutions.contains(.qhd))
+        #expect(
+            unknown.normalized(
+                XboxCloudStreamSettings(displayResolution: .qhd)
+            ).displayResolution == .qhd
+        )
+
+        let ultimate = XboxCloudStreamCapabilities.resolved(
+            for: .ultimate,
+            isMembershipKnown: true
+        )
+        #expect(ultimate.resolutions == [.automatic, .hd, .fullHD, .qhd])
+
+        let pcGamePass = XboxCloudStreamCapabilities.resolved(
+            for: .pcGamePass,
+            isMembershipKnown: true
+        )
+        #expect(pcGamePass.resolutions == [.automatic, .hd, .fullHD])
+        #expect(
+            pcGamePass.normalized(
+                XboxCloudStreamSettings(displayResolution: .qhd)
+            ).displayResolution == .automatic
+        )
     }
 
     @Test("Start composes access, allocation, media, settings, and teardown")
@@ -41,6 +89,7 @@ struct XboxCloudStreamControllerTests {
             runtimeFactory: runtimeFactory
         )
         let settings = XboxCloudStreamSettings(
+            displayResolution: .qhd,
             controllerDeadzone: 0.24,
             rumbleEnabled: false,
             rumbleIntensity: 0.4,
@@ -61,6 +110,9 @@ struct XboxCloudStreamControllerTests {
         #expect(controller.activeGameID == "fixture-title")
         #expect(controller.videoTrack === runtime.videoTrack)
         #expect(runtimeFactory.receivedSettings == [settings])
+        let access = try #require(lifecycleFactory.receivedAccess.first)
+        #expect(access.deviceInformation.displayWidthInPixels == 2560)
+        #expect(access.deviceInformation.displayHeightInPixels == 1440)
         let request = try #require(await lifecycle.requests().first)
         #expect(request.titleID == "fixture-title")
         #expect(request.settings.locale == "en-US")
@@ -523,15 +575,17 @@ private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
 @MainActor
 private final class XboxLifecycleFactoryStub {
     private var lifecycles: [any XboxCloudSessionLifecycleServing]
+    private(set) var receivedAccess: [XboxCloudSessionAccessContext] = []
 
     init(_ lifecycles: [any XboxCloudSessionLifecycleServing]) {
         self.lifecycles = lifecycles
     }
 
     func make(
-        access _: XboxCloudSessionAccessContext
+        access: XboxCloudSessionAccessContext
     ) -> any XboxCloudSessionLifecycleServing {
-        lifecycles.removeFirst()
+        receivedAccess.append(access)
+        return lifecycles.removeFirst()
     }
 }
 

@@ -80,6 +80,9 @@ struct PersistenceStoreTests {
         var geForceNowSettings = StreamSettings()
         geForceNowSettings.maxBitrateKbps = 42000
         let xboxSettings = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            codecPreference: .h265,
+            gameLanguage: "de_DE",
             controllerDeadzone: 0.25,
             rumbleEnabled: false,
             rumbleIntensity: 0.6,

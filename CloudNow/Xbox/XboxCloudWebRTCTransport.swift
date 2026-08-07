@@ -26,6 +26,40 @@ nonisolated enum XboxCloudDataSendDisposition: Equatable, Sendable {
     case rejected
 }
 
+nonisolated struct XboxCloudCodecDescriptor: Equatable, Sendable {
+    let name: String
+    let payloadType: Int?
+    let associatedPayloadType: Int?
+}
+
+nonisolated enum XboxCloudCodecPreferenceOrdering {
+    static func indices(
+        for codecs: [XboxCloudCodecDescriptor],
+        preferredName: String?
+    ) -> [Int] {
+        let allIndices = Array(codecs.indices)
+        guard let preferredName else { return allIndices }
+        let preferredPrimaryIndices = Set(allIndices.filter {
+            codecs[$0].name.caseInsensitiveCompare(preferredName) == .orderedSame
+        })
+        guard !preferredPrimaryIndices.isEmpty else { return allIndices }
+
+        let preferredPayloadTypes = Set(preferredPrimaryIndices.compactMap {
+            codecs[$0].payloadType
+        })
+        let preferredIndices = Set(allIndices.filter { index in
+            if preferredPrimaryIndices.contains(index) {
+                return true
+            }
+            let codec = codecs[index]
+            return codec.name.caseInsensitiveCompare("rtx") == .orderedSame
+                && codec.associatedPayloadType.map(preferredPayloadTypes.contains) == true
+        })
+        return allIndices.filter(preferredIndices.contains)
+            + allIndices.filter { !preferredIndices.contains($0) }
+    }
+}
+
 private nonisolated struct XboxCloudChannelSendState {
     var channels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
 }
@@ -160,6 +194,7 @@ final class XboxCloudWebRTCTransport: NSObject {
     ) -> Void)?
 
     @ObservationIgnored private let negotiationPipeline: XboxCloudWebRTCNegotiationPipeline
+    @ObservationIgnored private let codecPreference: XboxCloudVideoCodecPreference
     @ObservationIgnored private var peerConnection: LKRTCPeerConnection?
     @ObservationIgnored private var videoReceiver: LKRTCRtpReceiver?
     @ObservationIgnored private var channels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
@@ -188,6 +223,7 @@ final class XboxCloudWebRTCTransport: NSObject {
 
     init(
         signaling: any XboxCloudSignalingProviding = XboxCloudSignalingAPI(),
+        codecPreference: XboxCloudVideoCodecPreference = .automatic,
         disconnectGracePeriod: Duration = standardDisconnectGracePeriod,
         peerOperationTimeout: Duration = standardPeerOperationTimeout,
         sleep: @escaping XboxCloudBoundedCallback<Void>.Sleep = { duration in
@@ -195,6 +231,7 @@ final class XboxCloudWebRTCTransport: NSObject {
         }
     ) {
         negotiationPipeline = XboxCloudWebRTCNegotiationPipeline(signaling: signaling)
+        self.codecPreference = codecPreference
         self.disconnectGracePeriod = disconnectGracePeriod
         self.peerOperationTimeout = peerOperationTimeout
         self.sleep = sleep
@@ -388,11 +425,18 @@ final class XboxCloudWebRTCTransport: NSObject {
 
         let video = LKRTCRtpTransceiverInit()
         video.direction = .recvOnly
-        guard peerConnection.addTransceiver(of: .video, init: video) != nil else {
+        guard let videoTransceiver = peerConnection.addTransceiver(
+            of: .video,
+            init: video
+        ) else {
             throw XboxCloudWebRTCTransportError.unableToCreateTransceiver(
                 media: "video"
             )
         }
+        applyCodecPreference(
+            to: videoTransceiver,
+            configuration: configuration
+        )
 
         var createdChannels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
         for descriptor in XboxCloudDataChannelDescriptor.microsoftWebRTCChannels {
@@ -418,6 +462,51 @@ final class XboxCloudWebRTCTransport: NSObject {
         let registeredChannels = createdChannels
         channelSendState.withLock { $0.channels = registeredChannels }
         xboxWebRTCLog.info("Prepared one Xbox Cloud peer with six data channels")
+    }
+
+    private func applyCodecPreference(
+        to transceiver: LKRTCRtpTransceiver,
+        configuration: XboxCloudSessionConfiguration
+    ) {
+        let preferredName: String? = switch codecPreference {
+        case .automatic:
+            nil
+        case .h264:
+            kLKRTCVideoCodecH264Name
+        case .h265 where configuration.permitsHEVC:
+            kLKRTCVideoCodecH265Name
+        case .h265:
+            nil
+        }
+        guard let preferredName else { return }
+
+        let capabilities = CloudRTCRuntime.peerConnectionFactory
+            .rtpReceiverCapabilities(
+                forKind: kLKRTCMediaStreamTrackKindVideo
+            )
+        let codecs = capabilities.codecs
+        let descriptors = codecs.map {
+            XboxCloudCodecDescriptor(
+                name: $0.name,
+                payloadType: $0.preferredPayloadType?.intValue,
+                associatedPayloadType: $0.parameters["apt"].flatMap(Int.init)
+            )
+        }
+        let indices = XboxCloudCodecPreferenceOrdering.indices(
+            for: descriptors,
+            preferredName: preferredName
+        )
+        guard indices != Array(codecs.indices) else { return }
+        do {
+            try transceiver.setCodecPreferences(
+                indices.map { codecs[$0] },
+                error: ()
+            )
+        } catch {
+            xboxWebRTCLog.error(
+                "Xbox Cloud codec preference was unavailable; using WebRTC defaults"
+            )
+        }
     }
 
     private func synchronizeReadinessFromPeer() {

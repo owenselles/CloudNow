@@ -28,6 +28,12 @@ struct XboxCloudSessionAPITests {
             #expect(environment["clientAppId"] as? String == "CloudNowTests")
             #expect(environment["sdkInstallId"] as? String == "fixture-install-id")
             let dev = try #require(device["dev"] as? [String: Any])
+            let displayInfo = try #require(dev["displayInfo"] as? [String: Any])
+            let dimensions = try #require(
+                displayInfo["dimensions"] as? [String: Any]
+            )
+            #expect(dimensions["widthInPixels"] as? Int == 1920)
+            #expect(dimensions["heightInPixels"] as? Int == 1080)
             let hardware = try #require(dev["hw"] as? [String: Any])
             #expect(hardware["platformType"] as? String == "tvOS")
 

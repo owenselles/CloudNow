@@ -509,6 +509,57 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testStreamQualityUsesCloudNowRowsInBothModes() {
+        let geForceNowApp = makeApp()
+        geForceNowApp.launch()
+        openSettings(in: geForceNowApp)
+        XCTAssertTrue(
+            element("settings.stream-quality.resolution", in: geForceNowApp)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element("settings.stream-quality.codec", in: geForceNowApp)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element("settings.stream-quality.game-language", in: geForceNowApp)
+                .waitForExistence(timeout: 3)
+        )
+        geForceNowApp.terminate()
+
+        let xboxApp = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        xboxApp.launch()
+        let xboxChoice = xboxApp.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xboxChoice.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xboxChoice.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        let xboxSettings = xboxApp.buttons["Settings"]
+        XCTAssertTrue(xboxSettings.waitForExistence(timeout: 5))
+        selectTab(xboxSettings, movingRight: 2)
+        XCTAssertTrue(
+            element("settings.stream-quality.resolution", in: xboxApp)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element("settings.stream-quality.codec", in: xboxApp)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element("settings.stream-quality.game-language", in: xboxApp)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertFalse(xboxApp.buttons["Frame Rate"].exists)
+        XCTAssertFalse(xboxApp.buttons["Color Mode"].exists)
+        XCTAssertFalse(xboxApp.buttons["Audio Format"].exists)
+        XCTAssertFalse(xboxApp.buttons["Max Bitrate"].exists)
+    }
+
+    @MainActor
     func testControllerSettingsUseTheSameCloudNowRowsInBothModes() {
         let geForceNowApp = makeApp()
         geForceNowApp.launch()

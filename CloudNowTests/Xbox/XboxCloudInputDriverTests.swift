@@ -99,6 +99,71 @@ struct XboxCloudInputDriverTests {
         #expect(object["wasAdded"] as? Bool == true)
     }
 
+    @Test("Preferred resolution uses the Xbox control-channel contract")
+    func videoPreference() throws {
+        let data = try XboxCloudChannelProtocolCodec.videoPreference(
+            resolution: .qhd,
+            maximumFrameRate: 60
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let resolution = try #require(object["resolution"] as? [String: Any])
+        let dimensions = try #require(object["dimensions"] as? [String: Any])
+
+        #expect(object["message"] as? String == "VideoPreference")
+        #expect(object["type"] as? String == "VideoPreference")
+        #expect(object["maxFPS"] as? Int == 60)
+        #expect(resolution["width"] as? Int == 2560)
+        #expect(resolution["height"] as? Int == 1440)
+        #expect(dimensions["width"] as? Int == 2560)
+        #expect(dimensions["height"] as? Int == 1440)
+
+        #expect(throws: XboxCloudChannelProtocolError.invalidResolution) {
+            try XboxCloudChannelProtocolCodec.videoPreference(
+                resolution: .automatic,
+                maximumFrameRate: 60
+            )
+        }
+    }
+
+    @Test("Preferred resolution follows the message handshake")
+    func dimensionsChanged() throws {
+        let id = try #require(
+            UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")
+        )
+        let data = try XboxCloudChannelProtocolCodec.dimensionsChanged(
+            resolution: .fullHD,
+            id: id,
+            correlationVector: "fixture.3"
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let content = try #require(object["content"] as? String)
+        let dimensions = try #require(
+            JSONSerialization.jsonObject(with: Data(content.utf8))
+                as? [String: Any]
+        )
+
+        #expect(object["type"] as? String == "Message")
+        #expect(
+            object["target"] as? String
+                == "/streaming/characteristics/dimensionschanged"
+        )
+        #expect(object["id"] as? String == id.uuidString)
+        #expect(object["cv"] as? String == "fixture.3.2")
+        #expect(dimensions["horizontal"] as? Int == 1920)
+        #expect(dimensions["vertical"] as? Int == 1080)
+        #expect(dimensions["preferredWidth"] as? Int == 1920)
+        #expect(dimensions["preferredHeight"] as? Int == 1080)
+        #expect(dimensions["safeAreaLeft"] as? Int == 0)
+        #expect(dimensions["safeAreaTop"] as? Int == 0)
+        #expect(dimensions["safeAreaRight"] as? Int == 1920)
+        #expect(dimensions["safeAreaBottom"] as? Int == 1080)
+        #expect(dimensions["supportsCustomResolution"] as? Bool == true)
+    }
+
     @Test("Controller axes clamp symmetrically")
     func symmetricControllerAxes() {
         #expect(XboxCloudInputValueMapper.signedAxis(-2) == -32767)

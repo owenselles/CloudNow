@@ -302,6 +302,13 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         }
     }
 
+    var streamCapabilities: XboxCloudStreamCapabilities {
+        .resolved(
+            for: membershipTier,
+            isMembershipKnown: contentAccessPhase == .loaded
+        )
+    }
+
     @ObservationIgnored private let makeStreamController: @MainActor @Sendable (
         @escaping @Sendable () async throws -> String
     ) -> XboxCloudStreamController
@@ -477,6 +484,7 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
             contentAccessTask = nil
             membershipTier = snapshot.membershipTier
             contentAccessPhase = .loaded
+            streamSettings = streamCapabilities.normalized(streamSettings)
         } catch is CancellationError {
             if contentAccessGeneration == generation {
                 contentAccessTask = nil
@@ -2700,6 +2708,30 @@ private struct XboxSettingsView: View {
                     onSelectProvider: switchProvider
                 )
 
+                CloudNowStreamQualitySection {
+                    CloudNowStreamQualityPicker(
+                        L10n.text("resolution"),
+                        selection: $modeViewModel.streamSettings.displayResolution,
+                        accessibilityIdentifier: "settings.stream-quality.resolution",
+                        options: xboxAutomaticResolutionOption,
+                        groups: xboxResolutionGroups
+                    )
+
+                    CloudNowStreamQualityPicker(
+                        L10n.text("codec"),
+                        selection: $modeViewModel.streamSettings.codecPreference,
+                        accessibilityIdentifier: "settings.stream-quality.codec",
+                        options: modeViewModel.streamCapabilities.codecs.map {
+                            CloudNowStreamQualityOption(value: $0, title: $0.label)
+                        }
+                    )
+
+                    CloudNowGameLanguagePicker(
+                        selection: $modeViewModel.streamSettings.gameLanguage
+                    )
+                }
+                .disabled(isBusy)
+
                 CloudNowControllerSettingsSection(
                     rumbleEnabled: $modeViewModel.streamSettings.rumbleEnabled,
                     rumbleIntensity: $modeViewModel.streamSettings.rumbleIntensity,
@@ -2830,6 +2862,41 @@ private struct XboxSettingsView: View {
         isSigningOut
             || isPerformingDataAction
             || providerCoordinator.isProviderInteractionBlocked
+    }
+
+    private var xboxAutomaticResolutionOption: [
+        CloudNowStreamQualityOption<XboxCloudDisplayResolution>
+    ] {
+        guard modeViewModel.streamCapabilities.resolutions.contains(.automatic) else {
+            return []
+        }
+        return [
+            CloudNowStreamQualityOption(
+                value: .automatic,
+                title: XboxCloudDisplayResolution.automatic.label
+            ),
+        ]
+    }
+
+    private var xboxResolutionGroups: [
+        CloudNowStreamQualityOptionGroup<XboxCloudDisplayResolution>
+    ] {
+        let options: [CloudNowStreamQualityOption<XboxCloudDisplayResolution>] = modeViewModel
+            .streamCapabilities.resolutions.compactMap { resolution in
+                guard resolution != .automatic else { return nil }
+                return CloudNowStreamQualityOption(
+                    value: resolution,
+                    title: resolution.label,
+                    badge: resolution.badge,
+                    systemImage: resolution.systemImage
+                )
+            }
+        return [
+            CloudNowStreamQualityOptionGroup(
+                title: L10n.text("tv_standards"),
+                options: options
+            ),
+        ]
     }
 
     private var membershipDescription: String {

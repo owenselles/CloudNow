@@ -67,7 +67,6 @@ struct CloudNowCloudServiceSection: View {
                     .disabled(isInteractionDisabled)
                 }
             }
-
         }
     }
 }
@@ -295,6 +294,150 @@ extension CloudNowControllerSettingsSection where AdditionalContent == EmptyView
     }
 }
 
+struct CloudNowStreamQualityOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let title: String
+    let badge: String?
+    let systemImage: String?
+
+    var id: Value {
+        value
+    }
+
+    init(
+        value: Value,
+        title: String,
+        badge: String? = nil,
+        systemImage: String? = nil
+    ) {
+        self.value = value
+        self.title = title
+        self.badge = badge
+        self.systemImage = systemImage
+    }
+}
+
+struct CloudNowStreamQualityOptionGroup<Value: Hashable>: Identifiable {
+    let title: String
+    let options: [CloudNowStreamQualityOption<Value>]
+
+    var id: String {
+        title
+    }
+}
+
+struct CloudNowStreamQualityPicker<Value: Hashable>: View {
+    let title: String
+    let accessibilityIdentifier: String
+    @Binding var selection: Value
+    let options: [CloudNowStreamQualityOption<Value>]
+    let groups: [CloudNowStreamQualityOptionGroup<Value>]
+
+    init(
+        _ title: String,
+        selection: Binding<Value>,
+        accessibilityIdentifier: String,
+        options: [CloudNowStreamQualityOption<Value>] = [],
+        groups: [CloudNowStreamQualityOptionGroup<Value>] = []
+    ) {
+        self.title = title
+        self.accessibilityIdentifier = accessibilityIdentifier
+        _selection = selection
+        self.options = options
+        self.groups = groups
+    }
+
+    var body: some View {
+        Picker(title, selection: $selection) {
+            ForEach(options) { option in
+                optionLabel(option)
+                    .tag(option.value)
+            }
+            ForEach(groups) { group in
+                if !group.options.isEmpty {
+                    Section(group.title) {
+                        ForEach(group.options) { option in
+                            optionLabel(option)
+                                .tag(option.value)
+                        }
+                    }
+                }
+            }
+        }
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    @ViewBuilder
+    private func optionLabel(_ option: CloudNowStreamQualityOption<Value>) -> some View {
+        if let systemImage = option.systemImage {
+            Label(optionDisplayTitle(option), systemImage: systemImage)
+        } else {
+            Text(optionDisplayTitle(option))
+        }
+    }
+
+    private func optionDisplayTitle(_ option: CloudNowStreamQualityOption<Value>) -> String {
+        guard let badge = option.badge else { return option.title }
+        return "\(option.title)  —  \(badge)"
+    }
+}
+
+struct CloudNowGameLanguagePicker: View {
+    @Binding var selection: String
+
+    var body: some View {
+        Picker(L10n.text("game_language"), selection: $selection) {
+            Text(L10n.text("automatic")).tag(StreamSettings.automaticGameLanguage)
+            Text("English (US)").tag("en_US")
+            Text("English (UK)").tag("en_GB")
+            Text("French").tag("fr_FR")
+            Text("German").tag("de_DE")
+            Text("Spanish").tag("es_ES")
+            Text("Italian").tag("it_IT")
+            Text("Portuguese").tag("pt_BR")
+            Text("Hindi").tag("hi_IN")
+            Text("Japanese").tag("ja_JP")
+            Text("Korean").tag("ko_KR")
+            Text("Chinese (Simplified)").tag("zh_CN")
+            Text("Chinese (Traditional)").tag("zh_TW")
+            Text("Russian").tag("ru_RU")
+            Text("Arabic").tag("ar_SA")
+            Text("Dutch").tag("nl_NL")
+            Text("Polish").tag("pl_PL")
+            Text("Swedish").tag("sv_SE")
+            Text("Finnish").tag("fi_FI")
+            Text("Turkish").tag("tr_TR")
+            Text("Greek").tag("el_GR")
+            Text("Hebrew").tag("he_IL")
+            Text("Czech").tag("cs_CZ")
+            Text("Danish").tag("da_DK")
+            Text("Croatian").tag("hr_HR")
+            Text("Hungarian").tag("hu_HU")
+            Text("Indonesian").tag("id_ID")
+            Text("Malay").tag("ms_MY")
+            Text("Romanian").tag("ro_RO")
+            Text("Slovak").tag("sk_SK")
+            Text("Vietnamese").tag("vi_VN")
+            Text("Ukrainian").tag("uk_UA")
+        }
+        .accessibilityIdentifier("settings.stream-quality.game-language")
+    }
+}
+
+struct CloudNowStreamQualitySection<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder _ contentBuilder: () -> Content) {
+        content = contentBuilder()
+    }
+
+    var body: some View {
+        Section(L10n.text("stream_quality")) {
+            content
+        }
+    }
+}
+
 enum CloudNowDataDialog: Equatable {
     case confirmClearCache
     case confirmResetAllData
@@ -346,26 +489,13 @@ struct SettingsView: View {
                     onSelectProvider: switchProvider
                 )
 
-                Section(L10n.text("stream_quality")) {
-                    Picker(L10n.text("resolution"), selection: $vm.streamSettings.resolution) {
-                        let common = commonResolutions.filter { viewModel.availableResolutions.contains($0.res) }
-                        let other = viewModel.availableResolutions.filter { res in !commonResolutions.map(\.res).contains(res) }
-                        if !common.isEmpty {
-                            Section(L10n.text("tv_standards")) {
-                                ForEach(common, id: \.res) { item in
-                                    Label("\(item.res)  —  \(item.badge)", systemImage: item.symbol)
-                                        .tag(item.res)
-                                }
-                            }
-                        }
-                        if !other.isEmpty {
-                            Section(L10n.text("other")) {
-                                ForEach(other, id: \.self) { res in
-                                    Text(res).tag(res)
-                                }
-                            }
-                        }
-                    }
+                CloudNowStreamQualitySection {
+                    CloudNowStreamQualityPicker(
+                        L10n.text("resolution"),
+                        selection: $vm.streamSettings.resolution,
+                        accessibilityIdentifier: "settings.stream-quality.resolution",
+                        groups: geForceNowResolutionGroups
+                    )
 
                     Picker(L10n.text("frame_rate"), selection: $vm.streamSettings.fps) {
                         ForEach(viewModel.availableFps, id: \.self) { fps in
@@ -373,11 +503,14 @@ struct SettingsView: View {
                         }
                     }
 
-                    Picker(L10n.text("codec"), selection: $vm.streamSettings.codec) {
-                        ForEach(VideoCodec.allCases, id: \.self) { codec in
-                            Text(codec.label).tag(codec)
+                    CloudNowStreamQualityPicker(
+                        L10n.text("codec"),
+                        selection: $vm.streamSettings.codec,
+                        accessibilityIdentifier: "settings.stream-quality.codec",
+                        options: VideoCodec.allCases.map {
+                            CloudNowStreamQualityOption(value: $0, title: $0.label)
                         }
-                    }
+                    )
 
                     Picker(selection: $vm.streamSettings.colorPreference) {
                         ForEach(ColorModePreference.allCases, id: \.self) { preference in
@@ -419,40 +552,9 @@ struct SettingsView: View {
                         }
                     }
 
-                    Picker(L10n.text("game_language"), selection: $vm.streamSettings.gameLanguage) {
-                        Text(L10n.text("automatic")).tag(StreamSettings.automaticGameLanguage)
-                        Text("English (US)").tag("en_US")
-                        Text("English (UK)").tag("en_GB")
-                        Text("French").tag("fr_FR")
-                        Text("German").tag("de_DE")
-                        Text("Spanish").tag("es_ES")
-                        Text("Italian").tag("it_IT")
-                        Text("Portuguese").tag("pt_BR")
-                        Text("Hindi").tag("hi_IN")
-                        Text("Japanese").tag("ja_JP")
-                        Text("Korean").tag("ko_KR")
-                        Text("Chinese (Simplified)").tag("zh_CN")
-                        Text("Chinese (Traditional)").tag("zh_TW")
-                        Text("Russian").tag("ru_RU")
-                        Text("Arabic").tag("ar_SA")
-                        Text("Dutch").tag("nl_NL")
-                        Text("Polish").tag("pl_PL")
-                        Text("Swedish").tag("sv_SE")
-                        Text("Finnish").tag("fi_FI")
-                        Text("Turkish").tag("tr_TR")
-                        Text("Greek").tag("el_GR")
-                        Text("Hebrew").tag("he_IL")
-                        Text("Czech").tag("cs_CZ")
-                        Text("Danish").tag("da_DK")
-                        Text("Croatian").tag("hr_HR")
-                        Text("Hungarian").tag("hu_HU")
-                        Text("Indonesian").tag("id_ID")
-                        Text("Malay").tag("ms_MY")
-                        Text("Romanian").tag("ro_RO")
-                        Text("Slovak").tag("sk_SK")
-                        Text("Vietnamese").tag("vi_VN")
-                        Text("Ukrainian").tag("uk_UA")
-                    }
+                    CloudNowGameLanguagePicker(
+                        selection: $vm.streamSettings.gameLanguage
+                    )
 
                     Picker(selection: $vm.streamSettings.appLaunchMode) {
                         ForEach(AppLaunchMode.allCases, id: \.self) { mode in
@@ -919,6 +1021,33 @@ struct SettingsView: View {
         ResolutionEntry(res: "2560x1440", badge: "2K", symbol: "tv"),
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
+
+    private var geForceNowResolutionGroups: [CloudNowStreamQualityOptionGroup<String>] {
+        let common = commonResolutions
+            .filter { viewModel.availableResolutions.contains($0.res) }
+            .map {
+                CloudNowStreamQualityOption(
+                    value: $0.res,
+                    title: $0.res,
+                    badge: $0.badge,
+                    systemImage: $0.symbol
+                )
+            }
+        let commonValues = Set(commonResolutions.map(\.res))
+        let other = viewModel.availableResolutions
+            .filter { !commonValues.contains($0) }
+            .map { CloudNowStreamQualityOption(value: $0, title: $0) }
+        return [
+            CloudNowStreamQualityOptionGroup(
+                title: L10n.text("tv_standards"),
+                options: common
+            ),
+            CloudNowStreamQualityOptionGroup(
+                title: L10n.text("other"),
+                options: other
+            ),
+        ]
+    }
 }
 
 // MARK: - Server Location Picker

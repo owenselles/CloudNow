@@ -5,6 +5,16 @@ import Testing
 @Suite("Xbox Cloud native WebRTC transport")
 @MainActor
 struct XboxCloudWebRTCTransportTests {
+    struct CodecOrderCase: Sendable {
+        let preferredName: String
+        let expectedIndices: [Int]
+    }
+
+    struct HEVCOverrideCase: Sendable {
+        let overrides: XboxCloudJSONValue?
+        let expected: Bool
+    }
+
     @Test("Microsoft end-of-candidates marker maps to WebRTC's empty marker")
     func endOfCandidatesMarker() {
         let marker = XboxCloudICECandidate.endOfCandidates
@@ -98,6 +108,90 @@ struct XboxCloudWebRTCTransportTests {
                 "https://example.com/relay",
             ])
         }
+    }
+
+    @Test("Automatic codec preference preserves WebRTC's original order")
+    func automaticCodecPreferenceOrdering() {
+        let codecs = Self.codecOrderingFixture
+
+        #expect(
+            XboxCloudCodecPreferenceOrdering.indices(
+                for: codecs,
+                preferredName: nil
+            ) == Array(codecs.indices)
+        )
+    }
+
+    @Test(
+        "Preferred video codec and its RTX stay together ahead of stable fallbacks",
+        arguments: [
+            CodecOrderCase(
+                preferredName: "H264",
+                expectedIndices: [2, 3, 0, 1, 4, 5, 6, 7]
+            ),
+            CodecOrderCase(
+                preferredName: "H265",
+                expectedIndices: [6, 7, 0, 1, 2, 3, 4, 5]
+            ),
+        ]
+    )
+    func preferredCodecOrdering(testCase: CodecOrderCase) {
+        #expect(
+            XboxCloudCodecPreferenceOrdering.indices(
+                for: Self.codecOrderingFixture,
+                preferredName: testCase.preferredName
+            ) == testCase.expectedIndices
+        )
+    }
+
+    @Test("Missing preferred codec preserves every fallback and repair codec")
+    func missingPreferredCodecOrdering() {
+        let codecs = Self.codecOrderingFixture
+
+        #expect(
+            XboxCloudCodecPreferenceOrdering.indices(
+                for: codecs,
+                preferredName: "AV1"
+            ) == Array(codecs.indices)
+        )
+    }
+
+    @Test(
+        "HEVC permission requires an explicitly enabled video override",
+        arguments: [
+            HEVCOverrideCase(
+                overrides: .object([
+                    "videoConfiguration": .object([
+                        "enableHevc": .boolean(true),
+                    ]),
+                ]),
+                expected: true
+            ),
+            HEVCOverrideCase(
+                overrides: .object([
+                    "videoConfiguration": .object([
+                        "enableHevc": .boolean(false),
+                    ]),
+                ]),
+                expected: false
+            ),
+            HEVCOverrideCase(
+                overrides: .object([
+                    "videoConfiguration": .object([:]),
+                ]),
+                expected: false
+            ),
+            HEVCOverrideCase(overrides: nil, expected: false),
+        ]
+    )
+    func hevcPermission(testCase: HEVCOverrideCase) {
+        let configuration = XboxCloudSessionConfiguration(
+            serverDetails: Self.sessionConfiguration.serverDetails,
+            keepAlivePulse: Self.sessionConfiguration.keepAlivePulse,
+            clientStreamingConfigOverrides: testCase.overrides
+        )
+
+        #expect(configuration.permitsHEVC == testCase.expected)
     }
 
     @Test("Negotiation orders offer, SDP, ICE, and remote candidate application")
@@ -395,6 +489,49 @@ struct XboxCloudWebRTCTransportTests {
         keepAlivePulse: 15,
         clientStreamingConfigOverrides: nil
     )
+
+    private nonisolated static let codecOrderingFixture = [
+        XboxCloudCodecDescriptor(
+            name: "VP8",
+            payloadType: 96,
+            associatedPayloadType: nil
+        ),
+        XboxCloudCodecDescriptor(
+            name: "rtx",
+            payloadType: 97,
+            associatedPayloadType: 96
+        ),
+        XboxCloudCodecDescriptor(
+            name: "H264",
+            payloadType: 102,
+            associatedPayloadType: nil
+        ),
+        XboxCloudCodecDescriptor(
+            name: "RTX",
+            payloadType: 103,
+            associatedPayloadType: 102
+        ),
+        XboxCloudCodecDescriptor(
+            name: "red",
+            payloadType: 116,
+            associatedPayloadType: nil
+        ),
+        XboxCloudCodecDescriptor(
+            name: "ulpfec",
+            payloadType: 117,
+            associatedPayloadType: nil
+        ),
+        XboxCloudCodecDescriptor(
+            name: "H265",
+            payloadType: 104,
+            associatedPayloadType: nil
+        ),
+        XboxCloudCodecDescriptor(
+            name: "rtx",
+            payloadType: 105,
+            associatedPayloadType: 104
+        ),
+    ]
 
     fileprivate nonisolated static func answer(
         inputVersion: Int = 10

@@ -131,7 +131,8 @@ final class XboxCloudStreamController {
                 inputDriver: XboxCloudInputDriver(
                     deadzone: Float(settings.controllerDeadzone),
                     rumbleEnabled: settings.rumbleEnabled,
-                    rumbleIntensity: Float(settings.rumbleIntensity)
+                    rumbleIntensity: Float(settings.rumbleIntensity),
+                    preferredResolution: settings.displayResolution
                 )
             )
         },
@@ -250,7 +251,9 @@ final class XboxCloudStreamController {
             let gsSession = try await sessionProvider.session(for: account)
             try ensureCurrent(operationGeneration)
             let access = try gsSession.makeSessionAccessContext(
-                deviceInformation: deviceInformation,
+                deviceInformation: deviceInformation.withDisplayResolution(
+                    settings.displayResolution
+                ),
                 msaTransferToken: transferToken
             )
             let lifecycle = makeSessionLifecycle(access)
