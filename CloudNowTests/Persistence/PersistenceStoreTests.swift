@@ -169,6 +169,67 @@ struct PersistenceStoreTests {
         )
     }
 
+    @MainActor
+    @Test("Xbox favorites survive a recreated store and Xbox authorization")
+    func xboxFavoritesSurviveStoreAndAuthorizationRecreation() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let stableScope = "persisted-xbox-activity-scope"
+        let configuration = try MicrosoftDeviceCodeOAuthConfiguration(
+            tenant: "consumers",
+            clientID: "fixture-client",
+            scopes: ["openid", "offline_access"]
+        )
+        let session = XboxAuthSession(
+            configuration: configuration,
+            token: MicrosoftOAuthToken(
+                accessToken: "fixture-access",
+                refreshToken: "fixture-refresh",
+                idToken: nil,
+                tokenType: "Bearer",
+                scopes: configuration.scopes,
+                expiresAt: now.addingTimeInterval(3600)
+            ),
+            activityScopeIdentifier: stableScope
+        )
+        try await harness.store.saveXboxAuthSession(session, generation: 1)
+        await harness.store.saveXboxFavoriteIDs(
+            ["favorite-product"],
+            accountScope: stableScope
+        )
+
+        let recreatedStore = harness.makeRecreatedStore()
+        let authorization = PersistenceXboxAccountAuthorizationStub(
+            account: XboxCloudAuthorizedAccount(
+                authorizationIdentifier: "replacement-runtime-handle",
+                activityScopeIdentifier: "newly-derived-activity-scope",
+                displayName: nil,
+                expiresAt: now.addingTimeInterval(3600)
+            )
+        )
+        let manager = XboxAuthManager(
+            environment: XboxCloudEnvironment(
+                authentication: configuration,
+                makeAccountAuthorizationClient: { authorization },
+                service: nil
+            ),
+            persistence: recreatedStore,
+            now: { now }
+        )
+
+        await manager.restorePersistedSession()
+        await manager.activateXboxCloudAccess()
+
+        let restoredAccount = try #require(manager.authorizedAccount)
+        #expect(restoredAccount.activityScopeIdentifier == stableScope)
+        #expect(
+            await recreatedStore.loadXboxCatalogActivity(
+                accountScope: restoredAccount.activityScopeIdentifier
+            ).favoriteIDs == ["FAVORITE-PRODUCT"]
+        )
+    }
+
     @Test("Xbox history is normalized, bounded, and follows reset semantics")
     func xboxCatalogActivityBoundsAndReset() async throws {
         let harness = try PersistenceHarness()
@@ -1244,6 +1305,29 @@ private struct PersistenceHarness {
     func cleanup() {
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: cacheDirectory)
+    }
+
+    func makeRecreatedStore() -> AppPersistenceStore {
+        AppPersistenceStore(
+            preferences: preferences,
+            cacheDirectory: cacheDirectory,
+            credentialStore: secureStore,
+            xboxCredentialStore: xboxSecureStore
+        )
+    }
+}
+
+private actor PersistenceXboxAccountAuthorizationStub: XboxCloudAccountAuthorizationClient {
+    private let account: XboxCloudAuthorizedAccount
+
+    init(account: XboxCloudAuthorizedAccount) {
+        self.account = account
+    }
+
+    func authorize(
+        microsoftToken _: MicrosoftOAuthToken
+    ) -> XboxCloudAuthorizedAccount {
+        account
     }
 }
 

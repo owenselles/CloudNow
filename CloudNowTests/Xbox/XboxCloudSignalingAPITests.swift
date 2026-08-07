@@ -4,18 +4,18 @@ import Testing
 
 @Suite("Xbox Cloud REST signaling")
 struct XboxCloudSignalingAPITests {
-    @Test("SDP exchange double-encodes the Microsoft REST payload and polls")
+    @Test("SDP exchange sends the Microsoft REST payload and polls")
     func exchangesSDP() async throws {
         let transport = SignalingRecordingTransport { request, index in
             #expect(request.url?.absoluteString == "https://wus.gssv-play-prod.xboxlive.com/session/path/sdp")
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-gs-token")
+            #expect(request.value(forHTTPHeaderField: "X-GSSV-Routing") == "AFD")
             if index == 0 {
                 #expect(request.httpMethod == "POST")
-                #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.1")
-                let outer = try #require(request.httpBody)
-                let inner = try JSONDecoder().decode(String.self, from: outer)
+                #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.2")
+                let body = try #require(request.httpBody)
                 let object = try #require(
-                    JSONSerialization.jsonObject(with: Data(inner.utf8))
+                    JSONSerialization.jsonObject(with: body)
                         as? [String: Any]
                 )
                 #expect(object["messageType"] as? String == "offer")
@@ -30,14 +30,14 @@ struct XboxCloudSignalingAPITests {
             }
             if index == 1 {
                 #expect(request.httpMethod == "GET")
-                #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.2")
+                #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.3")
                 return signalingResponse(data: Data())
             }
             #expect(request.httpMethod == "GET")
-            #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.3")
-            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","chatStream":1,"control":3,"input":10,"unreliableinput":10,"reliableinput":10,"message":1,"chat":1}"#
+            #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.4")
+            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","chatStream":1,"control":3,"input":10,"message":1}"#
             return signalingResponse(
-                json: #"{"exchangeResponse":\#(String(reflecting: answer))}"#
+                json: #"{"exchangeResponse":\#(answer)}"#
             )
         }
         let delays = SignalingDelayRecorder()
@@ -54,6 +54,7 @@ struct XboxCloudSignalingAPITests {
 
         #expect(answer.sdp == "fixture-answer")
         #expect(answer.input == 10)
+        #expect(answer.chat == nil)
         #expect(await delays.values() == [0.1])
         #expect(await transport.requests().count == 3)
     }
@@ -64,10 +65,9 @@ struct XboxCloudSignalingAPITests {
             if index == 0 {
                 #expect(request.httpMethod == "POST")
                 #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.1")
-                let outer = try #require(request.httpBody)
-                let inner = try JSONDecoder().decode(String.self, from: outer)
+                let body = try #require(request.httpBody)
                 let object = try #require(
-                    JSONSerialization.jsonObject(with: Data(inner.utf8))
+                    JSONSerialization.jsonObject(with: body)
                         as? [String: Any]
                 )
                 let candidates = try #require(object["candidates"] as? [String])
@@ -78,10 +78,14 @@ struct XboxCloudSignalingAPITests {
             }
             #expect(request.httpMethod == "GET")
             #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.2")
-            let remote = #"[{"candidate":"fixture-remote-candidate","sdpMid":"0","sdpMLineIndex":0,"routingPreference":"AZURE"}]"#
-            return signalingResponse(
-                json: #"{"exchangeResponse":\#(String(reflecting: remote))}"#
-            )
+            let payloads = [
+                #"{"candidate":"fixture-remote-candidate","sdpMid":"0","sdpMLineIndex":0,"routingPreference":"AZURE"}"#,
+                #"{"candidate":"a=end-of-candidates"}"#,
+            ]
+            let payloadData = try JSONEncoder().encode(payloads)
+            let payload = try #require(String(data: payloadData, encoding: .utf8))
+            let response = try JSONEncoder().encode(["exchangeResponse": payload])
+            return signalingResponse(data: response)
         }
         let api = XboxCloudSignalingAPI(transport: transport)
 
@@ -105,7 +109,84 @@ struct XboxCloudSignalingAPITests {
                 sdpMLineIndex: 0,
                 routingPreference: "AZURE"
             ),
+            .endOfCandidates,
         ])
+    }
+
+    @Test(
+        "ICE accepts Microsoft object and string response shapes",
+        arguments: [
+            ICEPayloadShape.stringWrappedObjects,
+            ICEPayloadShape.directObjects,
+            ICEPayloadShape.stringElements,
+        ]
+    )
+    private func acceptsICEPayloadShapes(shape: ICEPayloadShape) async throws {
+        let candidate = XboxCloudICECandidate(
+            candidate: "fixture-remote-candidate",
+            sdpMid: "0",
+            sdpMLineIndex: 0,
+            routingPreference: "AZURE"
+        )
+        let transport = SignalingRecordingTransport { _, index in
+            if index == 0 {
+                return signalingResponse(statusCode: 204)
+            }
+            return try signalingResponse(data: shape.response(candidate: candidate))
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        let candidates = try await api.exchangeICE(
+            candidates: [XboxCloudICECandidate(candidate: "candidate-local")],
+            context: makeContext()
+        )
+
+        #expect(candidates == [candidate])
+    }
+
+    @Test("ICE rejects an oversized candidate in an object response")
+    func rejectsOversizedObjectCandidate() async throws {
+        let candidate = XboxCloudICECandidate(
+            candidate: String(repeating: "x", count: 17000)
+        )
+        let transport = SignalingRecordingTransport { _, index in
+            if index == 0 {
+                return signalingResponse(statusCode: 204)
+            }
+            let response = try JSONEncoder().encode([
+                "exchangeResponse": [candidate],
+            ])
+            return signalingResponse(data: response)
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        await #expect(throws: XboxCloudSignalingError.invalidPayload) {
+            _ = try await api.exchangeICE(
+                candidates: [XboxCloudICECandidate(candidate: "candidate-local")],
+                context: makeContext()
+            )
+        }
+    }
+
+    @Test(
+        "Signaling rejects oversized POST responses before diagnostics",
+        arguments: [204, 500]
+    )
+    func rejectsOversizedPOSTResponse(statusCode: Int) async throws {
+        let transport = SignalingRecordingTransport { _, _ in
+            signalingResponse(
+                statusCode: statusCode,
+                data: Data(repeating: 0, count: 2 * 1024 * 1024 + 1)
+            )
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        await #expect(throws: XboxCloudSignalingError.payloadTooLarge) {
+            _ = try await api.exchangeICE(
+                candidates: [XboxCloudICECandidate(candidate: "candidate-local")],
+                context: makeContext()
+            )
+        }
     }
 
     @Test("A reused signaling context advances from its last HTTP request")
@@ -215,6 +296,25 @@ struct XboxCloudSignalingAPITests {
         #expect(!XboxCloudSignalingError.transportFailure.localizedDescription.contains("fixture-gs-token"))
     }
 
+    @Test("HTTP diagnostics expose only bounded service codes")
+    func sanitizesServiceErrorDiagnostics() {
+        let supported = Data(#"{"errorInfo":{"RtcError":"Bad-CV.42"}}"#.utf8)
+        let unsafe = Data(#"{"error":{"code":"token value must never log"}}"#.utf8)
+
+        #expect(XboxCloudSignalingAPI.hasDiagnosticServiceErrorCode(in: supported))
+        #expect(!XboxCloudSignalingAPI.hasDiagnosticServiceErrorCode(in: unsafe))
+    }
+
+    @Test("SDP diagnostics expose only fixed field-presence flags")
+    func diagnosticSDPAnswerFieldsAreSafe() {
+        let data = Data(#"{"status":"success","sdp":"private-value","input":10}"#.utf8)
+
+        #expect(
+            XboxCloudSignalingAPI.diagnosticSDPAnswerFieldSummary(from: data)
+                == "status=1,sdpType=0,sdp=1,chatStream=0,control=0,input=1,unreliableinput=0,reliableinput=0,message=0,chat=0"
+        )
+    }
+
     private func makeContext() throws -> XboxCloudSignalingContext {
         try XboxCloudSignalingContext(
             endpointBaseURL: URL(
@@ -224,6 +324,40 @@ struct XboxCloudSignalingAPITests {
             gsToken: "fixture-gs-token",
             correlationVector: "fixture-cv.1"
         )
+    }
+}
+
+private enum ICEPayloadShape: Sendable {
+    case stringWrappedObjects
+    case directObjects
+    case stringElements
+
+    func response(candidate: XboxCloudICECandidate) throws -> Data {
+        switch self {
+        case .stringWrappedObjects:
+            let payloadData = try JSONEncoder().encode([candidate])
+            guard let payload = String(bytes: payloadData, encoding: .utf8) else {
+                throw XboxCloudSignalingError.invalidPayload
+            }
+            return try JSONEncoder().encode(["exchangeResponse": payload])
+        case .directObjects:
+            return try JSONEncoder().encode([
+                "exchangeResponse": [candidate],
+            ])
+        case .stringElements:
+            let candidateData = try JSONEncoder().encode(candidate)
+            guard let candidatePayload = String(
+                bytes: candidateData,
+                encoding: .utf8
+            ) else {
+                throw XboxCloudSignalingError.invalidPayload
+            }
+            let payloadData = try JSONEncoder().encode([candidatePayload])
+            guard let payload = String(bytes: payloadData, encoding: .utf8) else {
+                throw XboxCloudSignalingError.invalidPayload
+            }
+            return try JSONEncoder().encode(["exchangeResponse": payload])
+        }
     }
 }
 

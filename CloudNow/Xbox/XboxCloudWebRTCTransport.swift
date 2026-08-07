@@ -16,6 +16,25 @@ nonisolated enum XboxCloudWebRTCConnectionState: Equatable, Sendable {
     case connected
     case disconnected(reason: String)
     case failed(message: String)
+
+    var hasActivePeer: Bool {
+        switch self {
+        case .preparing, .negotiating, .connecting, .connected:
+            true
+        case .idle, .disconnected, .failed:
+            false
+        }
+    }
+}
+
+nonisolated enum XboxCloudRequiredChannelClosurePolicy {
+    static func shouldTerminate(
+        channel: XboxCloudDataChannelKind,
+        state: XboxCloudWebRTCConnectionState
+    ) -> Bool {
+        state.hasActivePeer
+            && XboxCloudWebRTCReadiness.requiredChannels.contains(channel)
+    }
 }
 
 nonisolated enum XboxCloudDataSendDisposition: Equatable, Sendable {
@@ -956,7 +975,12 @@ extension XboxCloudWebRTCTransport: XboxCloudWebRTCNegotiatingPeer {
         guard self.peerConnection === peerConnection else {
             throw CancellationError()
         }
-        return offerSDP
+        guard let localDescription = peerConnection.localDescription,
+              !localDescription.sdp.isEmpty
+        else {
+            throw XboxCloudWebRTCTransportError.unableToCreateOffer
+        }
+        return localDescription.sdp
     }
 
     func setRemoteAnswer(_ answer: XboxCloudSDPAnswer) async throws {
@@ -1043,12 +1067,15 @@ extension XboxCloudWebRTCTransport: XboxCloudWebRTCNegotiatingPeer {
         }
         for candidate in candidates {
             try Task.checkCancellation()
+            guard let candidateSDP = candidate.rtcCandidateSDP else {
+                continue
+            }
             let lineIndex = candidate.sdpMLineIndex ?? 0
             guard (0 ... Int(Int32.max)).contains(lineIndex) else {
                 throw XboxCloudWebRTCTransportError.invalidICECandidate
             }
             let rtcCandidate = LKRTCIceCandidate(
-                sdp: candidate.rtcCandidateSDP,
+                sdp: candidateSDP,
                 sdpMLineIndex: Int32(lineIndex),
                 sdpMid: candidate.sdpMid
             )
@@ -1170,10 +1197,17 @@ extension XboxCloudWebRTCTransport: LKRTCDataChannelDelegate {
             let isOpen = dataChannel.readyState == .open
             updateReadiness { $0.setChannel(kind, isOpen: isOpen) }
             onChannelStateChanged?(kind, isOpen)
+            if dataChannel.readyState == .closed {
+                xboxWebRTCLog.error(
+                    "Xbox Cloud data channel closed kind=\(kind.rawValue, privacy: .public)"
+                )
+            }
             if !isOpen,
                dataChannel.readyState == .closed,
-               state == .connected,
-               [.chat, .control, .message, .input].contains(kind)
+               XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                   channel: kind,
+                   state: state
+               )
             {
                 terminateActivePeer(reason: "An Xbox Cloud session channel closed.")
             }

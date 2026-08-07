@@ -323,7 +323,11 @@ struct XboxAuthManagerTests {
         #expect(manager.authorization == nil)
         #expect(manager.signInState == .authorized)
         #expect(await persistence.savedSession == manager.session)
-        #expect(await persistence.saveGenerations == [1])
+        #expect(
+            manager.session?.activityScopeIdentifier
+                == manager.authorizedAccount?.activityScopeIdentifier
+        )
+        #expect(await persistence.saveGenerations == [1, 1])
     }
 
     @MainActor
@@ -460,8 +464,43 @@ struct XboxAuthManagerTests {
         #expect(factory.creationCount == 2)
         #expect(manager.authorizedAccount == acceptedAccount)
         #expect(manager.signInState == .authorized)
-        #expect(await persistence.saveGenerations == [1, 3])
+        #expect(await persistence.saveGenerations == [1, 3, 3])
         #expect(await persistence.deleteGenerations == [2])
+    }
+
+    @MainActor
+    @Test("Reauthorization retains the activity scope stored with the Microsoft session")
+    func reauthorizationRetainsPersistedActivityScope() async throws {
+        let stableScope = "stable-persisted-activity-scope"
+        let session = try XboxAuthSession(
+            configuration: makeConfiguration(),
+            token: makeToken(),
+            activityScopeIdentifier: stableScope
+        )
+        let reauthorizedAccount = makeAccount(
+            authorizationIdentifier: "replacement-vault-handle",
+            activityScopeIdentifier: "newly-derived-activity-scope"
+        )
+        let persistence = XboxAuthPersistenceStub(session: session)
+        let manager = try XboxAuthManager(
+            environment: makeEnvironment(
+                makeAccountAuthorizationClient: {
+                    XboxAccountAuthorizationStub(account: reauthorizedAccount)
+                }
+            ),
+            oauthClient: XboxOAuthClientStub(token: makeToken()),
+            persistence: persistence,
+            now: { fixedDate }
+        )
+
+        await manager.restorePersistedSession()
+        await manager.activateXboxCloudAccess()
+
+        #expect(manager.authorizedAccount?.authorizationIdentifier == "replacement-vault-handle")
+        #expect(manager.authorizedAccount?.activityScopeIdentifier == stableScope)
+        #expect(manager.session?.activityScopeIdentifier == stableScope)
+        #expect(await persistence.savedSession?.activityScopeIdentifier == stableScope)
+        #expect(await persistence.saveGenerations.isEmpty)
     }
 
     @MainActor
@@ -706,7 +745,14 @@ struct XboxAuthManagerTests {
 
         await thirdClient.resolve(with: reenteredAccount)
         await thirdActivation.value
-        #expect(manager.authorizedAccount == reenteredAccount)
+        #expect(
+            manager.authorizedAccount?.authorizationIdentifier
+                == reenteredAccount.authorizationIdentifier
+        )
+        #expect(
+            manager.authorizedAccount?.activityScopeIdentifier
+                == currentAccount.activityScopeIdentifier
+        )
         #expect(manager.signInState == .authorized)
     }
 
@@ -743,7 +789,7 @@ struct XboxAuthManagerTests {
             await client.waitForAuthorizationRequest()
 
             #expect(factory.creationCount == index + 1)
-            #expect(manager.session == session)
+            #expect(manager.session?.token == session.token)
 
             let account = makeAccount(
                 authorizationIdentifier: "cycle-\(index)-account"
@@ -751,14 +797,21 @@ struct XboxAuthManagerTests {
             await client.resolve(with: account)
             await activation.value
 
-            #expect(manager.session == session)
-            #expect(manager.authorizedAccount == account)
+            #expect(manager.session?.token == session.token)
+            #expect(
+                manager.authorizedAccount?.authorizationIdentifier
+                    == account.authorizationIdentifier
+            )
+            #expect(
+                manager.authorizedAccount?.activityScopeIdentifier
+                    == "cycle-0-account"
+            )
             #expect(manager.signInState == .authorized)
 
             await manager.deactivateForInactiveProvider()
 
             #expect(factory.creationCount == index + 1)
-            #expect(manager.session == session)
+            #expect(manager.session?.token == session.token)
             #expect(manager.isMicrosoftSignedIn)
             #expect(manager.authorizedAccount == nil)
             #expect(manager.signInState == .idle)
@@ -792,7 +845,11 @@ struct XboxAuthManagerTests {
 
         #expect(manager.isMicrosoftSignedIn)
         #expect(manager.isXboxCloudAuthorized)
-        #expect(await persistence.savedSession == session)
+        #expect(await persistence.savedSession == manager.session)
+        #expect(
+            manager.session?.activityScopeIdentifier
+                == manager.authorizedAccount?.activityScopeIdentifier
+        )
     }
 
     @MainActor

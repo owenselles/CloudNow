@@ -18,6 +18,7 @@ struct XboxCloudSessionAPITests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-gs-secret")
             #expect(request.value(forHTTPHeaderField: "MS-CV") == "ABCDEFGHIJKLMNOPQRSTUV.0")
             #expect(request.value(forHTTPHeaderField: "x-xbl-market") == "US")
+            #expect(request.value(forHTTPHeaderField: "X-GSSV-Routing") == "AFD")
 
             let deviceHeader = try #require(request.value(forHTTPHeaderField: "X-MS-Device-Info"))
             let device = try #require(
@@ -74,6 +75,7 @@ struct XboxCloudSessionAPITests {
         let transport = RecordingHTTPTransport { request, index in
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-gs-secret")
             #expect(request.value(forHTTPHeaderField: "MS-CV") == "ABCDEFGHIJKLMNOPQRSTUV.\(index)")
+            #expect(request.value(forHTTPHeaderField: "X-GSSV-Routing") == "AFD")
             switch index {
             case 0:
                 return StubbedHTTPResponse(json: Self.createResponseJSON)
@@ -127,7 +129,8 @@ struct XboxCloudSessionAPITests {
         #expect(!provisioned.configuration.description.contains("fixture-srtp-secret"))
         #expect(signaling.endpointBaseURL.host == "transfer.gssv-play-prod.xboxlive.com")
         #expect(signaling.sessionPath == "v5/sessions/cloud/fixture-session")
-        #expect(signaling.correlationVector == "ABCDEFGHIJKLMNOPQRSTUV.6")
+        #expect(signaling.correlationVector == "ABCDEFGHIJKLMNOPQRSTUV.6.0")
+        #expect(signaling.routingHeader == "AFD")
         #expect(!signaling.description.contains("fixture-gs-secret"))
         #expect(!signaling.description.contains("fixture-session"))
         #expect(await transferTokens.requestCount() == 1)
@@ -137,6 +140,35 @@ struct XboxCloudSessionAPITests {
             .provisioning,
             .provisioned,
         ])
+    }
+
+    @Test("Signaling extends a reserved vector while lifecycle HTTP advances its root")
+    func correlationVectorBranches() async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            switch index {
+            case 0:
+                #expect(request.value(forHTTPHeaderField: "MS-CV") == "ABCDEFGHIJKLMNOPQRSTUV.0")
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                #expect(request.httpMethod == "POST")
+                #expect(request.value(forHTTPHeaderField: "MS-CV") == "ABCDEFGHIJKLMNOPQRSTUV.2")
+                return StubbedHTTPResponse(json: #"{"accepted":true}"#)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            correlationVectorBase: "ABCDEFGHIJKLMNOPQRSTUV"
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        let signaling = try await api.signalingContext(for: handle)
+        _ = try await api.keepAlive(handle)
+
+        #expect(signaling.correlationVector == "ABCDEFGHIJKLMNOPQRSTUV.1.0")
+        #expect(await transport.requests().count == 2)
     }
 
     @Test("Retry-After controls polling and is bounded by policy")

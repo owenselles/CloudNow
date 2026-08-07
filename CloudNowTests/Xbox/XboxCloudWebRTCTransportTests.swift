@@ -15,12 +15,12 @@ struct XboxCloudWebRTCTransportTests {
         let expected: Bool
     }
 
-    @Test("Microsoft end-of-candidates marker maps to WebRTC's empty marker")
+    @Test("Microsoft end-of-candidates marker is omitted from native WebRTC")
     func endOfCandidatesMarker() {
         let marker = XboxCloudICECandidate.endOfCandidates
 
         #expect(marker.candidate == "a=end-of-candidates")
-        #expect(marker.rtcCandidateSDP.isEmpty)
+        #expect(marker.rtcCandidateSDP == nil)
         #expect(
             XboxCloudICECandidate(candidate: "candidate:remote")
                 .rtcCandidateSDP == "candidate:remote"
@@ -70,18 +70,20 @@ struct XboxCloudWebRTCTransportTests {
         ])
     }
 
-    @Test("Readiness requires peer, media, input version, and four core channels")
+    @Test("Readiness requires peer, media, input version, and gameplay channels")
     func readinessGate() {
         var readiness = XboxCloudWebRTCReadiness()
         readiness.setPeerConnected(true)
         readiness.setActiveMedia(true)
         readiness.setNegotiatedInputVersion(10)
-        readiness.setChannel(.chat, isOpen: true)
         readiness.setChannel(.control, isOpen: true)
         readiness.setChannel(.message, isOpen: true)
         #expect(!readiness.isReady)
 
         readiness.setChannel(.input, isOpen: true)
+        #expect(readiness.isReady)
+
+        readiness.setChannel(.chat, isOpen: false)
         #expect(readiness.isReady)
 
         readiness.setChannel(.unreliableInput, isOpen: false)
@@ -90,6 +92,43 @@ struct XboxCloudWebRTCTransportTests {
 
         readiness.setActiveMedia(false)
         #expect(!readiness.isReady)
+    }
+
+    @Test("Required channel closure is terminal throughout active setup")
+    func requiredChannelClosurePolicy() {
+        let activeStates: [XboxCloudWebRTCConnectionState] = [
+            .preparing,
+            .negotiating,
+            .connecting,
+            .connected,
+        ]
+        for state in activeStates {
+            #expect(
+                XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                    channel: .control,
+                    state: state
+                )
+            )
+        }
+
+        #expect(
+            !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                channel: .chat,
+                state: .connected
+            )
+        )
+        #expect(
+            !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                channel: .control,
+                state: .idle
+            )
+        )
+        #expect(
+            !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                channel: .control,
+                state: .failed(message: "fixture")
+            )
+        )
     }
 
     @Test("Session STUN hosts are normalized without accepting arbitrary URLs")

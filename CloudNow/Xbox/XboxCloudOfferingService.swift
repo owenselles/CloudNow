@@ -123,11 +123,32 @@ nonisolated struct XboxCloudGSRegion: Equatable, Sendable, CustomStringConvertib
 nonisolated struct XboxCloudGSSession: Equatable, Sendable, CustomStringConvertible {
     let gsToken: String
     let offeringID: String
+    let routingHeader: String
     let market: String
     let regions: [XboxCloudGSRegion]
     let defaultRegion: XboxCloudGSRegion
     let fallbackRegionNames: [String]
     let expiresAt: Date
+
+    init(
+        gsToken: String,
+        offeringID: String,
+        routingHeader: String = "AFD",
+        market: String,
+        regions: [XboxCloudGSRegion],
+        defaultRegion: XboxCloudGSRegion,
+        fallbackRegionNames: [String],
+        expiresAt: Date
+    ) {
+        self.gsToken = gsToken
+        self.offeringID = offeringID
+        self.routingHeader = routingHeader
+        self.market = market
+        self.regions = regions
+        self.defaultRegion = defaultRegion
+        self.fallbackRegionNames = fallbackRegionNames
+        self.expiresAt = expiresAt
+    }
 
     func isUsable(at date: Date, minimumLifetime: TimeInterval = 30) -> Bool {
         expiresAt.timeIntervalSince(date) > minimumLifetime
@@ -143,6 +164,7 @@ nonisolated struct XboxCloudGSSession: Equatable, Sendable, CustomStringConverti
             market: market,
             fallbackRegionNames: fallbackRegionNames,
             systemUpdateGroups: defaultRegion.systemUpdateGroups,
+            routingHeader: routingHeader,
             deviceInformation: deviceInformation,
             msaTransferToken: msaTransferToken
         )
@@ -496,6 +518,7 @@ private nonisolated struct XboxCloudOfferingService: Sendable {
         return XboxCloudGSSession(
             gsToken: gsToken,
             offeringID: offeringID,
+            routingHeader: configuration.routingHeader(for: offeringID),
             market: market,
             regions: regions,
             defaultRegion: defaultRegion,

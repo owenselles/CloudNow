@@ -1152,15 +1152,9 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         _ operation: @escaping @Sendable () async -> Void
     ) {
         let previousTask = activitySaveTask
-        let generation = activityGeneration
-        activitySaveTask = Task { @MainActor [weak self] in
+        activitySaveTask = Task { @concurrent in
             await previousTask?.value
-            guard let self,
-                  !Task.isCancelled,
-                  activityGeneration == generation
-            else {
-                return
-            }
+            guard !Task.isCancelled else { return }
             await operation()
         }
     }
@@ -1256,9 +1250,15 @@ private struct XboxCatalogHome: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if let heroSelection {
+                        let heroArtworkURL = heroSelection.item
+                            .heroArtworkURL?.absoluteString
                         CloudCatalogHeroBanner(
-                            artworkURL: heroSelection.item.heroArtworkURL?.absoluteString
+                            artworkURL: heroArtworkURL
                                 ?? heroSelection.item.artworkURL?.absoluteString,
+                            artworkContentMode: heroArtworkURL == nil
+                                ? .fit
+                                : .fill,
+                            artworkAlignment: .center,
                             actionTitle: heroSelection.playTitle,
                             actionSystemImage: heroSelection.route.isPlayable
                                 ? "play.fill"
@@ -1272,6 +1272,7 @@ private struct XboxCatalogHome: View {
                                 onPlay(heroSelection.item, heroSelection.route)
                             }
                         )
+                        .accessibilityIdentifier("xbox-home.hero")
                     }
 
                     if showsRefreshWarning {

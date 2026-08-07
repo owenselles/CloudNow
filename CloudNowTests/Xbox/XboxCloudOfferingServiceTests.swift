@@ -37,6 +37,7 @@ struct XboxCloudOfferingServiceTests {
 
         #expect(session == cachedSession)
         #expect(session.offeringID == "xgpuweb")
+        #expect(session.routingHeader == "AFD")
         #expect(session.market == "US")
         #expect(session.defaultRegion.name == "West US")
         #expect(session.defaultRegion.baseURL.absoluteString == "https://wus.gssv-play-prod.xboxlive.com")

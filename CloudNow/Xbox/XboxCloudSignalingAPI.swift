@@ -1,23 +1,32 @@
 import Foundation
+import os
+
+private nonisolated let xboxSignalingLog = Logger(
+    subsystem: "com.owenselles.CloudNow2",
+    category: "XboxSignaling"
+)
 
 nonisolated struct XboxCloudSignalingContext: Sendable, CustomStringConvertible {
     let endpointBaseURL: URL
     let sessionPath: String
     let gsToken: String
     let correlationVector: String
+    let routingHeader: String
 
     init(
         endpointBaseURL: URL,
         sessionPath: String,
         gsToken: String,
-        correlationVector: String
+        correlationVector: String,
+        routingHeader: String = "AFD"
     ) throws {
         guard Self.isAllowedServiceURL(endpointBaseURL),
               Self.isSafeSessionPath(sessionPath),
               !gsToken.isEmpty,
               gsToken.utf8.count <= 16384,
               !correlationVector.isEmpty,
-              correlationVector.utf8.count <= 256
+              correlationVector.utf8.count <= 256,
+              routingHeader == "AFD" || routingHeader == "ATM"
         else {
             throw XboxCloudSignalingError.invalidContext
         }
@@ -25,6 +34,7 @@ nonisolated struct XboxCloudSignalingContext: Sendable, CustomStringConvertible 
         self.sessionPath = sessionPath
         self.gsToken = gsToken
         self.correlationVector = correlationVector
+        self.routingHeader = routingHeader
     }
 
     var description: String {
@@ -149,7 +159,7 @@ nonisolated struct XboxCloudSDPAnswer: Codable, Equatable, Sendable {
     let unreliableinput: Int?
     let reliableinput: Int?
     let message: Int
-    let chat: Int
+    let chat: Int?
 
     var isAccepted: Bool {
         status == "success"
@@ -182,10 +192,10 @@ nonisolated struct XboxCloudICECandidate: Codable, Equatable, Sendable {
         Self(candidate: endOfCandidatesMarker)
     }
 
-    /// WebRTC represents the remote end-of-candidates marker as an empty ICE
-    /// candidate even though Microsoft's signaling payload uses an SDP marker.
-    var rtcCandidateSDP: String {
-        candidate == Self.endOfCandidatesMarker ? "" : candidate
+    /// Native WebRTC has no browser-style empty-candidate API. A nil value means
+    /// the completed REST batch already supplied the end-of-candidates signal.
+    var rtcCandidateSDP: String? {
+        candidate == Self.endOfCandidatesMarker ? nil : candidate
     }
 }
 
@@ -277,7 +287,7 @@ actor XboxCloudSignalingAPI {
     }
 
     private struct ExchangeResponseEnvelope: Decodable {
-        let exchangeResponse: String
+        let exchangeResponse: XboxCloudJSONValue
     }
 
     private static let maximumResponseBytes = 2 * 1024 * 1024
@@ -320,26 +330,28 @@ actor XboxCloudSignalingAPI {
             throw XboxCloudSignalingError.invalidPayload
         }
         requestID &+= 1
-        let correlationVector = try nextCorrelationVector(for: context)
+        let payloadCorrelationVector = try nextCorrelationVector(for: context)
         let envelope = SDPEnvelope(
             requestId: requestID,
             sdp: offer,
-            cv: correlationVector,
+            cv: payloadCorrelationVector,
             configuration: configuration
         )
-        let innerData = try encode(envelope)
-        guard let innerJSON = String(data: innerData, encoding: .utf8) else {
-            throw XboxCloudSignalingError.invalidPayload
-        }
+        let body = try encode(envelope)
+        let requestCorrelationVector = try nextCorrelationVector(for: context)
         try await postExchange(
             operation: "sdp",
-            innerJSON: innerJSON,
+            body: body,
             context: context,
-            correlationVector: correlationVector
+            correlationVector: requestCorrelationVector
         )
         let responseData = try await pollExchange(
             operation: "sdp",
             context: context
+        )
+        let answerFields = Self.diagnosticSDPAnswerFieldSummary(from: responseData)
+        xboxSignalingLog.info(
+            "Xbox signaling sdp answer fields=\(answerFields, privacy: .public)"
         )
         let answer: XboxCloudSDPAnswer = try decode(
             XboxCloudSDPAnswer.self,
@@ -348,6 +360,9 @@ actor XboxCloudSignalingAPI {
         guard answer.isAccepted else {
             throw XboxCloudSignalingError.rejected(status: answer.status)
         }
+        xboxSignalingLog.info(
+            "Xbox signaling sdp answer accepted inputVersion=\(answer.input, privacy: .public)"
+        )
         return answer
     }
 
@@ -372,14 +387,11 @@ actor XboxCloudSignalingAPI {
             }
             return value
         }
-        let innerData = try encode(ICEEnvelope(candidates: candidateStrings))
-        guard let innerJSON = String(data: innerData, encoding: .utf8) else {
-            throw XboxCloudSignalingError.invalidPayload
-        }
+        let body = try encode(ICEEnvelope(candidates: candidateStrings))
         let correlationVector = try nextCorrelationVector(for: context)
         try await postExchange(
             operation: "ice",
-            innerJSON: innerJSON,
+            body: body,
             context: context,
             correlationVector: correlationVector
         )
@@ -387,12 +399,12 @@ actor XboxCloudSignalingAPI {
             operation: "ice",
             context: context
         )
-        return try decode([XboxCloudICECandidate].self, from: responseData)
+        return try decodeICECandidates(from: responseData)
     }
 
     private func postExchange(
         operation: String,
-        innerJSON: String,
+        body: Data,
         context: XboxCloudSignalingContext,
         correlationVector: String
     ) async throws {
@@ -403,12 +415,59 @@ actor XboxCloudSignalingAPI {
             correlationVector: correlationVector
         )
         request.httpMethod = "POST"
-        request.httpBody = try encode(innerJSON)
-        let (_, response) = try await perform(request)
+        request.httpBody = body
+        let (data, response) = try await perform(request)
         let statusCode = try statusCode(from: response)
+        guard data.count <= Self.maximumResponseBytes else {
+            throw XboxCloudSignalingError.payloadTooLarge
+        }
+        xboxSignalingLog.info(
+            "Xbox signaling \(operation, privacy: .public) POST status=\(statusCode, privacy: .public)"
+        )
         guard (200 ..< 300).contains(statusCode) else {
+            let hasServiceCode = Self.hasDiagnosticServiceErrorCode(in: data)
+            xboxSignalingLog.error(
+                "Xbox signaling \(operation, privacy: .public) rejected status=\(statusCode, privacy: .public) serviceCodePresent=\(hasServiceCode, privacy: .public)"
+            )
             throw XboxCloudSignalingError.httpFailure(statusCode: statusCode)
         }
+    }
+
+    private func decodeICECandidates(from data: Data) throws -> [XboxCloudICECandidate] {
+        if let candidates = try? JSONDecoder().decode(
+            [XboxCloudICECandidate].self,
+            from: data
+        ) {
+            return try validatedICECandidates(candidates)
+        }
+
+        let payloads: [String] = try decode([String].self, from: data)
+        guard payloads.count <= Self.maximumCandidates else {
+            throw XboxCloudSignalingError.invalidPayload
+        }
+        let candidates = try payloads.map { payload in
+            guard let candidateData = payload.data(using: .utf8),
+                  candidateData.count <= Self.maximumCandidateBytes
+            else {
+                throw XboxCloudSignalingError.invalidPayload
+            }
+            return try decode(XboxCloudICECandidate.self, from: candidateData)
+        }
+        return try validatedICECandidates(candidates)
+    }
+
+    private func validatedICECandidates(
+        _ candidates: [XboxCloudICECandidate]
+    ) throws -> [XboxCloudICECandidate] {
+        guard candidates.count <= Self.maximumCandidates else {
+            throw XboxCloudSignalingError.invalidPayload
+        }
+        for candidate in candidates {
+            guard try encode(candidate).count <= Self.maximumCandidateBytes else {
+                throw XboxCloudSignalingError.invalidPayload
+            }
+        }
+        return candidates
     }
 
     private func pollExchange(
@@ -434,15 +493,27 @@ actor XboxCloudSignalingAPI {
                 throw XboxCloudSignalingError.payloadTooLarge
             }
             if !data.isEmpty {
+                xboxSignalingLog.info(
+                    "Xbox signaling \(operation, privacy: .public) response ready attempt=\(attempt + 1, privacy: .public)"
+                )
                 let envelope: ExchangeResponseEnvelope = try decode(
                     ExchangeResponseEnvelope.self,
                     from: data
                 )
-                guard let responseData = envelope.exchangeResponse.data(
-                    using: .utf8
-                ),
-                    !responseData.isEmpty,
-                    responseData.count <= Self.maximumResponseBytes
+                let responseData: Data
+                switch envelope.exchangeResponse {
+                case let .string(value):
+                    guard let data = value.data(using: .utf8) else {
+                        throw XboxCloudSignalingError.invalidPayload
+                    }
+                    responseData = data
+                case .object, .array:
+                    responseData = try encode(envelope.exchangeResponse)
+                case .boolean, .number, .null:
+                    throw XboxCloudSignalingError.invalidPayload
+                }
+                guard !responseData.isEmpty,
+                      responseData.count <= Self.maximumResponseBytes
                 else {
                     throw XboxCloudSignalingError.invalidPayload
                 }
@@ -472,6 +543,10 @@ actor XboxCloudSignalingAPI {
         request.setValue(
             correlationVector,
             forHTTPHeaderField: "MS-CV"
+        )
+        request.setValue(
+            context.routingHeader,
+            forHTTPHeaderField: "X-GSSV-Routing"
         )
         request.timeoutInterval = 30
         return request
@@ -503,6 +578,10 @@ actor XboxCloudSignalingAPI {
         } catch let error as XboxCloudSignalingError {
             throw error
         } catch {
+            let metadata = error as NSError
+            xboxSignalingLog.error(
+                "Xbox signaling transport failed operation=\(request.url?.lastPathComponent ?? "unknown", privacy: .public) domain=\(metadata.domain, privacy: .public) code=\(metadata.code, privacy: .public)"
+            )
             throw XboxCloudSignalingError.transportFailure
         }
     }
@@ -531,5 +610,84 @@ actor XboxCloudSignalingAPI {
         } catch {
             throw XboxCloudSignalingError.invalidPayload
         }
+    }
+
+    nonisolated static func hasDiagnosticServiceErrorCode(in data: Data) -> Bool {
+        guard !data.isEmpty,
+              data.count <= maximumResponseBytes,
+              let root = try? JSONSerialization.jsonObject(with: data)
+        else {
+            return false
+        }
+        return diagnosticServiceErrorCode(in: root, depth: 0) != nil
+    }
+
+    nonisolated static func diagnosticSDPAnswerFieldSummary(from data: Data) -> String {
+        guard data.count <= maximumResponseBytes,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return "non-object"
+        }
+        return [
+            "status",
+            "sdpType",
+            "sdp",
+            "chatStream",
+            "control",
+            "input",
+            "unreliableinput",
+            "reliableinput",
+            "message",
+            "chat",
+        ].map { key in
+            "\(key)=\(object[key] == nil ? 0 : 1)"
+        }.joined(separator: ",")
+    }
+
+    private nonisolated static func diagnosticServiceErrorCode(
+        in value: Any,
+        depth: Int
+    ) -> String? {
+        guard depth < 8 else { return nil }
+        if let object = value as? [String: Any] {
+            for key in ["RtcError", "code", "errorCode", "status"] {
+                if let code = safeDiagnosticValue(object[key]) {
+                    return code
+                }
+            }
+            for key in ["errorInfo", "errorDetails", "error"] {
+                if let nested = object[key],
+                   let code = diagnosticServiceErrorCode(
+                       in: nested,
+                       depth: depth + 1
+                   )
+                {
+                    return code
+                }
+            }
+        }
+        return nil
+    }
+
+    private nonisolated static func safeDiagnosticValue(_ value: Any?) -> String? {
+        let text: String
+        if let value = value as? String {
+            text = value
+        } else if let value = value as? NSNumber {
+            text = value.stringValue
+        } else {
+            return nil
+        }
+        guard !text.isEmpty,
+              text.utf8.count <= 128,
+              text.unicodeScalars.allSatisfy({
+                  CharacterSet.alphanumerics
+                      .union(CharacterSet(charactersIn: "-._"))
+                      .contains($0)
+              })
+        else {
+            return nil
+        }
+        return text
     }
 }

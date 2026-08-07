@@ -8,15 +8,18 @@ nonisolated struct XboxAuthSession: Codable, Equatable, Sendable {
     let clientID: String
     let scopes: [String]
     var token: MicrosoftOAuthToken
+    var activityScopeIdentifier: String?
 
     init(
         configuration: MicrosoftDeviceCodeOAuthConfiguration,
-        token: MicrosoftOAuthToken
+        token: MicrosoftOAuthToken,
+        activityScopeIdentifier: String? = nil
     ) {
         tenant = configuration.tenant
         clientID = configuration.clientID
         scopes = configuration.scopes
         self.token = token
+        self.activityScopeIdentifier = activityScopeIdentifier
     }
 
     func matches(_ configuration: MicrosoftDeviceCodeOAuthConfiguration) -> Bool {
@@ -352,9 +355,9 @@ final class XboxAuthManager {
                 let accountAuthorizationClient = resolvedAccountAuthorizationClient(
                     factory: accountAuthorizationClientFactory
                 )
-                let account: XboxCloudAuthorizedAccount
+                let authorizedAccount: XboxCloudAuthorizedAccount
                 do {
-                    account = try await authorizeXboxCloud(
+                    authorizedAccount = try await authorizeXboxCloud(
                         microsoftToken: token,
                         client: accountAuthorizationClient,
                         generation: generation
@@ -370,10 +373,14 @@ final class XboxAuthManager {
                 guard credentialGeneration == generation else {
                     throw CancellationError()
                 }
-                guard account.isUsable(at: now()) else {
+                guard authorizedAccount.isUsable(at: now()) else {
                     publish(.failed(.xboxCloudAuthorizationFailed))
                     return
                 }
+                let account = try await accountWithPersistedActivityScope(
+                    authorizedAccount,
+                    generation: generation
+                )
                 let replacedCatalogAccount = acceptAuthorizedAccount(account)
                 publish(.authorized)
                 if let replacedCatalogAccount {
@@ -524,17 +531,21 @@ final class XboxAuthManager {
             if session.token.expiresAt.timeIntervalSince(now()) < 10 * 60 {
                 session = try await refresh(session: session)
             }
-            let account = try await authorizeXboxCloud(
+            let authorizedAccount = try await authorizeXboxCloud(
                 microsoftToken: session.token,
                 client: accountAuthorizationClient,
                 generation: generation
             )
             try Task.checkCancellation()
             guard credentialGeneration == generation else { return }
-            guard account.isUsable(at: now()) else {
+            guard authorizedAccount.isUsable(at: now()) else {
                 publish(.failed(.xboxCloudAuthorizationFailed))
                 return
             }
+            let account = try await accountWithPersistedActivityScope(
+                authorizedAccount,
+                generation: generation
+            )
             let replacedCatalogAccount = acceptAuthorizedAccount(account)
             publish(.authorized)
             if let replacedCatalogAccount {
@@ -729,7 +740,8 @@ final class XboxAuthManager {
                 )
                 let updatedSession = XboxAuthSession(
                     configuration: configuration,
-                    token: updatedToken
+                    token: updatedToken,
+                    activityScopeIdentifier: latestSession.activityScopeIdentifier
                 )
                 do {
                     try await persistence.saveXboxAuthSession(
@@ -822,7 +834,8 @@ final class XboxAuthManager {
             }
             let updated = XboxAuthSession(
                 configuration: configuration,
-                token: token
+                token: token,
+                activityScopeIdentifier: session.activityScopeIdentifier
             )
             try await persistence.saveXboxAuthSession(
                 updated,
@@ -946,6 +959,58 @@ final class XboxAuthManager {
             return nil
         }
         return replacedCatalogAccount
+    }
+
+    private func accountWithPersistedActivityScope(
+        _ account: XboxCloudAuthorizedAccount,
+        generation: UInt64
+    ) async throws -> XboxCloudAuthorizedAccount {
+        guard var session else {
+            throw XboxAuthError.noSession
+        }
+        let activityScopeIdentifier = Self.validActivityScopeIdentifier(
+            session.activityScopeIdentifier
+        ) ?? account.activityScopeIdentifier
+        let scopedAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: account.authorizationIdentifier,
+            activityScopeIdentifier: activityScopeIdentifier,
+            displayName: account.displayName,
+            expiresAt: account.expiresAt
+        )
+        guard session.activityScopeIdentifier != activityScopeIdentifier else {
+            return scopedAccount
+        }
+
+        session.activityScopeIdentifier = activityScopeIdentifier
+        do {
+            try await persistence.saveXboxAuthSession(
+                session,
+                generation: generation
+            )
+        } catch {
+            // The already-authorized runtime remains usable if an injected or
+            // temporarily unavailable credential store cannot commit this
+            // continuity hint. The next successful authorization can retry.
+        }
+        try Task.checkCancellation()
+        guard credentialGeneration == generation else {
+            throw CancellationError()
+        }
+        self.session = session
+        return scopedAccount
+    }
+
+    private static func validActivityScopeIdentifier(
+        _ value: String?
+    ) -> String? {
+        guard let value = value?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty,
+            value.utf8.count <= 1024
+        else {
+            return nil
+        }
+        return value
     }
 
     private func scheduleAuthorizedAccountRefresh(

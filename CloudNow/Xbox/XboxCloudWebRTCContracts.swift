@@ -52,8 +52,7 @@ nonisolated struct XboxCloudDataChannelDescriptor: Equatable, Sendable {
 }
 
 nonisolated struct XboxCloudWebRTCReadiness: Equatable, Sendable {
-    private static let requiredChannels: Set<XboxCloudDataChannelKind> = [
-        .chat,
+    static let requiredChannels: Set<XboxCloudDataChannelKind> = [
         .control,
         .message,
         .input,

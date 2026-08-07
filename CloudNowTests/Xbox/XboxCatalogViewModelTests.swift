@@ -238,6 +238,65 @@ struct XboxCatalogViewModelTests {
     }
 
     @MainActor
+    @Test("Queued favorites survive view-model replacement for the same account")
+    func queuedFavoritesSurviveViewModelReplacement() async {
+        let stableScope = "stable-favorite-account"
+        let firstAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "first-transient-authorization",
+            activityScopeIdentifier: stableScope,
+            displayName: nil,
+            expiresAt: .distantFuture
+        )
+        let replacementAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "replacement-transient-authorization",
+            activityScopeIdentifier: stableScope,
+            displayName: nil,
+            expiresAt: .distantFuture
+        )
+        let first = makeAccessItem(id: "first", accessKinds: [.standard])
+        let second = makeAccessItem(id: "second", accessKinds: [.standard])
+        let snapshot = XboxCatalogSnapshot(
+            items: [first, second],
+            fetchedAt: fetchedAt
+        )
+        let persistence = XboxCatalogActivityPersistenceProbe()
+        await persistence.suspendNextFavoriteSave()
+        var viewModel: XboxCatalogViewModel? = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(snapshot: snapshot),
+            account: firstAccount,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+        await viewModel?.load()
+
+        viewModel?.toggleFavorite(first)
+        await persistence.waitUntilFavoriteSaveIsSuspended()
+        viewModel?.toggleFavorite(second)
+        weak var releasedViewModel = viewModel
+        viewModel = nil
+
+        #expect(releasedViewModel == nil)
+
+        await persistence.resumeFavoriteSave()
+        for _ in 0 ..< 1000 {
+            guard await persistence.favoriteSaveCount() < 2 else { break }
+            await Task.yield()
+        }
+        #expect(await persistence.favoriteSaveCount() == 2)
+
+        let replacement = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(snapshot: snapshot),
+            account: replacementAccount,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+        await replacement.load()
+
+        #expect(replacement.favoriteIDs == [first.id, second.id])
+        #expect(replacement.favoriteItems == [first, second])
+    }
+
+    @MainActor
     @Test("Catalog activity remains isolated between Xbox accounts")
     func activityIsAccountScoped() async {
         let first = makeAccessItem(id: "first", accessKinds: [.standard])
@@ -1649,6 +1708,9 @@ private actor XboxCatalogActivityPersistenceProbe: XboxCatalogActivityPersistenc
     private var snapshots: [String: CloudCatalogActivitySnapshot]
     private var loadScopes: [String?] = []
     private var favoriteSaveScopes: [String?] = []
+    private var shouldSuspendNextFavoriteSave = false
+    private var suspendedFavoriteSave: CheckedContinuation<Void, Never>?
+    private var favoriteSaveSuspensionWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(snapshots: [String: CloudCatalogActivitySnapshot] = [:]) {
         self.snapshots = snapshots
@@ -1672,6 +1734,16 @@ private actor XboxCatalogActivityPersistenceProbe: XboxCatalogActivityPersistenc
         expectedGeneration: UInt64
     ) async {
         guard expectedGeneration == persistenceGeneration else { return }
+        if shouldSuspendNextFavoriteSave {
+            shouldSuspendNextFavoriteSave = false
+            let waiters = favoriteSaveSuspensionWaiters
+            favoriteSaveSuspensionWaiters.removeAll(keepingCapacity: false)
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { continuation in
+                suspendedFavoriteSave = continuation
+            }
+            suspendedFavoriteSave = nil
+        }
         favoriteSaveScopes.append(accountScope)
         guard let accountScope else { return }
         var snapshot = snapshots[accountScope] ?? CloudCatalogActivitySnapshot()
@@ -1701,6 +1773,26 @@ private actor XboxCatalogActivityPersistenceProbe: XboxCatalogActivityPersistenc
 
     func recordedFavoriteSaveScopes() -> [String?] {
         favoriteSaveScopes
+    }
+
+    func suspendNextFavoriteSave() {
+        shouldSuspendNextFavoriteSave = true
+    }
+
+    func waitUntilFavoriteSaveIsSuspended() async {
+        guard suspendedFavoriteSave == nil else { return }
+        await withCheckedContinuation { continuation in
+            favoriteSaveSuspensionWaiters.append(continuation)
+        }
+    }
+
+    func resumeFavoriteSave() {
+        suspendedFavoriteSave?.resume()
+        suspendedFavoriteSave = nil
+    }
+
+    func favoriteSaveCount() -> Int {
+        favoriteSaveScopes.count
     }
 }
 

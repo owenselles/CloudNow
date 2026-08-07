@@ -228,6 +228,8 @@ struct CloudCatalogHeroBanner: View {
     let artworkURL: String?
     var prefetchArtworkURL: String?
     var networkCachePolicy: ArtworkNetworkCachePolicy = .shared
+    var artworkContentMode: ContentMode = .fill
+    var artworkAlignment: Alignment = .center
     let actionTitle: String
     let actionSystemImage: String
     var isActionEnabled = true
@@ -240,10 +242,12 @@ struct CloudCatalogHeroBanner: View {
             SharedArtworkImage(
                 urlString: artworkURL,
                 maxPixelSize: ArtworkImagePipeline.heroArtPixelSize,
+                contentMode: artworkContentMode,
                 networkCachePolicy: networkCachePolicy
             )
             .frame(maxWidth: .infinity)
-            .frame(height: 420)
+            .frame(height: 420, alignment: artworkAlignment)
+            .clipped()
 
             LinearGradient(
                 colors: [.black.opacity(0.85), .black.opacity(0.5), .clear],

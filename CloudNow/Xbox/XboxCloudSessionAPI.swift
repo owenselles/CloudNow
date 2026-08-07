@@ -10,6 +10,7 @@ nonisolated struct XboxCloudSessionAccessContext: Sendable, CustomStringConverti
     let market: String
     let fallbackRegionNames: [String]
     let systemUpdateGroups: [String]
+    let routingHeader: String
     let deviceInformation: XboxCloudDeviceInformation
     let msaTransferToken: @Sendable () async throws -> String
 
@@ -19,6 +20,7 @@ nonisolated struct XboxCloudSessionAccessContext: Sendable, CustomStringConverti
         market: String,
         fallbackRegionNames: [String],
         systemUpdateGroups: [String],
+        routingHeader: String = "AFD",
         deviceInformation: XboxCloudDeviceInformation = .cloudNowTV(),
         msaTransferToken: @escaping @Sendable () async throws -> String
     ) throws {
@@ -28,6 +30,11 @@ nonisolated struct XboxCloudSessionAccessContext: Sendable, CustomStringConverti
         let normalizedMarket = market.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.isSafeLabel(normalizedMarket, maximumLength: 32) else {
             throw XboxCloudSessionAPIError.invalidAccessContext("Xbox Cloud market is missing or invalid.")
+        }
+        guard routingHeader == "AFD" || routingHeader == "ATM" else {
+            throw XboxCloudSessionAPIError.invalidAccessContext(
+                "Xbox Cloud routing mode is invalid."
+            )
         }
 
         self.gsToken = gsToken
@@ -44,6 +51,7 @@ nonisolated struct XboxCloudSessionAccessContext: Sendable, CustomStringConverti
             maximumCount: 32,
             permitsEmptyDefault: true
         )
+        self.routingHeader = routingHeader
         self.deviceInformation = try deviceInformation.validated()
         self.msaTransferToken = msaTransferToken
     }
@@ -722,7 +730,8 @@ actor XboxCloudSessionAPI {
             endpointBaseURL: record.baseURL,
             sessionPath: handle.sessionPath,
             gsToken: access.gsToken,
-            correlationVector: nextCorrelationVector()
+            correlationVector: nextSignalingCorrelationVector(),
+            routingHeader: access.routingHeader
         )
     }
 
@@ -838,6 +847,10 @@ actor XboxCloudSessionAPI {
         request.setValue("Bearer \(access.gsToken)", forHTTPHeaderField: "Authorization")
         request.setValue(nextCorrelationVector(), forHTTPHeaderField: "MS-CV")
         request.setValue(access.market, forHTTPHeaderField: "x-xbl-market")
+        request.setValue(
+            access.routingHeader,
+            forHTTPHeaderField: "X-GSSV-Routing"
+        )
         request.httpBody = body
         if includesDeviceInformation {
             try request.setValue(encodedDeviceInformation(), forHTTPHeaderField: "X-MS-Device-Info")
@@ -965,6 +978,10 @@ actor XboxCloudSessionAPI {
     private func nextCorrelationVector() -> String {
         defer { correlationVectorSequence += 1 }
         return "\(correlationVectorBase).\(correlationVectorSequence)"
+    }
+
+    private func nextSignalingCorrelationVector() -> String {
+        "\(nextCorrelationVector()).0"
     }
 
     private static func validatedCorrelationVectorBase(_ proposed: String?) -> String {
