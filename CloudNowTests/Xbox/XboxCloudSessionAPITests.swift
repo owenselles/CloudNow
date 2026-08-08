@@ -1,5 +1,6 @@
 @testable import CloudNow
 import Foundation
+import Synchronization
 import Testing
 
 @Suite("Xbox Cloud session REST API")
@@ -156,6 +157,53 @@ struct XboxCloudSessionAPITests {
         ])
     }
 
+    @Test("A repeated ready-to-connect state is paced without reconnecting")
+    func repeatedReadyToConnectIsPaced() async throws {
+        let delays = XboxCloudDelayRecorder()
+        let transferTokens = XboxTransferTokenRecorder(token: "fixture-transfer-secret")
+        let access = try makeAccessContext {
+            try await transferTokens.token()
+        }
+        let policy = try XboxCloudSessionPollingPolicy(
+            queueInterval: 1,
+            provisioningInterval: 1,
+            maximumRetryAfter: 5,
+            maximumElapsedTime: 60,
+            maximumStateRequests: 6
+        )
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1, 3:
+                return StubbedHTTPResponse(
+                    json: #"{"state":"ReadyToConnect","transferUri":"https://transfer.gssv-play-prod.xboxlive.com"}"#
+                )
+            case 2:
+                return StubbedHTTPResponse(statusCode: 204)
+            case 4:
+                return StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 5:
+                return StubbedHTTPResponse(json: Self.configurationJSON)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = XboxCloudSessionAPI(
+            access: access,
+            transport: transport,
+            pollingPolicy: policy,
+            sleep: { delay in await delays.record(delay) }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        _ = try await api.pollUntilProvisioned(handle)
+
+        #expect(await transferTokens.requestCount() == 1)
+        #expect(await delays.values() == [1])
+        #expect(await transport.requests().count == 6)
+    }
+
     @Test("Signaling extends a reserved vector while lifecycle HTTP advances its root")
     func correlationVectorBranches() async throws {
         let transport = RecordingHTTPTransport { request, index in
@@ -185,8 +233,8 @@ struct XboxCloudSessionAPITests {
         #expect(await transport.requests().count == 2)
     }
 
-    @Test("Retry-After controls polling and is bounded by policy")
-    func retryAfterIsBounded() async throws {
+    @Test("Capacity polling uses Microsoft's ten-second phase cadence instead of Retry-After")
+    func capacityPollingUsesConfiguredPhaseCadence() async throws {
         let delays = XboxCloudDelayRecorder()
         let policy = try XboxCloudSessionPollingPolicy(
             queueInterval: 1,
@@ -218,11 +266,11 @@ struct XboxCloudSessionAPITests {
 
         _ = try await api.pollUntilProvisioned(handle)
 
-        #expect(await delays.values() == [5])
+        #expect(await delays.values() == [1])
     }
 
-    @Test("Polling stops at its request bound without an extra delay")
-    func pollingIsBounded() async throws {
+    @Test("Provisioning stops at its request bound without an extra delay")
+    func provisioningIsBounded() async throws {
         let delays = XboxCloudDelayRecorder()
         let policy = try XboxCloudSessionPollingPolicy(
             queueInterval: 1,
@@ -235,7 +283,7 @@ struct XboxCloudSessionAPITests {
             if index == 0 {
                 return StubbedHTTPResponse(json: Self.createResponseJSON)
             }
-            return StubbedHTTPResponse(json: #"{"state":"WaitingForResources"}"#)
+            return StubbedHTTPResponse(json: #"{"state":"Provisioning"}"#)
         }
         let api = try XboxCloudSessionAPI(
             access: makeAccessContext(),
@@ -253,6 +301,242 @@ struct XboxCloudSessionAPITests {
         #expect(await delays.values() == [1])
     }
 
+    @Test("A valid capacity queue does not consume the provisioning request budget")
+    func capacityQueueDoesNotConsumeProvisioningBudget() async throws {
+        let delays = XboxCloudDelayRecorder()
+        let policy = try XboxCloudSessionPollingPolicy(
+            queueInterval: 1,
+            provisioningInterval: 1,
+            maximumRetryAfter: 5,
+            maximumElapsedTime: 60,
+            maximumStateRequests: 2
+        )
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1 ... 3:
+                return StubbedHTTPResponse(json: #"{"state":"WaitingForResources"}"#)
+            case 4:
+                return StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 5:
+                return StubbedHTTPResponse(json: Self.configurationJSON)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            pollingPolicy: policy,
+            sleep: { delay in await delays.record(delay) }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        _ = try await api.pollUntilProvisioned(handle)
+
+        #expect(await transport.requests().count == 6)
+        #expect(await delays.values() == [1, 1, 1])
+    }
+
+    @Test("A transient capacity-state transport failure is retried once")
+    func transientStateFailureRetriesOnce() async throws {
+        let delays = XboxCloudDelayRecorder()
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                throw TestTransportError.unexpectedRequest("Transient fixture failure")
+            case 2:
+                return StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 3:
+                return StubbedHTTPResponse(json: Self.configurationJSON)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            sleep: { delay in await delays.record(delay) }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        _ = try await api.pollUntilProvisioned(handle)
+
+        #expect(await transport.requests().count == 4)
+        #expect(await delays.values() == [2])
+    }
+
+    @Test(
+        "A transient capacity-state service response is retried once",
+        arguments: [408, 429, 500, 502, 503, 504]
+    )
+    func transientStateHTTPFailureRetriesOnce(statusCode: Int) async throws {
+        let delays = XboxCloudDelayRecorder()
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                return StubbedHTTPResponse(statusCode: statusCode)
+            case 2:
+                return StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 3:
+                return StubbedHTTPResponse(json: Self.configurationJSON)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            sleep: { delay in await delays.record(delay) }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        _ = try await api.pollUntilProvisioned(handle)
+
+        #expect(await transport.requests().count == 4)
+        #expect(await delays.values() == [2])
+    }
+
+    @Test("Two consecutive capacity-state failures stop polling")
+    func repeatedTransientStateFailuresStopPolling() async throws {
+        let delays = XboxCloudDelayRecorder()
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1, 2:
+                throw TestTransportError.unexpectedRequest("Transient fixture failure")
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            sleep: { delay in await delays.record(delay) }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        await #expect(throws: XboxCloudSessionAPIError.transportFailure(operation: .state)) {
+            _ = try await api.pollUntilProvisioned(handle)
+        }
+
+        #expect(await transport.requests().count == 3)
+        #expect(await delays.values() == [2])
+    }
+
+    @Test("State requests have a finite per-request timeout")
+    func stateRequestHasFiniteTimeout() async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                #expect(request.timeoutInterval == 30)
+                return StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 2:
+                return StubbedHTTPResponse(json: Self.configurationJSON)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        _ = try await api.pollUntilProvisioned(handle)
+    }
+
+    @Test("Provisioning state requests use only their remaining deadline")
+    func stateRequestUsesRemainingProvisioningDeadline() async throws {
+        let clock = XboxCloudSessionTestClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let policy = try XboxCloudSessionPollingPolicy(
+            queueInterval: 1,
+            provisioningInterval: 0.75,
+            maximumRetryAfter: 5,
+            maximumElapsedTime: 1,
+            maximumStateRequests: 4
+        )
+        let transport = RecordingHTTPTransport { request, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                return StubbedHTTPResponse(json: #"{"state":"Provisioning"}"#)
+            case 2:
+                #expect(abs(request.timeoutInterval - 0.25) < 0.001)
+                return StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 3:
+                return StubbedHTTPResponse(json: Self.configurationJSON)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            pollingPolicy: policy,
+            now: { clock.now() },
+            sleep: { delay in clock.advance(by: delay) }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        _ = try await api.pollUntilProvisioned(handle)
+    }
+
+    @Test("A transient provisioning retry cannot exceed the polling deadline")
+    func transientRetryUsesRemainingProvisioningDeadline() async throws {
+        let clock = XboxCloudSessionTestClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let delays = XboxCloudDelayRecorder()
+        let policy = try XboxCloudSessionPollingPolicy(
+            queueInterval: 1,
+            provisioningInterval: 0,
+            maximumRetryAfter: 5,
+            maximumElapsedTime: 1,
+            maximumStateRequests: 4
+        )
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                return StubbedHTTPResponse(json: #"{"state":"Provisioning"}"#)
+            case 2:
+                clock.advance(by: 0.75)
+                throw TestTransportError.unexpectedRequest("Transient fixture failure")
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            pollingPolicy: policy,
+            now: { clock.now() },
+            sleep: { delay in
+                await delays.record(delay)
+                clock.advance(by: delay)
+            }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        await #expect(throws: XboxCloudSessionAPIError.pollingTimedOut(maximumStateRequests: 4)) {
+            _ = try await api.pollUntilProvisioned(handle)
+        }
+
+        let recordedDelays = await delays.values()
+        #expect(recordedDelays.count == 1)
+        #expect(abs(recordedDelays[0] - 0.25) < 0.001)
+        #expect(await transport.requests().count == 3)
+    }
+
     @Test("Cancellation propagates out of the polling delay")
     func pollingCancellation() async throws {
         let transport = RecordingHTTPTransport { _, index in
@@ -263,14 +547,51 @@ struct XboxCloudSessionAPITests {
         let api = try XboxCloudSessionAPI(
             access: makeAccessContext(),
             transport: transport,
-            sleep: { _ in throw CancellationError() }
+            sleep: { _ in try await Task.sleep(for: .seconds(60)) }
         )
         let handle = try await api.createSession(makeLaunchRequest())
-
-        await #expect(throws: CancellationError.self) {
-            _ = try await api.pollUntilProvisioned(handle)
+        let pollingTask = Task {
+            try await api.pollUntilProvisioned(handle)
         }
 
+        #expect(await waitForRequestCount(2, transport: transport))
+        pollingTask.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await pollingTask.value
+        }
+
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Cancellation propagates out of an in-flight state request without retrying")
+    func inFlightStateRequestCancellation() async throws {
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                try await Task.sleep(for: .seconds(60))
+                return StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+        let pollingTask = Task {
+            try await api.pollUntilProvisioned(handle)
+        }
+
+        #expect(await waitForRequestCount(2, transport: transport))
+        pollingTask.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await pollingTask.value
+        }
         #expect(await transport.requests().count == 2)
     }
 
@@ -429,6 +750,37 @@ private actor XboxCloudDelayRecorder {
     func values() -> [TimeInterval] {
         recordedValues
     }
+}
+
+private final class XboxCloudSessionTestClock: Sendable {
+    private let value: Mutex<Date>
+
+    init(_ date: Date) {
+        value = Mutex(date)
+    }
+
+    func now() -> Date {
+        value.withLock { $0 }
+    }
+
+    func advance(by interval: TimeInterval) {
+        value.withLock { date in
+            date = date.addingTimeInterval(interval)
+        }
+    }
+}
+
+private func waitForRequestCount(
+    _ expectedCount: Int,
+    transport: RecordingHTTPTransport
+) async -> Bool {
+    for _ in 0 ..< 1000 {
+        if await transport.requests().count >= expectedCount {
+            return true
+        }
+        await Task.yield()
+    }
+    return false
 }
 
 private actor XboxCloudStateRecorder {

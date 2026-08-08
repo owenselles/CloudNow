@@ -39,28 +39,22 @@ nonisolated enum XboxCloudDisplayResolution: String, CaseIterable, Sendable {
         case .automatic:
             L10n.text("automatic")
         case .hd, .hdHighQuality:
-            "1280x720"
+            "720p"
         case .fullHD, .fullHDHighQuality:
-            "1920x1080"
+            "1080p"
         case .qhd:
-            "2560x1440"
+            "1440p"
         }
     }
 
     var badge: String? {
         switch self {
-        case .automatic:
+        case .automatic, .hd, .fullHD:
             nil
-        case .hd:
-            "HD"
-        case .hdHighQuality:
-            "HD · HQ"
-        case .fullHD:
-            "Full HD"
-        case .fullHDHighQuality:
-            "Full HD · HQ"
+        case .hdHighQuality, .fullHDHighQuality:
+            "HQ"
         case .qhd:
-            "QHD · HQ"
+            nil
         }
     }
 
@@ -115,7 +109,8 @@ nonisolated enum XboxCloudVideoCodecPreference: String, Codable, Sendable {
 
 /// Account-visible Xbox quality aliases. These are preferences rather than
 /// promises: Microsoft can still adapt the negotiated stream for the title,
-/// region, device, and live network condition.
+/// region, device, and live network condition. Higher-quality aliases are
+/// shown only when CloudNow has confirmed the account's Ultimate membership.
 nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
     let standardResolutions: [XboxCloudDisplayResolution]
     let higherQualityResolutions: [XboxCloudDisplayResolution]
@@ -128,28 +123,35 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
         for membershipTier: XboxMembershipTier?,
         isMembershipKnown: Bool
     ) -> Self {
-        let standardResolutions: [XboxCloudDisplayResolution] = [
-            .automatic,
-            .fullHD,
-            .hd,
-        ]
         let hasHigherQuality = isMembershipKnown && membershipTier == .ultimate
         let higherQualityResolutions: [XboxCloudDisplayResolution] = if hasHigherQuality {
-            [.qhd, .fullHDHighQuality, .hdHighQuality]
+            [.hdHighQuality, .fullHDHighQuality, .qhd]
         } else {
             []
         }
         return Self(
-            standardResolutions: standardResolutions,
+            standardResolutions: [
+                .automatic,
+                .hd,
+                .fullHD,
+            ],
             higherQualityResolutions: higherQualityResolutions
         )
     }
 
+    func selectableResolution(
+        for persistedResolution: XboxCloudDisplayResolution
+    ) -> XboxCloudDisplayResolution {
+        resolutions.contains(persistedResolution)
+            ? persistedResolution
+            : .automatic
+    }
+
     func normalized(_ settings: XboxCloudStreamSettings) -> XboxCloudStreamSettings {
         var normalized = settings
-        if !resolutions.contains(normalized.displayResolution) {
-            normalized.displayResolution = .automatic
-        }
+        normalized.displayResolution = selectableResolution(
+            for: settings.displayResolution
+        )
         // Xbox selects the negotiated WebRTC codec. Retain this legacy field
         // only so older persisted settings remain decodable.
         normalized.codecPreference = .automatic

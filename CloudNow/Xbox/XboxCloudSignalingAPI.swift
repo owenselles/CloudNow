@@ -155,7 +155,7 @@ nonisolated struct XboxCloudSDPAnswer: Codable, Equatable, Sendable {
     let sdp: String
     let chatStream: Int
     let control: Int
-    let input: Int
+    let input: Int?
     let unreliableinput: Int?
     let reliableinput: Int?
     let message: Int
@@ -360,8 +360,13 @@ actor XboxCloudSignalingAPI {
         guard answer.isAccepted else {
             throw XboxCloudSignalingError.rejected(status: answer.status)
         }
+        let hasModernInput = answer.unreliableinput != nil
+            && answer.reliableinput != nil
+        let selectedInputVersion = hasModernInput
+            ? answer.unreliableinput ?? 0
+            : answer.input ?? 0
         xboxSignalingLog.info(
-            "Xbox signaling sdp answer accepted inputVersion=\(answer.input, privacy: .public)"
+            "Xbox signaling sdp answer accepted modernInput=\(hasModernInput, privacy: .public) inputVersion=\(selectedInputVersion, privacy: .public)"
         )
         return answer
     }

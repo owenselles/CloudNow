@@ -35,7 +35,7 @@ struct XboxCloudSignalingAPITests {
             }
             #expect(request.httpMethod == "GET")
             #expect(request.value(forHTTPHeaderField: "MS-CV") == "fixture-cv.4")
-            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","chatStream":1,"control":3,"input":10,"message":1}"#
+            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","chatStream":1,"control":3,"unreliableinput":10,"reliableinput":10,"message":1}"#
             return signalingResponse(
                 json: #"{"exchangeResponse":\#(answer)}"#
             )
@@ -53,10 +53,25 @@ struct XboxCloudSignalingAPITests {
         )
 
         #expect(answer.sdp == "fixture-answer")
-        #expect(answer.input == 10)
+        #expect(answer.input == nil)
+        #expect(answer.unreliableinput == 10)
+        #expect(answer.reliableinput == 10)
         #expect(answer.chat == nil)
         #expect(await delays.values() == [0.1])
         #expect(await transport.requests().count == 3)
+    }
+
+    @Test("Legacy SDP input remains decodable")
+    func decodesLegacySDPInput() throws {
+        let data = Data(
+            #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","chatStream":1,"control":3,"input":10,"message":1}"#.utf8
+        )
+
+        let answer = try JSONDecoder().decode(XboxCloudSDPAnswer.self, from: data)
+
+        #expect(answer.input == 10)
+        #expect(answer.unreliableinput == nil)
+        #expect(answer.reliableinput == nil)
     }
 
     @Test("ICE exchange sends candidate strings and decodes remote candidates")

@@ -573,9 +573,9 @@ final class CloudNowUITests: XCTestCase {
 
         let currentResolutionText =
             "\(xboxResolution.label) \(accessibilityValue(of: xboxResolution))"
-        let targetResolution = currentResolutionText.contains("1920x1080")
-            ? "1280x720"
-            : "1920x1080"
+        let targetResolution = currentResolutionText.contains("1080p")
+            ? "720p"
+            : "1080p"
 
         // SwiftUI's native tvOS Picker does not expose `hasFocus` on its
         // identified accessibility node. The deterministic Settings fixture
@@ -583,16 +583,60 @@ final class CloudNowUITests: XCTestCase {
         XCUIRemote.shared.press(.down)
         XCUIRemote.shared.press(.select)
 
+        let automaticOption = xboxApp.cells
+            .matching(NSPredicate(format: "label == %@", "Automatic"))
+            .firstMatch
         let fullHDOption = xboxApp.cells
-            .matching(NSPredicate(format: "label CONTAINS %@", "1920x1080"))
+            .matching(NSPredicate(format: "label == %@", "1080p"))
             .firstMatch
         let hdOption = xboxApp.cells
-            .matching(NSPredicate(format: "label CONTAINS %@", "1280x720"))
+            .matching(NSPredicate(format: "label == %@", "720p"))
             .firstMatch
+        let hdHighQualityOption = xboxApp.cells
+            .matching(
+                NSPredicate(
+                    format: "label CONTAINS %@ AND label CONTAINS %@",
+                    "720p",
+                    "HQ"
+                )
+            )
+            .firstMatch
+        let fullHDHighQualityOption = xboxApp.cells
+            .matching(
+                NSPredicate(
+                    format: "label CONTAINS %@ AND label CONTAINS %@",
+                    "1080p",
+                    "HQ"
+                )
+            )
+            .firstMatch
+        let maxQualityOption = xboxApp.cells
+            .matching(
+                NSPredicate(
+                    format: "label CONTAINS %@ AND label CONTAINS[c] %@",
+                    "1440p",
+                    "max"
+                )
+            )
+            .firstMatch
+        XCTAssertTrue(automaticOption.waitForExistence(timeout: 3))
         XCTAssertTrue(fullHDOption.waitForExistence(timeout: 3))
         XCTAssertTrue(hdOption.waitForExistence(timeout: 3))
+        XCTAssertTrue(hdHighQualityOption.waitForExistence(timeout: 3))
+        XCTAssertTrue(fullHDHighQualityOption.waitForExistence(timeout: 3))
+        XCTAssertTrue(maxQualityOption.waitForExistence(timeout: 3))
+        XCTAssertFalse(
+            xboxApp.cells
+                .matching(NSPredicate(format: "label == %@", "Standard"))
+                .firstMatch.exists
+        )
+        XCTAssertFalse(
+            xboxApp.cells
+                .matching(NSPredicate(format: "label == %@", "Game Pass Ultimate"))
+                .firstMatch.exists
+        )
 
-        let targetOption = targetResolution == "1280x720" ? hdOption : fullHDOption
+        let targetOption = targetResolution == "720p" ? hdOption : fullHDOption
         XCTAssertTrue(targetOption.isEnabled)
         focus(
             targetOption,

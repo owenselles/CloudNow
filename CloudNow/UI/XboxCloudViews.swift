@@ -261,10 +261,13 @@ struct XboxMainTabView: View {
         guard route.isPlayable else { return }
 
         pendingPlaybackFocusRestoreID = item.id
+        let settings = modeViewModel.streamCapabilities.normalized(
+            modeViewModel.streamSettings
+        )
         playbackRequest = XboxCloudPlaybackRequest(
             item: item,
             route: route,
-            settings: modeViewModel.streamSettings,
+            settings: settings,
             controller: modeViewModel.streamController { [weak xboxAuthManager] in
                 guard let xboxAuthManager else { throw CancellationError() }
                 return try await xboxAuthManager.xboxCloudTransferToken()
@@ -487,7 +490,6 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
             contentAccessTask = nil
             membershipTier = snapshot.membershipTier
             contentAccessPhase = .loaded
-            streamSettings = streamCapabilities.normalized(streamSettings)
         } catch is CancellationError {
             if contentAccessGeneration == generation {
                 contentAccessTask = nil
@@ -2821,9 +2823,9 @@ private struct XboxSettingsView: View {
                 Section {
                     CloudNowStreamQualityPicker(
                         L10n.text("resolution"),
-                        selection: $modeViewModel.streamSettings.displayResolution,
+                        selection: xboxResolutionSelection,
                         accessibilityIdentifier: "settings.stream-quality.resolution",
-                        groups: xboxResolutionGroups
+                        options: xboxResolutionOptions
                     )
                 } header: {
                     Text(L10n.text("stream_quality"))
@@ -2969,25 +2971,23 @@ private struct XboxSettingsView: View {
             || providerCoordinator.isProviderInteractionBlocked
     }
 
-    private var xboxResolutionGroups: [
-        CloudNowStreamQualityOptionGroup<XboxCloudDisplayResolution>
+    private var xboxResolutionOptions: [
+        CloudNowStreamQualityOption<XboxCloudDisplayResolution>
     ] {
-        let capabilities = modeViewModel.streamCapabilities
-        var groups = [
-            CloudNowStreamQualityOptionGroup(
-                title: L10n.text("standard"),
-                options: capabilities.standardResolutions.map(resolutionOption)
-            ),
-        ]
-        if !capabilities.higherQualityResolutions.isEmpty {
-            groups.append(
-                CloudNowStreamQualityOptionGroup(
-                    title: XboxMembershipTier.ultimate.displayName,
-                    options: capabilities.higherQualityResolutions.map(resolutionOption)
+        modeViewModel.streamCapabilities.resolutions.map(resolutionOption)
+    }
+
+    private var xboxResolutionSelection: Binding<XboxCloudDisplayResolution> {
+        Binding(
+            get: {
+                modeViewModel.streamCapabilities.selectableResolution(
+                    for: modeViewModel.streamSettings.displayResolution
                 )
-            )
-        }
-        return groups
+            },
+            set: { resolution in
+                modeViewModel.streamSettings.displayResolution = resolution
+            }
+        )
     }
 
     private func resolutionOption(
@@ -2996,7 +2996,9 @@ private struct XboxSettingsView: View {
         CloudNowStreamQualityOption(
             value: resolution,
             title: resolution.label,
-            badge: resolution.badge,
+            badge: resolution == .qhd
+                ? L10n.text("maximum_abbreviation")
+                : resolution.badge,
             systemImage: resolution.systemImage
         )
     }

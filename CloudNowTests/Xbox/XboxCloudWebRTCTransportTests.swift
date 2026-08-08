@@ -135,6 +135,15 @@ struct XboxCloudWebRTCTransportTests {
         )
         #expect(
             try XboxCloudInputTransportMode(answer: Self.answer(
+                inputVersion: nil
+            ))
+                == .unreliable(
+                    reliableVersion: 10,
+                    unreliableVersion: 10
+                )
+        )
+        #expect(
+            try XboxCloudInputTransportMode(answer: Self.answer(
                 unreliableInputVersion: nil,
                 reliableInputVersion: 10
             )) == .legacy(version: 10)
@@ -145,6 +154,13 @@ struct XboxCloudWebRTCTransportTests {
                 reliableInputVersion: nil
             )) == .legacy(version: 10)
         )
+        #expect(throws: XboxCloudWebRTCTransportError.missingInputTransport) {
+            _ = try XboxCloudInputTransportMode(answer: Self.answer(
+                inputVersion: nil,
+                unreliableInputVersion: 10,
+                reliableInputVersion: nil
+            ))
+        }
 
         let mixedVersionMode = XboxCloudInputTransportMode.unreliable(
             reliableVersion: 9,
@@ -247,7 +263,10 @@ struct XboxCloudWebRTCTransportTests {
     func negotiationOrder() async throws {
         let events = XboxWebRTCEventRecorder()
         let peer = XboxWebRTCPeerStub(events: events)
-        let signaling = XboxWebRTCSignalingStub(events: events)
+        let signaling = XboxWebRTCSignalingStub(
+            events: events,
+            answer: Self.answer(inputVersion: nil)
+        )
         let pipeline = XboxCloudWebRTCNegotiationPipeline(signaling: signaling)
 
         let answer = try await pipeline.negotiate(
@@ -255,7 +274,9 @@ struct XboxCloudWebRTCTransportTests {
             context: makeSignalingContext()
         )
 
-        #expect(answer.input == 10)
+        #expect(answer.input == nil)
+        #expect(answer.unreliableinput == 10)
+        #expect(answer.reliableinput == 10)
         #expect(peer.remoteAnswer?.sdp == "fixture-answer")
         #expect(peer.appliedRemoteCandidates == [Self.remoteCandidate])
         #expect(await events.values() == [
@@ -274,7 +295,11 @@ struct XboxCloudWebRTCTransportTests {
         let peer = XboxWebRTCPeerStub(events: events)
         let signaling = XboxWebRTCSignalingStub(
             events: events,
-            answer: Self.answer(inputVersion: 11)
+            answer: Self.answer(
+                inputVersion: 11,
+                unreliableInputVersion: nil,
+                reliableInputVersion: nil
+            )
         )
         let pipeline = XboxCloudWebRTCNegotiationPipeline(signaling: signaling)
 
@@ -540,7 +565,7 @@ struct XboxCloudWebRTCTransportTests {
     )
 
     fileprivate nonisolated static func answer(
-        inputVersion: Int = 10,
+        inputVersion: Int? = 10,
         unreliableInputVersion: Int? = 10,
         reliableInputVersion: Int? = 10
     ) -> XboxCloudSDPAnswer {

@@ -125,36 +125,26 @@ struct XboxCloudStreamControllerTests {
         #expect(encoded == testCase.encodedValue)
     }
 
-    @Test("Xbox quality capabilities use standard and Ultimate quality groups")
+    @Test("Xbox quality capabilities expose flat membership-gated aliases")
     func xboxQualityCapabilities() {
         let unknown = XboxCloudStreamCapabilities.resolved(
             for: nil,
             isMembershipKnown: false
         )
-        #expect(unknown.standardResolutions == [.automatic, .fullHD, .hd])
-        #expect(unknown.higherQualityResolutions.isEmpty)
-        #expect(unknown.resolutions == [.automatic, .fullHD, .hd])
+        #expect(unknown.resolutions == [.automatic, .hd, .fullHD])
 
         let ultimate = XboxCloudStreamCapabilities.resolved(
             for: .ultimate,
             isMembershipKnown: true
         )
-        #expect(ultimate.standardResolutions == [.automatic, .fullHD, .hd])
-        #expect(
-            ultimate.higherQualityResolutions == [
-                .qhd,
-                .fullHDHighQuality,
-                .hdHighQuality,
-            ]
-        )
         #expect(
             ultimate.resolutions == [
                 .automatic,
-                .fullHD,
                 .hd,
-                .qhd,
-                .fullHDHighQuality,
+                .fullHD,
                 .hdHighQuality,
+                .fullHDHighQuality,
+                .qhd,
             ]
         )
 
@@ -162,15 +152,41 @@ struct XboxCloudStreamControllerTests {
             for: .pcGamePass,
             isMembershipKnown: true
         )
-        #expect(pcGamePass.resolutions == [.automatic, .fullHD, .hd])
-        let normalized = pcGamePass.normalized(
+        #expect(pcGamePass.resolutions == [.automatic, .hd, .fullHD])
+
+        let persisted = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            codecPreference: .h265
+        )
+        let hiddenSelection = pcGamePass.normalized(persisted)
+        #expect(hiddenSelection.displayResolution == .automatic)
+        #expect(hiddenSelection.codecPreference == .automatic)
+        #expect(persisted.displayResolution == .qhd)
+
+        let ultimateSelection = ultimate.normalized(
             XboxCloudStreamSettings(
                 displayResolution: .qhd,
                 codecPreference: .h265
             )
         )
-        #expect(normalized.displayResolution == .automatic)
-        #expect(normalized.codecPreference == .automatic)
+        #expect(ultimateSelection.displayResolution == .qhd)
+        #expect(ultimateSelection.codecPreference == .automatic)
+    }
+
+    @Test("Xbox quality labels use localized technical badges")
+    func xboxQualityLabels() {
+        #expect(XboxCloudDisplayResolution.automatic.label == L10n.text("automatic"))
+        #expect(XboxCloudDisplayResolution.hd.label == "720p")
+        #expect(XboxCloudDisplayResolution.fullHD.label == "1080p")
+        #expect(XboxCloudDisplayResolution.hdHighQuality.label == "720p")
+        #expect(XboxCloudDisplayResolution.fullHDHighQuality.label == "1080p")
+        #expect(XboxCloudDisplayResolution.qhd.label == "1440p")
+        #expect(XboxCloudDisplayResolution.automatic.badge == nil)
+        #expect(XboxCloudDisplayResolution.hd.badge == nil)
+        #expect(XboxCloudDisplayResolution.fullHD.badge == nil)
+        #expect(XboxCloudDisplayResolution.hdHighQuality.badge == "HQ")
+        #expect(XboxCloudDisplayResolution.fullHDHighQuality.badge == "HQ")
+        #expect(XboxCloudDisplayResolution.qhd.badge == nil)
     }
 
     @Test("Start composes access, allocation, media, settings, and teardown")

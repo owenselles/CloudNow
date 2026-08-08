@@ -127,11 +127,6 @@ nonisolated enum XboxCloudInputTransportMode: Equatable, Sendable {
     }
 
     init(answer: XboxCloudSDPAnswer) throws {
-        guard (1 ... 10).contains(answer.input) else {
-            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
-                answer.input
-            )
-        }
         if let unreliableVersion = answer.unreliableinput,
            let reliableVersion = answer.reliableinput
         {
@@ -149,9 +144,17 @@ nonisolated enum XboxCloudInputTransportMode: Equatable, Sendable {
                 reliableVersion: reliableVersion,
                 unreliableVersion: unreliableVersion
             )
-        } else {
-            self = .legacy(version: answer.input)
+            return
         }
+        guard let legacyVersion = answer.input else {
+            throw XboxCloudWebRTCTransportError.missingInputTransport
+        }
+        guard (1 ... 10).contains(legacyVersion) else {
+            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
+                legacyVersion
+            )
+        }
+        self = .legacy(version: legacyVersion)
     }
 }
 
@@ -196,6 +199,7 @@ nonisolated enum XboxCloudWebRTCTransportError: Error, Equatable, LocalizedError
     case unableToCreateDataChannel(label: String)
     case unableToCreateOffer
     case peerOperationFailed(operation: String)
+    case missingInputTransport
     case unsupportedInputVersion(Int)
     case noLocalICECandidates
     case tooManyICECandidates
@@ -217,6 +221,8 @@ nonisolated enum XboxCloudWebRTCTransportError: Error, Equatable, LocalizedError
             "CloudNow could not create the Xbox Cloud media offer."
         case let .peerOperationFailed(operation):
             "The Xbox Cloud media connection failed while \(operation)."
+        case .missingInputTransport:
+            "Xbox Cloud did not provide a supported input channel."
         case let .unsupportedInputVersion(version):
             "Xbox Cloud selected unsupported input protocol version \(version)."
         case .noLocalICECandidates:

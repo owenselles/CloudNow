@@ -1,4 +1,10 @@
 import Foundation
+import os
+
+private nonisolated let xboxSessionLog = Logger(
+    subsystem: "com.owenselles.CloudNow2",
+    category: "XboxSession"
+)
 
 /// Credentials and service metadata obtained during Xbox Cloud Gaming sign-in.
 ///
@@ -526,6 +532,9 @@ nonisolated enum XboxCloudSessionAPIError: Error, Equatable, Sendable, Localized
 /// The actor owns credential access, correlation-vector sequencing, transfer-host updates,
 /// and the bounded polling loop. SDP, ICE, and WebRTC negotiation are separate concerns.
 actor XboxCloudSessionAPI {
+    private static let requestTimeout: TimeInterval = 30
+    private static let transientStateRetryInterval: TimeInterval = 2
+
     private struct SessionRecord {
         var baseURL: URL
         var didConnect = false
@@ -594,12 +603,20 @@ actor XboxCloudSessionAPI {
         return XboxCloudSessionHandle(sessionPath: normalizedPath)
     }
 
-    func state(for handle: XboxCloudSessionHandle) async throws -> XboxCloudSessionStateSnapshot {
+    func state(
+        for handle: XboxCloudSessionHandle,
+        timeoutInterval: TimeInterval = XboxCloudSessionAPI.requestTimeout
+    ) async throws -> XboxCloudSessionStateSnapshot {
         guard let record = sessions[handle.sessionPath] else {
             throw XboxCloudSessionAPIError.unknownSession
         }
         let url = try endpoint(baseURL: record.baseURL, sessionPath: handle.sessionPath, suffix: "state")
-        let (data, response) = try await send(method: "GET", url: url, operation: .state)
+        let (data, response) = try await send(
+            method: "GET",
+            url: url,
+            operation: .state,
+            timeoutInterval: timeoutInterval
+        )
         guard let payload = try? JSONDecoder().decode(StateResponse.self, from: data),
               !payload.state.isEmpty
         else {
@@ -710,45 +727,74 @@ actor XboxCloudSessionAPI {
         _ handle: XboxCloudSessionHandle,
         onState: @escaping @Sendable (XboxCloudSessionStateSnapshot) async -> Void = { _ in }
     ) async throws -> XboxCloudProvisionedSession {
-        let startedAt = now()
-        var requests = 0
+        var provisioningStartedAt: Date?
+        var provisioningRequests = 0
+        var totalStateRequests = 0
+        var consecutiveTransientFailures = 0
 
         while true {
             try Task.checkCancellation()
-            guard requests < pollingPolicy.maximumStateRequests,
-                  now().timeIntervalSince(startedAt) < pollingPolicy.maximumElapsedTime
-            else {
-                throw XboxCloudSessionAPIError.pollingTimedOut(
-                    maximumStateRequests: pollingPolicy.maximumStateRequests
+            let timeoutInterval = try stateRequestTimeout(
+                provisioningStartedAt: provisioningStartedAt,
+                provisioningRequests: provisioningRequests
+            )
+            let snapshot: XboxCloudSessionStateSnapshot
+            do {
+                snapshot = try await state(
+                    for: handle,
+                    timeoutInterval: timeoutInterval
                 )
+                consecutiveTransientFailures = 0
+            } catch {
+                guard Self.isTransientStatePollingError(error),
+                      consecutiveTransientFailures == 0
+                else {
+                    throw error
+                }
+                consecutiveTransientFailures += 1
+                xboxSessionLog.notice("Xbox state poll transient failure; retrying once")
+                try await waitBeforeTransientStateRetry(
+                    provisioningStartedAt: provisioningStartedAt
+                )
+                continue
             }
-
-            let snapshot = try await state(for: handle)
-            requests += 1
+            totalStateRequests += 1
             await onState(snapshot)
+            try Task.checkCancellation()
+            xboxSessionLog.info(
+                "Xbox session state=\(Self.diagnosticName(for: snapshot.state), privacy: .public) poll=\(totalStateRequests, privacy: .public) estimateSeconds=\(Int(snapshot.estimatedTotalWaitTime ?? -1), privacy: .public)"
+            )
 
             switch snapshot.state {
             case .provisioned:
                 let sessionConfiguration = try await configuration(for: handle)
                 return XboxCloudProvisionedSession(handle: handle, configuration: sessionConfiguration)
             case .readyToConnect:
+                if provisioningStartedAt == nil {
+                    provisioningStartedAt = now()
+                }
+                provisioningRequests += 1
+                let wasAlreadyConnected = sessions[handle.sessionPath]?.didConnect == true
                 try await connect(handle)
-                try await waitBeforeNextPoll(
-                    snapshot.retryAfter ?? 0,
-                    requests: requests,
-                    startedAt: startedAt
-                )
+                if wasAlreadyConnected {
+                    try await waitBeforeNextProvisioningPoll(
+                        pollingPolicy.provisioningInterval,
+                        requests: provisioningRequests,
+                        startedAt: provisioningStartedAt ?? now()
+                    )
+                }
             case .waitingForResources:
-                try await waitBeforeNextPoll(
-                    snapshot.retryAfter ?? pollingPolicy.queueInterval,
-                    requests: requests,
-                    startedAt: startedAt
-                )
+                try await sleep(pollingPolicy.queueInterval)
+                try Task.checkCancellation()
             case .provisioning:
-                try await waitBeforeNextPoll(
-                    snapshot.retryAfter ?? pollingPolicy.provisioningInterval,
-                    requests: requests,
-                    startedAt: startedAt
+                if provisioningStartedAt == nil {
+                    provisioningStartedAt = now()
+                }
+                provisioningRequests += 1
+                try await waitBeforeNextProvisioningPoll(
+                    pollingPolicy.provisioningInterval,
+                    requests: provisioningRequests,
+                    startedAt: provisioningStartedAt ?? now()
                 )
             case .failed:
                 throw XboxCloudSessionAPIError.sessionFailed(serviceCode: snapshot.serviceCode)
@@ -779,7 +825,7 @@ actor XboxCloudSessionAPI {
         sessions.removeValue(forKey: handle.sessionPath)
     }
 
-    private func waitBeforeNextPoll(
+    private func waitBeforeNextProvisioningPoll(
         _ requestedDelay: TimeInterval,
         requests: Int,
         startedAt: Date
@@ -803,15 +849,62 @@ actor XboxCloudSessionAPI {
         }
     }
 
+    private func stateRequestTimeout(
+        provisioningStartedAt: Date?,
+        provisioningRequests: Int
+    ) throws -> TimeInterval {
+        guard let provisioningStartedAt else {
+            return Self.requestTimeout
+        }
+        guard provisioningRequests < pollingPolicy.maximumStateRequests else {
+            throw XboxCloudSessionAPIError.pollingTimedOut(
+                maximumStateRequests: pollingPolicy.maximumStateRequests
+            )
+        }
+        let remaining = pollingPolicy.maximumElapsedTime
+            - now().timeIntervalSince(provisioningStartedAt)
+        guard remaining > 0 else {
+            throw XboxCloudSessionAPIError.pollingTimedOut(
+                maximumStateRequests: pollingPolicy.maximumStateRequests
+            )
+        }
+        return min(Self.requestTimeout, remaining)
+    }
+
+    private func waitBeforeTransientStateRetry(
+        provisioningStartedAt: Date?
+    ) async throws {
+        let delay: TimeInterval
+        if let provisioningStartedAt {
+            let remaining = pollingPolicy.maximumElapsedTime
+                - now().timeIntervalSince(provisioningStartedAt)
+            guard remaining > 0 else {
+                throw XboxCloudSessionAPIError.pollingTimedOut(
+                    maximumStateRequests: pollingPolicy.maximumStateRequests
+                )
+            }
+            delay = min(Self.transientStateRetryInterval, remaining)
+        } else {
+            delay = Self.transientStateRetryInterval
+        }
+        try await sleep(delay)
+        try Task.checkCancellation()
+    }
+
     private func send(
         method: String,
         url: URL,
         operation: XboxCloudSessionAPIOperation,
         body: Data? = nil,
-        includesDeviceInformation: Bool = false
+        includesDeviceInformation: Bool = false,
+        timeoutInterval: TimeInterval = XboxCloudSessionAPI.requestTimeout
     ) async throws -> (Data, HTTPURLResponse) {
         try Task.checkCancellation()
         var request = URLRequest(url: url)
+        let positiveTimeout = timeoutInterval.isFinite && timeoutInterval > 0
+            ? timeoutInterval
+            : Self.requestTimeout
+        request.timeoutInterval = min(positiveTimeout, Self.requestTimeout)
         request.httpMethod = method
         request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -848,6 +941,28 @@ actor XboxCloudSessionAPI {
             )
         }
         return (data, httpResponse)
+    }
+
+    private static func isTransientStatePollingError(_ error: Error) -> Bool {
+        switch error as? XboxCloudSessionAPIError {
+        case .transportFailure(operation: .state):
+            true
+        case let .httpFailure(operation: .state, statusCode, _):
+            [408, 429, 500, 502, 503, 504].contains(statusCode)
+        default:
+            false
+        }
+    }
+
+    private static func diagnosticName(for state: XboxCloudSessionState) -> String {
+        switch state {
+        case .waitingForResources: "WaitingForResources"
+        case .readyToConnect: "ReadyToConnect"
+        case .provisioning: "Provisioning"
+        case .provisioned: "Provisioned"
+        case .failed: "Failed"
+        case .unknown: "Unknown"
+        }
     }
 
     private func encodedDeviceInformation() throws -> String {
