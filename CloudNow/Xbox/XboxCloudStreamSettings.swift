@@ -142,9 +142,17 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
     func selectableResolution(
         for persistedResolution: XboxCloudDisplayResolution
     ) -> XboxCloudDisplayResolution {
-        resolutions.contains(persistedResolution)
-            ? persistedResolution
-            : .automatic
+        guard !resolutions.contains(persistedResolution) else {
+            return persistedResolution
+        }
+        return switch persistedResolution {
+        case .hdHighQuality:
+            resolutions.contains(.hd) ? .hd : .automatic
+        case .fullHDHighQuality, .qhd:
+            resolutions.contains(.fullHD) ? .fullHD : .automatic
+        case .automatic, .hd, .fullHD:
+            .automatic
+        }
     }
 
     func normalized(_ settings: XboxCloudStreamSettings) -> XboxCloudStreamSettings {

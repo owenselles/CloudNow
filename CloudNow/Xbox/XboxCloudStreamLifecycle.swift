@@ -155,6 +155,9 @@ protocol XboxCloudStreamRuntime: AnyObject, Sendable {
     ) async throws
     func sampleStatistics() async -> XboxCloudRTCStatsSnapshot
     func recordDecodedVideoFrame()
+    func setMenuToggleHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    )
     func setInputPaused(_ isPaused: Bool)
     func sendInputKeepAlive()
     func disconnect()
@@ -243,6 +246,12 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
 
     func recordDecodedVideoFrame() {
         inputDriver.setVideoFlowing()
+    }
+
+    func setMenuToggleHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) {
+        inputDriver.menuToggleHandler = handler
     }
 
     func setInputPaused(_ isPaused: Bool) {

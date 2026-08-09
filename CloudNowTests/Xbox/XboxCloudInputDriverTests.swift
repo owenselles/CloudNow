@@ -19,41 +19,61 @@ struct XboxCloudInputDriverTests {
         )
     }
 
-    @Test("Control frames retry on backpressure and reset after reopen")
-    func controlFrameRetryAndReopen() {
+    @Test("Resolution backpressure blocks control authorization")
+    func resolutionBackpressureBlocksAuthorization() {
         var state = XboxCloudControlSendState()
 
         #expect(!state.shouldSendAuthorization)
         #expect(!state.shouldSendResolutionUpdate)
 
         state.channelStateChanged(isOpen: true)
-        #expect(state.shouldSendAuthorization)
+        #expect(!state.shouldSendAuthorization)
         #expect(state.shouldSendResolutionUpdate)
 
+        state.recordAuthorization(disposition: .accepted)
         state.recordResolutionUpdate(disposition: .backpressured)
-        state.recordAuthorization(disposition: .channelUnavailable)
-        #expect(state.shouldSendAuthorization)
+        #expect(!state.didSendAuthorization)
+        #expect(!state.didSendResolutionUpdate)
+        #expect(!state.shouldSendAuthorization)
         #expect(state.shouldSendResolutionUpdate)
 
         state.recordResolutionUpdate(disposition: .accepted)
-        state.recordAuthorization(disposition: .payloadTooLarge)
+        #expect(state.didSendResolutionUpdate)
         #expect(state.shouldSendAuthorization)
         #expect(!state.shouldSendResolutionUpdate)
 
+        state.recordAuthorization(disposition: .backpressured)
+        #expect(state.shouldSendAuthorization)
+        #expect(!state.didSendAuthorization)
+
         state.recordAuthorization(disposition: .accepted)
+        #expect(state.didSendAuthorization)
         #expect(!state.shouldSendAuthorization)
         #expect(!state.shouldSendResolutionUpdate)
+    }
+
+    @Test("Control bootstrap restarts with resolution after channel reopen")
+    func controlBootstrapAfterReopen() {
+        var state = XboxCloudControlSendState()
+
+        state.channelStateChanged(isOpen: true)
+        state.recordResolutionUpdate(disposition: .accepted)
+        state.recordAuthorization(disposition: .accepted)
+        #expect(state.didSendResolutionUpdate)
+        #expect(state.didSendAuthorization)
 
         state.channelStateChanged(isOpen: false)
+        #expect(!state.didSendResolutionUpdate)
+        #expect(!state.didSendAuthorization)
         #expect(!state.shouldSendAuthorization)
         #expect(!state.shouldSendResolutionUpdate)
 
         state.channelStateChanged(isOpen: true)
-        #expect(state.shouldSendAuthorization)
+        #expect(!state.shouldSendAuthorization)
         #expect(state.shouldSendResolutionUpdate)
     }
 
-    @Test("Authorization precedes the preferred-resolution update")
+    @Test("Preferred resolution follows input bootstrap and precedes authorization")
     func bootstrapOrdering() {
         var state = XboxCloudInputBootstrapState(
             isTransportReady: false,
@@ -90,10 +110,10 @@ struct XboxCloudInputDriverTests {
         #expect(!state.canSendAuthorization)
 
         state.didSendInitialControllerReport = true
-        #expect(!state.canSendResolutionUpdate)
-        #expect(state.canSendAuthorization)
+        #expect(state.canSendResolutionUpdate)
+        #expect(!state.canSendAuthorization)
 
-        state.didSendAuthorization = true
+        state.didSendResolutionUpdate = true
         #expect(state.canSendAuthorization)
         #expect(state.canSendResolutionUpdate)
         #expect(!state.isPublishedReady(
@@ -101,7 +121,7 @@ struct XboxCloudInputDriverTests {
             didReceiveMessageHandshake: true
         ))
 
-        state.didSendResolutionUpdate = true
+        state.didSendAuthorization = true
         #expect(!state.isPublishedReady(
             isMessageChannelOpen: true,
             didReceiveMessageHandshake: false
@@ -192,6 +212,215 @@ struct XboxCloudInputDriverTests {
             current: 1,
             occupiedSlots: [false, false]
         ) == nil)
+    }
+
+    @Test("A short Start press produces one remote Menu down then up")
+    func shortOverlayPress() {
+        var sequence = XboxCloudOverlayInputSequence()
+        let start: UInt64 = 1000
+
+        #expect(sequence.update(isPressed: true, at: start) == .none)
+        #expect(sequence.remoteMenuOverride == false)
+
+        let pressedAction = sequence.update(
+            isPressed: false,
+            at: start + 20_000_000
+        )
+        guard case let .remoteMenu(isPressed, replayToken) = pressedAction
+        else {
+            Issue.record("Short press did not begin a remote Menu replay")
+            return
+        }
+        #expect(isPressed)
+        #expect(sequence.remoteMenuOverride == true)
+
+        let releasedAction = sequence.finishReplay(token: replayToken)
+        #expect(releasedAction == .remoteMenu(
+            isPressed: false,
+            replayToken: replayToken
+        ))
+        #expect(sequence.remoteMenuOverride == nil)
+        #expect(sequence.finishReplay(token: replayToken) == .none)
+
+        let transitions = [pressedAction, releasedAction].compactMap {
+            action -> Bool? in
+            guard case let .remoteMenu(isPressed, _) = action else {
+                return nil
+            }
+            return isPressed
+        }
+        #expect(transitions == [true, false])
+    }
+
+    @Test("A 1.8 second Start hold toggles once with no remote Menu event")
+    func longOverlayPress() {
+        var sequence = XboxCloudOverlayInputSequence()
+        let start: UInt64 = 5000
+        let threshold = XboxCloudOverlayGestureState
+            .longPressDurationNanoseconds
+
+        let actions = [
+            sequence.update(isPressed: true, at: start),
+            sequence.update(
+                isPressed: true,
+                at: start + threshold - 1
+            ),
+            sequence.update(
+                isPressed: true,
+                at: start + threshold
+            ),
+            sequence.update(
+                isPressed: true,
+                at: start + threshold + 1
+            ),
+            sequence.update(
+                isPressed: false,
+                at: start + threshold + 2
+            ),
+        ]
+
+        #expect(actions.filter { $0 == .toggleOverlay }.count == 1)
+        #expect(!actions.contains { action in
+            if case .remoteMenu = action {
+                return true
+            }
+            return false
+        })
+        #expect(sequence.remoteMenuOverride == nil)
+    }
+
+    @Test("Overlay filtering changes both Xbox menu fields only")
+    func overlayMenuFiltering() {
+        let original = XboxGamepadState(
+            index: 2,
+            buttons: [.menu, .a],
+            leftThumbX: 123,
+            physicalPhysicality: [.menu, .a],
+            virtualPhysicality: [.leftThumbXAxis]
+        )
+
+        let suppressed = XboxCloudOverlayInputPolicy.settingMenuPressed(
+            false,
+            in: original
+        )
+        #expect(!suppressed.buttons.contains(.menu))
+        #expect(suppressed.buttons.contains(.a))
+        #expect(!suppressed.physicalPhysicality.contains(.menu))
+        #expect(suppressed.physicalPhysicality.contains(.a))
+        #expect(suppressed.leftThumbX == original.leftThumbX)
+        #expect(suppressed.virtualPhysicality == original.virtualPhysicality)
+
+        let replayed = XboxCloudOverlayInputPolicy.settingMenuPressed(
+            true,
+            in: suppressed
+        )
+        #expect(replayed.buttons.contains(.menu))
+        #expect(replayed.physicalPhysicality.contains(.menu))
+        #expect(replayed.buttons.contains(.a))
+        #expect(replayed.physicalPhysicality.contains(.a))
+    }
+
+    @Test("Overlay replay reaches legacy and modern Xbox wire encoders")
+    func overlayReplayWireEncoding() throws {
+        var sequence = XboxCloudOverlayInputSequence()
+        let neutral = XboxGamepadState(index: 0)
+
+        #expect(sequence.update(isPressed: true, at: 0) == .none)
+        let replayAction = sequence.update(isPressed: false, at: 1)
+        guard case let .remoteMenu(isPressed, replayToken) = replayAction
+        else {
+            Issue.record("Short press did not begin a remote Menu replay")
+            return
+        }
+        #expect(isPressed)
+        let remoteDown = XboxCloudOverlayInputPolicy.settingMenuPressed(
+            sequence.remoteMenuOverride == true,
+            in: neutral
+        )
+
+        #expect(sequence.finishReplay(token: replayToken) == .remoteMenu(
+            isPressed: false,
+            replayToken: replayToken
+        ))
+        let remoteUp = XboxCloudOverlayInputPolicy.settingMenuPressed(
+            sequence.remoteMenuOverride == true,
+            in: neutral
+        )
+
+        var legacyEncoder = XboxLegacyInputEncoder()
+        let legacyDown = try legacyEncoder.encodeGamepads(
+            [remoteDown],
+            version: 10,
+            timestampMilliseconds: 0
+        )
+        let legacyUp = try legacyEncoder.encodeGamepads(
+            [remoteUp],
+            version: 10,
+            timestampMilliseconds: 1
+        )
+        #expect(legacyDown[16] == UInt8(XboxGamepadButtons.menu.rawValue))
+        #expect(legacyDown[17] == 0)
+        #expect(legacyDown[30] == UInt8(
+            XboxGamepadPhysicality.menu.rawValue
+        ))
+        #expect(legacyUp[16] == 0)
+        #expect(legacyUp[17] == 0)
+        #expect(legacyUp[30] == 0)
+
+        var modernTracker = XboxModernInputStateTracker()
+        _ = modernTracker.attach()
+        let recordedModernDown = modernTracker.record(remoteDown)
+        let modernDownFrame = try #require(recordedModernDown)
+        let recordedModernUp = modernTracker.record(remoteUp)
+        let modernUpFrame = try #require(recordedModernUp)
+        let modernDown = try XboxModernInputEncoder.encode(
+            modernDownFrame,
+            version: 10,
+            inputToken: 1,
+            timestampMilliseconds: 0
+        )
+        let modernUp = try XboxModernInputEncoder.encode(
+            modernUpFrame,
+            version: 10,
+            inputToken: 2,
+            timestampMilliseconds: 1
+        )
+        #expect(modernDown[24] == 1)
+        #expect(modernDown[48] == UInt8(
+            XboxGamepadPhysicality.menu.rawValue
+        ))
+        #expect(modernUp[24] == 2)
+        #expect(modernUp[48] == 0)
+    }
+
+    @Test("Pause or generation reset invalidates a pending replay token")
+    func resetOverlayPress() {
+        var sequence = XboxCloudOverlayInputSequence()
+
+        #expect(sequence.update(isPressed: true, at: 10) == .none)
+        let action = sequence.update(isPressed: false, at: 20)
+        guard case let .remoteMenu(_, staleToken) = action else {
+            Issue.record("Short press did not create a replay token")
+            return
+        }
+
+        sequence.reset()
+        #expect(sequence.remoteMenuOverride == nil)
+        #expect(sequence.finishReplay(token: staleToken) == .none)
+
+        #expect(sequence.update(isPressed: true, at: 30) == .none)
+        let nextAction = sequence.update(isPressed: false, at: 40)
+        guard case let .remoteMenu(_, currentToken) = nextAction else {
+            Issue.record("New session did not create a replay token")
+            return
+        }
+        #expect(currentToken != staleToken)
+        #expect(sequence.finishReplay(token: staleToken) == .none)
+        #expect(sequence.remoteMenuOverride == true)
+        #expect(sequence.finishReplay(token: currentToken) == .remoteMenu(
+            isPressed: false,
+            replayToken: currentToken
+        ))
     }
 
     @Test("Inbound input work is bounded under a packet burst")

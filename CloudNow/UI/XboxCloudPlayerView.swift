@@ -64,6 +64,9 @@ struct XboxCloudPlayerView: View {
                 MemoryLifecycleCoordinator.shared.streamDidLeavePlayback()
             }
         }
+        .onChange(of: controller.menuPressCount) { _, _ in
+            toggleOverlay()
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .background else { return }
             endSession()

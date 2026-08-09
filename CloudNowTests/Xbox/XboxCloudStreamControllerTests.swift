@@ -159,9 +159,14 @@ struct XboxCloudStreamControllerTests {
             codecPreference: .h265
         )
         let hiddenSelection = pcGamePass.normalized(persisted)
-        #expect(hiddenSelection.displayResolution == .automatic)
+        #expect(hiddenSelection.displayResolution == .fullHD)
         #expect(hiddenSelection.codecPreference == .automatic)
         #expect(persisted.displayResolution == .qhd)
+        #expect(pcGamePass.selectableResolution(for: .hdHighQuality) == .hd)
+        #expect(
+            pcGamePass.selectableResolution(for: .fullHDHighQuality) == .fullHD
+        )
+        #expect(pcGamePass.selectableResolution(for: .qhd) == .fullHD)
 
         let ultimateSelection = ultimate.normalized(
             XboxCloudStreamSettings(
@@ -187,6 +192,33 @@ struct XboxCloudStreamControllerTests {
         #expect(XboxCloudDisplayResolution.hdHighQuality.badge == "HQ")
         #expect(XboxCloudDisplayResolution.fullHDHighQuality.badge == "HQ")
         #expect(XboxCloudDisplayResolution.qhd.badge == nil)
+    }
+
+    @Test("Xbox display metadata prefers current output mode and safe fallbacks")
+    func xboxDisplayMetadata() {
+        let activeMode = XboxCloudDisplayMetadata.resolved(
+            currentModeSize: CGSize(width: 3840, height: 2160),
+            nativeBoundsSize: CGSize(width: 1920, height: 1080),
+            nativeScale: 2
+        )
+        #expect(activeMode.widthInPixels == 3840)
+        #expect(activeMode.heightInPixels == 2160)
+        #expect(activeMode.pixelDensity == 2)
+
+        let nativeBounds = XboxCloudDisplayMetadata.resolved(
+            currentModeSize: CGSize(width: 0, height: 0),
+            nativeBoundsSize: CGSize(width: 2560, height: 1440),
+            nativeScale: 1
+        )
+        #expect(nativeBounds.widthInPixels == 2560)
+        #expect(nativeBounds.heightInPixels == 1440)
+
+        let fallback = XboxCloudDisplayMetadata.resolved(
+            currentModeSize: nil,
+            nativeBoundsSize: nil,
+            nativeScale: .nan
+        )
+        #expect(fallback == .fallback)
     }
 
     @Test("Start composes access, allocation, media, settings, and teardown")
@@ -242,6 +274,68 @@ struct XboxCloudStreamControllerTests {
         #expect(await lifecycle.deleteCount() == 1)
     }
 
+    @Test("Device information is resolved for every Xbox stream start")
+    func deviceInformationRefreshesForEveryStart() async throws {
+        let firstLifecycle = try XboxStreamLifecycleStub()
+        let secondLifecycle = try XboxStreamLifecycleStub()
+        let lifecycleFactory = XboxLifecycleFactoryStub([
+            firstLifecycle,
+            secondLifecycle,
+        ])
+        let provider = XboxDeviceInformationProviderStub([
+            .cloudNowTV(
+                sdkInstallID: "00000000-0000-0000-0000-000000000001",
+                displayWidthInPixels: 3840,
+                displayHeightInPixels: 2160,
+                pixelDensity: 1
+            ),
+            .cloudNowTV(
+                sdkInstallID: "00000000-0000-0000-0000-000000000001",
+                displayWidthInPixels: 1920,
+                displayHeightInPixels: 1080,
+                pixelDensity: 1
+            ),
+        ])
+        let controller = makeController(
+            lifecycleFactory: lifecycleFactory,
+            runtimeFactory: XboxRuntimeFactoryStub([
+                XboxStreamRuntimeStub(),
+                XboxStreamRuntimeStub(),
+            ]),
+            deviceInformationProvider: { provider.next() }
+        )
+
+        try await controller.start(
+            gameID: "first-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        try await controller.start(
+            gameID: "second-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+
+        #expect(provider.callCount == 2)
+        #expect(lifecycleFactory.receivedAccess.count == 2)
+        #expect(
+            lifecycleFactory.receivedAccess[0].deviceInformation.displayWidthInPixels == 3840
+        )
+        #expect(
+            lifecycleFactory.receivedAccess[0].deviceInformation.displayHeightInPixels == 2160
+        )
+        #expect(
+            lifecycleFactory.receivedAccess[1].deviceInformation.displayWidthInPixels == 1920
+        )
+        #expect(
+            lifecycleFactory.receivedAccess[1].deviceInformation.displayHeightInPixels == 1080
+        )
+
+        await controller.stop()
+    }
+
     @Test("Xbox runtime drives the shared HUD and input pause state")
     func statisticsAndInputPause() async throws {
         let lifecycle = try XboxStreamLifecycleStub()
@@ -269,6 +363,9 @@ struct XboxCloudStreamControllerTests {
         #expect(controller.stats.serverZone == "West US")
         #expect(controller.audioStats.codecName == "opus")
         #expect(controller.statsMode == .compact)
+        #expect(controller.menuPressCount == 0)
+        runtime.requestMenuToggle()
+        #expect(controller.menuPressCount == 1)
         controller.recordDecodedVideoFormat(DecodedVideoFormat(
             mode: .sdr8,
             width: 1920,
@@ -292,6 +389,8 @@ struct XboxCloudStreamControllerTests {
         controller.setStatsMode(.off)
         #expect(controller.statsMode == .off)
         await controller.stop()
+        runtime.requestMenuToggle()
+        #expect(controller.menuPressCount == 1)
     }
 
     @Test("A replacement launch releases the previous provider runtime first")
@@ -469,6 +568,7 @@ struct XboxCloudStreamControllerTests {
     private func makeController(
         lifecycleFactory: XboxLifecycleFactoryStub,
         runtimeFactory: XboxRuntimeFactoryStub,
+        deviceInformationProvider: (@MainActor @Sendable () -> XboxCloudDeviceInformation)? = nil,
         policy: XboxCloudStreamControllerPolicy = .standard,
         keepAliveSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { _ in
             try await Task.sleep(for: .seconds(60))
@@ -477,6 +577,7 @@ struct XboxCloudStreamControllerTests {
         XboxCloudStreamController(
             sessionProvider: XboxStreamSessionProviderStub(session: Self.gsSession),
             transferToken: { "fixture-transfer-token" },
+            deviceInformationProvider: deviceInformationProvider,
             makeSessionLifecycle: { access in
                 lifecycleFactory.make(access: access)
             },
@@ -528,6 +629,21 @@ struct XboxCloudStreamControllerTests {
             expiresAt: .distantFuture
         )
     }()
+}
+
+@MainActor
+private final class XboxDeviceInformationProviderStub {
+    private var values: [XboxCloudDeviceInformation]
+    private(set) var callCount = 0
+
+    init(_ values: [XboxCloudDeviceInformation]) {
+        self.values = values
+    }
+
+    func next() -> XboxCloudDeviceInformation {
+        callCount += 1
+        return values.removeFirst()
+    }
 }
 
 private actor XboxStreamSessionProviderStub: XboxCloudGSSessionProviding {
@@ -709,6 +825,7 @@ private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
     private(set) var decodedVideoFrameCount = 0
     private(set) var inputPausedStates: [Bool] = []
     private(set) var connectionState: XboxCloudWebRTCConnectionState = .connected
+    private var menuToggleHandler: (@MainActor @Sendable () -> Void)?
     var statistics = XboxCloudRTCStatsSnapshot()
     let videoTrack: LKRTCVideoTrack?
 
@@ -739,6 +856,16 @@ private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
 
     func recordDecodedVideoFrame() {
         decodedVideoFrameCount += 1
+    }
+
+    func setMenuToggleHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) {
+        menuToggleHandler = handler
+    }
+
+    func requestMenuToggle() {
+        menuToggleHandler?()
     }
 
     func setInputPaused(_ isPaused: Bool) {

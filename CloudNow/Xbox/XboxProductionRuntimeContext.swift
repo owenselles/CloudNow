@@ -2,6 +2,53 @@ import Foundation
 import Synchronization
 import UIKit
 
+nonisolated struct XboxCloudDisplayMetadata: Equatable, Sendable {
+    static let fallback = XboxCloudDisplayMetadata(
+        widthInPixels: 1920,
+        heightInPixels: 1080,
+        pixelDensity: 1
+    )
+
+    let widthInPixels: Int
+    let heightInPixels: Int
+    let pixelDensity: Double
+
+    static func resolved(
+        currentModeSize: CGSize?,
+        nativeBoundsSize: CGSize?,
+        nativeScale: CGFloat
+    ) -> Self {
+        let dimensions = validDimensions(currentModeSize)
+            ?? validDimensions(nativeBoundsSize)
+            ?? (fallback.widthInPixels, fallback.heightInPixels)
+        let scale = Double(nativeScale)
+        return Self(
+            widthInPixels: dimensions.0,
+            heightInPixels: dimensions.1,
+            pixelDensity: scale.isFinite && scale > 0
+                ? scale
+                : fallback.pixelDensity
+        )
+    }
+
+    private static func validDimensions(_ size: CGSize?) -> (Int, Int)? {
+        guard let size,
+              size.width.isFinite,
+              size.height.isFinite
+        else {
+            return nil
+        }
+        let width = size.width.rounded()
+        let height = size.height.rounded()
+        guard (1 ... 16384).contains(width),
+              (1 ... 16384).contains(height)
+        else {
+            return nil
+        }
+        return (Int(width), Int(height))
+    }
+}
+
 /// Owns production-only Xbox dependencies without loading their transports on
 /// GeForce NOW launches. The environment retains this lightweight context;
 /// the first Xbox authorization, catalog, or stream request creates one graph.
@@ -127,16 +174,19 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
     ) -> XboxCloudStreamController {
         let graph = resolvedGraph()
         let transport = graph.transport
-        let display = Self.currentDisplayMetadata
+        let installationIdentity = graph.installationIdentity
         return XboxCloudStreamController(
             sessionProvider: graph.gsSessionProvider,
             transferToken: transferToken,
-            deviceInformation: .cloudNowTV(
-                sdkInstallID: graph.installationIdentity.loadOrCreateSDKInstallID(),
-                displayWidthInPixels: display.widthInPixels,
-                displayHeightInPixels: display.heightInPixels,
-                pixelDensity: display.pixelDensity
-            ),
+            deviceInformationProvider: {
+                let display = Self.currentDisplayMetadata
+                return .cloudNowTV(
+                    sdkInstallID: installationIdentity.loadOrCreateSDKInstallID(),
+                    displayWidthInPixels: display.widthInPixels,
+                    displayHeightInPixels: display.heightInPixels,
+                    pixelDensity: display.pixelDensity
+                )
+            },
             makeSessionLifecycle: { access in
                 XboxCloudSessionLifecycleClient(
                     api: XboxCloudSessionAPI(
@@ -164,22 +214,15 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
     }
 
     @MainActor
-    private static var currentDisplayMetadata: (
-        widthInPixels: Int,
-        heightInPixels: Int,
-        pixelDensity: Double
-    ) {
+    private static var currentDisplayMetadata: XboxCloudDisplayMetadata {
         let screen = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive }?
             .screen
-        guard let screen else {
-            return (1920, 1080, 1)
-        }
-        return (
-            max(Int(screen.nativeBounds.width.rounded()), 1),
-            max(Int(screen.nativeBounds.height.rounded()), 1),
-            max(Double(screen.nativeScale), 1)
+        return XboxCloudDisplayMetadata.resolved(
+            currentModeSize: screen?.currentMode?.size,
+            nativeBoundsSize: screen?.nativeBounds.size,
+            nativeScale: screen?.nativeScale ?? 1
         )
     }
 

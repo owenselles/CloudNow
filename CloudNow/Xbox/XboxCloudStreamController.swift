@@ -92,6 +92,7 @@ final class XboxCloudStreamController {
     private(set) var statsMode: StreamStatsMode = .off
     private(set) var streamingStartedAt: Date?
     private(set) var serverLocation = ""
+    private(set) var menuPressCount = 0
     private(set) var colorState = StreamColorState(
         preference: .automatic,
         requestedMode: .sdr8,
@@ -107,7 +108,7 @@ final class XboxCloudStreamController {
 
     @ObservationIgnored private let sessionProvider: any XboxCloudGSSessionProviding
     @ObservationIgnored private let transferToken: @Sendable () async throws -> String
-    @ObservationIgnored private let deviceInformation: XboxCloudDeviceInformation
+    @ObservationIgnored private let deviceInformationProvider: @MainActor @Sendable () -> XboxCloudDeviceInformation
     @ObservationIgnored private let makeSessionLifecycle: @MainActor @Sendable (
         XboxCloudSessionAccessContext
     ) -> any XboxCloudSessionLifecycleServing
@@ -132,6 +133,7 @@ final class XboxCloudStreamController {
         sessionProvider: any XboxCloudGSSessionProviding,
         transferToken: @escaping @Sendable () async throws -> String,
         deviceInformation: XboxCloudDeviceInformation = .cloudNowTV(),
+        deviceInformationProvider: (@MainActor @Sendable () -> XboxCloudDeviceInformation)? = nil,
         makeSessionLifecycle: @escaping @MainActor @Sendable (
             XboxCloudSessionAccessContext
         ) -> any XboxCloudSessionLifecycleServing = { access in
@@ -168,7 +170,11 @@ final class XboxCloudStreamController {
     ) {
         self.sessionProvider = sessionProvider
         self.transferToken = transferToken
-        self.deviceInformation = deviceInformation
+        if let deviceInformationProvider {
+            self.deviceInformationProvider = deviceInformationProvider
+        } else {
+            self.deviceInformationProvider = { deviceInformation }
+        }
         self.makeSessionLifecycle = makeSessionLifecycle
         self.makeRuntime = makeRuntime
         self.policy = policy
@@ -200,9 +206,11 @@ final class XboxCloudStreamController {
     ) async throws {
         await stop()
 
+        let deviceInformation = deviceInformationProvider()
         generation &+= 1
         let operationGeneration = generation
         activeGameID = gameID
+        menuPressCount = 0
         resetStatistics(settings: settings)
         state = .requestingAccess
 
@@ -213,6 +221,7 @@ final class XboxCloudStreamController {
                 account: account,
                 locale: locale,
                 settings: settings,
+                deviceInformation: deviceInformation,
                 generation: operationGeneration
             )
         }
@@ -262,6 +271,7 @@ final class XboxCloudStreamController {
         account: XboxCloudAuthorizedAccount,
         locale: String,
         settings: XboxCloudStreamSettings,
+        deviceInformation: XboxCloudDeviceInformation,
         generation operationGeneration: UInt64
     ) async throws {
         do {
@@ -319,6 +329,9 @@ final class XboxCloudStreamController {
             else {
                 runtime.disconnect()
                 throw CancellationError()
+            }
+            runtime.setMenuToggleHandler { [weak self] in
+                self?.handleMenuPress(generation: operationGeneration)
             }
             operation.runtime = runtime
             activeOperation = operation
@@ -491,6 +504,15 @@ final class XboxCloudStreamController {
         activeOperation?.runtime?.setInputPaused(isPaused)
     }
 
+    private func handleMenuPress(generation operationGeneration: UInt64) {
+        guard generation == operationGeneration,
+              state == .streaming
+        else {
+            return
+        }
+        menuPressCount &+= 1
+    }
+
     func recordDecodedVideoFormat(_ format: DecodedVideoFormat) {
         colorState.detectedMode = format.mode
         activeOperation?.runtime?.recordDecodedVideoFrame()
@@ -592,6 +614,7 @@ final class XboxCloudStreamController {
         mediaMonitorTask?.cancel()
         mediaMonitorTask = nil
         stopStatisticsMonitor()
+        activeOperation?.runtime?.setMenuToggleHandler(nil)
         activeOperation?.runtime?.disconnect()
         let operation = activeOperation
         activeOperation = nil

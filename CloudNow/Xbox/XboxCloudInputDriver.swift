@@ -15,8 +15,8 @@ nonisolated enum XboxCloudChannelProtocolError: Error, Equatable, Sendable {
 }
 
 nonisolated enum XboxCloudChannelProtocolCodec {
-    /// Public access key sent by Microsoft's Xbox web client after its input
-    /// registration. Authorized quality updates follow on the same channel.
+    /// Public access key sent by Microsoft's Xbox web client after its initial
+    /// preferred-resolution update on the same control channel.
     private static let controlAccessKey =
         "4BDB3609-C1F1-4195-9B37-FEFF45DA8B8E"
     private static let messageProtocolVersion = "messageV1"
@@ -154,7 +154,7 @@ nonisolated struct XboxCloudControlSendState: Sendable {
     private(set) var didSendResolutionUpdate = false
 
     var shouldSendAuthorization: Bool {
-        isOpen && !didSendAuthorization
+        isOpen && didSendResolutionUpdate && !didSendAuthorization
     }
 
     var shouldSendResolutionUpdate: Bool {
@@ -191,7 +191,7 @@ nonisolated struct XboxCloudControlSendState: Sendable {
 
 /// Pure bootstrap predicate shared by the worker and focused tests. Each
 /// accepted frame unlocks only the next protocol phase. Controller bootstrap
-/// precedes authorization; the preferred resolution is an authorized update.
+/// precedes the preferred-resolution update, which precedes authorization.
 nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
     var isTransportReady: Bool
     var hasInputVersion: Bool
@@ -215,17 +215,21 @@ nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
         !hasAttachedController || didSendInitialControllerReport
     }
 
-    var canSendResolutionUpdate: Bool {
-        canSendAuthorization && didSendAuthorization
-    }
-
-    var canSendAuthorization: Bool {
+    private var canStartControlBootstrap: Bool {
         isTransportReady
             && hasInputVersion
             && isInputChannelOpen
             && didSendClientMetadata
             && !hasPendingControlUpdates
             && initialControllerReportSatisfied
+    }
+
+    var canSendResolutionUpdate: Bool {
+        canStartControlBootstrap
+    }
+
+    var canSendAuthorization: Bool {
+        canStartControlBootstrap && didSendResolutionUpdate
     }
 
     func isPublishedReady(
@@ -273,6 +277,149 @@ nonisolated enum XboxModernControllerSlotPolicy {
             return current
         }
         return occupiedSlots.firstIndex(of: true)
+    }
+}
+
+nonisolated enum XboxCloudOverlayGestureAction: Equatable, Sendable {
+    case none
+    case toggleOverlay
+    case replayMenuTap
+}
+
+/// Provider-neutral gesture semantics expressed in Xbox input terms. This
+/// matches GFN's default Start/Menu behavior: keep the remote button neutral
+/// while deciding between a short tap and a local 1.8-second overlay hold.
+nonisolated struct XboxCloudOverlayGestureState: Equatable, Sendable {
+    static let longPressDurationNanoseconds = UInt64(216 * 8_333_333)
+
+    private(set) var startedAtNanoseconds: UInt64?
+    private(set) var didTrigger = false
+
+    var suppressesRemoteMenu: Bool {
+        startedAtNanoseconds != nil
+    }
+
+    mutating func update(
+        isPressed: Bool,
+        at timestampNanoseconds: UInt64
+    ) -> XboxCloudOverlayGestureAction {
+        guard isPressed else {
+            guard startedAtNanoseconds != nil else { return .none }
+            let action: XboxCloudOverlayGestureAction = didTrigger
+                ? .none
+                : .replayMenuTap
+            reset()
+            return action
+        }
+
+        guard let startedAtNanoseconds else {
+            startedAtNanoseconds = timestampNanoseconds
+            didTrigger = false
+            return .none
+        }
+        guard !didTrigger,
+              timestampNanoseconds >= startedAtNanoseconds,
+              timestampNanoseconds - startedAtNanoseconds
+              >= Self.longPressDurationNanoseconds
+        else {
+            return .none
+        }
+        didTrigger = true
+        return .toggleOverlay
+    }
+
+    mutating func reset() {
+        startedAtNanoseconds = nil
+        didTrigger = false
+    }
+}
+
+nonisolated enum XboxCloudOverlayInputAction: Equatable, Sendable {
+    case none
+    case toggleOverlay
+    case remoteMenu(isPressed: Bool, replayToken: UInt64)
+}
+
+/// Owns the complete Start/Menu decision and synthetic remote tap lifecycle.
+/// The worker schedules only the replay deadline; this value decides whether
+/// that deadline still belongs to the active controller/session state.
+nonisolated struct XboxCloudOverlayInputSequence: Equatable, Sendable {
+    private var gesture = XboxCloudOverlayGestureState()
+    private var replaySequence: UInt64 = 0
+    private(set) var activeReplayToken: UInt64?
+
+    var remoteMenuOverride: Bool? {
+        if activeReplayToken != nil {
+            return true
+        }
+        if gesture.suppressesRemoteMenu {
+            return false
+        }
+        return nil
+    }
+
+    mutating func update(
+        isPressed: Bool,
+        at timestampNanoseconds: UInt64
+    ) -> XboxCloudOverlayInputAction {
+        switch gesture.update(
+            isPressed: isPressed,
+            at: timestampNanoseconds
+        ) {
+        case .none:
+            return .none
+        case .toggleOverlay:
+            return .toggleOverlay
+        case .replayMenuTap:
+            replaySequence &+= 1
+            activeReplayToken = replaySequence
+            return .remoteMenu(
+                isPressed: true,
+                replayToken: replaySequence
+            )
+        }
+    }
+
+    mutating func finishReplay(
+        token: UInt64
+    ) -> XboxCloudOverlayInputAction {
+        guard activeReplayToken == token else { return .none }
+        activeReplayToken = nil
+        return .remoteMenu(isPressed: false, replayToken: token)
+    }
+
+    mutating func reset() {
+        gesture.reset()
+        activeReplayToken = nil
+    }
+}
+
+nonisolated enum XboxCloudOverlayInputPolicy {
+    static func settingMenuPressed(
+        _ isPressed: Bool,
+        in state: XboxGamepadState
+    ) -> XboxGamepadState {
+        var buttons = state.buttons
+        var physicality = state.physicalPhysicality
+        if isPressed {
+            buttons.insert(.menu)
+            physicality.insert(.menu)
+        } else {
+            buttons.remove(.menu)
+            physicality.remove(.menu)
+        }
+        return XboxGamepadState(
+            index: state.index,
+            buttons: buttons,
+            leftThumbX: state.leftThumbX,
+            leftThumbY: state.leftThumbY,
+            rightThumbX: state.rightThumbX,
+            rightThumbY: state.rightThumbY,
+            leftTrigger: state.leftTrigger,
+            rightTrigger: state.rightTrigger,
+            physicalPhysicality: physicality,
+            virtualPhysicality: state.virtualPhysicality
+        )
     }
 }
 
@@ -439,6 +586,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private static let sampleIntervalNanoseconds = Int(
         XboxCloudInputStateCache.minimumSendIntervalNanoseconds
     )
+    private static let overlayReplayDelay = DispatchTimeInterval.milliseconds(17)
     private static let maximumRumbleIterations = 8
 
     private let queue = DispatchQueue(
@@ -461,6 +609,11 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         repeating: nil,
         count: controllerCapacity
     )
+    private var overlayInputSequences = Array(
+        repeating: XboxCloudOverlayInputSequence(),
+        count: controllerCapacity
+    )
+    private var overlayToggleRequested: (@Sendable (UInt64) -> Void)?
     private var pendingControlUpdates: [Bool?] = Array(
         repeating: nil,
         count: controllerCapacity
@@ -520,6 +673,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         sink: XboxCloudInputDataSink,
         correlationVector: String,
         controllers: [GCController],
+        overlayToggleRequested: @escaping @Sendable (UInt64) -> Void,
         readinessChanged: @escaping @Sendable (UInt64, Bool) -> Void
     ) {
         queue.sync {
@@ -529,6 +683,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 $0.activate(generation: generation)
             }
             self.sink = sink
+            self.overlayToggleRequested = overlayToggleRequested
             self.readinessChanged = readinessChanged
             controlAuthorizationData = try? XboxCloudChannelProtocolCodec
                 .authorizationRequest()
@@ -574,6 +729,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             didSendClientMetadata = false
             didSendInitialControllerReport = false
             inputStateCache.reset()
+            resetAllOverlayGesturesLocked()
             if case .unreliable = mode {
                 resetModernInputStateLocked()
             } else {
@@ -634,6 +790,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             }
             isPaused = paused
             if paused {
+                resetAllOverlayGesturesLocked()
                 needsPausedNeutralSnapshot = true
                 for index in rumblePlaybacks.indices {
                     cancelRumbleLocked(index: index)
@@ -654,6 +811,15 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     ) {
         queue.async { [weak self] in
             guard let self, generation == expectedGeneration else { return }
+            if !isOpen {
+                switch kind {
+                case .input, .reliableInput, .unreliableInput, .control,
+                     .message:
+                    resetAllOverlayGesturesLocked()
+                case .chat:
+                    break
+                }
+            }
             switch kind {
             case .control:
                 if !isOpen {
@@ -843,7 +1009,9 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
         sampledStates.removeAll(keepingCapacity: true)
         inputStateCache.reset()
+        resetAllOverlayGesturesLocked()
         sink = nil
+        overlayToggleRequested = nil
         readinessChanged = nil
         inboundMessageBudget.withLock {
             $0.deactivate(generation: generation)
@@ -892,6 +1060,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         let previousValueChangedHandler = gamepad.valueChangedHandler
         controller.handlerQueue = queue
         controller.playerIndex = Self.playerIndex(for: index)
+        resetOverlayGestureLocked(index: index)
         let claimedSystemGestures = claimControllerInputLocked(gamepad)
         gamepad.valueChangedHandler = { [weak self, weak controller] _, _ in
             guard let self, let controller else { return }
@@ -952,6 +1121,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         } else {
             false
         }
+        resetOverlayGestureLocked(index: index)
         cancelRumbleLocked(index: index)
         releaseControllerLocked(index: index)
         inputStateCache.invalidate(index: index)
@@ -981,17 +1151,135 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     }
 
     private func sampleAndFlushLocked() {
+        let forceInputReport = sampleOverlayGesturesLocked()
         flushMessageHandshakeLocked()
         flushClientMetadataLocked()
         flushControlUpdatesLocked()
         if isPaused {
             sendPausedNeutralSnapshotLocked()
         } else {
-            sendGamepadSnapshotLocked()
+            sendGamepadSnapshotLocked(force: forceInputReport)
         }
-        flushControlAuthorizationLocked()
         flushResolutionUpdateLocked()
+        flushControlAuthorizationLocked()
         updateReadinessLocked()
+    }
+
+    private func sampleOverlayGesturesLocked() -> Bool {
+        guard !isPaused else { return false }
+        let timestamp = DispatchTime.now().uptimeNanoseconds
+        var shouldForceInputReport = false
+        for index in controllerSlots.indices {
+            guard let controller = controllerSlots[index]?.controller,
+                  let gamepad = controller.extendedGamepad
+            else {
+                continue
+            }
+            let action = overlayInputSequences[index].update(
+                isPressed: gamepad.buttonMenu.isPressed,
+                at: timestamp
+            )
+            shouldForceInputReport = handleOverlayInputActionLocked(
+                action,
+                controller: controller,
+                index: index
+            ) || shouldForceInputReport
+        }
+        return shouldForceInputReport
+    }
+
+    private func handleOverlayInputActionLocked(
+        _ action: XboxCloudOverlayInputAction,
+        controller: GCController,
+        index: Int
+    ) -> Bool {
+        switch action {
+        case .none:
+            return false
+        case .toggleOverlay:
+            overlayToggleRequested?(generation)
+            return false
+        case let .remoteMenu(isPressed, replayToken):
+            if isPressed {
+                scheduleOverlayReplayReleaseLocked(
+                    controller: controller,
+                    index: index,
+                    token: replayToken
+                )
+            }
+            return true
+        }
+    }
+
+    private func scheduleOverlayReplayReleaseLocked(
+        controller: GCController,
+        index: Int,
+        token: UInt64
+    ) {
+        let expectedGeneration = generation
+        let controllerIdentifier = ObjectIdentifier(controller)
+        queue.asyncAfter(deadline: .now() + Self.overlayReplayDelay) {
+            [weak self] in
+            guard let self,
+                  generation == expectedGeneration,
+                  overlayInputSequences.indices.contains(index),
+                  controllerSlots[index]?.identifier == controllerIdentifier
+            else {
+                return
+            }
+            let action = overlayInputSequences[index].finishReplay(
+                token: token
+            )
+            guard action == .remoteMenu(
+                isPressed: false,
+                replayToken: token
+            ) else {
+                return
+            }
+            sendGamepadSnapshotLocked(force: true)
+        }
+    }
+
+    private func effectiveGamepadStateLocked(
+        controller: GCController,
+        physicalSlot: Int,
+        wireIndex: UInt8
+    ) -> XboxGamepadState? {
+        guard overlayInputSequences.indices.contains(physicalSlot),
+              let state = XboxCloudInputValueMapper.gamepadState(
+                  controller: controller,
+                  index: wireIndex,
+                  deadzone: deadzone
+              )
+        else {
+            return nil
+        }
+        if let remoteMenuOverride = overlayInputSequences[physicalSlot]
+            .remoteMenuOverride
+        {
+            return XboxCloudOverlayInputPolicy.settingMenuPressed(
+                remoteMenuOverride,
+                in: state
+            )
+        }
+        if controller.extendedGamepad?.buttonMenu.isPressed == true {
+            return XboxCloudOverlayInputPolicy.settingMenuPressed(
+                false,
+                in: state
+            )
+        }
+        return state
+    }
+
+    private func resetOverlayGestureLocked(index: Int) {
+        guard overlayInputSequences.indices.contains(index) else { return }
+        overlayInputSequences[index].reset()
+    }
+
+    private func resetAllOverlayGesturesLocked() {
+        for index in overlayInputSequences.indices {
+            resetOverlayGestureLocked(index: index)
+        }
     }
 
     private func flushControlUpdatesLocked() {
@@ -1031,7 +1319,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         if controlSendState.didSendResolutionUpdate {
             let resolutionAlias = preferredResolution.rawValue
             xboxInputLog.notice(
-                "[Control] preferred resolution queued alias=\(resolutionAlias, privacy: .public) authorized=true"
+                "[Control] preferred resolution queued alias=\(resolutionAlias, privacy: .public)"
             )
         }
     }
@@ -1113,17 +1401,23 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
-    private func sendGamepadSnapshotLocked() {
+    private func sendGamepadSnapshotLocked(force: Bool = false) {
         guard let inputMode else { return }
         switch inputMode {
         case let .legacy(version):
-            sendLegacyGamepadSnapshotLocked(version: version)
+            sendLegacyGamepadSnapshotLocked(version: version, force: force)
         case let .unreliable(_, unreliableVersion):
-            sendModernGamepadSnapshotLocked(version: unreliableVersion)
+            sendModernGamepadSnapshotLocked(
+                version: unreliableVersion,
+                force: force
+            )
         }
     }
 
-    private func sendLegacyGamepadSnapshotLocked(version: Int) {
+    private func sendLegacyGamepadSnapshotLocked(
+        version: Int,
+        force: Bool = false
+    ) {
         guard !isPaused,
               bootstrapState.canSendControllerReport,
               isInputChannelOpen,
@@ -1133,7 +1427,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             return
         }
         let timestampNanoseconds = DispatchTime.now().uptimeNanoseconds
-        guard inputStateCache.canAttemptSend(
+        guard force || inputStateCache.canAttemptSend(
             at: timestampNanoseconds
         ) else {
             return
@@ -1141,10 +1435,10 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         sampledStates.removeAll(keepingCapacity: true)
         for index in controllerSlots.indices {
             guard let controller = controllerSlots[index]?.controller,
-                  let state = XboxCloudInputValueMapper.gamepadState(
+                  let state = effectiveGamepadStateLocked(
                       controller: controller,
-                      index: UInt8(index),
-                      deadzone: deadzone
+                      physicalSlot: index,
+                      wireIndex: UInt8(index)
                   )
             else {
                 continue
@@ -1178,7 +1472,10 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
-    private func sendModernGamepadSnapshotLocked(version: Int) {
+    private func sendModernGamepadSnapshotLocked(
+        version: Int,
+        force: Bool = false
+    ) {
         guard !isPaused,
               bootstrapState.canSendControllerReport,
               isUnreliableInputChannelOpen,
@@ -1189,18 +1486,24 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         if let modernControllerSlotIndex,
            controllerSlots.indices.contains(modernControllerSlotIndex),
            let controller = controllerSlots[modernControllerSlotIndex]?.controller,
-           let state = XboxCloudInputValueMapper.gamepadState(
+           let state = effectiveGamepadStateLocked(
                controller: controller,
-               index: 0,
-               deadzone: deadzone
+               physicalSlot: modernControllerSlotIndex,
+               wireIndex: 0
            )
         {
             _ = modernInputState.record(state)
         }
-        sendPendingModernGamepadSnapshotLocked(version: version)
+        sendPendingModernGamepadSnapshotLocked(
+            version: version,
+            force: force
+        )
     }
 
-    private func sendPendingModernGamepadSnapshotLocked(version: Int) {
+    private func sendPendingModernGamepadSnapshotLocked(
+        version: Int,
+        force: Bool = false
+    ) {
         guard !isPaused,
               bootstrapState.canSendControllerReport,
               isUnreliableInputChannelOpen,
@@ -1211,7 +1514,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
         let timestampNanoseconds = DispatchTime.now().uptimeNanoseconds
         guard let frame = modernInputState.frameForTransmission(),
-              modernInputSendCadence.canAttempt(
+              force || modernInputSendCadence.canAttempt(
                   frameID: frame.frameID,
                   at: timestampNanoseconds
               ),
@@ -1422,10 +1725,10 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
         if isPaused {
             _ = modernInputState.record(XboxGamepadState(index: 0))
-        } else if let state = XboxCloudInputValueMapper.gamepadState(
+        } else if let state = effectiveGamepadStateLocked(
             controller: controller,
-            index: 0,
-            deadzone: deadzone
+            physicalSlot: modernControllerSlotIndex,
+            wireIndex: 0
         ) {
             _ = modernInputState.record(state)
         }
@@ -1574,16 +1877,27 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private func controllerValueChangedLocked(_ controller: GCController) {
         guard !isPaused else { return }
         let identifier = ObjectIdentifier(controller)
-        guard controllerSlots.contains(where: {
+        guard let index = controllerSlots.firstIndex(where: {
             $0?.identifier == identifier
-        }) else {
+        }),
+            let gamepad = controller.extendedGamepad
+        else {
             return
         }
         if !didLogFirstControllerActivity {
             didLogFirstControllerActivity = true
             xboxInputLog.notice("[Controller] first input observed")
         }
-        sendGamepadSnapshotLocked()
+        let action = overlayInputSequences[index].update(
+            isPressed: gamepad.buttonMenu.isPressed,
+            at: DispatchTime.now().uptimeNanoseconds
+        )
+        let forceInputReport = handleOverlayInputActionLocked(
+            action,
+            controller: controller,
+            index: index
+        )
+        sendGamepadSnapshotLocked(force: forceInputReport)
     }
 
     private func claimControllerInputLocked(
@@ -1804,6 +2118,7 @@ nonisolated enum XboxCloudInputValueMapper {
 @MainActor
 final class XboxCloudInputDriver {
     private(set) var isReady = false
+    var menuToggleHandler: (@MainActor @Sendable () -> Void)?
 
     @ObservationIgnored private weak var transport: XboxCloudWebRTCTransport?
     @ObservationIgnored private let notificationCenter: NotificationCenter
@@ -1896,6 +2211,16 @@ final class XboxCloudInputDriver {
             sink: sink,
             correlationVector: signalingContext.correlationVector,
             controllers: GCController.controllers(),
+            overlayToggleRequested: { [weak self] callbackGeneration in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          attachmentGeneration == callbackGeneration
+                    else {
+                        return
+                    }
+                    menuToggleHandler?()
+                }
+            },
             readinessChanged: { [weak self] callbackGeneration, ready in
                 Task { @MainActor [weak self] in
                     guard let self,
