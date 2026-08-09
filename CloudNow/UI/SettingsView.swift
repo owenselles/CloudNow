@@ -452,14 +452,19 @@ struct SettingsView: View {
                             LabeledContent(L10n.text("email"), value: email)
                         }
                         if let sub = viewModel.subscription {
-                            LabeledContent(L10n.text("membership"), value: sub.membershipTier)
+                            if let best = sub.entitledResolutions.max(by: {
+                                ($0.widthInPixels, $0.framesPerSecond) < ($1.widthInPixels, $1.framesPerSecond)
+                            }) {
+                                LabeledContent(
+                                    L10n.text("max_stream_quality"),
+                                    value: "\(best.resolutionLabel) @ \(best.framesPerSecond)fps"
+                                )
+                            }
                             if !sub.isUnlimited, let remaining = sub.remainingMinutes {
                                 let hours = remaining / 60
                                 let mins = remaining % 60
                                 LabeledContent(L10n.text("time_remaining"), value: hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m")
                             }
-                        } else {
-                            LabeledContent(L10n.text("membership"), value: user.membershipTier)
                         }
                     }
 
