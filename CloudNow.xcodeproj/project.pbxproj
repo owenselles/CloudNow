@@ -427,7 +427,7 @@
 				INFOPLIST_FILE = CloudNow/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = CloudNow2;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "CloudNow uses the microphone for voice chat during GeForce NOW game sessions.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "CloudNow uses the microphone for voice chat during game sessions.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Automatic;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -466,7 +466,7 @@
 				INFOPLIST_FILE = CloudNow/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = CloudNow2;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "CloudNow uses the microphone for voice chat during GeForce NOW game sessions.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "CloudNow uses the microphone for voice chat during game sessions.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIUserInterfaceStyle = Automatic;
 				LD_RUNPATH_SEARCH_PATHS = (

@@ -268,7 +268,7 @@ struct GameDetailView: View {
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.green)
                     } else {
-                        Text("Not in your GeForce NOW library")
+                        Text(L10n.text("not_in_cloud_library"))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
