@@ -13,18 +13,28 @@ struct CloudServiceSelectionView: View {
 
                 HStack(spacing: 28) {
                     ForEach(CloudGamingProvider.allCases) { provider in
+                        let availability = providerCoordinator.capabilities(
+                            for: provider
+                        ).availability
                         Button {
                             providerCoordinator.select(provider)
                         } label: {
                             CloudServiceChoiceLabel(
                                 provider: provider,
-                                isFocused: focusedProvider == provider
+                                isFocused: focusedProvider == provider,
+                                availability: availability
                             )
                         }
                         .buttonStyle(.bordered)
                         .tint(provider == .geForceNow ? .green : .blue)
                         .focused($focusedProvider, equals: provider)
+                        .disabled(!availability.isSupported)
                         .accessibilityLabel(provider.displayName)
+                        .accessibilityValue(
+                            availability.unavailableReason.map {
+                                L10n.text($0.localizationKey)
+                            } ?? ""
+                        )
                         .accessibilityIdentifier("service-choice.\(provider.rawValue)")
                     }
                 }
@@ -89,12 +99,11 @@ struct XboxCloudConfigurationRequiredView: View {
     }
 
     private var availabilityMessage: String {
-        switch providerCoordinator.xboxAvailability {
-        case .awaitingMicrosoftConfiguration:
-            L10n.text("xbox_cloud_unconfigured_message")
-        case .configured:
-            L10n.text("xbox_cloud_runtime_inactive_message")
-        }
+        providerCoordinator.capabilities(
+            for: .xboxCloudGaming
+        ).availability.unavailableReason.map {
+            L10n.text($0.localizationKey)
+        } ?? L10n.text("xbox_cloud_runtime_inactive_message")
     }
 }
 
@@ -119,6 +128,7 @@ struct CloudNowBrandHeader: View {
 private struct CloudServiceChoiceLabel: View {
     let provider: CloudGamingProvider
     let isFocused: Bool
+    let availability: CloudCapability<CloudProviderAvailabilityCapability>
 
     var body: some View {
         VStack(spacing: 16) {
@@ -128,6 +138,14 @@ private struct CloudServiceChoiceLabel: View {
                 .font(.title2.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+
+            if let reason = availability.unavailableReason {
+                Text(L10n.text(reason.localizationKey))
+                    .font(.caption)
+                    .foregroundStyle(isFocused ? .black.opacity(0.7) : .secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
         }
         .foregroundStyle(isFocused ? .black : .white)
         .frame(width: 410, height: 150)

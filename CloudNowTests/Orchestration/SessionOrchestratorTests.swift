@@ -257,6 +257,129 @@ struct SessionOrchestratorTests {
     }
 
     @MainActor
+    @Test("Concurrent teardown callers await the same server stop")
+    func concurrentTeardownIsSingleFlight() async {
+        let client = GatedStopSessionClient()
+        let orchestrator = SessionOrchestrator(client: client)
+        orchestrator.adopt(
+            makeSession(id: "owned", status: 2),
+            token: "token"
+        )
+        var completionCount = 0
+
+        let first = Task { @MainActor in
+            let stopped = await orchestrator.teardown()
+            completionCount += 1
+            return stopped
+        }
+        await client.waitForStopCount(1)
+        let second = Task { @MainActor in
+            let stopped = await orchestrator.teardown()
+            completionCount += 1
+            return stopped
+        }
+        await Task.yield()
+
+        #expect(await client.stopCount == 1)
+        #expect(completionCount == 0)
+
+        await client.releaseStop()
+        #expect(await first.value)
+        #expect(await second.value)
+        #expect(completionCount == 2)
+        #expect(await client.stopCount == 1)
+    }
+
+    @MainActor
+    @Test("A detached parked session retains an immutable stop handle")
+    func detachedSessionStopHandle() async throws {
+        let client = ScriptedSessionClient()
+        let orchestrator = SessionOrchestrator(client: client)
+        orchestrator.adopt(
+            makeSession(id: "parked", status: 2),
+            token: "token"
+        )
+        let handle = try #require(orchestrator.stopHandle(for: "parked"))
+
+        orchestrator.detachOwnedSession()
+
+        #expect(await orchestrator.stopSession(using: handle))
+        #expect(await client.stoppedSessionIds == ["parked"])
+    }
+
+    @MainActor
+    @Test("A persisted session teardown retains every DELETE identity field")
+    func persistedSessionStopTarget() async throws {
+        let client = ScriptedSessionClient()
+        let orchestrator = SessionOrchestrator(client: client)
+        orchestrator.adoptStopTarget(
+            sessionID: "persisted",
+            token: "persisted-token",
+            base: "https://region.fixture.invalid",
+            serverIP: "192.0.2.44",
+            clientID: "persisted-client",
+            deviceID: "persisted-device"
+        )
+
+        #expect(await orchestrator.stopOwnedSession())
+        let stopCalls = await client.stopCalls
+        let stopCall = try #require(stopCalls.first)
+        #expect(stopCall == RecordedStopCall(
+            sessionID: "persisted",
+            token: "persisted-token",
+            base: "https://region.fixture.invalid",
+            serverIP: "192.0.2.44",
+            clientID: "persisted-client",
+            deviceID: "persisted-device"
+        ))
+    }
+
+    @MainActor
+    @Test("Ending a parked GFN lease uses its captured server stop")
+    func parkedGFNLeaseCanEndAfterDetach() async throws {
+        let client = ScriptedSessionClient()
+        let orchestrator = SessionOrchestrator(client: client)
+        let coordinator = CloudSessionCoordinator()
+        orchestrator.adopt(
+            makeSession(id: "parked", status: 2),
+            token: "token"
+        )
+        let handle = try #require(orchestrator.stopHandle(for: "parked"))
+        let lease = try coordinator.reserveServerSession(
+            provider: .geForceNow,
+            serverSessionID: "parked",
+            actions: CloudServerSessionActions(
+                end: {
+                    await orchestrator.stopSession(using: handle)
+                }
+            )
+        )
+        coordinator.parkServerSession(lease, expiresAt: .distantFuture)
+        orchestrator.detachOwnedSession()
+
+        #expect(await coordinator.endServerSessionUsingProvider(lease))
+        #expect(await client.stoppedSessionIds == ["parked"])
+        #expect(coordinator.serverSession == nil)
+    }
+
+    @MainActor
+    @Test("A failed server stop remains owned and can be retried")
+    func failedStopCanRetry() async {
+        let client = RetryingStopSessionClient()
+        let orchestrator = SessionOrchestrator(client: client)
+        orchestrator.adopt(
+            makeSession(id: "retry-stop", status: 2),
+            token: "token"
+        )
+
+        #expect(await !(orchestrator.stopOwnedSession()))
+        #expect(await orchestrator.stopOwnedSession())
+        #expect(await client.stopCount == 2)
+        #expect(await orchestrator.stopOwnedSession())
+        #expect(await client.stopCount == 2)
+    }
+
+    @MainActor
     @Test("New connection identity rejects callbacks from replaced connections")
     func connectionGenerationRejectsStaleCallbacks() throws {
         let orchestrator = SessionOrchestrator(
@@ -416,6 +539,7 @@ private actor ScriptedSessionClient: SessionOrchestrationClient {
     private var polls: [SessionInfo]
     private(set) var pollCount = 0
     private(set) var stoppedSessionIds: [String] = []
+    private(set) var stopCalls: [RecordedStopCall] = []
 
     init(
         creates: [SessionInfo] = [],
@@ -450,13 +574,117 @@ private actor ScriptedSessionClient: SessionOrchestrationClient {
 
     func stopSession(
         sessionId: String,
+        token: String,
+        base: String,
+        serverIp: String?,
+        clientId: String?,
+        deviceId: String?
+    ) {
+        stoppedSessionIds.append(sessionId)
+        stopCalls.append(RecordedStopCall(
+            sessionID: sessionId,
+            token: token,
+            base: base,
+            serverIP: serverIp,
+            clientID: clientId,
+            deviceID: deviceId
+        ))
+    }
+}
+
+private nonisolated struct RecordedStopCall: Equatable, Sendable {
+    let sessionID: String
+    let token: String
+    let base: String
+    let serverIP: String?
+    let clientID: String?
+    let deviceID: String?
+}
+
+private actor GatedStopSessionClient: SessionOrchestrationClient {
+    private(set) var stopCount = 0
+    private var stopContinuation: CheckedContinuation<Void, Never>?
+    private var stopWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func createSession(_: SessionCreateRequest) throws -> SessionInfo {
+        throw SessionOrchestratorTestError.missingScriptedResponse
+    }
+
+    func pollSession(
+        sessionId _: String,
+        token _: String,
+        base _: String,
+        serverIp _: String?,
+        routingZoneUrl _: String?,
+        clientId _: String,
+        deviceId _: String
+    ) throws -> SessionInfo {
+        throw SessionOrchestratorTestError.missingScriptedResponse
+    }
+
+    func stopSession(
+        sessionId _: String,
         token _: String,
         base _: String,
         serverIp _: String?,
         clientId _: String?,
         deviceId _: String?
-    ) {
-        stoppedSessionIds.append(sessionId)
+    ) async {
+        stopCount += 1
+        let ready = stopWaiters.filter { stopCount >= $0.0 }
+        stopWaiters.removeAll { stopCount >= $0.0 }
+        for waiter in ready {
+            waiter.1.resume()
+        }
+        await withCheckedContinuation { continuation in
+            stopContinuation = continuation
+        }
+    }
+
+    func waitForStopCount(_ expected: Int) async {
+        guard stopCount < expected else { return }
+        await withCheckedContinuation { continuation in
+            stopWaiters.append((expected, continuation))
+        }
+    }
+
+    func releaseStop() {
+        stopContinuation?.resume()
+        stopContinuation = nil
+    }
+}
+
+private actor RetryingStopSessionClient: SessionOrchestrationClient {
+    private(set) var stopCount = 0
+
+    func createSession(_: SessionCreateRequest) throws -> SessionInfo {
+        throw SessionOrchestratorTestError.missingScriptedResponse
+    }
+
+    func pollSession(
+        sessionId _: String,
+        token _: String,
+        base _: String,
+        serverIp _: String?,
+        routingZoneUrl _: String?,
+        clientId _: String,
+        deviceId _: String
+    ) throws -> SessionInfo {
+        throw SessionOrchestratorTestError.missingScriptedResponse
+    }
+
+    func stopSession(
+        sessionId _: String,
+        token _: String,
+        base _: String,
+        serverIp _: String?,
+        clientId _: String?,
+        deviceId _: String?
+    ) throws {
+        stopCount += 1
+        if stopCount == 1 {
+            throw SessionOrchestratorTestError.scriptedStopFailure
+        }
     }
 }
 
@@ -494,6 +722,7 @@ private actor ManualSessionScheduler {
 private enum SessionOrchestratorTestError: Error {
     case missingContinuation
     case missingScriptedResponse
+    case scriptedStopFailure
 }
 
 private func makeRequest() -> SessionCreateRequest {

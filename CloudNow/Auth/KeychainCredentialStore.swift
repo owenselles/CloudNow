@@ -37,7 +37,7 @@ nonisolated enum KeychainService {
         SecItemDelete(query as CFDictionary)
         var attributes = query
         attributes[kSecValueData] = data
-        attributes[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        attributes[kSecAttrAccessible] = accessibility(for: namespace)
         let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw KeychainError.saveFailed(status)
@@ -64,6 +64,19 @@ nonisolated enum KeychainService {
     static func validateDeleteStatus(_ status: OSStatus) throws {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.deleteFailed(status)
+        }
+    }
+
+    static func accessibility(
+        for namespace: CloudCredentialNamespace
+    ) -> CFString {
+        switch namespace {
+        case .geForceNow:
+            // Preserve the latest-main GFN Keychain contract and its existing
+            // credential data. Namespace queries remain unchanged.
+            kSecAttrAccessibleAfterFirstUnlock
+        case .xboxCloudGaming:
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         }
     }
 

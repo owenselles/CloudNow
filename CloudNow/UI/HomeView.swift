@@ -137,45 +137,14 @@ struct HomeView: View {
     // MARK: Resume Banner
 
     private func resumeBanner(_ rs: ResumableSession) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            SharedArtworkImage(
-                urlString: rs.game.heroBannerUrl,
-                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 420)
-            .clipped()
-            .overlay(LinearGradient(
-                colors: [.black.opacity(0.8), .clear, .black.opacity(0.4)],
-                startPoint: .bottom, endPoint: .top
-            ))
-
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 10) {
-                        Text(rs.game.title)
-                            .font(.largeTitle.weight(.bold))
-                            .foregroundStyle(.white)
-                            .shadow(radius: 4)
-                        Text(L10n.text("session_active"))
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.green, in: Capsule())
-                    }
-                    ResumableSessionCountdownView(leftAt: rs.leftAt)
-                    Button { onResume(rs) } label: {
-                        Label(L10n.text("rejoin_session"), systemImage: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                }
-                Spacer()
-            }
-            .padding(60)
-        }
-        .focusSection()
+        CloudResumableSessionBanner(
+            title: rs.game.title,
+            artworkURL: rs.game.heroBannerUrl,
+            expiresAt: rs.leftAt.addingTimeInterval(
+                ResumableSession.gracePeriod
+            ),
+            onResume: { onResume(rs) }
+        )
     }
 
     // MARK: Hero Banner
@@ -278,26 +247,6 @@ struct HomeView: View {
 
     private var emptyState: some View {
         CloudCatalogHomeEmptyState()
-    }
-}
-
-/// Keeps the once-per-second countdown update inside the single text leaf.
-private struct ResumableSessionCountdownView: View {
-    let leftAt: Date
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let secondsRemaining = max(
-                0,
-                Int(
-                    ResumableSession.gracePeriod
-                        - context.date.timeIntervalSince(leftAt)
-                )
-            )
-            Text(L10n.format("session_expires_in", secondsRemaining))
-                .font(.callout)
-                .foregroundStyle(.white.opacity(0.8))
-        }
     }
 }
 

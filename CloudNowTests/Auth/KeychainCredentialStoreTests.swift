@@ -16,4 +16,20 @@ struct KeychainCredentialStoreTests {
             try KeychainService.validateDeleteStatus(errSecInteractionNotAllowed)
         }
     }
+
+    @Test("Credential namespaces retain provider-specific accessibility")
+    func providerAccessibility() {
+        #expect(
+            CFEqual(
+                KeychainService.accessibility(for: .geForceNow),
+                kSecAttrAccessibleAfterFirstUnlock
+            )
+        )
+        #expect(
+            CFEqual(
+                KeychainService.accessibility(for: .xboxCloudGaming),
+                kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            )
+        )
+    }
 }

@@ -42,9 +42,12 @@ struct CloudNowStorageAndDataSection: View {
 }
 
 struct CloudNowCloudServiceSection: View {
+    @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+    @Environment(CloudSessionCoordinator.self) private var sessionCoordinator
     let activeProvider: CloudGamingProvider
     let isInteractionDisabled: Bool
-    let onSelectProvider: (CloudGamingProvider) -> Void
+    let onSelectProvider: @MainActor @Sendable (CloudGamingProvider) -> Void
+    @State private var providerSwitchPrompt: CloudProviderSwitchPrompt?
 
     var body: some View {
         Section(L10n.text("cloud_service")) {
@@ -56,7 +59,7 @@ struct CloudNowCloudServiceSection: View {
             ForEach(CloudGamingProvider.allCases) { provider in
                 if provider != activeProvider {
                     Button {
-                        onSelectProvider(provider)
+                        requestProviderSwitch(to: provider)
                     } label: {
                         Label(
                             L10n.format("switch_to_service", provider.displayName),
@@ -64,9 +67,38 @@ struct CloudNowCloudServiceSection: View {
                         )
                     }
                     .accessibilityIdentifier("service-switch.\(provider.rawValue)")
-                    .disabled(isInteractionDisabled)
+                    .accessibilityHint(
+                        providerCoordinator.capabilities(
+                            for: provider
+                        ).availability.unavailableReason.map {
+                            L10n.text($0.localizationKey)
+                        } ?? ""
+                    )
+                    .disabled(
+                        isInteractionDisabled
+                            || !providerCoordinator.capabilities(
+                                for: provider
+                            ).availability.isSupported
+                    )
                 }
             }
+        }
+        .cloudProviderSwitchConfirmation(
+            prompt: $providerSwitchPrompt,
+            onSwitch: onSelectProvider
+        )
+    }
+
+    private func requestProviderSwitch(to provider: CloudGamingProvider) {
+        let requirement = sessionCoordinator.switchRequirement(to: provider)
+        switch requirement {
+        case .allowed:
+            onSelectProvider(provider)
+        case .leaveOrEnd, .endParkedSession:
+            providerSwitchPrompt = CloudProviderSwitchPrompt(
+                targetProvider: provider,
+                requirement: requirement
+            )
         }
     }
 }
@@ -141,6 +173,39 @@ private struct CloudNowSettingLabel: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 8)
+    }
+}
+
+struct CloudNowDiagnosticsSettingsSection: View {
+    @Binding var diagnosticsEnabled: Bool
+    @Binding var enableRtcEventLog: Bool
+    let isDisabled: Bool
+
+    var body: some View {
+        Section(L10n.text("diagnostics")) {
+            Toggle(isOn: $diagnosticsEnabled) {
+                CloudNowSettingLabel(
+                    title: L10n.text("diagnostic"),
+                    description: L10n.text(
+                        "adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts"
+                    )
+                )
+            }
+            .onChange(of: diagnosticsEnabled) { _, enabled in
+                if !enabled {
+                    enableRtcEventLog = false
+                }
+            }
+
+            Toggle(isOn: $enableRtcEventLog) {
+                CloudNowSettingLabel(
+                    title: L10n.text("rtc_event_log"),
+                    description: L10n.text("rtc_event_log_description")
+                )
+            }
+            .disabled(!diagnosticsEnabled)
+        }
+        .disabled(isDisabled)
     }
 }
 
@@ -438,6 +503,29 @@ struct CloudNowStreamQualitySection<Content: View>: View {
     }
 }
 
+/// Shared microphone preference presentation. Providers keep independent
+/// persisted values and decide whether a requested microphone can be attached
+/// to their own stream transport.
+struct CloudNowMicrophoneSettingsSection: View {
+    @Binding var isEnabled: Bool
+    var isDisabled = false
+
+    var body: some View {
+        Section(L10n.text("microphone")) {
+            Toggle(isOn: $isEnabled) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10n.text("use_microphone"))
+                    Text(L10n.text("microphone_description"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .disabled(isDisabled)
+    }
+}
+
 enum CloudNowDataDialog: Equatable {
     case confirmClearCache
     case confirmResetAllData
@@ -459,7 +547,7 @@ enum CloudNowDataDialog: Equatable {
         case .confirmClearCache:
             L10n.text("clear_cache_confirmation_message")
         case .confirmResetAllData:
-            L10n.text("reset_all_data_confirmation_message")
+            L10n.text("reset_active_service_confirmation_message")
         case let .result(_, message):
             message
         }
@@ -469,7 +557,7 @@ enum CloudNowDataDialog: Equatable {
 struct SettingsView: View {
     @Environment(AuthManager.self) var authManager
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
-    @Environment(XboxAuthManager.self) private var xboxAuthManager
+    @Environment(CloudSessionCoordinator.self) private var sessionCoordinator
     @Environment(GamesViewModel.self) var viewModel
 
     @State private var showServerLocationPicker = false
@@ -635,17 +723,9 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
                 }
 
-                Section(L10n.text("microphone")) {
-                    Toggle(isOn: $vm.streamSettings.micEnabled) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("use_microphone"))
-                            Text(L10n.text("microphone_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
-                }
+                CloudNowMicrophoneSettingsSection(
+                    isEnabled: $vm.streamSettings.micEnabled
+                )
 
                 CloudNowControllerSettingsSection(
                     rumbleEnabled: $vm.streamSettings.rumbleEnabled,
@@ -748,33 +828,11 @@ struct SettingsView: View {
                 }
 
                 #if DEBUG
-                    Section(L10n.text("diagnostics")) {
-                        Toggle(isOn: $vm.streamSettings.diagnosticsEnabled) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L10n.text("diagnostic"))
-                                Text(L10n.text("adds_receiver_timing_renderer_metrics_frame_counters_and_instruments_signposts"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
-                        }
-                        .onChange(of: vm.streamSettings.diagnosticsEnabled) { _, enabled in
-                            if !enabled {
-                                vm.streamSettings.enableRtcEventLog = false
-                            }
-                        }
-
-                        Toggle(isOn: $vm.streamSettings.enableRtcEventLog) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L10n.text("rtc_event_log"))
-                                Text(L10n.text("rtc_event_log_description"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
-                        }
-                        .disabled(!vm.streamSettings.diagnosticsEnabled)
-                    }
+                    CloudNowDiagnosticsSettingsSection(
+                        diagnosticsEnabled: $vm.streamSettings.diagnosticsEnabled,
+                        enableRtcEventLog: $vm.streamSettings.enableRtcEventLog,
+                        isDisabled: false
+                    )
                 #endif
 
                 CloudNowStorageAndDataSection(
@@ -888,7 +946,7 @@ struct SettingsView: View {
         viewModel.prepareForCacheClear()
         Task {
             do {
-                try await AppDataManager.shared.clearCaches()
+                try await AppDataManager.shared.clearCaches(for: .geForceNow)
                 dataDialog = .result(
                     title: L10n.text("cache_cleared"),
                     message: L10n.text("cache_cleared_message")
@@ -909,7 +967,6 @@ struct SettingsView: View {
         }
         isPerformingDataAction = true
         authManager.prepareForDataReset()
-        xboxAuthManager.prepareForDataReset()
         viewModel.prepareForDataReset()
 
         Task {
@@ -918,39 +975,37 @@ struct SettingsView: View {
                 isPerformingDataAction = false
             }
             do {
-                try await AppDataManager.shared.clearCaches()
-                let result = await AppDataManager.shared.clearPersistentData()
-                let remainingProvider = result.remainingProvider(
-                    preferring: .geForceNow
+                guard await endProviderSessionIfNeeded(.geForceNow) else {
+                    authManager.abortDataResetWithoutActivation()
+                    await authManager.activateForCurrentProvider()
+                    await viewModel.load(authManager: authManager)
+                    dataDialog = .result(
+                        title: L10n.text("reset_failed"),
+                        message: L10n.text("end_session_before_sign_out")
+                    )
+                    return
+                }
+                try await AppDataManager.shared.clearCaches(for: .geForceNow)
+                let result = await AppDataManager.shared.clearPersistentData(
+                    for: .geForceNow
                 )
-                if result.geForceNowCredentialsRemoved {
+                if result.credentialsRemoved {
                     await viewModel.resetAllData()
                     authManager.finishDataReset()
+                    providerCoordinator.select(nil)
                 } else {
                     authManager.abortDataResetWithoutActivation()
-                }
-                if result.xboxCredentialsRemoved {
-                    await xboxAuthManager.finishDataReset()
-                } else {
-                    xboxAuthManager.abortDataResetWithoutActivation()
-                }
-                if result.isComplete {
-                    providerCoordinator.select(nil)
-                } else if let remainingProvider {
                     providerCoordinator.preserveSelectionAfterFailedDataReset(
-                        remainingProvider
+                        .geForceNow
                     )
                     providerCoordinator.presentDataResetFailure(
                         result.failureDescription ?? L10n.text("reset_failed")
                     )
-                    if remainingProvider == .geForceNow {
-                        await authManager.activateForCurrentProvider()
-                        await viewModel.load(authManager: authManager)
-                    }
+                    await authManager.activateForCurrentProvider()
+                    await viewModel.load(authManager: authManager)
                 }
             } catch {
                 authManager.abortDataResetWithoutActivation()
-                xboxAuthManager.abortDataResetWithoutActivation()
                 await authManager.activateForCurrentProvider()
                 await viewModel.load(authManager: authManager)
                 dataDialog = .result(
@@ -973,6 +1028,13 @@ struct SettingsView: View {
                 isPerformingDataAction = false
             }
             do {
+                guard await endProviderSessionIfNeeded(.geForceNow) else {
+                    dataDialog = .result(
+                        title: L10n.text("sign_out"),
+                        message: L10n.text("end_session_before_sign_out")
+                    )
+                    return
+                }
                 try await authManager.logout()
             } catch {
                 await viewModel.load(authManager: authManager)
@@ -982,6 +1044,17 @@ struct SettingsView: View {
                 )
             }
         }
+    }
+
+    private func endProviderSessionIfNeeded(
+        _ provider: CloudGamingProvider
+    ) async -> Bool {
+        guard let lease = sessionCoordinator.serverSession,
+              lease.provider == provider
+        else {
+            return true
+        }
+        return await sessionCoordinator.endServerSessionUsingProvider(lease)
     }
 
     private var serverLocationValue: String {
@@ -1304,7 +1377,7 @@ private struct ServerLocationPickerView: View {
     }
 }
 
-private struct ServerPickerScreen<Content: View>: View {
+struct ServerPickerScreen<Content: View>: View {
     let title: String
     private let content: Content
 
@@ -1327,7 +1400,7 @@ private struct ServerPickerScreen<Content: View>: View {
     }
 }
 
-private struct ServerRowButtonStyle: ButtonStyle {
+struct ServerRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         RowBody(configuration: configuration)
     }
@@ -1731,105 +1804,17 @@ private struct RegionPickerView: View {
 // MARK: - Network Test
 
 private struct NetworkTestView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(GamesViewModel.self) private var viewModel
     @Environment(AuthManager.self) private var authManager
 
-    @State private var isRunning = true
-    @State private var routedTo: String?
-    @State private var pingMs: Double?
-    @State private var jitterMs: Double?
-    @State private var lossPercent: Double?
-
-    private static let sampleCount = 10
-
     var body: some View {
-        NavigationStack {
-            ServerPickerScreen(title: L10n.text("test_network")) {
-                List {
-                    Section {
-                        if let routedTo {
-                            LabeledContent(L10n.text("routed_to"), value: routedTo)
-                        }
-                        LabeledContent(L10n.text("rtt")) {
-                            resultText(
-                                pingMs.map { String(format: "%.0f ms", $0) },
-                                color: pingMs.map(pingColor)
-                            )
-                        }
-                        LabeledContent(L10n.text("jitter")) {
-                            resultText(
-                                jitterMs.map { String(format: "%.1f ms", $0) },
-                                color: nil
-                            )
-                        }
-                        LabeledContent(L10n.text("loss")) {
-                            resultText(
-                                lossPercent.map { String(format: "%.0f %%", $0) },
-                                color: lossPercent.map { $0 > 0 ? .orange : .green }
-                            )
-                        }
-                    } footer: {
-                        if isRunning {
-                            Label(L10n.text("test_running"), systemImage: "wifi")
-                        }
-                    }
-
-                    Section {
-                        Button {
-                            dismiss()
-                        } label: {
-                            Text(L10n.text("close"))
-                        }
-                        .buttonStyle(ServerRowButtonStyle())
-                    }
-                }
-            }
-            .task {
-                await run()
-            }
+        CloudNetworkTestView {
+            let target = await resolveTarget()
+            return CloudNetworkTestTarget(
+                address: target.address,
+                displayName: target.name
+            )
         }
-        .blocksGlobalControllerNavigation()
-    }
-
-    @ViewBuilder
-    private func resultText(_ value: String?, color: Color?) -> some View {
-        if let value {
-            Text(value)
-                .monospacedDigit()
-                .foregroundStyle(color ?? .primary)
-        } else {
-            Text("…")
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func run() async {
-        let (targetAddress, targetName) = await resolveTarget()
-        routedTo = targetName
-
-        _ = await probe(targetAddress)
-
-        var samples: [Double] = []
-        var failures = 0
-        for _ in 0 ..< Self.sampleCount {
-            guard !Task.isCancelled else { return }
-            if let ms = await probe(targetAddress) {
-                samples.append(ms)
-                pingMs = samples.reduce(0, +) / Double(samples.count)
-            } else {
-                failures += 1
-            }
-            lossPercent = Double(failures) / Double(Self.sampleCount) * 100
-        }
-
-        if samples.count > 1 {
-            let differences = zip(samples.dropFirst(), samples).map { abs($0 - $1) }
-            jitterMs = differences.reduce(0, +) / Double(differences.count)
-        } else if !samples.isEmpty {
-            jitterMs = 0
-        }
-        isRunning = false
     }
 
     private func resolveTarget() async -> (address: String, name: String?) {
@@ -1862,37 +1847,8 @@ private struct NetworkTestView: View {
         return (base, info?.localRegionName)
     }
 
-    private func probe(_ urlString: String) async -> Double? {
-        guard let url = URL(string: urlString) else { return nil }
-        var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = 5
-        let start = ContinuousClock.now
-        do {
-            _ = try await URLSession.shared.data(for: request)
-            let duration = start.duration(to: .now)
-            return Double(duration.components.seconds) * 1000
-                + Double(duration.components.attoseconds) / 1e15
-        } catch {
-            return nil
-        }
-    }
-
     private func displayZone(_ url: String) -> String {
         let host = URL(string: url)?.host ?? url
         return host.components(separatedBy: ".").first?.uppercased() ?? url
-    }
-
-    private func pingColor(_ milliseconds: Double) -> Color {
-        if milliseconds < 30 {
-            return .green
-        }
-        if milliseconds < 80 {
-            return .yellow
-        }
-        if milliseconds < 150 {
-            return .orange
-        }
-        return .red
     }
 }

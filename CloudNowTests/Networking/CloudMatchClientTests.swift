@@ -189,6 +189,28 @@ struct CloudMatchClientTests {
         }
     }
 
+    @Test(
+        "Stop accepts an already-ended server session",
+        arguments: [404, 410]
+    )
+    func stopSessionAlreadyEnded(statusCode: Int) async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            #expect(request.httpMethod == "DELETE")
+            return StubbedHTTPResponse(statusCode: statusCode)
+        }
+
+        try await CloudMatchClient(
+            transport: transport,
+            deviceId: { "fixture-device" }
+        ).stopSession(
+            sessionId: "ended-session",
+            token: "token",
+            base: "https://region.example.invalid",
+            clientId: "client",
+            deviceId: "device"
+        )
+    }
+
     @Test("Claim sends a minimal resume body after ready preflight")
     func claimReadySession() async throws {
         let fixture = try NetworkingFixture.data("cloudmatch-session.json")

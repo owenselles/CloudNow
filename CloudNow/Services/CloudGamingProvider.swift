@@ -73,17 +73,12 @@ final class CloudGamingProviderCoordinator {
     private(set) var dataResetFailureMessage: String?
     private(set) var isProviderSwitchInProgress = false
     private(set) var isCredentialMutationInProgress = false
+    private(set) var providerCapabilities: [
+        CloudGamingProvider: CloudGamingProviderCapabilities
+    ]
 
     var isProviderInteractionBlocked: Bool {
         isProviderSwitchInProgress || isCredentialMutationInProgress
-    }
-
-    var xboxAvailability: XboxCloudAvailability {
-        xboxEnvironment.availability
-    }
-
-    var xboxServiceConfiguration: XboxCloudServiceConfiguration? {
-        xboxEnvironment.service
     }
 
     /// A pre-provider-selection CloudNow install may still have a GeForce NOW
@@ -96,7 +91,6 @@ final class CloudGamingProviderCoordinator {
     }
 
     @ObservationIgnored private let persistence: any CloudGamingProviderSelectionPersistence
-    @ObservationIgnored private let xboxEnvironment: XboxCloudEnvironment
     @ObservationIgnored private var selectionGeneration: UInt64 = 0
     @ObservationIgnored private var providerSwitchGeneration: UInt64 = 0
     @ObservationIgnored private var credentialMutationGeneration: UInt64 = 0
@@ -108,15 +102,37 @@ final class CloudGamingProviderCoordinator {
 
     init(
         persistence: any CloudGamingProviderSelectionPersistence = AppPersistenceStore.shared,
-        xboxEnvironment: XboxCloudEnvironment = .unconfigured,
+        capabilityProviders: [any CloudGamingCapabilityProviding] = [],
         initialSelection: CloudGamingProvider? = nil,
         startsReady: Bool = false
     ) {
         self.persistence = persistence
-        self.xboxEnvironment = xboxEnvironment
+        var capabilities = Dictionary(
+            uniqueKeysWithValues: CloudGamingProvider.allCases.map { provider in
+                (provider, CloudGamingProviderCapabilities.unknown(for: provider))
+            }
+        )
+        for capabilityProvider in capabilityProviders {
+            capabilities[capabilityProvider.provider] =
+                capabilityProvider.capabilities
+        }
+        providerCapabilities = capabilities
         selectedProvider = initialSelection
         hasStoredSelection = initialSelection != nil
         startupPhase = startsReady ? .ready : .pending
+    }
+
+    func capabilities(
+        for provider: CloudGamingProvider
+    ) -> CloudGamingProviderCapabilities {
+        providerCapabilities[provider]
+            ?? CloudGamingProviderCapabilities.unknown(for: provider)
+    }
+
+    func updateCapabilities(
+        _ capabilities: CloudGamingProviderCapabilities
+    ) {
+        providerCapabilities[capabilities.provider] = capabilities
     }
 
     isolated deinit {

@@ -15,9 +15,9 @@ private nonisolated let h265Log = Logger(subsystem: "com.owenselles.CloudNow2", 
 /// 8-bit SDR. This decoder lets VideoToolbox emit its native output format (10-bit for
 /// Main10) and propagate the bitstream's VUI colorimetry (PQ/BT.2020 for HDR10) untouched.
 /// The upstream fix is proposed as webrtc-sdk/webrtc#267; once it ships in a LiveKitWebRTC
-/// release this class can be deleted and `GFNVideoDecoderFactory` reverted to the default
+/// release this class can be deleted and `CloudVideoDecoderFactory` reverted to the default
 /// decoder.
-final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unchecked Sendable {
+final nonisolated class CloudVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unchecked Sendable {
     private var callback: RTCVideoDecoderCallback?
     private var videoFormat: CMVideoFormatDescription?
     private var session: VTDecompressionSession?
@@ -268,3 +268,6 @@ final nonisolated class GFNVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unche
         return sampleBuffer
     }
 }
+
+/// Source compatibility for existing native-provider references.
+typealias GFNVideoDecoderH265 = CloudVideoDecoderH265

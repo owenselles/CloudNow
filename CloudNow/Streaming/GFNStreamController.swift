@@ -292,6 +292,7 @@ final class GFNStreamController: NSObject {
     private var accountAllowsHDR: Bool?
     private var micAudioSource: LKRTCAudioSource?
     private var micAudioTrack: LKRTCAudioTrack?
+    private let audioSessionCoordinator = CloudAudioSessionCoordinator()
     private var microphoneAuthorizedForConnection = false
     private var connectionGeneration: UInt64 = 0
     private var signalingComplete = false
@@ -808,71 +809,29 @@ final class GFNStreamController: NSObject {
 
     private func configureAudioSession(microphoneRequested: Bool) -> Bool {
         let audioSession = AVAudioSession.sharedInstance()
-        if microphoneRequested, audioSession.availableCategories.contains(.playAndRecord) {
+        if microphoneRequested {
             logAudioSessionInputDiagnostics(audioSession, stage: "before microphone configuration")
-            var operation = "setCategory(playAndRecord/voiceChat)"
-            do {
-                try audioSession.setCategory(
-                    .playAndRecord,
-                    mode: .voiceChat,
-                    options: [.allowBluetoothHFP, .allowBluetoothA2DP]
-                )
-                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone category")
-
-                operation = "setPreferredIOBufferDuration(0.01)"
-                try audioSession.setPreferredIOBufferDuration(0.01)
-
-                operation = "setActive(true)"
-                try audioSession.setActive(true)
-                logAudioSessionInputDiagnostics(audioSession, stage: "after microphone activation")
-
-                guard audioSession.isInputAvailable,
-                      !audioSession.currentRoute.inputs.isEmpty,
-                      audioSession.inputNumberOfChannels > 0
-                else {
-                    gfnLog.warning("[Stream] AVAudioSession has no usable input route, falling back to playback")
-                    return configurePlaybackAudioSession(audioSession)
-                }
-                gfnLog.info("[Stream] AVAudioSession configured for playback + microphone")
-                logAudioSessionConfiguration(audioSession)
-                return true
-            } catch {
-                logAudioSessionOperationFailure(operation, error: error, session: audioSession)
-            }
-        } else if microphoneRequested {
-            gfnLog.warning("[Stream] AVAudioSession playAndRecord unavailable, falling back to playback")
         }
-
-        return configurePlaybackAudioSession(audioSession)
+        let routeReady = audioSessionCoordinator.configure(
+            microphoneAuthorized: microphoneRequested
+        )
+        if routeReady {
+            gfnLog.info("[Stream] AVAudioSession configured for playback + microphone")
+        } else if microphoneRequested {
+            gfnLog.info(
+                "[Stream] Microphone authorized; capture awaits an input route"
+            )
+        } else {
+            gfnLog.info("[Stream] AVAudioSession configured for playback")
+        }
+        logAudioSessionConfiguration(audioSession)
+        return routeReady
     }
 
     private func configurePlaybackAudioSession(_ audioSession: AVAudioSession) -> Bool {
-        do {
-            // .default mode, not .moviePlayback: movie mode engages tvOS's high-latency,
-            // quality-optimized output path (measured 80 ms outputLatency + 20 ms IO buffer
-            // = 100 ms device playout delay over HDMI), which puts game audio ~100 ms behind
-            // our zero-buffer video. A short preferred IO buffer keeps the render quantum small.
-            try audioSession.setCategory(.playback, mode: .default, options: [])
-            try audioSession.setPreferredIOBufferDuration(0.01)
-            try audioSession.setActive(true)
-            gfnLog.info("[Stream] AVAudioSession configured for playback")
-            logAudioSessionConfiguration(audioSession)
-        } catch {
-            gfnLog.error("[Stream] AVAudioSession playback configuration failed: \(error, privacy: .private)")
-        }
+        audioSessionCoordinator.configurePlayback()
+        logAudioSessionConfiguration(audioSession)
         return false
-    }
-
-    private func logAudioSessionOperationFailure(
-        _ operation: String,
-        error: Error,
-        session: AVAudioSession
-    ) {
-        let nsError = error as NSError
-        let message = "[Stream] AVAudioSession \(operation) failed: " +
-            "domain=\(nsError.domain) code=\(nsError.code); falling back to playback"
-        gfnLog.warning("\(message, privacy: .public); error=\(error, privacy: .private)")
-        logAudioSessionInputDiagnostics(session, stage: "after \(operation) failure")
     }
 
     private func logAudioSessionInputDiagnostics(_ session: AVAudioSession, stage: String) {
@@ -1300,36 +1259,18 @@ final class GFNStreamController: NSObject {
     // MARK: Private — Microphone
 
     private func requestMicrophonePermissionIfNeeded() async -> Bool {
-        guard settings.micEnabled else { return false }
-
-        let granted = await withCheckedContinuation { continuation in
-            AVAudioApplication.requestRecordPermission { granted in
-                continuation.resume(returning: granted)
-            }
-        }
-        if !granted {
-            gfnLog.warning("[Stream] Microphone permission denied, using playback-only audio")
-        }
-        return granted
+        await audioSessionCoordinator.requestMicrophonePermission(
+            if: settings.micEnabled
+        )
     }
 
     private func attachMicrophone(to pc: LKRTCPeerConnection) -> Bool {
-        let audioConstraints = LKRTCMediaConstraints(
-            mandatoryConstraints: nil,
-            optionalConstraints: [
-                "googEchoCancellation": "false",
-                "googAutoGainControl": "false",
-                "googNoiseSuppression": "false",
-            ]
-        )
-        let source = CloudRTCRuntime.peerConnectionFactory.audioSource(with: audioConstraints)
-        let track = CloudRTCRuntime.peerConnectionFactory.audioTrack(with: source, trackId: "mic")
-        guard pc.add(track, streamIds: ["mic"]) != nil else {
-            gfnLog.warning("[Stream] Unable to attach microphone track, continuing without microphone")
+        guard let attachment = audioSessionCoordinator.attachMicrophone(to: pc)
+        else {
             return false
         }
-        micAudioSource = source
-        micAudioTrack = track
+        micAudioSource = attachment.source
+        micAudioTrack = attachment.track
         return true
     }
 

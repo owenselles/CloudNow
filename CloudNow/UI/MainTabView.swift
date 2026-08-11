@@ -3,6 +3,7 @@ import UIKit
 
 struct MainTabView: View {
     @Environment(AuthManager.self) var authManager
+    @Environment(CloudSessionCoordinator.self) private var cloudSessionCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: GamesViewModel
     @State private var gameToPlay: GameInfo?
@@ -64,6 +65,9 @@ struct MainTabView: View {
         .task {
             guard loadsRemoteData else { return }
             await viewModel.load(authManager: authManager)
+            viewModel.restoreResumableSession(
+                from: cloudSessionCoordinator.serverSession
+            )
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, loadsRemoteData else { return }
@@ -110,6 +114,9 @@ struct MainTabView: View {
 
 extension GamesViewModel: CloudGamingProviderModeLifecycle {
     func deactivateForInactiveProvider() async {
+        // Provider switching only suspends GFN work. The coordinator still owns
+        // any parked server lease, so keep the metadata required to resume it
+        // when this mode is recreated. Logout and Reset retain their own clears.
         prepareForLogout()
     }
 }

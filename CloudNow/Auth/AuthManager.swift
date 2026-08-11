@@ -36,12 +36,43 @@ nonisolated protocol NVIDIAAuthAPIClient: Sendable {
 extension NVIDIAAuthAPI: NVIDIAAuthAPIClient {}
 
 nonisolated protocol AuthSessionPersistence: Sendable {
+    nonisolated func authSessionResetGeneration() -> UInt64
     func loadAuthSession() async throws -> AuthSession
     func saveAuthSession(
         _ session: AuthSession,
         generation: UInt64
     ) async throws
     func deleteAuthSession(generation: UInt64) async throws
+    func saveAuthSession(
+        _ session: AuthSession,
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws
+    func deleteAuthSession(
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws
+}
+
+extension AuthSessionPersistence {
+    nonisolated func authSessionResetGeneration() -> UInt64 {
+        0
+    }
+
+    func saveAuthSession(
+        _ session: AuthSession,
+        generation: UInt64,
+        resetGeneration _: UInt64
+    ) async throws {
+        try await saveAuthSession(session, generation: generation)
+    }
+
+    func deleteAuthSession(
+        generation: UInt64,
+        resetGeneration _: UInt64
+    ) async throws {
+        try await deleteAuthSession(generation: generation)
+    }
 }
 
 extension AppPersistenceStore: AuthSessionPersistence {}
@@ -342,6 +373,7 @@ final class AuthManager {
 
         credentialGeneration &+= 1
         let rollbackGeneration = credentialGeneration
+        let resetGeneration = persistence.authSessionResetGeneration()
         loginTask?.cancel()
         loginTask = nil
         self.activeLogin = nil
@@ -361,11 +393,13 @@ final class AuthManager {
             if let priorSession = activeLogin.priorSession {
                 try? await persistence.saveAuthSession(
                     priorSession,
-                    generation: rollbackGeneration
+                    generation: rollbackGeneration,
+                    resetGeneration: resetGeneration
                 )
             } else {
                 try? await persistence.deleteAuthSession(
-                    generation: rollbackGeneration
+                    generation: rollbackGeneration,
+                    resetGeneration: resetGeneration
                 )
             }
         }
@@ -379,9 +413,11 @@ final class AuthManager {
         defer { isCredentialMutationInProgress = false }
         invalidateAuthenticationWork()
         let generation = credentialGeneration
+        let resetGeneration = persistence.authSessionResetGeneration()
         do {
             try await persistence.deleteAuthSession(
-                generation: generation
+                generation: generation,
+                resetGeneration: resetGeneration
             )
         } catch {
             guard credentialGeneration == generation else { return }
@@ -524,8 +560,10 @@ final class AuthManager {
                 authLog.error("[Auth] Token expired and refresh failed: \(error, privacy: .private) — clearing session, re-login required")
                 refreshTimer?.cancel()
                 session = nil
+                let resetGeneration = persistence.authSessionResetGeneration()
                 try? await persistence.deleteAuthSession(
-                    generation: generation
+                    generation: generation,
+                    resetGeneration: resetGeneration
                 )
             } else {
                 authLog.warning("[Auth] Refresh failed but token still valid (\(Int(s.tokens.expiresAt.timeIntervalSinceNow), privacy: .public)s left) — keeping session")
@@ -721,9 +759,11 @@ final class AuthManager {
         generation: UInt64
     ) async throws {
         try ensureAuthenticationWorkIsCurrent(generation)
+        let resetGeneration = persistence.authSessionResetGeneration()
         try await persistence.saveAuthSession(
             session,
-            generation: generation
+            generation: generation,
+            resetGeneration: resetGeneration
         )
     }
 

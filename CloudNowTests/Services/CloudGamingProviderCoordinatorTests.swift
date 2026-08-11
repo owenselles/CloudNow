@@ -5,6 +5,53 @@ import Testing
 @Suite("Cloud gaming provider coordination")
 struct CloudGamingProviderCoordinatorTests {
     @MainActor
+    @Test("Capability providers stay independent and update by provider")
+    func capabilityProvidersRemainIndependent() {
+        let coordinator = CloudGamingProviderCoordinator(
+            persistence: ProviderSelectionPersistence(),
+            capabilityProviders: [
+                GFNCapabilityAdapter(),
+                XboxCapabilityAdapter(environment: .unconfigured),
+            ],
+            startsReady: true
+        )
+
+        #expect(
+            coordinator.capabilities(for: .geForceNow).availability.isSupported
+        )
+        #expect(
+            !coordinator.capabilities(
+                for: .xboxCloudGaming
+            ).availability.isSupported
+        )
+
+        let unknownXbox = CloudGamingProviderCapabilities.unknown(
+            for: .xboxCloudGaming
+        )
+        let xbox = CloudGamingProviderCapabilities(
+            provider: unknownXbox.provider,
+            availability: .supported(.available),
+            account: unknownXbox.account,
+            catalog: unknownXbox.catalog,
+            streamOptions: unknownXbox.streamOptions,
+            input: unknownXbox.input,
+            microphone: unknownXbox.microphone,
+            session: unknownXbox.session,
+            diagnostics: unknownXbox.diagnostics
+        )
+        coordinator.updateCapabilities(xbox)
+
+        #expect(
+            coordinator.capabilities(
+                for: .xboxCloudGaming
+            ).availability.isSupported
+        )
+        #expect(
+            coordinator.capabilities(for: .geForceNow).availability.isSupported
+        )
+    }
+
+    @MainActor
     @Test("Restores the last selected provider")
     func restoresSelection() async {
         let persistence = ProviderSelectionPersistence(selectedProvider: .xboxCloudGaming)

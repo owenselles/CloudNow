@@ -29,7 +29,7 @@ struct PersistenceStoreTests {
         #expect(await harness.store.loadSelectedCloudGamingProvider() == nil)
     }
 
-    @Test("Xbox credentials use independent secure storage and reject stale writes")
+    @Test("Xbox Keychain stores only refresh credentials and rejects stale writes")
     func xboxCredentialPersistence() async throws {
         let harness = try PersistenceHarness()
         defer { harness.cleanup() }
@@ -62,7 +62,23 @@ struct PersistenceStoreTests {
         try await harness.store.saveXboxAuthSession(current, generation: 2)
         try await harness.store.saveXboxAuthSession(stale, generation: 1)
 
-        #expect(try await harness.store.loadXboxAuthSession() == current)
+        let restored = try #require(
+            try await harness.store.loadXboxAuthSession()
+        )
+        #expect(restored.tenant == current.tenant)
+        #expect(restored.clientID == current.clientID)
+        #expect(restored.scopes == current.scopes)
+        #expect(restored.token.accessToken.isEmpty)
+        #expect(restored.token.idToken == nil)
+        #expect(restored.token.refreshToken == "refresh")
+        #expect(restored.token.expiresAt == .distantPast)
+        let storedText = try #require(
+            String(data: harness.xboxSecureStore.data, encoding: .utf8)
+        )
+        #expect(!storedText.contains("current"))
+        #expect(!storedText.contains("stale"))
+        #expect(!storedText.contains("accessToken"))
+        #expect(!storedText.contains("idToken"))
         #expect(throws: FakeSecureStoreError.notFound) {
             _ = try harness.secureStore.load()
         }
@@ -71,6 +87,46 @@ struct PersistenceStoreTests {
         await #expect(throws: FakeSecureStoreError.notFound) {
             _ = try await harness.store.loadXboxAuthSession()
         }
+    }
+
+    @Test("Legacy full Xbox OAuth records migrate silently to refresh-only storage")
+    func xboxFullTokenMigration() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let configuration = try MicrosoftDeviceCodeOAuthConfiguration(
+            tenant: "consumers",
+            clientID: "fixture-client",
+            scopes: ["openid", "offline_access"]
+        )
+        let legacy = XboxAuthSession(
+            configuration: configuration,
+            token: MicrosoftOAuthToken(
+                accessToken: "legacy-access-secret",
+                refreshToken: "legacy-refresh-secret",
+                idToken: "legacy-id-secret",
+                tokenType: "Bearer",
+                scopes: configuration.scopes,
+                expiresAt: .distantFuture
+            ),
+            activityScopeIdentifier: "stable-activity-scope"
+        )
+        try harness.xboxSecureStore.save(JSONEncoder().encode(legacy))
+
+        let restored = try #require(
+            try await harness.store.loadXboxAuthSession()
+        )
+
+        #expect(restored.token.accessToken.isEmpty)
+        #expect(restored.token.idToken == nil)
+        #expect(restored.token.refreshToken == "legacy-refresh-secret")
+        #expect(restored.activityScopeIdentifier == "stable-activity-scope")
+        let migratedText = try #require(
+            String(data: harness.xboxSecureStore.data, encoding: .utf8)
+        )
+        #expect(!migratedText.contains("legacy-access-secret"))
+        #expect(!migratedText.contains("legacy-id-secret"))
+        #expect(migratedText.contains("legacy-refresh-secret"))
+        #expect(migratedText.contains("\"schemaVersion\":1"))
     }
 
     @Test("Xbox stream settings persist independently from GeForce NOW settings")
@@ -112,6 +168,227 @@ struct PersistenceStoreTests {
         #expect(
             await harness.store.loadXboxCloudStreamSettings()
                 == XboxCloudStreamSettings()
+        )
+    }
+
+    @Test("A scoped GeForce NOW reset preserves every Xbox value and fence")
+    func geForceNowScopedResetPreservesXboxData() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let xboxAccountScope = "preserved-xbox-account"
+        let xboxSession = try makeXboxAuthSession()
+        var geForceNowSettings = StreamSettings()
+        geForceNowSettings.maxBitrateKbps = 42000
+        let xboxSettings = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            gameLanguage: "de-DE"
+        )
+        try await harness.store.saveAuthSession(
+            makeAuthSession(accessToken: "gfn-access"),
+            generation: 1
+        )
+        try await harness.store.saveXboxAuthSession(
+            xboxSession,
+            generation: 1
+        )
+        await harness.store.saveFavoriteIds(["gfn-favorite"])
+        await harness.store.saveStreamSettings(geForceNowSettings)
+        await harness.store.saveXboxCloudStreamSettings(xboxSettings)
+        await harness.store.saveXboxFavoriteIDs(
+            ["xbox-favorite"],
+            accountScope: xboxAccountScope
+        )
+        await harness.store.saveSelectedCloudGamingProvider(
+            .xboxCloudGaming,
+            generation: 1
+        )
+        let geForceNowFence = harness.store.authSessionResetGeneration()
+        let xboxFence = harness.store.xboxAuthSessionResetGeneration()
+
+        let result = await harness.store.clearPersistentData(
+            for: .geForceNow
+        )
+
+        #expect(result.isComplete)
+        #expect(result.provider == .geForceNow)
+        #expect(result.credentialsRemoved)
+        #expect(
+            harness.store.authSessionResetGeneration() == geForceNowFence + 1
+        )
+        #expect(harness.store.xboxAuthSessionResetGeneration() == xboxFence)
+        await #expect(throws: FakeSecureStoreError.notFound) {
+            _ = try await harness.store.loadAuthSession()
+        }
+        let restoredXboxSession = try #require(
+            try await harness.store.loadXboxAuthSession()
+        )
+        #expect(
+            restoredXboxSession.token.refreshToken
+                == xboxSession.token.refreshToken
+        )
+        let geForceNowSnapshot = await harness.store.loadGamesSnapshot(
+            accountScope: nil
+        )
+        #expect(geForceNowSnapshot.favoriteIds.isEmpty)
+        #expect(geForceNowSnapshot.streamSettings == nil)
+        #expect(await harness.store.loadXboxCloudStreamSettings() == xboxSettings)
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: xboxAccountScope
+            ).favoriteIDs == ["XBOX-FAVORITE"]
+        )
+        #expect(
+            await harness.store.loadSelectedCloudGamingProvider()
+                == .xboxCloudGaming
+        )
+    }
+
+    @Test("Xbox installation identity follows provider-scoped reset ownership")
+    func xboxInstallationIdentityScopedReset() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let identity = XboxCloudInstallationIdentityStore(
+            preferences: harness.preferences
+        ).loadOrCreateSDKInstallID()
+
+        _ = await harness.store.clearPersistentData(for: .geForceNow)
+
+        #expect(
+            harness.defaults.string(
+                forKey: XboxCloudInstallationIdentityStore.preferenceKey
+            ) == identity
+        )
+
+        _ = await harness.store.clearPersistentData(for: .xboxCloudGaming)
+
+        #expect(
+            harness.defaults.string(
+                forKey: XboxCloudInstallationIdentityStore.preferenceKey
+            ) == nil
+        )
+    }
+
+    @Test("A scoped Xbox reset preserves every GeForce NOW value and fence")
+    func xboxScopedResetPreservesGeForceNowData() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let xboxAccountScope = "removed-xbox-account"
+        let geForceNowSession = makeAuthSession(accessToken: "gfn-access")
+        var geForceNowSettings = StreamSettings()
+        geForceNowSettings.maxBitrateKbps = 42000
+        try await harness.store.saveAuthSession(
+            geForceNowSession,
+            generation: 1
+        )
+        try await harness.store.saveXboxAuthSession(
+            makeXboxAuthSession(),
+            generation: 1
+        )
+        await harness.store.saveFavoriteIds(["gfn-favorite"])
+        await harness.store.saveStreamSettings(geForceNowSettings)
+        await harness.store.saveXboxCloudStreamSettings(
+            XboxCloudStreamSettings(displayResolution: .qhd)
+        )
+        await harness.store.saveXboxFavoriteIDs(
+            ["xbox-favorite"],
+            accountScope: xboxAccountScope
+        )
+        await harness.store.saveSelectedCloudGamingProvider(
+            .geForceNow,
+            generation: 1
+        )
+        let geForceNowFence = harness.store.authSessionResetGeneration()
+        let xboxFence = harness.store.xboxAuthSessionResetGeneration()
+
+        let result = await harness.store.clearPersistentData(
+            for: .xboxCloudGaming
+        )
+
+        #expect(result.isComplete)
+        #expect(result.provider == .xboxCloudGaming)
+        #expect(result.credentialsRemoved)
+        #expect(harness.store.authSessionResetGeneration() == geForceNowFence)
+        #expect(
+            harness.store.xboxAuthSessionResetGeneration() == xboxFence + 1
+        )
+        #expect(
+            try await harness.store.loadAuthSession().tokens.accessToken
+                == geForceNowSession.tokens.accessToken
+        )
+        let geForceNowSnapshot = await harness.store.loadGamesSnapshot(
+            accountScope: nil
+        )
+        #expect(geForceNowSnapshot.favoriteIds == ["gfn-favorite"])
+        #expect(geForceNowSnapshot.streamSettings == geForceNowSettings)
+        await #expect(throws: FakeSecureStoreError.notFound) {
+            _ = try await harness.store.loadXboxAuthSession()
+        }
+        #expect(
+            await harness.store.loadXboxCloudStreamSettings()
+                == XboxCloudStreamSettings()
+        )
+        #expect(
+            await harness.store.loadXboxCatalogActivity(
+                accountScope: xboxAccountScope
+            ) == CloudCatalogActivitySnapshot()
+        )
+        #expect(
+            await harness.store.loadSelectedCloudGamingProvider()
+                == .geForceNow
+        )
+    }
+
+    @Test("A scoped reset reports only its provider's credential failure")
+    func scopedResetReportsTargetCredentialFailure() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        harness.xboxSecureStore.error = .injected
+
+        let result = await harness.store.clearPersistentData(
+            for: .xboxCloudGaming
+        )
+
+        #expect(!result.isComplete)
+        #expect(!result.credentialsRemoved)
+        #expect(result.failureDescription != nil)
+        #expect(harness.secureStore.deleteCount == 0)
+        #expect(harness.xboxSecureStore.deleteCount == 1)
+    }
+
+    @Test("A scoped Xbox cache clear preserves GeForce NOW disk caches")
+    func xboxScopedCacheClearPreservesGeForceNowCaches() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        await harness.store.saveLibraryGames(
+            [makeGame(id: "cached-game")],
+            accountScope: "gfn-account"
+        )
+        let cachedNames = try FileManager.default.contentsOfDirectory(
+            atPath: harness.cacheDirectory.path
+        )
+        #expect(cachedNames.contains { $0.hasPrefix("gfn.library.") })
+
+        #expect(
+            await harness.store.clearCachedData(
+                for: .xboxCloudGaming
+            ).isEmpty
+        )
+        let namesAfterXboxClear = try FileManager.default.contentsOfDirectory(
+            atPath: harness.cacheDirectory.path
+        )
+        #expect(
+            namesAfterXboxClear.contains { $0.hasPrefix("gfn.library.") }
+        )
+
+        #expect(
+            await harness.store.clearCachedData(for: .geForceNow).isEmpty
+        )
+        let namesAfterGeForceNowClear = try FileManager.default
+            .contentsOfDirectory(atPath: harness.cacheDirectory.path)
+        #expect(
+            !namesAfterGeForceNowClear.contains {
+                $0.hasPrefix("gfn.library.")
+            }
         )
     }
 
@@ -208,12 +485,23 @@ struct PersistenceStoreTests {
                 expiresAt: now.addingTimeInterval(3600)
             )
         )
+        let oauth = PersistenceXboxOAuthClientStub(
+            token: MicrosoftOAuthToken(
+                accessToken: "refreshed-runtime-access",
+                refreshToken: "fixture-refresh",
+                idToken: "refreshed-runtime-id",
+                tokenType: "Bearer",
+                scopes: configuration.scopes,
+                expiresAt: now.addingTimeInterval(3600)
+            )
+        )
         let manager = XboxAuthManager(
             environment: XboxCloudEnvironment(
                 authentication: configuration,
                 makeAccountAuthorizationClient: { authorization },
                 service: nil
             ),
+            oauthClient: oauth,
             persistence: recreatedStore,
             now: { now }
         )
@@ -222,6 +510,7 @@ struct PersistenceStoreTests {
         await manager.activateXboxCloudAccess()
 
         let restoredAccount = try #require(manager.authorizedAccount)
+        #expect(await oauth.refreshCount == 1)
         #expect(restoredAccount.activityScopeIdentifier == stableScope)
         #expect(
             await recreatedStore.loadXboxCatalogActivity(
@@ -1216,6 +1505,26 @@ struct PersistenceStoreTests {
             )
         )
     }
+
+    private func makeXboxAuthSession() throws -> XboxAuthSession {
+        let configuration = try MicrosoftDeviceCodeOAuthConfiguration(
+            tenant: "consumers",
+            clientID: "fixture-client",
+            scopes: ["openid", "offline_access"]
+        )
+        return XboxAuthSession(
+            configuration: configuration,
+            token: MicrosoftOAuthToken(
+                accessToken: "xbox-runtime-access",
+                refreshToken: "xbox-refresh",
+                idToken: "xbox-runtime-id",
+                tokenType: "Bearer",
+                scopes: configuration.scopes,
+                expiresAt: Date(timeIntervalSince1970: 2_000_000_000)
+            ),
+            activityScopeIdentifier: "xbox-activity-scope"
+        )
+    }
 }
 
 extension AppPersistenceStore {
@@ -1331,6 +1640,30 @@ private actor PersistenceXboxAccountAuthorizationStub: XboxCloudAccountAuthoriza
     }
 }
 
+private actor PersistenceXboxOAuthClientStub: XboxOAuthClient {
+    private let token: MicrosoftOAuthToken
+    private(set) var refreshCount = 0
+
+    init(token: MicrosoftOAuthToken) {
+        self.token = token
+    }
+
+    func authenticate(
+        configuration _: MicrosoftDeviceCodeOAuthConfiguration,
+        onState _: @escaping @Sendable (MicrosoftDeviceCodeState) async -> Void
+    ) -> MicrosoftOAuthToken {
+        token
+    }
+
+    func refreshToken(
+        configuration _: MicrosoftDeviceCodeOAuthConfiguration,
+        refreshToken _: String
+    ) -> MicrosoftOAuthToken {
+        refreshCount += 1
+        return token
+    }
+}
+
 private enum FakeSecureStoreError: Error, Equatable {
     case notFound
     case injected
@@ -1359,6 +1692,12 @@ private final class FakeSecureCredentialStore: SecureCredentialStore, @unchecked
         lock.lock()
         defer { lock.unlock() }
         return storedDeleteCount
+    }
+
+    var data: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedData ?? Data()
     }
 
     func load() throws -> Data {

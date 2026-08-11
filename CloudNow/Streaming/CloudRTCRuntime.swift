@@ -11,11 +11,11 @@ enum CloudRTCRuntime {
     static let peerConnectionFactory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
         let encoderFactory = LKRTCDefaultVideoEncoderFactory()
-        let decoderFactory = GFNVideoDecoderFactory()
+        let decoderFactory = CloudVideoDecoderFactory()
         return LKRTCPeerConnectionFactory(
             encoderFactory: encoderFactory,
             decoderFactory: decoderFactory,
-            audioDevice: GFNAudioDevice.shared
+            audioDevice: CloudAudioDevice.shared
         )
     }()
 }

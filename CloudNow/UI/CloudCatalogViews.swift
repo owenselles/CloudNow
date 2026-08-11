@@ -64,6 +64,83 @@ struct CloudCatalogCardLabel: View {
     }
 }
 
+/// Shared Continue Playing chrome. Providers supply only the artwork, expiry
+/// and resume action while retaining their own server-session lifecycle.
+struct CloudResumableSessionBanner: View {
+    let title: String
+    let artworkURL: String?
+    let expiresAt: Date
+    var isResumeEnabled = true
+    let onResume: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            SharedArtworkImage(
+                urlString: artworkURL,
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: 420)
+            .clipped()
+            .overlay(
+                LinearGradient(
+                    colors: [.black.opacity(0.8), .clear, .black.opacity(0.4)],
+                    startPoint: .bottom,
+                    endPoint: .top
+                )
+            )
+
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        Text(title)
+                            .font(.largeTitle.weight(.bold))
+                            .foregroundStyle(.white)
+                            .shadow(radius: 4)
+                        Text(L10n.text("session_active"))
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.green, in: Capsule())
+                    }
+                    CloudSessionExpiryCountdownView(expiresAt: expiresAt)
+                    Button(action: onResume) {
+                        Label(
+                            L10n.text("rejoin_session"),
+                            systemImage: "arrow.counterclockwise"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .disabled(!isResumeEnabled)
+                }
+                Spacer()
+            }
+            .padding(60)
+        }
+        .focusSection()
+        .accessibilityIdentifier("continue-playing")
+    }
+}
+
+/// Keeps the once-per-second expiry update inside the single text leaf.
+struct CloudSessionExpiryCountdownView: View {
+    let expiresAt: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let secondsRemaining = max(
+                0,
+                Int(expiresAt.timeIntervalSince(context.date))
+            )
+            Text(L10n.format("session_expires_in", secondsRemaining))
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.8))
+        }
+    }
+}
+
 /// Shared adaptive collection layout used by provider library/catalog screens.
 struct CloudCatalogGrid<
     Item: Identifiable,

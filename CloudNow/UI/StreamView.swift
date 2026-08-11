@@ -22,6 +22,7 @@ struct StreamView: View {
 
     @Environment(AuthManager.self) var authManager
     @Environment(GamesViewModel.self) var viewModel
+    @Environment(CloudSessionCoordinator.self) private var cloudSessionCoordinator
     @Environment(\.colorScheme) private var colorScheme
     @State private var streamController = GFNStreamController()
     @State private var showOverlay = false
@@ -31,6 +32,10 @@ struct StreamView: View {
     @State private var sessionToken: String?
     @State private var sessionAttemptState = SessionAttemptState()
     @State private var sessionOrchestrator: SessionOrchestrator
+    @State private var serverSessionLease: CloudServerSessionLease?
+    @State private var localPeerLease: CloudLocalPeerLease?
+    @State private var isEndingSession = false
+    @State private var endConfirmationFailed = false
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
@@ -92,6 +97,7 @@ struct StreamView: View {
         .onDisappear {
             cancelSessionAttempt()
             streamController.disconnect()
+            releaseLocalPeerLease()
             MemoryLifecycleCoordinator.shared.streamDidClose()
         }
         .onChange(of: streamController.state) { oldState, state in
@@ -99,6 +105,12 @@ struct StreamView: View {
                 MemoryLifecycleCoordinator.shared.streamDidStart()
             } else if oldState == .streaming {
                 MemoryLifecycleCoordinator.shared.streamDidLeavePlayback()
+            }
+            switch state {
+            case .connecting, .streaming, .reconnecting:
+                break
+            case .idle, .disconnected, .failed, .sessionEnded:
+                releaseLocalPeerLease()
             }
         }
         // During streaming, VideoSurfaceView is first responder and intercepts Menu via UIKit,
@@ -371,80 +383,52 @@ struct StreamView: View {
     /// Left sidebar, like the official client's in-game overlay. Stats live in the
     /// StatsHUDView on the right, which stays visible while this menu is open.
     private var pauseMenu: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Button {
-                toggleOverlay()
-            } label: {
-                Label(L10n.text("resume"), systemImage: "play.fill")
-                    .foregroundStyle(Color.black.opacity(0.84))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .tint(.green)
-
-            Button {
-                streamController.toggleRemoteMode()
-            } label: {
-                Label(remoteModeLabel, systemImage: remoteModeIcon)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-
-            Button {
+        CloudStreamPauseMenu(
+            statsMode: streamController.statsMode,
+            onResume: toggleOverlay,
+            onCycleStatistics: {
                 let next = streamController.statsMode.nextHUDLevel
                 streamController.setStatsMode(next)
                 viewModel.streamSettings.statsMode = next
                 viewModel.saveSettings()
-            } label: {
-                Label(
-                    L10n.format("statistics_level", streamController.statsMode.label),
-                    systemImage: "chart.bar.xaxis"
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-
-            Button {
-                leave()
-            } label: {
-                Label(L10n.text("leave_game"), systemImage: "house")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-
-            Button(role: .destructive) {
+            },
+            onLeave: leave,
+            onEndRequest: {
                 showExitConfirmation = true
-            } label: {
-                Label(L10n.text("end_session"), systemImage: "xmark.circle")
-                    .foregroundStyle(Color.black.opacity(0.84))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-
-            Spacer()
-
-            if let sub = viewModel.subscription, !sub.isUnlimited, let rem = sub.remainingMinutes {
-                Label {
-                    Text(rem >= 60 ? "\(rem / 60)h \(rem % 60)m remaining" : "\(rem)m remaining")
-                } icon: {
-                    Image(systemName: "clock")
+            },
+            isEndDisabled: isEndingSession,
+            providerActions: {
+                Button {
+                    streamController.toggleRemoteMode()
+                } label: {
+                    Label(remoteModeLabel, systemImage: remoteModeIcon)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.caption.weight(.medium))
-                .foregroundStyle(rem < 30 ? .orange : hostPrimaryForegroundColor.opacity(0.8))
+                .buttonStyle(.bordered)
+            },
+            footer: {
+                if let sub = viewModel.subscription,
+                   !sub.isUnlimited,
+                   let rem = sub.remainingMinutes
+                {
+                    Label {
+                        Text(
+                            rem >= 60
+                                ? "\(rem / 60)h \(rem % 60)m remaining"
+                                : "\(rem)m remaining"
+                        )
+                    } icon: {
+                        Image(systemName: "clock")
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(
+                        rem < 30
+                            ? .orange
+                            : hostPrimaryForegroundColor.opacity(0.8)
+                    )
+                }
             }
-        }
-        .padding(.horizontal, 48)
-        .padding(.vertical, 80)
-        .frame(width: 480)
-        .frame(maxHeight: .infinity)
-        .background(pauseMenuBackgroundColor)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .ignoresSafeArea()
-    }
-
-    private var pauseMenuBackgroundColor: Color {
-        colorScheme == .dark ? .black.opacity(0.75) : .white.opacity(0.82)
+        )
     }
 
     private var remoteModeLabel: String {
@@ -568,9 +552,15 @@ struct StreamView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             HStack(spacing: 24) {
-                Button(L10n.text("retry")) { retrySessionAttempt() }
-                    .buttonStyle(.bordered)
-                    .tint(.blue)
+                Button(L10n.text("retry")) {
+                    if endConfirmationFailed {
+                        disconnect()
+                    } else {
+                        retrySessionAttempt()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(.blue)
                 Button(L10n.text("exit")) { disconnect() }
                     .buttonStyle(.bordered)
                     .tint(.red)
@@ -613,6 +603,7 @@ struct StreamView: View {
     // MARK: Actions
 
     private func retrySessionAttempt() {
+        endConfirmationFailed = false
         sessionOrchestrator.cancelAttempt()
         sessionAttemptState.retry()
     }
@@ -676,6 +667,13 @@ struct StreamView: View {
                 streamLog.info("startSession: claimed session, status=\(sessionInfo.status)")
                 createdSession = sessionInfo
                 sessionOrchestrator.adopt(sessionInfo, token: token)
+                guard reserveServerSession(
+                    sessionInfo,
+                    adoptingParkedSession: true
+                ) else {
+                    await sessionOrchestrator.stopOwnedSession()
+                    return
+                }
 
                 // A reclaimed media endpoint needs one ready response. Queue waiting remains
                 // unbounded; the 60-second deadline begins only after the queue clears.
@@ -697,6 +695,10 @@ struct StreamView: View {
                 streamLog.info("startSession: direct path ready, connecting WebRTC")
                 viewModel.recordPlayed(game)
                 _ = sessionOrchestrator.beginConnection(for: orchestrationAttempt)
+                guard attachLocalPeer() else {
+                    _ = await stopOwnedSessionAndReleaseLease()
+                    return
+                }
                 await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
                 return
             } catch is CancellationError {
@@ -711,7 +713,10 @@ struct StreamView: View {
                 // server-side. Drop the stale resume offer and fall through to create a
                 // fresh session rather than dead-ending on a raw server error.
                 streamLog.error("startSession: direct path failed: \(error, privacy: .private); falling back to a fresh session")
-                await sessionOrchestrator.stopOwnedSession()
+                guard await stopOwnedSessionAndReleaseLease() else {
+                    streamController.fail(with: L10n.text("cloud_service_unavailable"))
+                    return
+                }
                 viewModel.resumableSession = nil
                 createdSession = nil
             }
@@ -721,8 +726,13 @@ struct StreamView: View {
         // Skip for resume — we want to keep the existing session alive.
         if let session = createdSession, sessionToken != nil, existingSession == nil {
             streamLog.info("startSession: stopping previous session \(session.sessionId)")
-            await sessionOrchestrator.stopOwnedSession()
+            let didStop = await sessionOrchestrator.stopOwnedSession()
             guard isCurrentSessionAttempt(generation) else { return }
+            guard didStop else {
+                streamController.fail(with: L10n.text("cloud_service_unavailable"))
+                return
+            }
+            endSessionLease()
         }
         createdSession = nil
         loadingPhase = .finding
@@ -737,6 +747,7 @@ struct StreamView: View {
             streamLog.info("startSession: base=\(base)")
 
             var sessionInfo: SessionInfo
+            var isContinuingExistingSession = false
 
             if let existing = existingSession, let serverIp = existing.serverIp {
                 streamLog.info("startSession: resume path, sessionId=\(existing.sessionId)")
@@ -762,6 +773,7 @@ struct StreamView: View {
                 try requireCurrentSessionAttempt(generation)
                 streamLog.info("startSession: claimed, status=\(sessionInfo.status)")
                 sessionOrchestrator.adopt(sessionInfo, token: token)
+                isContinuingExistingSession = true
             } else {
                 // New session path
                 guard let appId = game.variants.first?.appId ?? game.variants.first?.id else {
@@ -789,19 +801,13 @@ struct StreamView: View {
                         streamLog.info("[Resume] claimed session, status=\(sessionInfo.status, privacy: .public)")
                         createdSession = sessionInfo
                         sessionOrchestrator.adopt(sessionInfo, token: token)
+                        isContinuingExistingSession = true
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
                         try requireCurrentSessionAttempt(generation)
                         streamLog.warning("[Resume] claim failed: \(error, privacy: .private), stopping old session and creating new")
-                        try? await cloudMatchClient.stopSession(
-                            sessionId: last.sessionId,
-                            token: token,
-                            base: last.base,
-                            serverIp: last.serverIp.isEmpty ? nil : last.serverIp,
-                            clientId: last.clientId,
-                            deviceId: last.deviceId
-                        )
+                        guard await stopSavedSession(last, token: token) else { return }
                         try requireCurrentSessionAttempt(generation)
                         viewModel.clearLastSession()
                         // Fall through to create new session below
@@ -816,14 +822,7 @@ struct StreamView: View {
                 } else {
                     if let last = viewModel.lastSession {
                         streamLog.info("[Resume] saved session appId=\(last.appId, privacy: .public) != game appId=\(appId, privacy: .public), stopping it")
-                        try? await cloudMatchClient.stopSession(
-                            sessionId: last.sessionId,
-                            token: token,
-                            base: last.base,
-                            serverIp: last.serverIp.isEmpty ? nil : last.serverIp,
-                            clientId: last.clientId,
-                            deviceId: last.deviceId
-                        )
+                        guard await stopSavedSession(last, token: token) else { return }
                         try requireCurrentSessionAttempt(generation)
                         viewModel.clearLastSession()
                     }
@@ -837,6 +836,13 @@ struct StreamView: View {
                 }
             }
             createdSession = sessionInfo
+            guard reserveServerSession(
+                sessionInfo,
+                adoptingParkedSession: isContinuingExistingSession
+            ) else {
+                await sessionOrchestrator.stopOwnedSession()
+                return
+            }
 
             // Persist session so we can resume it across app launches
             if let appId = game.variants.first?.appId ?? game.variants.first?.id {
@@ -872,6 +878,10 @@ struct StreamView: View {
             streamLog.info("startSession: serverIp=\(sessionInfo.serverIp), signalingUrl=\(sessionInfo.signalingUrl)")
             viewModel.recordPlayed(game)
             _ = sessionOrchestrator.beginConnection(for: orchestrationAttempt)
+            guard attachLocalPeer() else {
+                _ = await stopOwnedSessionAndReleaseLease()
+                return
+            }
             await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
         } catch is CancellationError {
             return
@@ -965,6 +975,15 @@ struct StreamView: View {
         if let session = createdSession {
             onLeave?(game, session)
         }
+        if let serverSessionLease {
+            cloudSessionCoordinator.parkServerSession(
+                serverSessionLease,
+                expiresAt: Date().addingTimeInterval(
+                    ResumableSession.gracePeriod
+                )
+            )
+        }
+        releaseLocalPeerLease()
         sessionOrchestrator.detachOwnedSession()
         cancelSessionAttempt()
         streamController.disconnect()
@@ -972,29 +991,148 @@ struct StreamView: View {
     }
 
     private func disconnect() {
+        guard !isEndingSession else { return }
+        isEndingSession = true
+        endConfirmationFailed = false
         cancelSessionAttempt()
-        // Intentional end — clear any pending resumable session
-        viewModel.resumableSession = nil
-        viewModel.clearLastSession()
         let shouldRefreshActiveSessions = createdSession != nil
-        if let session = createdSession {
-            // Drop the session from Home immediately: the refresh fired by the
-            // dismissal below races the stop request, and the server keeps
-            // listing a stopped session for a few seconds.
-            viewModel.markSessionStopped(session.sessionId)
-        }
+        let lease = serverSessionLease
         Task {
-            // Tell the server to stop the session so it doesn't linger. The
-            // coordinator coalesces repeated teardown from multiple UI paths.
-            await sessionOrchestrator.teardown()
+            let didEnd: Bool = if let lease {
+                await cloudSessionCoordinator
+                    .endServerSessionUsingProvider(lease)
+            } else {
+                await sessionOrchestrator.teardown()
+            }
+            guard didEnd else {
+                isEndingSession = false
+                endConfirmationFailed = true
+                streamController.disconnect()
+                streamController.fail(
+                    with: L10n.text("cloud_service_unavailable")
+                )
+                return
+            }
+
+            // Clear resumable metadata only after the service confirms End.
+            viewModel.resumableSession = nil
+            viewModel.clearLastSession()
+            if let session = createdSession {
+                viewModel.markSessionStopped(session.sessionId)
+            }
+            serverSessionLease = nil
+            streamController.disconnect()
+            releaseLocalPeerLease()
             if shouldRefreshActiveSessions {
                 // Converge to server truth once the stop has actually landed
                 // (the grace window still excludes the stopped id).
                 await viewModel.refreshActiveSessions(authManager: authManager)
             }
+            onDismiss()
         }
-        streamController.disconnect()
-        onDismiss()
+    }
+
+    private func reserveServerSession(
+        _ session: SessionInfo,
+        adoptingParkedSession: Bool
+    ) -> Bool {
+        if let serverSessionLease,
+           let current = cloudSessionCoordinator.serverSession,
+           current.id == serverSessionLease.id,
+           current.provider == .geForceNow,
+           current.serverSessionID == session.sessionId
+        {
+            return true
+        }
+        guard sessionToken != nil,
+              let stopHandle = sessionOrchestrator.stopHandle(for: session.sessionId)
+        else {
+            streamController.fail(with: L10n.text("cloud_session_in_use"))
+            return false
+        }
+        do {
+            let actions = CloudServerSessionActions(
+                end: { [sessionOrchestrator, stopHandle] in
+                    await sessionOrchestrator.stopSession(using: stopHandle)
+                }
+            )
+            if adoptingParkedSession,
+               cloudSessionCoordinator.serverSession != nil
+            {
+                serverSessionLease = try cloudSessionCoordinator
+                    .adoptParkedServerSession(
+                        provider: .geForceNow,
+                        serverSessionID: session.sessionId,
+                        actions: actions
+                    )
+            } else {
+                serverSessionLease = try cloudSessionCoordinator
+                    .reserveServerSession(
+                        provider: .geForceNow,
+                        serverSessionID: session.sessionId,
+                        actions: actions
+                    )
+            }
+            return true
+        } catch {
+            streamController.fail(with: L10n.text("cloud_session_in_use"))
+            return false
+        }
+    }
+
+    private func attachLocalPeer() -> Bool {
+        if localPeerLease != nil {
+            return true
+        }
+        do {
+            localPeerLease = try cloudSessionCoordinator.attachLocalPeer(
+                for: .geForceNow
+            )
+            return true
+        } catch {
+            streamController.fail(with: L10n.text("cloud_session_in_use"))
+            return false
+        }
+    }
+
+    private func endSessionLease() {
+        guard let serverSessionLease else { return }
+        cloudSessionCoordinator.endServerSession(serverSessionLease)
+        self.serverSessionLease = nil
+        releaseLocalPeerLease()
+    }
+
+    private func releaseLocalPeerLease() {
+        guard let localPeerLease else { return }
+        cloudSessionCoordinator.releaseLocalPeer(localPeerLease)
+        self.localPeerLease = nil
+    }
+
+    private func stopOwnedSessionAndReleaseLease() async -> Bool {
+        let didStop = await sessionOrchestrator.stopOwnedSession()
+        if didStop {
+            endSessionLease()
+        }
+        return didStop
+    }
+
+    private func stopSavedSession(
+        _ session: LastSessionRecord,
+        token: String
+    ) async -> Bool {
+        sessionOrchestrator.adoptStopTarget(
+            sessionID: session.sessionId,
+            token: token,
+            base: session.base,
+            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            clientID: session.clientId,
+            deviceID: session.deviceId
+        )
+        guard await sessionOrchestrator.stopOwnedSession() else {
+            streamController.fail(with: L10n.text("cloud_service_unavailable"))
+            return false
+        }
+        return true
     }
 
     private func createNewSession(

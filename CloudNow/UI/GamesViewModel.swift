@@ -1420,6 +1420,59 @@ class GamesViewModel {
         }
     }
 
+    /// Rebuilds the short-lived Continue banner after provider navigation
+    /// recreates this view model. The shared lease remains the server authority;
+    /// persisted metadata alone can never advertise a resumable session.
+    func restoreResumableSession(
+        from lease: CloudServerSessionLease?,
+        now: Date = Date()
+    ) {
+        resumableSession = nil
+        guard let lease,
+              lease.provider == .geForceNow,
+              case let .parked(expiresAt) = lease.phase,
+              expiresAt > now,
+              let lastSession,
+              lastSession.sessionId == lease.serverSessionID,
+              !lastSession.appId.isEmpty,
+              !lastSession.serverIp.isEmpty,
+              !lastSession.base.isEmpty,
+              let clientID = lastSession.clientId,
+              !clientID.isEmpty,
+              let deviceID = lastSession.deviceId,
+              !deviceID.isEmpty,
+              let game = mainGames.first(where: { game in
+                  game.variants.contains { $0.appId == lastSession.appId }
+              })
+        else {
+            return
+        }
+
+        let session = SessionInfo(
+            sessionId: lastSession.sessionId,
+            status: 2,
+            zone: lastSession.routingZoneUrl ?? "",
+            streamingBaseUrl: lastSession.base,
+            serverIp: lastSession.serverIp,
+            signalingServer: "",
+            signalingUrl: "",
+            gpuType: nil,
+            queuePosition: nil,
+            seatSetupStep: nil,
+            seatSetupEtaMs: nil,
+            iceServers: [],
+            mediaConnectionInfo: nil,
+            clientId: clientID,
+            deviceId: deviceID,
+            adState: nil
+        )
+        resumableSession = ResumableSession(
+            game: game,
+            session: session,
+            leftAt: expiresAt.addingTimeInterval(-ResumableSession.gracePeriod)
+        )
+    }
+
     func prepareForCacheClear() {
         cancelForegroundLibraryRefresh()
         cacheGeneration &+= 1

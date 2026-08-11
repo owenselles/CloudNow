@@ -44,6 +44,135 @@ protocol CloudGamingProviderModeLifecycle: AnyObject {
     func deactivateForInactiveProvider() async
 }
 
+struct CloudProviderSwitchPrompt: Equatable, Identifiable {
+    let targetProvider: CloudGamingProvider
+    let requirement: CloudProviderSwitchRequirement
+
+    var id: String {
+        switch requirement {
+        case let .leaveOrEnd(lease), let .endParkedSession(lease):
+            "\(targetProvider.rawValue)|\(lease.id.uuidString)"
+        case .allowed:
+            targetProvider.rawValue
+        }
+    }
+
+    var lease: CloudServerSessionLease? {
+        switch requirement {
+        case let .leaveOrEnd(lease), let .endParkedSession(lease):
+            lease
+        case .allowed:
+            nil
+        }
+    }
+}
+
+struct CloudProviderSwitchConfirmationModifier: ViewModifier {
+    @Environment(CloudSessionCoordinator.self) private var sessionCoordinator
+    @Binding var prompt: CloudProviderSwitchPrompt?
+    @State private var failureMessage: String?
+    let onSwitch: @MainActor (CloudGamingProvider) -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            L10n.text("cloud_session_active"),
+            isPresented: isPresented,
+            titleVisibility: .visible,
+            presenting: prompt
+        ) { prompt in
+            if case let .leaveOrEnd(lease) = prompt.requirement,
+               sessionCoordinator.canLeaveServerSession(lease)
+            {
+                Button(L10n.text("leave_game")) {
+                    Task { @MainActor in
+                        guard await sessionCoordinator.leaveServerSession(lease)
+                        else {
+                            failureMessage = L10n.text(
+                                "cloud_service_unavailable"
+                            )
+                            return
+                        }
+                        onSwitch(prompt.targetProvider)
+                    }
+                }
+            }
+
+            Button(
+                L10n.format(
+                    "end_and_switch_to_service",
+                    prompt.targetProvider.displayName
+                ),
+                role: .destructive
+            ) {
+                Task { @MainActor in
+                    guard let lease = prompt.lease,
+                          await sessionCoordinator.endServerSessionUsingProvider(
+                              lease
+                          )
+                    else {
+                        failureMessage = L10n.text(
+                            "cloud_service_unavailable"
+                        )
+                        return
+                    }
+                    onSwitch(prompt.targetProvider)
+                }
+            }
+
+            Button(L10n.text("cancel"), role: .cancel) {}
+        } message: { prompt in
+            switch prompt.requirement {
+            case .leaveOrEnd:
+                Text(L10n.text("active_session_switch_message"))
+            case .endParkedSession:
+                Text(L10n.text("parked_session_switch_message"))
+            case .allowed:
+                EmptyView()
+            }
+        }
+        .alert(
+            L10n.text("retry_failed"),
+            isPresented: Binding(
+                get: { failureMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        failureMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button(L10n.text("ok"), role: .cancel) {}
+        } message: {
+            Text(failureMessage ?? "")
+        }
+    }
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { prompt != nil },
+            set: { isPresented in
+                if !isPresented {
+                    prompt = nil
+                }
+            }
+        )
+    }
+}
+
+extension View {
+    func cloudProviderSwitchConfirmation(
+        prompt: Binding<CloudProviderSwitchPrompt?>,
+        onSwitch: @escaping @MainActor (CloudGamingProvider) -> Void
+    ) -> some View {
+        modifier(
+            CloudProviderSwitchConfirmationModifier(
+                prompt: prompt,
+                onSwitch: onSwitch
+            )
+        )
+    }
+}
+
 @Observable
 @MainActor
 final class CloudNowNativeTabBarState {
@@ -378,6 +507,8 @@ struct CloudNowTabShell<Selection: CloudNowTabSelection, Content: TabContent<Sel
 
 private struct CloudGamingProviderMenu: View {
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+    @Environment(CloudSessionCoordinator.self) private var sessionCoordinator
+    @State private var providerSwitchPrompt: CloudProviderSwitchPrompt?
 
     let modeLifecycle: any CloudGamingProviderModeLifecycle
     let isInteractionReady: Bool
@@ -389,7 +520,7 @@ private struct CloudGamingProviderMenu: View {
             Menu {
                 ForEach(CloudGamingProvider.allCases) { provider in
                     Button {
-                        switchProvider(to: provider)
+                        requestProviderSwitch(to: provider)
                     } label: {
                         Label(
                             provider.displayName,
@@ -401,6 +532,16 @@ private struct CloudGamingProviderMenu: View {
                     .disabled(
                         provider == activeProvider
                             || providerCoordinator.isProviderInteractionBlocked
+                            || !providerCoordinator.capabilities(
+                                for: provider
+                            ).availability.isSupported
+                    )
+                    .accessibilityHint(
+                        providerCoordinator.capabilities(
+                            for: provider
+                        ).availability.unavailableReason.map {
+                            L10n.text($0.localizationKey)
+                        } ?? ""
                     )
                     .accessibilityIdentifier("provider-option.\(provider.rawValue)")
                 }
@@ -437,6 +578,23 @@ private struct CloudGamingProviderMenu: View {
             .accessibilityLabel(L10n.text("cloud_service"))
             .accessibilityValue(activeProvider.displayName)
             .accessibilityIdentifier("provider-switcher")
+            .cloudProviderSwitchConfirmation(
+                prompt: $providerSwitchPrompt,
+                onSwitch: switchProvider
+            )
+        }
+    }
+
+    private func requestProviderSwitch(to provider: CloudGamingProvider) {
+        let requirement = sessionCoordinator.switchRequirement(to: provider)
+        switch requirement {
+        case .allowed:
+            switchProvider(to: provider)
+        case .leaveOrEnd, .endParkedSession:
+            providerSwitchPrompt = CloudProviderSwitchPrompt(
+                targetProvider: provider,
+                requirement: requirement
+            )
         }
     }
 

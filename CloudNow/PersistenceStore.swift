@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 nonisolated protocol SecureCredentialStore: Sendable {
     func load() throws -> Data
@@ -112,6 +113,25 @@ nonisolated struct PersistentDataClearResult: Equatable, Sendable {
     }
 }
 
+nonisolated struct ProviderPersistentDataClearResult: Equatable, Sendable {
+    let provider: CloudGamingProvider
+    let credentialsRemoved: Bool
+
+    var isComplete: Bool {
+        credentialsRemoved
+    }
+
+    var failureDescription: String? {
+        guard !isComplete else { return nil }
+        return "Unable to remove the secure account credential store."
+    }
+}
+
+private nonisolated struct ProviderCredentialResetGenerations: Sendable {
+    var geForceNow: UInt64 = 0
+    var xboxCloudGaming: UInt64 = 0
+}
+
 /// `UserDefaults` is documented as thread-safe but is not annotated `Sendable`.
 /// This narrow adapter keeps the unchecked boundary in one place and exposes
 /// only the value types used by persistence.
@@ -150,6 +170,7 @@ final nonisolated class UserDefaultsPreferencesStore: PreferencesStore, @uncheck
 /// Serializes disk, UserDefaults, JSON, and Keychain work away from the UI actor.
 actor AppPersistenceStore {
     static let shared = AppPersistenceStore()
+    private static let maximumXboxCredentialRecordSize = 262_144
 
     struct GamesSnapshot {
         var favoriteIds: Set<String> = []
@@ -216,6 +237,9 @@ actor AppPersistenceStore {
     private var xboxAuthCredentialGeneration: UInt64 = 0
     private var cloudGamingProviderGeneration: UInt64 = 0
     private var cloudCatalogActivityGeneration: UInt64 = 0
+    private nonisolated let credentialResetGenerations = Mutex(
+        ProviderCredentialResetGenerations()
+    )
 
     init(
         preferences: any PreferencesStore = UserDefaultsPreferencesStore(),
@@ -603,6 +627,25 @@ actor AppPersistenceStore {
         try credentialStore.save(data)
     }
 
+    nonisolated func authSessionResetGeneration() -> UInt64 {
+        credentialResetGenerations.withLock { $0.geForceNow }
+    }
+
+    func saveAuthSession(
+        _ session: AuthSession,
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws {
+        guard resetGeneration == authSessionResetGeneration(),
+              generation >= authCredentialGeneration
+        else {
+            return
+        }
+        let data = try JSONEncoder().encode(session)
+        authCredentialGeneration = generation
+        try credentialStore.save(data)
+    }
+
     func deleteAuthSession(generation: UInt64) async throws {
         guard generation >= authCredentialGeneration else {
             return
@@ -611,9 +654,43 @@ actor AppPersistenceStore {
         try credentialStore.delete()
     }
 
+    func deleteAuthSession(
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws {
+        guard resetGeneration == authSessionResetGeneration(),
+              generation >= authCredentialGeneration
+        else {
+            return
+        }
+        authCredentialGeneration = generation
+        try credentialStore.delete()
+    }
+
     func loadXboxAuthSession() async throws -> XboxAuthSession? {
         let data = try xboxCredentialStore.load()
-        return try JSONDecoder().decode(XboxAuthSession.self, from: data)
+        guard data.count <= Self.maximumXboxCredentialRecordSize else {
+            throw XboxAuthError.persistenceUnavailable
+        }
+        let decoder = JSONDecoder()
+        if let credential = try? decoder.decode(
+            XboxRefreshTokenCredential.self,
+            from: data
+        ) {
+            return try credential.makeRefreshOnlySession()
+        }
+
+        // Version 0 stored Microsoft's complete OAuth response. Rewrite it
+        // immediately, returning a refresh-only in-memory session so legacy
+        // access and ID tokens never survive migration.
+        let legacySession = try decoder.decode(XboxAuthSession.self, from: data)
+        let credential = try XboxRefreshTokenCredential(session: legacySession)
+        let migratedData = try JSONEncoder().encode(credential)
+        guard migratedData.count <= Self.maximumXboxCredentialRecordSize else {
+            throw XboxAuthError.persistenceUnavailable
+        }
+        try xboxCredentialStore.save(migratedData)
+        return try credential.makeRefreshOnlySession()
     }
 
     func saveXboxAuthSession(
@@ -621,7 +698,34 @@ actor AppPersistenceStore {
         generation: UInt64
     ) async throws {
         guard generation >= xboxAuthCredentialGeneration else { return }
-        let data = try JSONEncoder().encode(session)
+        let credential = try XboxRefreshTokenCredential(session: session)
+        let data = try JSONEncoder().encode(credential)
+        guard data.count <= Self.maximumXboxCredentialRecordSize else {
+            throw XboxAuthError.persistenceUnavailable
+        }
+        xboxAuthCredentialGeneration = generation
+        try xboxCredentialStore.save(data)
+    }
+
+    nonisolated func xboxAuthSessionResetGeneration() -> UInt64 {
+        credentialResetGenerations.withLock { $0.xboxCloudGaming }
+    }
+
+    func saveXboxAuthSession(
+        _ session: XboxAuthSession,
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws {
+        guard resetGeneration == xboxAuthSessionResetGeneration(),
+              generation >= xboxAuthCredentialGeneration
+        else {
+            return
+        }
+        let credential = try XboxRefreshTokenCredential(session: session)
+        let data = try JSONEncoder().encode(credential)
+        guard data.count <= Self.maximumXboxCredentialRecordSize else {
+            throw XboxAuthError.persistenceUnavailable
+        }
         xboxAuthCredentialGeneration = generation
         try xboxCredentialStore.save(data)
     }
@@ -632,10 +736,30 @@ actor AppPersistenceStore {
         try xboxCredentialStore.delete()
     }
 
+    func deleteXboxAuthSession(
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws {
+        guard resetGeneration == xboxAuthSessionResetGeneration(),
+              generation >= xboxAuthCredentialGeneration
+        else {
+            return
+        }
+        xboxAuthCredentialGeneration = generation
+        try xboxCredentialStore.delete()
+    }
+
     /// Removes cache-backed preferences and files after callers have invalidated
     /// in-flight producers. Running this on the persistence actor serializes the
     /// deletion behind writes that were already submitted.
     func clearCachedData() -> [String] {
+        clearCachedData(for: .geForceNow)
+    }
+
+    /// Removes only cache-backed state owned by `provider`. Xbox catalog data is
+    /// memory-only, so its persistent cache operation is intentionally empty.
+    func clearCachedData(for provider: CloudGamingProvider) -> [String] {
+        guard provider == .geForceNow else { return [] }
         gameMetadataCacheGeneration &+= 1
         ownershipCacheGeneration &+= 1
         [
@@ -671,10 +795,65 @@ actor AppPersistenceStore {
         return failures
     }
 
+    /// Clears preferences and credentials owned by one provider while retaining
+    /// the other provider's account and settings. Callers remain responsible for
+    /// updating the shared provider selection after the reset succeeds.
+    func clearPersistentData(
+        for provider: CloudGamingProvider
+    ) -> ProviderPersistentDataClearResult {
+        let credentialsRemoved: Bool
+        switch provider {
+        case .geForceNow:
+            credentialResetGenerations.withLock { generations in
+                generations.geForceNow &+= 1
+            }
+            gameMetadataCacheGeneration &+= 1
+            ownershipCacheGeneration &+= 1
+            authCredentialGeneration &+= 1
+            preferences.keys()
+                .filter { $0.hasPrefix("gfn.") }
+                .forEach(preferences.removeObject(forKey:))
+            do {
+                try credentialStore.delete()
+                credentialsRemoved = true
+            } catch {
+                credentialsRemoved = false
+            }
+        case .xboxCloudGaming:
+            credentialResetGenerations.withLock { generations in
+                generations.xboxCloudGaming &+= 1
+            }
+            cloudCatalogActivityGeneration &+= 1
+            xboxAuthCredentialGeneration &+= 1
+            let catalogActivityPrefix = "\(Key.cloudCatalogActivityPrefix).\(provider.rawValue)."
+            preferences.keys()
+                .filter {
+                    $0 == Key.xboxCloudStreamSettings
+                        || $0 == XboxCloudInstallationIdentityStore.preferenceKey
+                        || $0.hasPrefix(catalogActivityPrefix)
+                }
+                .forEach(preferences.removeObject(forKey:))
+            do {
+                try xboxCredentialStore.delete()
+                credentialsRemoved = true
+            } catch {
+                credentialsRemoved = false
+            }
+        }
+        return ProviderPersistentDataClearResult(
+            provider: provider,
+            credentialsRemoved: credentialsRemoved
+        )
+    }
+
     /// Clears every preference and credential after all producers have been
     /// invalidated. Actor serialization prevents an earlier queued write from
     /// restoring data after this deletion completes.
     func clearPersistentData() -> PersistentDataClearResult {
+        credentialResetGenerations.withLock { generations in
+            generations.geForceNow &+= 1
+            generations.xboxCloudGaming &+= 1
+        }
         ownershipCacheGeneration &+= 1
         cloudCatalogActivityGeneration &+= 1
         authCredentialGeneration &+= 1

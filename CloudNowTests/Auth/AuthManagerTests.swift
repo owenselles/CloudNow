@@ -453,6 +453,44 @@ struct AuthManagerTests {
     }
 
     @MainActor
+    @Test("Reset generation fence rejects a delayed GFN login rollback")
+    func resetFenceRejectsDelayedLoginRollback() async throws {
+        let harness = CredentialResetTestHarness()
+        let priorSession = makeSession(
+            expiresAt: Date().addingTimeInterval(3600)
+        )
+        try await harness.persistence.saveAuthSession(
+            priorSession,
+            generation: 0
+        )
+        let persistence = DelayedGeForceNowRollbackPersistence(
+            upstream: harness.persistence
+        )
+        let api = FakeAuthAPI(blockDevicePoll: true)
+        let manager = AuthManager(
+            api: api,
+            persistence: persistence,
+            backgroundScheduler: .disabled,
+            schedulesAutomaticRefresh: false,
+            initialSession: priorSession
+        )
+
+        let login = manager.login()
+        await api.waitForDevicePollRequest()
+        manager.cancelLogin()
+        await persistence.waitUntilSaveIsBlocked()
+
+        _ = await harness.persistence.clearPersistentData(for: .geForceNow)
+        await persistence.releaseSave()
+        await persistence.waitUntilSaveIsForwarded()
+        await login.value
+
+        await #expect(throws: CredentialResetTestStoreError.notFound) {
+            _ = try await harness.persistence.loadAuthSession()
+        }
+    }
+
+    @MainActor
     @Test("Device-flow denial is reported instead of silently restarting")
     func deviceFlowDenialFails() async {
         let persistence = FakeAuthPersistence()
