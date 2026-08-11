@@ -56,6 +56,23 @@ struct CloudGamingCapabilitiesTests {
         #expect(policy.delay(beforeAttempt: 4) == nil)
     }
 
+    @Test("Network targets preserve optional service labels")
+    func networkTestTarget() {
+        #expect(
+            CloudNetworkTestTarget(address: "https://latency.example")
+                == CloudNetworkTestTarget(
+                    address: "https://latency.example",
+                    displayName: nil
+                )
+        )
+        #expect(
+            CloudNetworkTestTarget(
+                address: "https://regional.example",
+                displayName: "West Europe"
+            ).displayName == "West Europe"
+        )
+    }
+
     @Test("Only connecting playback states own a local peer")
     func presentationPeerOwnership() {
         let failure = CloudStreamPresentationFailure(
@@ -267,6 +284,46 @@ struct CloudGamingCapabilitiesTests {
         #expect(snapshot.account.unavailableReason?.code == .accountRequired)
     }
 
+    @Test("Xbox catalog input requirements fail closed on tvOS")
+    func xboxCatalogInputRequirements() {
+        let controller = XboxCatalogItem(
+            id: "controller",
+            title: "Controller",
+            artworkURL: nil,
+            supportedInputTypes: [.controller]
+        )
+        let keyboardMouse = XboxCatalogItem(
+            id: "keyboard-mouse",
+            title: "Keyboard and Mouse",
+            artworkURL: nil,
+            supportedInputTypes: [.mouseAndKeyboard]
+        )
+        let either = XboxCatalogItem(
+            id: "either",
+            title: "Either",
+            artworkURL: nil,
+            supportedInputTypes: [.controller, .mouseAndKeyboard]
+        )
+        let touchOnly = XboxCatalogItem(
+            id: "touch",
+            title: "Touch",
+            artworkURL: nil,
+            supportedInputTypes: [.touch]
+        )
+
+        #expect(controller.cloudRequiredInputDevices == [.controller])
+        #expect(controller.hasCompatibleInput(connectedDevices: [.controller]))
+        #expect(!controller.hasCompatibleInput(connectedDevices: [.keyboardMouse]))
+        #expect(!controller.isTouchOnlyOnTVOS)
+        #expect(keyboardMouse.cloudRequiredInputDevices == [.keyboardMouse])
+        #expect(keyboardMouse.hasCompatibleInput(connectedDevices: [.keyboardMouse]))
+        #expect(either.cloudRequiredInputDevices == [.controller, .keyboardMouse])
+        #expect(either.hasCompatibleInput(connectedDevices: [.controller]))
+        #expect(touchOnly.cloudRequiredInputDevices.isEmpty)
+        #expect(!touchOnly.hasCompatibleInput(connectedDevices: [.touch]))
+        #expect(touchOnly.isTouchOnlyOnTVOS)
+    }
+
     @MainActor
     @Test("Session coordinator enforces one server session and peer")
     func sessionCoordinatorEnforcesGlobalLimits() throws {
@@ -297,6 +354,9 @@ struct CloudGamingCapabilitiesTests {
                 provider: .xboxCloudGaming,
                 serverSessionID: "xbox-session"
             )
+        }
+        #expect(throws: CloudSessionConflict.self) {
+            _ = try coordinator.attachLocalPeer(for: .xboxCloudGaming)
         }
 
         let localPeer = try coordinator.attachLocalPeer(for: .geForceNow)
@@ -352,11 +412,16 @@ struct CloudGamingCapabilitiesTests {
         coordinator.parkServerSession(bound, expiresAt: .distantFuture)
         let adopted = try coordinator.adoptParkedServerSession(
             provider: .xboxCloudGaming,
-            serverSessionID: "xbox-service-redacted"
+            serverSessionID: "xbox-service-redacted",
+            actions: CloudServerSessionActions(
+                leave: { .distantFuture },
+                end: { true }
+            )
         )
 
         #expect(adopted.id == provisional.id)
         #expect(adopted.phase == .active)
+        #expect(coordinator.canLeaveServerSession(adopted))
         #expect(throws: CloudSessionConflict.self) {
             _ = try coordinator.adoptParkedServerSession(
                 provider: .xboxCloudGaming,
@@ -498,6 +563,12 @@ struct CloudGamingCapabilitiesTests {
         let retainedLease = try #require(coordinator.serverSession)
         #expect(retainedLease.id == lease.id)
         #expect(actions.endCount == 1)
+        #expect(throws: CloudSessionConflict.self) {
+            _ = try coordinator.adoptParkedServerSession(
+                provider: .xboxCloudGaming,
+                serverSessionID: "expired-session"
+            )
+        }
         #expect(
             coordinator.switchRequirement(to: .geForceNow)
                 == .endParkedSession(retainedLease)
@@ -570,6 +641,38 @@ struct CloudGamingCapabilitiesTests {
     }
 
     @MainActor
+    @Test("A scheduled expiry stops after its lease is ended")
+    func scheduledExpiryStopsAfterLeaseEnds() async throws {
+        let clock = CapabilityDateClock(Date(timeIntervalSince1970: 0))
+        let sleeps = CapabilitySleepGate()
+        let resumed = CapabilityAsyncGate()
+        let coordinator = CloudSessionCoordinator(
+            now: { clock.now },
+            sleep: { delay in
+                try await sleeps.sleep(for: delay)
+                await resumed.open()
+            }
+        )
+        let lease = try coordinator.reserveServerSession(
+            provider: .geForceNow,
+            serverSessionID: "ended-before-expiry",
+            actions: CloudServerSessionActions(end: { true })
+        )
+
+        coordinator.parkServerSession(
+            lease,
+            expiresAt: Date(timeIntervalSince1970: 100)
+        )
+        await sleeps.waitForRequestCount(1)
+        coordinator.endServerSession(lease)
+        await sleeps.resumeNext()
+        await resumed.wait()
+        await Task.yield()
+
+        #expect(coordinator.serverSession == nil)
+    }
+
+    @MainActor
     @Test("Only the current lease can mutate session ownership")
     func staleLeaseCannotMutateSession() throws {
         let coordinator = CloudSessionCoordinator()
@@ -628,6 +731,30 @@ struct CloudGamingCapabilitiesTests {
     }
 
     @MainActor
+    @Test(
+        "Leave rejects missing or expired resumable lifetimes",
+        arguments: [
+            Date?.none,
+            Date(timeIntervalSince1970: 99),
+        ]
+    )
+    func leaveRejectsInvalidExpiry(_ expiry: Date?) async throws {
+        let now = Date(timeIntervalSince1970: 100)
+        let coordinator = CloudSessionCoordinator(now: { now })
+        let lease = try coordinator.reserveServerSession(
+            provider: .xboxCloudGaming,
+            serverSessionID: "invalid-leave-expiry",
+            actions: CloudServerSessionActions(
+                leave: { expiry },
+                end: { true }
+            )
+        )
+
+        #expect(await !(coordinator.leaveServerSession(lease)))
+        #expect(coordinator.serverSession == lease)
+    }
+
+    @MainActor
     @Test("End executes provider work before releasing the lease")
     func endExecutesProviderAction() async throws {
         let coordinator = CloudSessionCoordinator()
@@ -677,6 +804,9 @@ struct CloudGamingCapabilitiesTests {
         }
         await entered.wait()
 
+        #expect(throws: CloudSessionConflict.self) {
+            _ = try coordinator.attachLocalPeer(for: .geForceNow)
+        }
         #expect(throws: CloudSessionConflict.self) {
             _ = try coordinator.reserveServerSession(
                 provider: .xboxCloudGaming,

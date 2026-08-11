@@ -297,7 +297,17 @@ Each run writes a timestamped result bundle and compact coverage summaries under
 TestArtifacts/<timestamp>-<mode>/CloudNow-<mode>.xcresult
 TestArtifacts/<timestamp>-<mode>/Coverage/targets.txt
 TestArtifacts/<timestamp>-<mode>/Coverage/targets.json
+TestArtifacts/<timestamp>-<mode>/Coverage/required-sources.txt
+TestArtifacts/<timestamp>-<mode>/Coverage/required-sources.json
 ```
+
+Successful full and unit runs require 100% xccov executable-line coverage for
+the shared deterministic capability model, its GFN adapter, and its Xbox
+adapter. UI-only runs skip this scoped gate. With the CI toolchain (Xcode 26.6,
+Apple Swift 6.3.3), LLVM reports a zero branch denominator for these Swift
+sources. The gate therefore measures executable lines only and does not claim
+an unavailable branch-coverage percentage; deterministic tests enumerate the
+behavioral paths separately.
 
 `TestArtifacts/` is gitignored. Unit and integration tests use Swift Testing (`import Testing`, `@Suite`, `@Test`, `#expect`, and `#require`). XCTest is reserved for `XCUIApplication` UI automation.
 

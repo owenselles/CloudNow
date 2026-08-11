@@ -990,6 +990,9 @@ struct XboxCloudStreamControllerTests {
         #expect(controller.state == .idle)
         #expect(controller.canContinueSession)
         #expect(controller.resumableSessionExpiresAt == expiry)
+        #expect(
+            controller.cloudPresentationState == .resumable(expiresAt: expiry)
+        )
         #expect(controller.activeGameID == "fixture-title")
         #expect(controller.videoTrack == nil)
         #expect(!controller.microphoneEnabledForConnection)
@@ -1009,6 +1012,7 @@ struct XboxCloudStreamControllerTests {
         await controller.endSession()
 
         #expect(controller.state == .idle)
+        #expect(controller.cloudPresentationState == .idle)
         #expect(!controller.microphoneEnabledForConnection)
         #expect(await lifecycle.deleteCount() == 1)
     }
