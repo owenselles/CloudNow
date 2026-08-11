@@ -355,7 +355,7 @@ struct XboxCatalogViewModelTests {
         viewModel?.toggleFavorite(first)
         await persistence.waitUntilFavoriteSaveIsSuspended()
         viewModel?.toggleFavorite(second)
-        weak var releasedViewModel = viewModel
+        weak let releasedViewModel = viewModel
         viewModel = nil
 
         #expect(releasedViewModel == nil)
@@ -507,7 +507,7 @@ struct XboxCatalogViewModelTests {
             id: "owned-free",
             accessKinds: [.freeWithAds],
             genres: ["Racing"],
-            supportedInputTypes: [.touch],
+            supportedInputTypes: [.controller, .touch],
             isOwned: true
         )
         let favoriteOwnedDual = makeAccessItem(
@@ -558,9 +558,11 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.filterOptions.standardCount == 3)
         #expect(viewModel.filterOptions.freeWithAdsCount == 2)
         #expect(viewModel.filterOptions.ownedCount == 2)
-        #expect(viewModel.filterOptions.inputTypeCounts[.controller] == 2)
-        #expect(viewModel.filterOptions.inputTypeCounts[.touch] == 1)
+        #expect(viewModel.filterOptions.inputTypeCounts[.controller] == 3)
+        #expect(viewModel.filterOptions.inputTypeCounts[.touch] == nil)
         #expect(viewModel.filterOptions.inputTypeCounts[.mouseAndKeyboard] == 2)
+        #expect(viewModel.filterOptions.playableCount == 4)
+        #expect(viewModel.filterOptions.unavailableCount == 0)
         #expect(!viewModel.hasActiveBrowseFilters)
 
         var state = XboxCatalogFilterState()
@@ -612,6 +614,41 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems == items)
         #expect(viewModel.filterState.isEmpty)
         #expect(!viewModel.hasActiveBrowseFilters)
+    }
+
+    @Test("Catalog filter sections expose only non-empty options")
+    func filterSectionAvailabilityIsDataDriven() {
+        #expect(!XboxCatalogFilterOptions.empty.showsCollectionsSection)
+        #expect(XboxCatalogFilterOptions.empty.availableAccessFilters.isEmpty)
+
+        let accessOnly = XboxCatalogFilterOptions(
+            genres: [],
+            inputTypeCounts: [:],
+            favoriteCount: 0,
+            standardCount: 0,
+            freeWithAdsCount: 2,
+            ownedCount: 0,
+            playableCount: 2,
+            unavailableCount: 0,
+            unavailableReasonCounts: [:]
+        )
+        #expect(!accessOnly.showsCollectionsSection)
+        #expect(accessOnly.availableAccessFilters == [.freeWithAds])
+        #expect(accessOnly.accessCount(.freeWithAds) == 2)
+
+        let favoritesOnly = XboxCatalogFilterOptions(
+            genres: [],
+            inputTypeCounts: [:],
+            favoriteCount: 1,
+            standardCount: 0,
+            freeWithAdsCount: 0,
+            ownedCount: 0,
+            playableCount: 1,
+            unavailableCount: 0,
+            unavailableReasonCounts: [:]
+        )
+        #expect(favoritesOnly.showsCollectionsSection)
+        #expect(favoritesOnly.availableAccessFilters.isEmpty)
     }
 
     @MainActor
@@ -669,6 +706,61 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems == [haloWars])
         #expect(viewModel.browseFilterBaseCount == 3)
         #expect(viewModel.filteredItemCount == 1)
+    }
+
+    @MainActor
+    @Test("Playability and unavailable-reason filters stay reasoned")
+    func reasonedPlayabilityFilters() async {
+        let playable = makeAccessItem(
+            id: "playable",
+            accessKinds: [.standard],
+            supportedInputTypes: [.controller]
+        )
+        let planRequired = makeAccessItem(
+            id: "plan-required",
+            accessKinds: [.standard],
+            supportedInputTypes: [.controller],
+            availability: .requiresEligibility,
+            playabilityReason: .entitlementRequired
+        )
+        let timeExhausted = makeAccessItem(
+            id: "time-exhausted",
+            accessKinds: [.freeWithAds],
+            supportedInputTypes: [.controller],
+            availability: .requiresEligibility,
+            playabilityReason: .gameplayTimeExhausted
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: [playable, planRequired, timeExhausted],
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: XboxCatalogActivityPersistenceProbe()
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.filterOptions.playableCount == 1)
+        #expect(viewModel.filterOptions.unavailableCount == 2)
+        #expect(
+            viewModel.filterOptions.unavailableReasonCounts[
+                .entitlementRequired
+            ] == 1
+        )
+
+        var state = XboxCatalogFilterState()
+        state.playability = [.unavailable]
+        viewModel.filterState = state
+        #expect(viewModel.visibleItems == [planRequired, timeExhausted])
+
+        state.unavailableReasons = [.gameplayTimeExhausted]
+        viewModel.filterState = state
+        #expect(viewModel.visibleItems == [timeExhausted])
+        #expect(viewModel.activeBrowseFilterCount == 2)
     }
 
     @MainActor
@@ -1022,10 +1114,11 @@ struct XboxCatalogViewModelTests {
             snapshot: XboxCatalogSnapshot(items: items, fetchedAt: fetchedAt)
         )
         let factory = XboxCatalogClientFactoryProbe(client: client)
+        let cache = XboxCatalogMemoryCache()
         let viewModel = XboxCatalogViewModel(
             makeClient: { factory.makeClient() },
             account: account,
-            cache: XboxCatalogMemoryCache(),
+            cache: cache,
             freshnessInterval: 0
         )
 
@@ -1037,6 +1130,7 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems == items)
 
         viewModel.prepareForCacheClear()
+        await cache.clear()
 
         #expect(viewModel.visibleItems.isEmpty)
         #expect(viewModel.phase == .idle)
@@ -1151,6 +1245,57 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems == items)
         #expect(viewModel.phase == .loaded)
         #expect(await client.recordedRequests().isEmpty)
+    }
+
+    @MainActor
+    @Test("Provider re-entry presents stale cache until explicit refresh")
+    func staleCacheWaitsForExplicitRefresh() async {
+        let cachedItems = makeItems(count: 2)
+        let refreshedItems = [
+            makeAccessItem(id: "refreshed", accessKinds: [.standard]),
+        ]
+        let cachedSnapshot = XboxCatalogSnapshot(
+            items: cachedItems,
+            fetchedAt: fetchedAt
+        )
+        let refreshedSnapshot = XboxCatalogSnapshot(
+            items: refreshedItems,
+            fetchedAt: fetchedAt.addingTimeInterval(3601)
+        )
+        let cache = XboxCatalogMemoryCache()
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        await cache.store(cachedSnapshot, for: key)
+        let client = XboxCatalogClientProbe(snapshot: refreshedSnapshot)
+        let viewModel = XboxCatalogViewModel(
+            client: client,
+            account: account,
+            cache: cache,
+            now: { fetchedAt.addingTimeInterval(3600) }
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.visibleItems == cachedItems)
+        #expect(viewModel.phase == .loaded)
+        #expect(viewModel.showsRefreshWarning)
+        #expect(viewModel.catalogLastUpdatedAt == fetchedAt)
+        #expect(await client.recordedRequests().isEmpty)
+
+        await viewModel.load()
+        #expect(await client.recordedRequests().isEmpty)
+
+        await viewModel.reload()
+
+        #expect(viewModel.visibleItems == refreshedItems)
+        #expect(viewModel.phase == .loaded)
+        #expect(!viewModel.showsRefreshWarning)
+        #expect(await cache.snapshot(for: key) == refreshedSnapshot)
+        #expect(await client.recordedRequests().count == 1)
+        #expect(await client.recordedRefreshAccounts() == [account])
     }
 
     @MainActor
@@ -1296,7 +1441,7 @@ struct XboxCatalogViewModelTests {
     }
 
     @MainActor
-    @Test("A stale catalog remains visible when its refresh fails")
+    @Test("A stale catalog remains visible after explicit refresh fails")
     func staleCacheSurvivesRefreshFailure() async {
         let items = makeItems(count: 4)
         let snapshot = XboxCatalogSnapshot(items: items, fetchedAt: fetchedAt)
@@ -1319,6 +1464,9 @@ struct XboxCatalogViewModelTests {
         )
 
         await viewModel.load()
+        #expect(await client.recordedRequests().isEmpty)
+
+        await viewModel.reload()
 
         #expect(viewModel.visibleItems == items)
         #expect(viewModel.phase == .loaded)
@@ -1777,7 +1925,9 @@ struct XboxCatalogViewModelTests {
         accessKinds: [XboxCloudAccessKind],
         genres: [String] = [],
         supportedInputTypes: Set<XboxCloudInputType> = [],
-        isOwned: Bool = false
+        isOwned: Bool = false,
+        availability: XboxCloudRouteAvailability = .playable,
+        playabilityReason: XboxCloudRoutePlayabilityReason? = nil
     ) -> XboxCatalogItem {
         XboxCatalogItem(
             id: id,
@@ -1789,7 +1939,9 @@ struct XboxCatalogViewModelTests {
             routes: accessKinds.enumerated().map { index, accessKind in
                 XboxCloudTitleRoute(
                     titleID: "\(id)-route-\(index)",
-                    accessKind: accessKind
+                    accessKind: accessKind,
+                    availability: availability,
+                    playabilityReason: playabilityReason
                 )
             }
         )

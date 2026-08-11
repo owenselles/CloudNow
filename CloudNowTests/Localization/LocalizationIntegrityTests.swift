@@ -5,29 +5,110 @@ import Testing
 @Suite("Localization integrity and locale mapping")
 @MainActor
 struct LocalizationIntegrityTests {
-    private static let xboxUIKeys: Set<String> = [
+    /// Complete manifest of cloud UI keys added on this provider branch versus main.
+    private static let branchAddedCloudUIKeys: Set<String> = [
+        "about",
+        "access",
+        "access_not_confirmed",
+        "accessibility",
+        "account_access_required",
+        "accounts_stay_signed_in_when_switching_services",
+        "active_service",
+        "active_session_switch_message",
+        "awaiting_official_xbox_cloud_support",
+        "browse",
+        "catalog_last_updated",
+        "catalog_may_be_out_of_date",
+        "choose_another_service",
+        "choose_cloud_gaming_service",
         "cloud_gaming_access",
+        "cloud_play_unavailable",
+        "cloud_service",
+        "cloud_service_unavailable",
+        "cloud_session_active",
+        "cloud_session_in_use",
+        "compatible_input_required",
+        "connected",
+        "controller_changes_next_session",
+        "details",
+        "developer",
+        "end_and_switch_to_service",
+        "end_session_before_sign_out",
+        "ending_session",
         "free_with_ads",
         "free_with_ads_session_description",
+        "game_pass",
+        "gameplay_time_exhausted",
         "high_contrast",
+        "info",
+        "input",
+        "keyboard_and_mouse",
         "magnifier",
+        "membership",
+        "microsoft_account",
+        "microsoft_sign_in_code_expired",
+        "microsoft_sign_in_declined",
         "not_eligible",
+        "owned",
+        "parked_session_switch_message",
+        "playability",
+        "playable",
+        "publisher",
+        "rating",
+        "requesting_microsoft_sign_in_code",
+        "requires_xbox_cloud_subscription",
+        "reset_active_service_confirmation_message",
+        "reset_failed",
+        "screenshots",
         "share_optional_diagnostic_data",
+        "sign_in_to_xbox_cloud_gaming",
+        "sign_in_with_microsoft",
         "stream_free_with_ads",
+        "subscription_access",
+        "switch_to_service",
         "text_to_speech",
+        "touch",
+        "unavailable",
+        "unavailable_reasons",
+        "use_geforce_now",
+        "verifying_xbox_cloud_access",
+        "waiting_for_microsoft_sign_in",
         "xbox_accessibility",
         "xbox_allocating_session",
+        "xbox_cloud_catalog",
+        "xbox_cloud_catalog_unavailable",
+        "xbox_cloud_gaming",
+        "xbox_cloud_runtime_inactive_message",
+        "xbox_cloud_unconfigured_message",
+        "xbox_compatibility_profile_invalid",
         "xbox_connecting_stream",
         "xbox_controller_changes_next_session",
+        "xbox_empty_home_message",
         "xbox_ending_session",
         "xbox_estimated_wait",
         "xbox_free_with_ads_candidate_description",
+        "xbox_launch_unavailable",
         "xbox_optional_data_description",
         "xbox_privacy",
         "xbox_provisioning_console",
         "xbox_requesting_access",
         "xbox_stream_settings",
         "xbox_waiting_capacity",
+    ]
+
+    /// Product names intentionally remain unchanged in every locale.
+    private static let brandedEnglishValueAllowlist: Set<String> = [
+        "game_pass",
+        "xbox_cloud_gaming",
+    ]
+
+    /// These short UI nouns are valid identical cognates in the listed language.
+    private static let englishCognateAllowlistByLanguage: [String: Set<String>] = [
+        "da": ["input"],
+        "de": ["details", "info", "screenshots", "touch"],
+        "id": ["info", "input"],
+        "ms": ["input"],
+        "nl": ["details"],
     ]
 
     struct MappingCase: Sendable {
@@ -49,11 +130,33 @@ struct LocalizationIntegrityTests {
         }
     }
 
-    @Test("Every locale directly provides every Xbox UI translation")
-    func everyTableProvidesXboxUIKeys() {
+    @Test("Every locale directly provides every branch-added cloud UI translation")
+    func everyTableProvidesBranchAddedCloudUIKeys() {
+        #expect(Self.branchAddedCloudUIKeys.count == 87)
         for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key }) {
-            let missing = Self.xboxUIKeys.subtracting(table.keys)
-            #expect(missing.isEmpty, "\(locale) is missing Xbox UI keys: \(missing.sorted())")
+            let missing = Self.branchAddedCloudUIKeys.subtracting(table.keys)
+            #expect(missing.isEmpty, "\(locale) is missing cloud UI keys: \(missing.sorted())")
+        }
+    }
+
+    @Test("Branch-added cloud UI translations do not fall back to English")
+    func branchAddedCloudUIValuesAreLocalized() {
+        let english = L10n.translationTable(for: "en-US")
+
+        for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key })
+            where Locale(identifier: locale).language.languageCode?.identifier != "en"
+        {
+            let language = Locale(identifier: locale)
+                .language.languageCode?.identifier ?? locale
+            let allowedMatches = Self.brandedEnglishValueAllowlist.union(
+                Self.englishCognateAllowlistByLanguage[language] ?? []
+            )
+            for key in Self.branchAddedCloudUIKeys.sorted() {
+                #expect(
+                    table[key] != english[key] || allowedMatches.contains(key),
+                    "\(locale).\(key) repeats English without an allowlist entry"
+                )
+            }
         }
     }
 
