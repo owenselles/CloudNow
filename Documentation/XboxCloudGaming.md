@@ -33,6 +33,13 @@ Permitted inputs are:
 The two providers share CloudNow infrastructure where it is genuinely generic;
 they do not share or translate wire protocols.
 
+Xbox production wire values are owned by one immutable, versioned compatibility
+profile. It validates Microsoft endpoint hosts and paths, offering order,
+Content Access offerings and plan-product mappings, SDP version ranges, and
+data-channel descriptors before the Xbox runtime is exposed. If validation
+fails, the app keeps GeForce NOW available and disables Xbox streaming with a
+localized compatibility explanation.
+
 ## Product flow
 
 1. A fresh install shows two equal CloudNow choices: GeForce NOW and Xbox Cloud
@@ -44,42 +51,46 @@ they do not share or translate wire protocols.
    Xbox Live and XSTS authorization.
 3. GeForce NOW and Xbox keep independent credential records. Signing into or
    switching away from one does not sign the other account out.
-4. After sign-in, each provider presents a distinct CloudNow mode with its own
-   Home, Browse, Settings, catalog state, launch flow, and player.
-5. Xbox Home includes a separate `Stream free with ads` rail populated from
-   Microsoft's current public preview catalog. Browse offers an All / Free with
-   ads filter, and each selection retains its exact authenticated Xbox launch
-   route. Microsoft session creation is the final authority for ad-backed access;
-   CloudNow does not incorrectly gate that route on standard subscription
-   entitlement fields, which remain false for valid ad-backed launches.
-   Settings reports the authoritative Game Pass membership when optional Content
-   Access metadata is available; metadata failure never blocks catalog discovery
-   or standard streaming.
+4. After sign-in, Xbox presents Home, Library, and Settings while GeForce NOW
+   retains its existing Home, Library, Store, Settings, launch flow, and player.
+5. Xbox Home contains only Continue Playing, Recently Played, and Favorites when
+   those sections have content. Library contains the unified catalog and shows
+   only data-backed filters. Unavailable titles remain visible with a localized
+   account, access, region, input, time-limit, or service reason. Confirmed
+   ad-supported routes remain ordinary playable items with an Ads badge;
+   Microsoft owns any advertising experience.
 6. A top-left provider dropdown switches between the two modes. There is no
    merged home screen, catalog, settings form, or provider-branded borrowed UI.
-7. Before a switch completes, the outgoing mode stops its active stream,
-   controller sampler, WebRTC peer, polling, and catalog work. Small persisted
-   account records remain so switching back does not require another QR login.
-8. Xbox Play allocates one session, shows CloudNow queue/provisioning/connection
-   states, then presents video in CloudNow's full-screen player. Cancel and End
-   Session both perform best-effort server deletion and local teardown.
+7. A global coordinator permits one cloud-server session and one local WebRTC
+   peer. Switching with an active session offers Leave or End; a parked session
+   must be ended before the other provider can start. A failed server deletion
+   keeps the lease quarantined instead of silently allowing a second session.
+8. Xbox Play allocates one session, shows shared queue/provisioning/connection
+   states, then presents video in CloudNow's full-screen player. Leave retains a
+   resumable allocation only until its service expiry. Continue reuses that
+   allocation; explicit End deletes it and performs local teardown.
 
 ## Architecture
 
 The root `CloudGamingProviderCoordinator` persists only the selected provider and
-exposes the matching provider configuration. GeForce NOW remains concrete and
-unchanged. Xbox dependencies are composed once, remain lazy, and are reachable
+exposes the matching provider configuration. `CloudGamingCore`-style contracts in
+the app target describe narrow account, catalog, stream-option, input,
+microphone, resume, reconnect, and diagnostics capabilities. Provider adapters
+consume those contracts without importing one another. GeForce NOW behavior is
+preserved behind an adapter; Xbox dependencies remain lazy and are reachable
 only while Xbox is selected.
 
 CloudNow deliberately reuses:
 
 - App-owned login chrome, QR/PIN presentation, navigation, focus, and dialogs.
-- Actor-backed Keychain/UserDefaults persistence and reset behavior.
+- Actor-backed Keychain/UserDefaults persistence, provider-scoped reset fences,
+  and provider-scoped cache clearing.
 - Bounded lazy catalog grids, artwork validation, request coalescing,
   downsampling, and decoded-image cache.
 - Exactly one `CloudRTCRuntime.peerConnectionFactory`, the existing audio device,
   native video surface, and controller haptics implementation.
-- Common cancellation, memory-pressure, app-lifecycle, and error-redaction
+- Shared settings rows, launch presentation, pause menu, HUD, network-test UI,
+  cancellation, memory-pressure, lifecycle, accessibility, and error-redaction
   primitives.
 
 CloudNow deliberately keeps separate:
@@ -89,6 +100,27 @@ CloudNow deliberately keeps separate:
 - Catalog and session requests, REST SDP/ICE signaling, and data-channel formats.
 - Xbox legacy-input encoding, channel handshake, feedback, and rumble decoding.
 - Xbox stream preferences, accessibility flags, UI state, and player lifecycle.
+
+Provider-scoped Clear Cache removes only attributable catalog, routing, and
+diagnostic-cache artifacts for the selected provider. The decoded-artwork cache
+and shared `URLCache` are deliberately preserved because their entries do not
+carry provider ownership; app-wide cache maintenance may evict both.
+
+### Diagnostics and tvOS export limitation
+
+Debug builds expose the same Diagnostics and RTC Event Log controls used by the
+shared settings and stream HUD. Xbox RTC logging is opt-in, local-only, bounded
+to two 1 MiB files, and redacted by construction: it records only allowlisted
+connection lifecycle events and never writes SDP, ICE candidates, endpoints,
+tokens, account/session identifiers, or channel payloads. Release builds force
+both diagnostics controls off even if a Debug build previously persisted them.
+
+tvOS 26.5 marks `ShareLink`, `UIActivityViewController`, the document picker,
+and SwiftUI service/file export surfaces unavailable. CloudNow therefore does
+not advertise local diagnostic export for either provider on tvOS and does not
+invent a network-upload path. Logs remain in the app cache and are removable
+through cache maintenance; a future export surface requires a supported tvOS
+API or a separately reviewed, explicit transfer design.
 
 ### Xbox request path
 
@@ -103,37 +135,37 @@ CloudNow deliberately keeps separate:
    exposes a PUID, token, or raw response, and any failure is isolated from the
    cloud runtime. A shared, two-entry, five-minute actor cache coalesces the
    catalog and Settings requests without extending credential lifetime.
-5. The Xbox catalog client keeps Microsoft's authenticated title response as the
-   authority for standard launch routes. Separately, a credential-free request
-   discovers product identifiers from Microsoft's current `Stream with ads`
-   catalog rail. Its subscription context follows Microsoft's bounded cloud-pass
-   allowlist and uses the required `none` sentinel when no supported cloud pass
-   is active; unrelated Content Access passes are never forwarded. CloudNow then
-   resolves their localized names and posters through Microsoft's public Game
-   Pass metadata endpoint, and maps them to exact launch identifiers through the
-   authenticated title service. The public metadata request sends no Microsoft
-   credential. It tries Microsoft's 400-product limit first and retries only
-   size/client rejections in 200-product batches. A title returned by the
-   authenticated mapping is offered for launch; standard `hasEntitlement`,
-   `userPrograms`, and remaining-time hints are diagnostic only because they do
-   not represent ad-backed authorization. Session creation remains the final
-   server authority. Standard and free routes for one product are merged without
-   losing distinct title identifiers, and a playable duplicate always wins.
-6. Play creates one v5 cloud session, polls bounded provisioning states, obtains
-   the console-transfer URI, submits the short-lived Microsoft transfer token,
-   and retrieves configuration/signaling context.
+5. The Xbox catalog client retains service eligibility, ownership, streaming
+   program, and remaining-time evidence for every route. Content Access uses the
+   exact offering selected by the coalesced Game Streaming login. A
+   credential-free request discovers the current ad-supported catalog; localized
+   metadata is resolved without sending a Microsoft credential. Standard and ad
+   routes for one product are merged without losing distinct title identifiers,
+   and only service-confirmed ad routes are marked playable.
+6. Play creates one v5 cloud session, polls queue and provisioning states within
+   an ETA-aware allocation deadline capped at 15 minutes, obtains the
+   console-transfer URI, submits the short-lived Microsoft transfer token, and
+   retrieves configuration/signaling context. Session and signaling bodies are
+   incrementally bounded before buffering.
 7. The native transport creates one peer from CloudNow's shared factory,
-   exchanges SDP and ICE over the session REST endpoints, and opens Microsoft's
-   chat, control, message, input, reliable-input, and unreliable-input channels.
-8. A dedicated serial sampler sends bounded legacy gamepad frames only while a
-   stream is active. Controller notifications maintain stable slots; feedback is
-   decoded into CloudNow's existing haptics component.
-9. Each service heartbeat also forces one unchanged slot-zero controller report
-   through the existing input sampler, keeping idle sessions active without a
-   second timer or synthetic stick movement. Keepalive and media monitoring are
-   generation-fenced. Stream exit, provider switch, sign-out, reset,
-   cancellation, and deinitialization all converge on idempotent local teardown
-   plus best-effort session deletion.
+   exchanges SDP and ICE over the session REST endpoints, and negotiates
+   Microsoft's chat, control, message, input, reliable-input, and
+   unreliable-input channels. Every returned channel version is validated;
+   unsupported optional channels are disabled while video and a supported input
+   path remain required.
+8. A dedicated serial sampler sends bounded legacy or modern input frames only
+   while a stream is active. Its internal controller capacity is bounded by the
+   compatibility profile, but CloudNow does not advertise a live-service slot
+   count until Microsoft confirms one. Xbox and PlayStation controllers,
+   Menu/View/Share, physical keyboard and mouse, and Escape-to-pause share the
+   negotiated input path. The current service contract has no confirmed Unicode
+   or composition channel, so CloudNow does not advertise native text entry.
+9. Heartbeats retransmit unchanged input state without synthetic stick movement.
+   Video and audio readiness are monitored. Media loss reconnects the existing
+   allocation up to three times with exponential backoff inside one absolute
+   30-second window. Microphone capture is opt-in and permission-gated; the
+   shared audio device retains intent across AirPods or Continuity Microphone
+   loss and restores capture when the input route returns.
 
 ## Backend decision
 
@@ -154,19 +186,25 @@ Xbox must preserve the Issue 66 optimizations:
   activation for the inactive mode.
 - Xbox catalog clients and the stream controller are factory-created only when
   needed; switching drops their in-flight work and transient rows.
-- Catalog snapshots retain at most 512 validated unique items. Artwork is HTTPS,
+- Catalog snapshots retain at most 1,024 validated unique items. Artwork is HTTPS,
   credential-free, downsampled, and handled by the shared bounded pipeline.
 - Session allocation, polling, keepalive, candidate lists, response bodies,
   controller slots, queued input, retries, and caches all have explicit bounds.
 - High-frequency controller/media work stays outside SwiftUI observation and the
   main actor; sampling stops synchronously with the stream.
 - Provider settings use separate small Codable values. Xbox's non-secret SDK
-  installation identifier is stable and removed by Reset All Data.
+  installation identifier is stable, survives a GeForce NOW reset, and is
+  removed by Xbox-scoped or global Reset All Data.
 - Release validation checks exactly one RTC factory/framework, no new runtime
   package, GeForce NOW regression coverage, resource return after repeated
   switches, and archive/IPA size against the Issue 66 baseline.
 
-## Entitled-account smoke test
+## Physical Apple TV release validation
+
+The deterministic suites cannot prove Microsoft entitlement, regional service,
+display-route, controller-firmware, or tvOS microphone behavior. Run this list
+together on a physical Apple TV before release and record the result; do not
+infer a pass from simulator coverage.
 
 Use a physical Apple TV, a supported controller, and a Microsoft account with a
 current Xbox Cloud Gaming entitlement:
@@ -176,27 +214,35 @@ current Xbox Cloud Gaming entitlement:
 2. Select Xbox and confirm its QR code and device code remain visible until the
    Microsoft flow succeeds or Cancel is selected; the screen must not return to
    the provider chooser on its own.
-3. Complete sign-in and confirm Xbox opens its own Home, Browse, and Settings
+3. Complete sign-in and confirm Xbox opens its own Home, Library, and Settings
    tabs with the top-left provider dropdown visible.
-4. Launch a catalog title and verify queue/provisioning states, video, audio,
-   controller input, rumble, pause, cancellation, and End Session.
-5. Switch to GeForce NOW with the dropdown, confirm its existing Library and
+4. Validate paid subscription and free/owned access routes. Launch a title and
+   verify queue/provisioning states, video, audio, HDR where supported,
+   cancellation, Leave, Continue without a second allocation, reconnect after a
+   temporary network interruption, and explicit End.
+5. Test an Xbox controller, a PlayStation controller, keyboard and mouse,
+   Menu/View/Share, independent rumble, and Escape-to-pause. Record additional
+   controller behavior as a compatibility observation rather than a confirmed
+   service slot count.
+6. Enable the provider-specific microphone setting, grant permission, and verify
+   AirPods and Continuity Microphone hot-plug, loss, and automatic restoration.
+7. Switch to GeForce NOW with the dropdown, confirm its existing Library and
    Store remain unchanged, then switch back and verify neither account requires
    another login.
-6. Background and foreground CloudNow once in each mode. Confirm the inactive
-   provider performs no refresh, an active Xbox session tears down cleanly, and
-   a later launch can create a fresh session.
+8. Background and foreground CloudNow once in each mode. Confirm the inactive
+   provider performs no refresh, Xbox leaves and can continue the same unexpired
+   session, and End Session permits a later launch to create a fresh session.
 
 Record the displayed CloudNow error and redacted diagnostics if a live request
 fails. Do not capture or share Microsoft, Xbox Live, XSTS, Game Streaming, or
 transfer tokens.
 
-For an account enrolled in Microsoft's free-with-ads preview but without
-standard cloud access, also confirm Home shows the free-with-ads rail, Browse can
-filter to it, Settings reports the independent Game Pass membership, and the
-selected free route reaches Microsoft's normal queue/provisioning flow. CloudNow
-does not simulate, suppress, or claim completion of Microsoft's advertising;
-Microsoft controls preview eligibility, ad presentation, and session limits.
+For an account enrolled in the ad-supported preview but without standard cloud
+access, confirm Library offers the Ads filter only when it is non-empty, the
+selected confirmed route reaches the normal queue/provisioning flow, and
+unconfirmed routes stay disabled with a neutral reason. CloudNow does not
+simulate, suppress, or claim completion of advertising; Microsoft controls
+preview eligibility, ad presentation, and session limits.
 
 ## First-party references
 
