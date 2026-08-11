@@ -2,9 +2,13 @@ import Observation
 import SwiftUI
 
 struct XboxLoginView: View {
-    @Environment(AuthManager.self) private var geForceNowAuthManager
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
     @Environment(XboxAuthManager.self) private var xboxAuthManager
+    let fallbackProvider: CloudGamingProvider?
+
+    init(fallbackProvider: CloudGamingProvider? = nil) {
+        self.fallbackProvider = fallbackProvider
+    }
 
     var body: some View {
         ZStack {
@@ -36,7 +40,7 @@ struct XboxLoginView: View {
             case .expired:
                 failureView(message: L10n.text("microsoft_sign_in_code_expired"))
             case let .failed(error):
-                failureView(message: error.localizedDescription)
+                failureView(message: signInFailureMessage(error))
             }
         }
         .task {
@@ -75,6 +79,14 @@ struct XboxLoginView: View {
             }
         }
         .padding(80)
+    }
+
+    private func signInFailureMessage(_ error: Error) -> String {
+        #if DEBUG
+            return error.localizedDescription
+        #else
+            return L10n.text("sign_in_failed")
+        #endif
     }
 
     private func progressView(message: String) -> some View {
@@ -137,9 +149,7 @@ struct XboxLoginView: View {
 
     private func cancel() {
         xboxAuthManager.cancelLogin()
-        providerCoordinator.select(
-            geForceNowAuthManager.isAuthenticated ? .geForceNow : nil
-        )
+        providerCoordinator.select(fallbackProvider)
     }
 
     private func displayURL(_ url: URL) -> String {
@@ -152,14 +162,17 @@ struct XboxMainTabView: View {
     @State private var modeViewModel: XboxCloudModeViewModel
     @State private var playbackRequest: XboxCloudPlaybackRequest?
     @State private var pendingPlaybackFocusRestoreID: String?
-    @State private var browsePlaybackFocusRestoreID: String?
+    @State private var libraryPlaybackFocusRestoreID: String?
     @State private var selectedTab: XboxAppTab = .home
     @State private var controllerNavigation = UIControllerNavigationCoordinator()
+    @State private var inputDeviceMonitor: CloudInputDeviceMonitor
     private let account: XboxCloudAuthorizedAccount
+    private let fallbackProvider: CloudGamingProvider?
 
     init(
         configuration: XboxCloudServiceConfiguration,
-        account: XboxCloudAuthorizedAccount
+        account: XboxCloudAuthorizedAccount,
+        fallbackProvider: CloudGamingProvider? = nil
     ) {
         let catalogViewModel = XboxCatalogViewModel(
             makeClient: configuration.makeCatalogClient,
@@ -170,10 +183,31 @@ struct XboxMainTabView: View {
                 catalogViewModel: catalogViewModel,
                 account: account,
                 makeContentAccessClient: configuration.makeContentAccessClient,
-                makeStreamController: configuration.makeStreamController
+                resolveContentAccessOfferingID: configuration
+                    .resolveContentAccessOfferingID,
+                resolveNetworkTestTarget: configuration
+                    .resolveNetworkTestTarget,
+                makeStreamController: configuration.makeStreamController,
+                streamControllerRetention: configuration
+                    .streamControllerRetention
             )
         )
+        #if DEBUG
+            let usesUITestFixtures = ProcessInfo.processInfo.arguments.contains(
+                "--cloudnow-ui-testing"
+            )
+            _inputDeviceMonitor = State(
+                initialValue: usesUITestFixtures
+                    ? CloudInputDeviceMonitor(snapshot: { [.controller] })
+                    : CloudInputDeviceMonitor()
+            )
+        #else
+            _inputDeviceMonitor = State(
+                initialValue: CloudInputDeviceMonitor()
+            )
+        #endif
         self.account = account
+        self.fallbackProvider = fallbackProvider
     }
 
     var body: some View {
@@ -189,32 +223,39 @@ struct XboxMainTabView: View {
                     favoriteItems: modeViewModel.catalogViewModel.favoriteItems,
                     phase: modeViewModel.catalogViewModel.phase,
                     showsRefreshWarning: modeViewModel.catalogViewModel.showsRefreshWarning,
-                    onBrowse: { selectedTab = .browse },
+                    resumableSession: resumableSession,
+                    onBrowse: { selectedTab = .library },
                     onRetry: retryCatalog,
+                    onContinue: continuePlaying,
                     onPlay: play,
                     onToggleFavorite: modeViewModel.catalogViewModel.toggleFavorite
                 )
                 .accessibilityIdentifier("xbox-home-screen")
             }
-            Tab(L10n.text("browse"), systemImage: "rectangle.stack.fill", value: XboxAppTab.browse) {
+            Tab(L10n.text("library"), systemImage: "rectangle.stack.fill", value: XboxAppTab.library) {
                 XboxCatalogGrid(
                     onRetry: retryCatalog,
                     onPlay: play,
-                    playbackFocusRestoreID: $browsePlaybackFocusRestoreID
+                    playbackFocusRestoreID: $libraryPlaybackFocusRestoreID
                 )
-                .accessibilityIdentifier("xbox-browse-screen")
+                .accessibilityIdentifier("xbox-library-screen")
             }
             Tab(L10n.text("settings"), systemImage: "gearshape.fill", value: XboxAppTab.settings) {
-                XboxSettingsView()
+                XboxSettingsView(fallbackProvider: fallbackProvider)
                     .accessibilityIdentifier("xbox-settings-screen")
             }
         }
         .environment(modeViewModel)
         .environment(modeViewModel.catalogViewModel)
+        .environment(inputDeviceMonitor)
+        .onAppear {
+            inputDeviceMonitor.start()
+        }
         .task {
             await modeViewModel.load()
         }
         .onDisappear {
+            inputDeviceMonitor.stop()
             // Full-screen game/detail presentations can make the shell
             // disappear temporarily. Only tear down here when authorization
             // was actually lost; provider switches already deactivate before
@@ -241,6 +282,7 @@ struct XboxMainTabView: View {
                 account: account,
                 settings: request.settings,
                 controller: request.controller,
+                continuesExistingSession: request.continuesExistingSession,
                 onStreamStarted: {
                     modeViewModel.catalogViewModel.recordPlayed(request.item)
                 },
@@ -258,7 +300,13 @@ struct XboxMainTabView: View {
         _ item: XboxCatalogItem,
         route: XboxCloudTitleRoute
     ) {
-        guard route.isPlayable else { return }
+        guard route.isPlayable,
+              item.hasCompatibleInput(
+                  connectedDevices: inputDeviceMonitor.connectedDevices
+              )
+        else {
+            return
+        }
 
         pendingPlaybackFocusRestoreID = item.id
         let settings = modeViewModel.streamCapabilities.normalized(
@@ -271,14 +319,51 @@ struct XboxMainTabView: View {
             controller: modeViewModel.streamController { [weak xboxAuthManager] in
                 guard let xboxAuthManager else { throw CancellationError() }
                 return try await xboxAuthManager.xboxCloudTransferToken()
-            }
+            },
+            continuesExistingSession: false
+        )
+    }
+
+    private var resumableSession: XboxCloudResumableSessionPresentation? {
+        guard let controller = modeViewModel.resumableStreamController,
+              let titleID = controller.activeGameID,
+              let expiresAt = controller.resumableSessionExpiresAt,
+              let item = modeViewModel.catalogViewModel.item(
+                  forTitleID: titleID
+              ),
+              let route = item.routes.first(where: { $0.titleID == titleID })
+        else {
+            return nil
+        }
+        return XboxCloudResumableSessionPresentation(
+            item: item,
+            route: route,
+            controller: controller,
+            expiresAt: expiresAt,
+            hasCompatibleInput: item.hasCompatibleInput(
+                connectedDevices: inputDeviceMonitor.connectedDevices
+            )
+        )
+    }
+
+    private func continuePlaying(
+        _ session: XboxCloudResumableSessionPresentation
+    ) {
+        guard session.hasCompatibleInput else { return }
+        pendingPlaybackFocusRestoreID = session.item.id
+        playbackRequest = XboxCloudPlaybackRequest(
+            item: session.item,
+            route: session.route,
+            settings: modeViewModel.streamSettings,
+            controller: session.controller,
+            continuesExistingSession: true
         )
     }
 
     private func restorePlaybackFocus() {
         defer { pendingPlaybackFocusRestoreID = nil }
-        guard selectedTab == .browse else { return }
-        browsePlaybackFocusRestoreID = pendingPlaybackFocusRestoreID
+        guard selectedTab == .library else { return }
+        libraryPlaybackFocusRestoreID = pendingPlaybackFocusRestoreID
     }
 
     private func retryCatalog() {
@@ -318,9 +403,16 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
     @ObservationIgnored private let makeStreamController: @MainActor @Sendable (
         @escaping @Sendable () async throws -> String
     ) -> XboxCloudStreamController
+    @ObservationIgnored private let streamControllerRetention: XboxCloudStreamControllerRetention
     @ObservationIgnored private let makeContentAccessClient: (
         @Sendable () -> any XboxContentAccessProviding
     )?
+    @ObservationIgnored private let resolveContentAccessOfferingID: @Sendable (
+        XboxCloudAuthorizedAccount
+    ) async throws -> String
+    @ObservationIgnored private let resolveNetworkTestTarget: @Sendable (
+        XboxCloudAuthorizedAccount
+    ) async throws -> CloudNetworkTestTarget
     @ObservationIgnored private let account: XboxCloudAuthorizedAccount
     @ObservationIgnored private let persistence: AppPersistenceStore
     @ObservationIgnored private var activeStreamController: XboxCloudStreamController?
@@ -337,15 +429,32 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         makeContentAccessClient: (
             @Sendable () -> any XboxContentAccessProviding
         )? = nil,
+        resolveContentAccessOfferingID: @escaping @Sendable (
+            XboxCloudAuthorizedAccount
+        ) async throws -> String = { _ in
+            XboxCloudOfferingServiceConfiguration.defaultConsumerOfferingID
+        },
+        resolveNetworkTestTarget: @escaping @Sendable (
+            XboxCloudAuthorizedAccount
+        ) async throws -> CloudNetworkTestTarget = { _ in
+            CloudNetworkTestTarget(
+                address: XboxCloudCompatibilityProfile.bundledV1
+                    .defaultNetworkTestTargetURL.absoluteString
+            )
+        },
         makeStreamController: @escaping @MainActor @Sendable (
             @escaping @Sendable () async throws -> String
         ) -> XboxCloudStreamController,
+        streamControllerRetention: XboxCloudStreamControllerRetention = .none,
         persistence: AppPersistenceStore = .shared
     ) {
         self.catalogViewModel = catalogViewModel
         self.account = account
         self.makeContentAccessClient = makeContentAccessClient
+        self.resolveContentAccessOfferingID = resolveContentAccessOfferingID
+        self.resolveNetworkTestTarget = resolveNetworkTestTarget
         self.makeStreamController = makeStreamController
+        self.streamControllerRetention = streamControllerRetention
         self.persistence = persistence
     }
 
@@ -354,6 +463,7 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         let generation = activationGeneration
         if !hasLoadedSettings {
             let settings = await persistence.loadXboxCloudStreamSettings()
+                .normalizedForClient
             guard activationGeneration == generation,
                   !Task.isCancelled
             else {
@@ -376,16 +486,54 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         transferToken: @escaping @Sendable () async throws -> String
     ) -> XboxCloudStreamController {
         if let activeStreamController {
-            return activeStreamController
+            if activeStreamController.state != .idle
+                || activeStreamController.canContinueSession
+                || activeStreamController.hasUnconfirmedSessionDeletion
+            {
+                return activeStreamController
+            }
+            streamControllerRetention.releaseController(
+                activeStreamController
+            )
+            self.activeStreamController = nil
+        }
+        if let retainedController = streamControllerRetention
+            .retainedController(account)
+        {
+            activeStreamController = retainedController
+            return retainedController
         }
         let controller = makeStreamController(transferToken)
         activeStreamController = controller
+        streamControllerRetention.retainController(controller, account)
+        return controller
+    }
+
+    var resumableStreamController: XboxCloudStreamController? {
+        let controller: XboxCloudStreamController
+        if let activeStreamController {
+            controller = activeStreamController
+        } else if let retainedController = streamControllerRetention
+            .retainedController(account)
+        {
+            activeStreamController = retainedController
+            controller = retainedController
+        } else {
+            return nil
+        }
+        guard controller.canContinueSession
+        else {
+            return nil
+        }
         return controller
     }
 
     func stopStream() async {
         guard let controller = activeStreamController else { return }
-        await controller.stop()
+        let didStop = await controller.stop()
+        if didStop {
+            streamControllerRetention.releaseController(controller)
+        }
         if activeStreamController === controller {
             activeStreamController = nil
         }
@@ -395,7 +543,21 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         activationGeneration &+= 1
         cancelContentAccessRequest()
         await flushSettings()
-        await stopStream()
+        if let activeStreamController {
+            let requiresRetention = activeStreamController.canContinueSession
+                || activeStreamController.hasUnconfirmedSessionDeletion
+            if requiresRetention {
+                streamControllerRetention.retainController(
+                    activeStreamController,
+                    account
+                )
+                self.activeStreamController = nil
+            } else {
+                await stopStream()
+            }
+        } else {
+            await stopStream()
+        }
         await catalogViewModel.deactivateForInactiveProvider()
         contentAccessClient = nil
         membershipTier = nil
@@ -418,6 +580,7 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         activationGeneration &+= 1
         let generation = activationGeneration
         let settings = await persistence.loadXboxCloudStreamSettings()
+            .normalizedForClient
         guard activationGeneration == generation else { return }
         streamSettings = settings
         hasLoadedSettings = true
@@ -426,6 +589,17 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
     func refreshContentAccess() async {
         guard contentAccessPhase == .unavailable else { return }
         await loadContentAccess()
+    }
+
+    func networkTestTarget() async -> CloudNetworkTestTarget {
+        do {
+            return try await resolveNetworkTestTarget(account)
+        } catch {
+            return CloudNetworkTestTarget(
+                address: XboxCloudCompatibilityProfile.bundledV1
+                    .defaultNetworkTestTargetURL.absoluteString
+            )
+        }
     }
 
     func reloadContentAccessAfterCatalogRefresh() async {
@@ -469,13 +643,13 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         contentAccessPhase = .loading
         let client = resolvedContentAccessClient()
         let account = account
+        let resolveOfferingID = resolveContentAccessOfferingID
         let task = Task {
-            // Content Access intentionally uses the first-party web offering even
-            // when Game Streaming selected a different fallback offering.
-            try await client.fetchContentAccess(
+            let offeringID = try await resolveOfferingID(account)
+            return try await client.fetchContentAccess(
                 for: account,
                 market: Locale.current.region?.identifier ?? "US",
-                offeringID: XboxCloudOfferingServiceConfiguration.defaultConsumerOfferingID
+                offeringID: offeringID
             )
         }
         contentAccessTask = task
@@ -528,10 +702,19 @@ private struct XboxCloudPlaybackRequest: Identifiable {
     let route: XboxCloudTitleRoute
     let settings: XboxCloudStreamSettings
     let controller: XboxCloudStreamController
+    let continuesExistingSession: Bool
 
     var id: String {
         "\(item.id)|\(route.titleID)|\(route.accessKind)"
     }
+}
+
+private struct XboxCloudResumableSessionPresentation {
+    let item: XboxCatalogItem
+    let route: XboxCloudTitleRoute
+    let controller: XboxCloudStreamController
+    let expiresAt: Date
+    let hasCompatibleInput: Bool
 }
 
 nonisolated enum XboxCatalogCollectionFilter: CaseIterable, Hashable, Sendable {
@@ -544,14 +727,26 @@ nonisolated enum XboxCatalogAccessFilter: CaseIterable, Hashable, Sendable {
     case owned
 }
 
+nonisolated enum XboxCatalogPlayabilityFilter: CaseIterable, Hashable, Sendable {
+    case playable
+    case unavailable
+}
+
 nonisolated struct XboxCatalogFilterState: Equatable, Sendable {
     var collections: Set<XboxCatalogCollectionFilter> = []
     var access: Set<XboxCatalogAccessFilter> = []
+    var playability: Set<XboxCatalogPlayabilityFilter> = []
+    var unavailableReasons: Set<XboxCloudRoutePlayabilityReason> = []
     var inputTypes: Set<XboxCloudInputType> = []
     var genres: Set<String> = []
 
     var activeSelectionCount: Int {
-        collections.count + access.count + inputTypes.count + genres.count
+        collections.count
+            + access.count
+            + playability.count
+            + unavailableReasons.count
+            + inputTypes.count
+            + genres.count
     }
 
     var isEmpty: Bool {
@@ -561,6 +756,8 @@ nonisolated struct XboxCatalogFilterState: Equatable, Sendable {
     mutating func clear() {
         collections.removeAll()
         access.removeAll()
+        playability.removeAll()
+        unavailableReasons.removeAll()
         inputTypes.removeAll()
         genres.removeAll()
     }
@@ -579,6 +776,9 @@ nonisolated struct XboxCatalogFilterOptions: Equatable, Sendable {
     let standardCount: Int
     let freeWithAdsCount: Int
     let ownedCount: Int
+    let playableCount: Int
+    let unavailableCount: Int
+    let unavailableReasonCounts: [XboxCloudRoutePlayabilityReason: Int]
 
     static let empty = XboxCatalogFilterOptions(
         genres: [],
@@ -586,8 +786,30 @@ nonisolated struct XboxCatalogFilterOptions: Equatable, Sendable {
         favoriteCount: 0,
         standardCount: 0,
         freeWithAdsCount: 0,
-        ownedCount: 0
+        ownedCount: 0,
+        playableCount: 0,
+        unavailableCount: 0,
+        unavailableReasonCounts: [:]
     )
+
+    var showsCollectionsSection: Bool {
+        favoriteCount > 0
+    }
+
+    var availableAccessFilters: [XboxCatalogAccessFilter] {
+        XboxCatalogAccessFilter.allCases.filter { accessCount($0) > 0 }
+    }
+
+    func accessCount(_ filter: XboxCatalogAccessFilter) -> Int {
+        switch filter {
+        case .standard:
+            standardCount
+        case .freeWithAds:
+            freeWithAdsCount
+        case .owned:
+            ownedCount
+        }
+    }
 }
 
 nonisolated enum XboxCatalogSortOrder: CaseIterable, Hashable, Sendable {
@@ -626,6 +848,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     private(set) var phase: LoadPhase = .idle
     private(set) var isRefreshing = false
     private(set) var showsRefreshWarning = false
+    private(set) var catalogLastUpdatedAt: Date?
     private(set) var totalItemCount = 0
     private(set) var browseFilterBaseCount = 0
     private(set) var filteredItemCount = 0
@@ -762,11 +985,13 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
             guard loadGeneration == generation else { return }
             loadedCachedSnapshot = true
             allItems = cached.items
+            catalogLastUpdatedAt = cached.fetchedAt
             publishVisibleItems()
             phase = .loaded
-            if now().timeIntervalSince(cached.fetchedAt) < freshnessInterval {
-                return
-            }
+            let isStale = now().timeIntervalSince(cached.fetchedAt)
+                >= freshnessInterval
+            showsRefreshWarning = isStale
+            return
         } else {
             phase = .loading
         }
@@ -786,8 +1011,10 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
             await cache.store(snapshot, for: cacheKey)
             guard loadGeneration == generation else { return }
             allItems = snapshot.items
+            catalogLastUpdatedAt = snapshot.fetchedAt
             publishVisibleItems()
             phase = .loaded
+            showsRefreshWarning = false
         } catch is CancellationError {
             return
         } catch {
@@ -916,6 +1143,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         filterOptions = .empty
         phase = .idle
         showsRefreshWarning = false
+        catalogLastUpdatedAt = nil
         totalItemCount = 0
         browseFilterBaseCount = 0
         filteredItemCount = 0
@@ -941,23 +1169,26 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     }
 
     private func publishVisibleItems() {
-        let availableAccessKinds = Set(allItems.flatMap(\.accessKinds))
-        let playableAccessKinds = Set(allItems.flatMap { item in
+        let presentableItems = allItems.filter { !$0.isTouchOnlyOnTVOS }
+        let availableAccessKinds = Set(presentableItems.flatMap(\.accessKinds))
+        let playableAccessKinds = Set(presentableItems.flatMap { item in
             item.routes.compactMap { route in
                 route.isPlayable ? route.accessKind : nil
             }
         })
-        let searchedItems = search(allItems)
+        let searchedItems = search(presentableItems)
         let carouselItems = sort(filter(searchedItems, state: filterState))
         let items = Array(carouselItems.prefix(visibleItemLimit))
-        let favoriteItems = allItems.filter { favoriteIDs.contains($0.id) }
+        let favoriteItems = presentableItems.filter {
+            favoriteIDs.contains($0.id)
+        }
         let itemsByID = Dictionary(
-            allItems.map { ($0.id, $0) },
+            presentableItems.map { ($0.id, $0) },
             uniquingKeysWith: { retained, _ in retained }
         )
         let recentlyPlayedItems = recentlyPlayedIDs.compactMap { itemsByID[$0] }
         let filterOptions = makeFilterOptions()
-        totalItemCount = allItems.count
+        totalItemCount = presentableItems.count
         browseFilterBaseCount = searchedItems.count
         filteredItemCount = carouselItems.count
         if availableAccessKinds != self.availableAccessKinds {
@@ -983,7 +1214,16 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     }
 
     func browsePreviewCount(for state: XboxCatalogFilterState) -> Int {
-        filter(search(allItems), state: state).count
+        filter(
+            search(allItems.filter { !$0.isTouchOnlyOnTVOS }),
+            state: state
+        ).count
+    }
+
+    func item(forTitleID titleID: String) -> XboxCatalogItem? {
+        allItems.first { item in
+            item.routes.contains { $0.titleID == titleID }
+        }
     }
 
     func clearBrowseFilters() {
@@ -1034,6 +1274,28 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
                 }
             }
 
+            if !state.playability.isEmpty {
+                let hasPlayableRoute = item.routes.contains(where: \.isPlayable)
+                let matchesPlayability =
+                    state.playability.contains(.playable) && hasPlayableRoute
+                        || state.playability.contains(.unavailable)
+                        && !hasPlayableRoute
+                if !matchesPlayability {
+                    return false
+                }
+            }
+
+            if !state.unavailableReasons.isEmpty {
+                let itemReasons = Set(
+                    item.routes.compactMap { route in
+                        route.isPlayable ? nil : route.playabilityReason
+                    }
+                )
+                if state.unavailableReasons.isDisjoint(with: itemReasons) {
+                    return false
+                }
+            }
+
             if !state.inputTypes.isEmpty,
                state.inputTypes.isDisjoint(with: item.supportedInputTypes)
             {
@@ -1080,10 +1342,20 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         var genreLabels: [String: String] = [:]
         var genreCounts: [String: Int] = [:]
         var inputTypeCounts: [XboxCloudInputType: Int] = [:]
+        var unavailableReasonCounts: [
+            XboxCloudRoutePlayabilityReason: Int
+        ] = [:]
 
-        for item in allItems {
-            for inputType in item.supportedInputTypes {
+        let presentableItems = allItems.filter { !$0.isTouchOnlyOnTVOS }
+        for item in presentableItems {
+            for inputType in item.supportedInputTypes where inputType != .touch {
                 inputTypeCounts[inputType, default: 0] += 1
+            }
+            let unavailableReasons = Set(item.routes.compactMap { route in
+                route.isPlayable ? nil : route.playabilityReason
+            })
+            for reason in unavailableReasons {
+                unavailableReasonCounts[reason, default: 0] += 1
             }
             var itemGenreIDs: Set<String> = []
             for genre in item.genres {
@@ -1107,10 +1379,23 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         return XboxCatalogFilterOptions(
             genres: genres,
             inputTypeCounts: inputTypeCounts,
-            favoriteCount: allItems.count { favoriteIDs.contains($0.id) },
-            standardCount: allItems.count { $0.accessKinds.contains(.standard) },
-            freeWithAdsCount: allItems.count(where: \.supportsFreeWithAds),
-            ownedCount: allItems.count(where: \.isOwned)
+            favoriteCount: presentableItems.count {
+                favoriteIDs.contains($0.id)
+            },
+            standardCount: presentableItems.count {
+                $0.accessKinds.contains(.standard)
+            },
+            freeWithAdsCount: presentableItems.count(
+                where: \.supportsFreeWithAds
+            ),
+            ownedCount: presentableItems.count(where: \.isOwned),
+            playableCount: presentableItems.count { item in
+                item.routes.contains(where: \.isPlayable)
+            },
+            unavailableCount: presentableItems.count { item in
+                !item.routes.contains(where: \.isPlayable)
+            },
+            unavailableReasonCounts: unavailableReasonCounts
         )
     }
 
@@ -1259,13 +1544,16 @@ private struct XboxCatalogHome: View {
     let favoriteItems: [XboxCatalogItem]
     let phase: XboxCatalogViewModel.LoadPhase
     let showsRefreshWarning: Bool
+    let resumableSession: XboxCloudResumableSessionPresentation?
     let onBrowse: () -> Void
     let onRetry: () -> Void
+    let onContinue: (XboxCloudResumableSessionPresentation) -> Void
     let onPlay: (XboxCatalogItem, XboxCloudTitleRoute) -> Void
     let onToggleFavorite: (String) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(XboxCatalogViewModel.self) private var viewModel
+    @Environment(CloudInputDeviceMonitor.self) private var inputDeviceMonitor
     @State private var carouselRequest: XboxCatalogCarouselRequest?
     @State private var carouselSourceFocus: XboxHomeGameFocus?
     @State private var carouselRestoreFocus: XboxHomeGameFocus?
@@ -1291,7 +1579,7 @@ private struct XboxCatalogHome: View {
     }
 
     private var emptyStateMessage: String {
-        L10n.text("xbox_empty_home_message")
+        L10n.text("empty_home_message")
     }
 
     private var recentlyPlayedWithoutHero: [XboxCatalogItem] {
@@ -1300,17 +1588,21 @@ private struct XboxCatalogHome: View {
 
     var body: some View {
         ZStack {
-            switch phase {
-            case .idle, .loading:
-                XboxCatalogHomeSkeleton()
-            case .failed:
-                emptyState
-                    .accessibilityIdentifier("xbox-home-empty")
-            case .loaded where heroSelection == nil:
-                emptyState
-                    .accessibilityIdentifier("xbox-home-empty")
-            case .loaded:
+            if resumableSession != nil {
                 loadedContent
+            } else {
+                switch phase {
+                case .idle, .loading:
+                    XboxCatalogHomeSkeleton()
+                case .failed:
+                    emptyState
+                        .accessibilityIdentifier("xbox-home-empty")
+                case .loaded where heroSelection == nil:
+                    emptyState
+                        .accessibilityIdentifier("xbox-home-empty")
+                case .loaded:
+                    loadedContent
+                }
             }
         }
         .fullScreenCover(
@@ -1337,7 +1629,7 @@ private struct XboxCatalogHome: View {
     private var emptyState: some View {
         CloudCatalogHomeEmptyState(
             message: emptyStateMessage,
-            actionTitle: L10n.text("browse"),
+            actionTitle: L10n.text("library"),
             action: onBrowse,
             actionFocus: $emptyActionFocused
         )
@@ -1347,6 +1639,20 @@ private struct XboxCatalogHome: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    if let resumableSession {
+                        CloudResumableSessionBanner(
+                            title: resumableSession.item.title,
+                            artworkURL: resumableSession.item.heroArtworkURL?
+                                .absoluteString
+                                ?? resumableSession.item.artworkURL?
+                                .absoluteString,
+                            expiresAt: resumableSession.expiresAt,
+                            isResumeEnabled: resumableSession
+                                .hasCompatibleInput,
+                            onResume: { onContinue(resumableSession) }
+                        )
+                    }
+
                     if let heroSelection, let heroPresentation {
                         CloudCatalogHeroBanner(
                             artworkURL: heroPresentation.artworkURL?.absoluteString,
@@ -1355,11 +1661,11 @@ private struct XboxCatalogHome: View {
                                 : .fit,
                             artworkAlignment: .center,
                             actionTitle: heroSelection.playTitle,
-                            actionSystemImage: heroSelection.route.isPlayable
+                            actionSystemImage: heroSelection.isPlayable
                                 ? "play.fill"
                                 : "lock.fill",
-                            isActionEnabled: heroSelection.route.isPlayable,
-                            actionTint: heroSelection.route.isPlayable
+                            isActionEnabled: heroSelection.isPlayable,
+                            actionTint: heroSelection.isPlayable
                                 ? .green
                                 : .gray,
                             actionFocus: $heroActionFocused,
@@ -1371,9 +1677,12 @@ private struct XboxCatalogHome: View {
                     }
 
                     if showsRefreshWarning {
-                        XboxCatalogRefreshWarning(onRetry: onRetry)
-                            .padding(.horizontal, 60)
-                            .padding(.top, 24)
+                        XboxCatalogRefreshWarning(
+                            lastUpdatedAt: viewModel.catalogLastUpdatedAt,
+                            onRetry: onRetry
+                        )
+                        .padding(.horizontal, 60)
+                        .padding(.top, 24)
                     }
 
                     VStack(alignment: .leading, spacing: 48) {
@@ -1485,7 +1794,7 @@ private struct XboxCatalogHome: View {
                     row: .favorites,
                     itemID: itemID
                 )
-            } else if heroSelection?.route.isPlayable == true {
+            } else if heroSelection?.isPlayable == true {
                 restoresHeroActionFocus = true
             } else if heroSelection != nil {
                 onBrowse()
@@ -1536,7 +1845,11 @@ private struct XboxCatalogHome: View {
         for item: XboxCatalogItem?
     ) -> XboxCatalogSelection? {
         guard let item, let route = item.preferredRoute else { return nil }
-        return XboxCatalogSelection(item: item, route: route)
+        return XboxCatalogSelection(
+            item: item,
+            route: route,
+            connectedDevices: inputDeviceMonitor.connectedDevices
+        )
     }
 }
 
@@ -1594,10 +1907,16 @@ private struct XboxCatalogRail: View {
     let onShowInfo: ([XboxCatalogSelection], XboxHomeGameFocus) -> Void
     let onToggleFavorite: (String) -> Void
 
+    @Environment(CloudInputDeviceMonitor.self) private var inputDeviceMonitor
+
     private var selections: [XboxCatalogSelection] {
         items.compactMap { item in
             item.preferredRoute.map {
-                XboxCatalogSelection(item: item, route: $0)
+                XboxCatalogSelection(
+                    item: item,
+                    route: $0,
+                    connectedDevices: inputDeviceMonitor.connectedDevices
+                )
             }
         }
     }
@@ -1617,7 +1936,11 @@ private struct XboxCatalogRail: View {
                             itemID: selection.item.id
                         )
                         Button {
-                            onPlay(selection.item, selection.route)
+                            if selection.isPlayable {
+                                onPlay(selection.item, selection.route)
+                            } else {
+                                onShowInfo(selections, focus)
+                            }
                         } label: {
                             XboxCatalogCardLabel(selection: selection)
                         }
@@ -1670,6 +1993,7 @@ private struct XboxCatalogGrid: View {
     @Binding var playbackFocusRestoreID: String?
 
     @Environment(XboxCatalogViewModel.self) private var viewModel
+    @Environment(CloudInputDeviceMonitor.self) private var inputDeviceMonitor
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var carouselRequest: XboxCatalogCarouselRequest?
     @State private var carouselRestoreFocusID: String?
@@ -1800,9 +2124,12 @@ private struct XboxCatalogGrid: View {
     private var filterHeader: some View {
         VStack(alignment: .leading, spacing: 0) {
             if viewModel.showsRefreshWarning {
-                XboxCatalogRefreshWarning(onRetry: onRetry)
-                    .padding(.horizontal, 60)
-                    .padding(.top, 24)
+                XboxCatalogRefreshWarning(
+                    lastUpdatedAt: viewModel.catalogLastUpdatedAt,
+                    onRetry: onRetry
+                )
+                .padding(.horizontal, 60)
+                .padding(.top, 24)
             }
             XboxCatalogFilterBar()
         }
@@ -1817,7 +2144,13 @@ private struct XboxCatalogGrid: View {
         } else {
             item.preferredRoute
         }
-        return route.map { XboxCatalogSelection(item: item, route: $0) }
+        return route.map {
+            XboxCatalogSelection(
+                item: item,
+                route: $0,
+                connectedDevices: inputDeviceMonitor.connectedDevices
+            )
+        }
     }
 
     private func showCarousel(startingAt item: XboxCatalogItem) {
@@ -1988,6 +2321,24 @@ private struct XboxCatalogFilterBar: View {
                 onRemove: { remove(access) }
             ))
         }
+        for playability in viewModel.filterState.playability.sorted(by: {
+            $0.sortOrder < $1.sortOrder
+        }) {
+            filters.append(CloudCatalogActiveFilter(
+                id: "xbox-playability-\(playability.id)",
+                label: playability.label,
+                onRemove: { remove(playability) }
+            ))
+        }
+        for reason in viewModel.filterState.unavailableReasons.sorted(by: {
+            $0.sortOrder < $1.sortOrder
+        }) {
+            filters.append(CloudCatalogActiveFilter(
+                id: "xbox-unavailable-reason-\(reason.id)",
+                label: reason.label,
+                onRemove: { remove(reason) }
+            ))
+        }
         for inputType in viewModel.filterState.inputTypes.sorted(by: {
             $0.sortOrder < $1.sortOrder
         }) {
@@ -2028,6 +2379,18 @@ private struct XboxCatalogFilterBar: View {
         viewModel.filterState = state
     }
 
+    private func remove(_ playability: XboxCatalogPlayabilityFilter) {
+        var state = viewModel.filterState
+        state.playability.remove(playability)
+        viewModel.filterState = state
+    }
+
+    private func remove(_ reason: XboxCloudRoutePlayabilityReason) {
+        var state = viewModel.filterState
+        state.unavailableReasons.remove(reason)
+        viewModel.filterState = state
+    }
+
     private func removeGenre(_ genreID: String) {
         var state = viewModel.filterState
         state.genres.remove(genreID)
@@ -2045,6 +2408,7 @@ private struct XboxCatalogFilterSheet: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var expandedSections: Set<XboxCatalogFilterSection> = [
         .collections,
+        .playability,
         .access,
         .input,
         .genres,
@@ -2064,8 +2428,20 @@ private struct XboxCatalogFilterSheet: View {
 
                 ScrollView {
                     VStack(spacing: 16) {
-                        collectionsSection
-                        accessSection
+                        if options.showsCollectionsSection {
+                            collectionsSection
+                        }
+                        if options.playableCount > 0
+                            || options.unavailableCount > 0
+                        {
+                            playabilitySection
+                        }
+                        if !availableUnavailableReasons.isEmpty {
+                            unavailableReasonsSection
+                        }
+                        if !options.availableAccessFilters.isEmpty {
+                            accessSection
+                        }
                         if !availableInputTypes.isEmpty {
                             inputSection
                         }
@@ -2170,12 +2546,56 @@ private struct XboxCatalogFilterSheet: View {
                 horizontalSpacing: 14,
                 verticalSpacing: 14
             ) {
-                ForEach(availableAccessOptions, id: \.self) { option in
+                ForEach(options.availableAccessFilters, id: \.self) { option in
                     FilterOptionButton(
                         label: option.label,
-                        count: accessCount(option),
+                        count: options.accessCount(option),
                         isSelected: state.access.contains(option),
                         action: { toggle(option) }
+                    )
+                }
+            }
+        }
+    }
+
+    private var playabilitySection: some View {
+        FilterAccordionSection(
+            title: L10n.text("playability"),
+            selectedCount: state.playability.count,
+            isExpanded: expansionBinding(for: .playability)
+        ) {
+            WrappingFilterLayout(
+                horizontalSpacing: 14,
+                verticalSpacing: 14
+            ) {
+                ForEach(availablePlayabilityOptions, id: \.self) { option in
+                    FilterOptionButton(
+                        label: option.label,
+                        count: playabilityCount(option),
+                        isSelected: state.playability.contains(option),
+                        action: { toggle(option) }
+                    )
+                }
+            }
+        }
+    }
+
+    private var unavailableReasonsSection: some View {
+        FilterAccordionSection(
+            title: L10n.text("unavailable_reasons"),
+            selectedCount: state.unavailableReasons.count,
+            isExpanded: expansionBinding(for: .unavailableReasons)
+        ) {
+            WrappingFilterLayout(
+                horizontalSpacing: 14,
+                verticalSpacing: 14
+            ) {
+                ForEach(availableUnavailableReasons, id: \.self) { reason in
+                    FilterOptionButton(
+                        label: reason.label,
+                        count: options.unavailableReasonCounts[reason] ?? 0,
+                        isSelected: state.unavailableReasons.contains(reason),
+                        action: { toggle(reason) }
                     )
                 }
             }
@@ -2226,8 +2646,18 @@ private struct XboxCatalogFilterSheet: View {
         }
     }
 
-    private var availableAccessOptions: [XboxCatalogAccessFilter] {
-        XboxCatalogAccessFilter.allCases.filter { accessCount($0) > 0 }
+    private var availablePlayabilityOptions: [XboxCatalogPlayabilityFilter] {
+        XboxCatalogPlayabilityFilter.allCases.filter {
+            playabilityCount($0) > 0
+        }
+    }
+
+    private var availableUnavailableReasons: [
+        XboxCloudRoutePlayabilityReason
+    ] {
+        XboxCloudRoutePlayabilityReason.unavailableFilterCases.filter {
+            (options.unavailableReasonCounts[$0] ?? 0) > 0
+        }
     }
 
     private var availableInputTypes: [XboxCloudInputType] {
@@ -2236,14 +2666,14 @@ private struct XboxCatalogFilterSheet: View {
             .sorted { $0.sortOrder < $1.sortOrder }
     }
 
-    private func accessCount(_ option: XboxCatalogAccessFilter) -> Int {
+    private func playabilityCount(
+        _ option: XboxCatalogPlayabilityFilter
+    ) -> Int {
         switch option {
-        case .standard:
-            options.standardCount
-        case .freeWithAds:
-            options.freeWithAdsCount
-        case .owned:
-            options.ownedCount
+        case .playable:
+            options.playableCount
+        case .unavailable:
+            options.unavailableCount
         }
     }
 
@@ -2268,6 +2698,22 @@ private struct XboxCatalogFilterSheet: View {
             state.inputTypes.remove(inputType)
         } else {
             state.inputTypes.insert(inputType)
+        }
+    }
+
+    private func toggle(_ playability: XboxCatalogPlayabilityFilter) {
+        if state.playability.contains(playability) {
+            state.playability.remove(playability)
+        } else {
+            state.playability.insert(playability)
+        }
+    }
+
+    private func toggle(_ reason: XboxCloudRoutePlayabilityReason) {
+        if state.unavailableReasons.contains(reason) {
+            state.unavailableReasons.remove(reason)
+        } else {
+            state.unavailableReasons.insert(reason)
         }
     }
 
@@ -2297,6 +2743,8 @@ private struct XboxCatalogFilterSheet: View {
 
 private enum XboxCatalogFilterSection: Hashable {
     case collections
+    case playability
+    case unavailableReasons
     case access
     case input
     case genres
@@ -2323,6 +2771,7 @@ private struct XboxCatalogCarousel: View {
     let onDismiss: (String?) -> Void
 
     @Environment(XboxCatalogViewModel.self) private var viewModel
+    @Environment(CloudInputDeviceMonitor.self) private var inputDeviceMonitor
     @State private var detailItems: [String: XboxCatalogItem] = [:]
     @State private var detailCacheOrder: [String] = []
     @State private var detailLoadTokens: [String: UUID] = [:]
@@ -2341,7 +2790,8 @@ private struct XboxCatalogCarousel: View {
             XboxCatalogCarouselCard(
                 selection: XboxCatalogSelection(
                     item: item,
-                    route: context.item.route
+                    route: context.item.route,
+                    connectedDevices: inputDeviceMonitor.connectedDevices
                 ),
                 focusedID: context.focusedID,
                 isCurrent: context.isCurrent,
@@ -2437,6 +2887,7 @@ private struct XboxCatalogStandaloneDetail: View {
         XboxCatalogDetailView(
             item: item,
             route: selection.route,
+            isInputAvailable: selection.isInputAvailable,
             isFavorite: viewModel.isFavorite(selection.item),
             isLoadingDetail: isLoadingDetail,
             detailLoadFailed: detailLoadFailed,
@@ -2512,6 +2963,7 @@ private struct XboxCatalogCarouselCard: View {
                 XboxCatalogDetailView(
                     item: selection.item,
                     route: selection.route,
+                    isInputAvailable: selection.isInputAvailable,
                     isFavorite: isFavorite,
                     isLoadingDetail: isLoadingDetail,
                     detailLoadFailed: detailLoadFailed,
@@ -2531,6 +2983,7 @@ private struct XboxCatalogCarouselCard: View {
                     XboxCatalogDetailView(
                         item: selection.item,
                         route: selection.route,
+                        isInputAvailable: selection.isInputAvailable,
                         isFavorite: isFavorite,
                         isLoadingDetail: isLoadingDetail,
                         detailLoadFailed: detailLoadFailed,
@@ -2606,39 +3059,74 @@ private struct XboxCatalogCarouselRequest: Identifiable {
 private struct XboxCatalogSelection: Identifiable {
     let item: XboxCatalogItem
     let route: XboxCloudTitleRoute
+    let isInputAvailable: Bool
+
+    init(
+        item: XboxCatalogItem,
+        route: XboxCloudTitleRoute,
+        connectedDevices: Set<CloudInputDeviceKind>
+    ) {
+        self.item = item
+        self.route = route
+        isInputAvailable = item.hasCompatibleInput(
+            connectedDevices: connectedDevices
+        )
+    }
+
+    var isPlayable: Bool {
+        route.isPlayable && isInputAvailable
+    }
 
     var id: String {
         "\(item.id)|\(route.titleID)|\(route.accessKind)"
     }
 
     var badge: CloudCatalogCardBadge? {
-        guard route.accessKind == .freeWithAds else { return nil }
-        return route.isPlayable
-            ? CloudCatalogCardBadge(
-                title: L10n.text("free_with_ads"),
-                systemImage: nil,
-                foregroundColor: .black,
-                backgroundColor: .green
+        guard isInputAvailable else {
+            return CloudCatalogCardBadge(
+                title: L10n.text("compatible_input_required"),
+                systemImage: "gamecontroller",
+                foregroundColor: .white,
+                backgroundColor: .gray
             )
-            : CloudCatalogCardBadge(
-                title: L10n.text("not_eligible"),
+        }
+        guard route.isPlayable else {
+            return CloudCatalogCardBadge(
+                title: route.playabilityReason.label,
                 systemImage: "lock.fill",
                 foregroundColor: .white,
                 backgroundColor: .gray
             )
+        }
+        guard route.accessKind == .freeWithAds else { return nil }
+        return CloudCatalogCardBadge(
+            title: L10n.text("free_with_ads"),
+            systemImage: nil,
+            foregroundColor: .black,
+            backgroundColor: .green
+        )
     }
 
     var accessibilityStatus: String {
-        if route.accessKind == .freeWithAds {
-            return route.isPlayable
-                ? L10n.text("free_with_ads")
-                : L10n.text("not_eligible")
+        guard isInputAvailable else {
+            return L10n.text("compatible_input_required")
         }
-        return L10n.text("xbox_cloud_catalog")
+        guard route.isPlayable else {
+            return route.playabilityReason.label
+        }
+        if route.accessKind == .freeWithAds {
+            return L10n.text("free_with_ads")
+        }
+        return L10n.text("cloud_gaming_access")
     }
 
     var playTitle: String {
-        guard route.isPlayable else { return L10n.text("not_eligible") }
+        guard isInputAvailable else {
+            return L10n.text("compatible_input_required")
+        }
+        guard route.isPlayable else {
+            return route.playabilityReason.label
+        }
         return route.accessKind == .freeWithAds
             ? L10n.text("stream_free_with_ads")
             : L10n.text("play")
@@ -2674,7 +3162,7 @@ private extension XboxCatalogAccessFilter {
     var label: String {
         switch self {
         case .standard:
-            L10n.text("game_pass")
+            L10n.text("subscription_access")
         case .freeWithAds:
             L10n.text("free_with_ads")
         case .owned:
@@ -2690,6 +3178,99 @@ private extension XboxCatalogAccessFilter {
             1
         case .freeWithAds:
             2
+        }
+    }
+}
+
+private extension XboxCatalogPlayabilityFilter {
+    var id: String {
+        switch self {
+        case .playable:
+            "playable"
+        case .unavailable:
+            "unavailable"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .playable:
+            L10n.text("playable")
+        case .unavailable:
+            L10n.text("unavailable")
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .playable:
+            0
+        case .unavailable:
+            1
+        }
+    }
+}
+
+extension XboxCloudRoutePlayabilityReason {
+    static let unavailableFilterCases: [Self] = [
+        .entitlementRequired,
+        .unsupportedStreamingProgram,
+        .gameplayTimeExhausted,
+        .eligibilityUnconfirmed,
+    ]
+
+    var id: String {
+        switch self {
+        case .authenticatedCatalog:
+            "authenticated-catalog"
+        case .fresnoServiceConfirmed:
+            "service-confirmed"
+        case .contentAccessConfirmed:
+            "content-access-confirmed"
+        case .entitlementRequired:
+            "entitlement-required"
+        case .unsupportedStreamingProgram:
+            "unsupported-streaming-program"
+        case .gameplayTimeExhausted:
+            "gameplay-time-exhausted"
+        case .eligibilityUnconfirmed:
+            "eligibility-unconfirmed"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .authenticatedCatalog,
+             .fresnoServiceConfirmed,
+             .contentAccessConfirmed:
+            L10n.text("playable")
+        case .entitlementRequired:
+            L10n.text("account_access_required")
+        case .unsupportedStreamingProgram:
+            L10n.text("cloud_play_unavailable")
+        case .gameplayTimeExhausted:
+            L10n.text("gameplay_time_exhausted")
+        case .eligibilityUnconfirmed:
+            L10n.text("access_not_confirmed")
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .entitlementRequired:
+            0
+        case .unsupportedStreamingProgram:
+            1
+        case .gameplayTimeExhausted:
+            2
+        case .eligibilityUnconfirmed:
+            3
+        case .authenticatedCatalog:
+            4
+        case .fresnoServiceConfirmed:
+            5
+        case .contentAccessConfirmed:
+            6
         }
     }
 }
@@ -2738,18 +3319,32 @@ private extension XboxCatalogSortOrder {
 }
 
 private struct XboxCatalogRefreshWarning: View {
+    let lastUpdatedAt: Date?
     let onRetry: () -> Void
 
     var body: some View {
         HStack(spacing: 18) {
-            Label(
-                L10n.text("xbox_cloud_catalog_unavailable"),
-                systemImage: "exclamationmark.triangle.fill"
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                Label(
+                    L10n.text("catalog_may_be_out_of_date"),
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                if let lastUpdatedAt {
+                    Text(
+                        L10n.format(
+                            "catalog_last_updated",
+                            lastUpdatedAt.formatted(
+                                date: .abbreviated,
+                                time: .shortened
+                            )
+                        )
+                    )
+                }
+            }
             .font(.caption)
             .foregroundStyle(.yellow)
 
-            Button(L10n.text("try_again"), action: onRetry)
+            Button(L10n.text("refresh_library"), action: onRetry)
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("xbox-catalog.refresh-retry")
         }
@@ -2764,7 +3359,7 @@ private struct XboxCatalogFailureView: View {
             ContentUnavailableView(
                 L10n.text("failed_to_load_games"),
                 systemImage: "exclamationmark.triangle",
-                description: Text(L10n.text("xbox_cloud_catalog_unavailable"))
+                description: Text(L10n.text("cloud_service_unavailable"))
             )
 
             Button(L10n.text("try_again"), action: onRetry)
@@ -2799,15 +3394,35 @@ private extension XboxCatalogItem {
     }
 }
 
+@MainActor
+enum XboxSettingsSignOutWorkflow {
+    static func run(
+        endSession: () async -> Bool,
+        deactivate: () async -> Void,
+        logout: () async throws -> Void,
+        clearCatalog: () -> Void,
+        selectFallback: () -> Void
+    ) async throws -> Bool {
+        guard await endSession() else { return false }
+        await deactivate()
+        try await logout()
+        clearCatalog()
+        selectFallback()
+        return true
+    }
+}
+
 private struct XboxSettingsView: View {
-    @Environment(AuthManager.self) private var geForceNowAuthManager
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+    @Environment(CloudSessionCoordinator.self) private var sessionCoordinator
     @Environment(XboxAuthManager.self) private var xboxAuthManager
     @Environment(XboxCloudModeViewModel.self) private var modeViewModel
     @Environment(XboxCatalogViewModel.self) private var viewModel
     @State private var isSigningOut = false
     @State private var dataDialog: CloudNowDataDialog?
     @State private var isPerformingDataAction = false
+    @State private var showNetworkTest = false
+    let fallbackProvider: CloudGamingProvider?
 
     var body: some View {
         @Bindable var modeViewModel = modeViewModel
@@ -2820,17 +3435,17 @@ private struct XboxSettingsView: View {
                     onSelectProvider: switchProvider
                 )
 
-                Section {
-                    CloudNowStreamQualityPicker(
-                        L10n.text("resolution"),
-                        selection: xboxResolutionSelection,
-                        accessibilityIdentifier: "settings.stream-quality.resolution",
-                        options: xboxResolutionOptions
-                    )
-                } header: {
-                    Text(L10n.text("stream_quality"))
+                if supportsManualResolution {
+                    CloudNowStreamQualitySection {
+                        CloudNowStreamQualityPicker(
+                            L10n.text("resolution"),
+                            selection: xboxResolutionSelection,
+                            accessibilityIdentifier: "settings.stream-quality.resolution",
+                            options: xboxResolutionOptions
+                        )
+                    }
+                    .disabled(isBusy)
                 }
-                .disabled(isBusy)
 
                 Section(L10n.text("game")) {
                     CloudNowGameLanguagePicker(
@@ -2845,8 +3460,34 @@ private struct XboxSettingsView: View {
                     controllerDeadzone: $modeViewModel.streamSettings.controllerDeadzone,
                     policy: .xboxCloudGaming,
                     isDisabled: isBusy,
-                    footer: L10n.text("xbox_controller_changes_next_session")
+                    footer: L10n.text("controller_changes_next_session")
                 )
+
+                if supportsMicrophone {
+                    CloudNowMicrophoneSettingsSection(
+                        isEnabled: $modeViewModel.streamSettings.microphoneEnabled,
+                        isDisabled: isBusy
+                    )
+                }
+
+                if supportsNetworkTest {
+                    Section(L10n.text("server_location")) {
+                        Button {
+                            showNetworkTest = true
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.text("test_network"))
+                                Text(L10n.text("test_network_description"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 8)
+                        }
+                        .foregroundStyle(.primary)
+                        .accessibilityIdentifier("xbox-settings.network-test")
+                    }
+                    .disabled(isBusy)
+                }
 
                 Section {
                     Toggle(
@@ -2867,22 +3508,19 @@ private struct XboxSettingsView: View {
                     )
                     .accessibilityIdentifier("xbox-settings.high-contrast")
                 } header: {
-                    Text(L10n.text("xbox_accessibility"))
+                    Text(L10n.text("accessibility"))
                 }
                 .disabled(isBusy)
 
-                Section {
-                    Toggle(
-                        L10n.text("share_optional_diagnostic_data"),
-                        isOn: $modeViewModel.streamSettings.enableOptionalDataCollection
+                #if DEBUG
+                    CloudNowDiagnosticsSettingsSection(
+                        diagnosticsEnabled: $modeViewModel.streamSettings
+                            .diagnosticsEnabled,
+                        enableRtcEventLog: $modeViewModel.streamSettings
+                            .enableRtcEventLog,
+                        isDisabled: isBusy
                     )
-                    .accessibilityIdentifier("xbox-settings.optional-data")
-                } header: {
-                    Text(L10n.text("xbox_privacy"))
-                } footer: {
-                    Text(L10n.text("xbox_optional_data_description"))
-                }
-                .disabled(isBusy)
+                #endif
 
                 CloudNowStorageAndDataSection(
                     isPerformingAction: isBusy,
@@ -2896,22 +3534,26 @@ private struct XboxSettingsView: View {
                         value: xboxAuthManager.authorizedAccount?.displayName
                             ?? L10n.text("connected")
                     )
-                    LabeledContent {
-                        HStack(spacing: 12) {
-                            Text(membershipDescription)
-                            if modeViewModel.contentAccessPhase == .unavailable {
-                                Button(L10n.text("try_again")) {
-                                    Task { @MainActor in
-                                        await modeViewModel.refreshContentAccess()
+                    #if DEBUG
+                        LabeledContent {
+                            HStack(spacing: 12) {
+                                Text(membershipDescription)
+                                if modeViewModel.contentAccessPhase == .unavailable {
+                                    Button(L10n.text("try_again")) {
+                                        Task { @MainActor in
+                                            await modeViewModel.refreshContentAccess()
+                                        }
                                     }
+                                    .accessibilityIdentifier(
+                                        "xbox-settings.membership-retry"
+                                    )
                                 }
-                                .accessibilityIdentifier("xbox-settings.membership-retry")
                             }
+                        } label: {
+                            Text(L10n.text("membership"))
                         }
-                    } label: {
-                        Text(L10n.text("membership"))
-                    }
-                    .accessibilityIdentifier("xbox-settings.membership")
+                        .accessibilityIdentifier("xbox-settings.membership")
+                    #endif
 
                     LabeledContent(
                         L10n.text("cloud_gaming_access"),
@@ -2939,6 +3581,11 @@ private struct XboxSettingsView: View {
             .navigationTitle("")
             .task {
                 await modeViewModel.refreshContentAccess()
+            }
+            .sheet(isPresented: $showNetworkTest) {
+                CloudNetworkTestView {
+                    await self.modeViewModel.networkTestTarget()
+                }
             }
             .alert(
                 dataDialog?.title ?? "",
@@ -2969,6 +3616,24 @@ private struct XboxSettingsView: View {
         isSigningOut
             || isPerformingDataAction
             || providerCoordinator.isProviderInteractionBlocked
+    }
+
+    private var xboxCapabilities: CloudGamingProviderCapabilities {
+        providerCoordinator.capabilities(for: .xboxCloudGaming)
+    }
+
+    private var supportsManualResolution: Bool {
+        xboxCapabilities.streamOptions.value?.qualityControls.contains(
+            .resolution
+        ) == true && xboxResolutionOptions.count > 1
+    }
+
+    private var supportsMicrophone: Bool {
+        xboxCapabilities.microphone.value?.supportsVoiceChat == true
+    }
+
+    private var supportsNetworkTest: Bool {
+        xboxCapabilities.diagnostics.value?.supportsNetworkTest == true
     }
 
     private var xboxResolutionOptions: [
@@ -3020,9 +3685,9 @@ private struct XboxSettingsView: View {
         let hasFreeWithAds = kinds.contains(.freeWithAds)
         switch (hasStandard, hasFreeWithAds) {
         case (true, true):
-            return "\(L10n.text("xbox_cloud_gaming")) · \(L10n.text("free_with_ads"))"
+            return "\(L10n.text("connected")) · \(L10n.text("free_with_ads"))"
         case (true, false):
-            return L10n.text("xbox_cloud_gaming")
+            return L10n.text("connected")
         case (false, true):
             return L10n.text("free_with_ads")
         case (false, false):
@@ -3046,7 +3711,9 @@ private struct XboxSettingsView: View {
         viewModel.prepareForCacheClear()
         Task {
             do {
-                try await AppDataManager.shared.clearCaches()
+                try await AppDataManager.shared.clearCaches(
+                    for: .xboxCloudGaming
+                )
                 await viewModel.load()
                 dataDialog = .result(
                     title: L10n.text("cache_cleared"),
@@ -3058,7 +3725,10 @@ private struct XboxSettingsView: View {
                     title: L10n.text("cache_clear_failed"),
                     message: L10n.format(
                         "cache_clear_failed_message",
-                        error.localizedDescription
+                        localizedFailure(
+                            error,
+                            fallbackKey: "cloud_service_unavailable"
+                        )
                     )
                 )
             }
@@ -3088,7 +3758,6 @@ private struct XboxSettingsView: View {
             return
         }
         isPerformingDataAction = true
-        geForceNowAuthManager.prepareForDataReset()
         xboxAuthManager.prepareForDataReset()
         viewModel.prepareForPersistentDataClear()
         modeViewModel.prepareForPersistentDataClear()
@@ -3098,47 +3767,51 @@ private struct XboxSettingsView: View {
                 providerCoordinator.finishCredentialMutation(mutation)
                 isPerformingDataAction = false
             }
-            await modeViewModel.stopStream()
             do {
-                try await AppDataManager.shared.clearCaches()
-                let result = await AppDataManager.shared.clearPersistentData()
-                let remainingProvider = result.remainingProvider(
-                    preferring: .xboxCloudGaming
-                )
-                if result.geForceNowCredentialsRemoved {
-                    geForceNowAuthManager.finishDataReset()
-                } else {
-                    geForceNowAuthManager.abortDataResetWithoutActivation()
+                guard await endProviderSessionIfNeeded() else {
+                    xboxAuthManager.abortDataResetWithoutActivation()
+                    await modeViewModel.restoreSettingsAfterDataClearAttempt()
+                    await xboxAuthManager.activateXboxCloudAccess()
+                    await modeViewModel.load()
+                    dataDialog = .result(
+                        title: L10n.text("reset_failed"),
+                        message: L10n.text("end_session_before_sign_out")
+                    )
+                    return
                 }
-                if result.xboxCredentialsRemoved {
+                await modeViewModel.stopStream()
+                try await AppDataManager.shared.clearCaches(
+                    for: .xboxCloudGaming
+                )
+                let result = await AppDataManager.shared.clearPersistentData(
+                    for: .xboxCloudGaming
+                )
+                if result.credentialsRemoved {
                     await xboxAuthManager.finishDataReset()
+                    providerCoordinator.select(fallbackProvider)
                 } else {
                     xboxAuthManager.abortDataResetWithoutActivation()
-                }
-                if result.isComplete {
-                    providerCoordinator.select(nil)
-                } else if let remainingProvider {
                     providerCoordinator.preserveSelectionAfterFailedDataReset(
-                        remainingProvider
+                        .xboxCloudGaming
                     )
                     providerCoordinator.presentDataResetFailure(
-                        result.failureDescription ?? L10n.text("reset_failed")
+                        persistentResetFailureMessage(result.failureDescription)
                     )
-                    if remainingProvider == .xboxCloudGaming {
-                        await modeViewModel.restoreSettingsAfterDataClearAttempt()
-                        await xboxAuthManager.activateXboxCloudAccess()
-                        await modeViewModel.load()
-                    }
+                    await modeViewModel.restoreSettingsAfterDataClearAttempt()
+                    await xboxAuthManager.activateXboxCloudAccess()
+                    await modeViewModel.load()
                 }
             } catch {
-                geForceNowAuthManager.abortDataResetWithoutActivation()
                 xboxAuthManager.abortDataResetWithoutActivation()
                 await modeViewModel.restoreSettingsAfterDataClearAttempt()
                 await xboxAuthManager.activateXboxCloudAccess()
                 await modeViewModel.load()
                 dataDialog = .result(
                     title: L10n.text("reset_failed"),
-                    message: error.localizedDescription
+                    message: localizedFailure(
+                        error,
+                        fallbackKey: "reset_failed"
+                    )
                 )
             }
         }
@@ -3149,32 +3822,75 @@ private struct XboxSettingsView: View {
             return
         }
         isSigningOut = true
-        viewModel.prepareForCacheClear()
         Task {
             defer {
                 providerCoordinator.finishCredentialMutation(mutation)
                 isSigningOut = false
             }
             do {
-                await modeViewModel.deactivateForInactiveProvider()
-                try await xboxAuthManager.logout()
-                providerCoordinator.select(
-                    geForceNowAuthManager.isAuthenticated ? .geForceNow : nil
+                let didSignOut = try await XboxSettingsSignOutWorkflow.run(
+                    endSession: { await endProviderSessionIfNeeded() },
+                    deactivate: {
+                        await modeViewModel.deactivateForInactiveProvider()
+                    },
+                    logout: { try await xboxAuthManager.logout() },
+                    clearCatalog: { viewModel.prepareForCacheClear() },
+                    selectFallback: {
+                        providerCoordinator.select(fallbackProvider)
+                    }
                 )
+                guard didSignOut else {
+                    dataDialog = .result(
+                        title: L10n.text("sign_out"),
+                        message: L10n.text("end_session_before_sign_out")
+                    )
+                    return
+                }
             } catch {
                 await modeViewModel.load()
                 dataDialog = .result(
                     title: L10n.text("sign_out"),
-                    message: error.localizedDescription
+                    message: localizedFailure(
+                        error,
+                        fallbackKey: "cloud_service_unavailable"
+                    )
                 )
             }
         }
+    }
+
+    private func localizedFailure(
+        _ error: Error,
+        fallbackKey: String
+    ) -> String {
+        #if DEBUG
+            return error.localizedDescription
+        #else
+            return L10n.text(fallbackKey)
+        #endif
+    }
+
+    private func persistentResetFailureMessage(_ message: String?) -> String {
+        #if DEBUG
+            return message ?? L10n.text("reset_failed")
+        #else
+            return L10n.text("reset_failed")
+        #endif
+    }
+
+    private func endProviderSessionIfNeeded() async -> Bool {
+        guard let lease = sessionCoordinator.serverSession,
+              lease.provider == .xboxCloudGaming
+        else {
+            return true
+        }
+        return await sessionCoordinator.endServerSessionUsingProvider(lease)
     }
 }
 
 private nonisolated enum XboxAppTab: CloudNowTabSelection {
     case home
-    case browse
+    case library
     case settings
 
     static let first = XboxAppTab.home
@@ -3183,8 +3899,8 @@ private nonisolated enum XboxAppTab: CloudNowTabSelection {
     var next: XboxAppTab {
         switch self {
         case .home:
-            .browse
-        case .browse:
+            .library
+        case .library:
             .settings
         case .settings:
             .home
@@ -3195,10 +3911,10 @@ private nonisolated enum XboxAppTab: CloudNowTabSelection {
         switch self {
         case .home:
             .settings
-        case .browse:
+        case .library:
             .home
         case .settings:
-            .browse
+            .library
         }
     }
 }

@@ -13,7 +13,9 @@ struct CloudNowApp: App {
     @State private var authManager: AuthManager
     @State private var providerCoordinator: CloudGamingProviderCoordinator
     @State private var xboxAuthManager: XboxAuthManager
+    @State private var cloudSessionCoordinator = CloudSessionCoordinator()
     @State private var hasRestoredApplicationState = false
+    private let xboxEnvironment: XboxCloudEnvironment
     #if DEBUG
         private let usesUITestFixtures: Bool
     #endif
@@ -51,7 +53,10 @@ struct CloudNowApp: App {
                 Self.productionXboxEnvironment
             }
             let providerCoordinator = CloudGamingProviderCoordinator(
-                xboxEnvironment: xboxEnvironment,
+                capabilityProviders: [
+                    GFNCapabilityAdapter(),
+                    XboxCapabilityAdapter(environment: xboxEnvironment),
+                ],
                 initialSelection: usesUITestFixtures && !showsServiceChooserFixture
                     ? .geForceNow
                     : nil,
@@ -75,7 +80,10 @@ struct CloudNowApp: App {
             let authManager = AuthManager()
             let xboxEnvironment = Self.productionXboxEnvironment
             let providerCoordinator = CloudGamingProviderCoordinator(
-                xboxEnvironment: xboxEnvironment
+                capabilityProviders: [
+                    GFNCapabilityAdapter(),
+                    XboxCapabilityAdapter(environment: xboxEnvironment),
+                ]
             )
             let xboxAuthManager = XboxAuthManager(
                 environment: xboxEnvironment,
@@ -85,6 +93,7 @@ struct CloudNowApp: App {
         _authManager = State(initialValue: authManager)
         _providerCoordinator = State(initialValue: providerCoordinator)
         _xboxAuthManager = State(initialValue: xboxAuthManager)
+        self.xboxEnvironment = xboxEnvironment
 
         URLCache.shared = URLCache(
             memoryCapacity: 50 * 1024 * 1024,
@@ -114,10 +123,12 @@ struct CloudNowApp: App {
             Group {
                 #if DEBUG
                     if usesUITestFixtures {
-                        UITestRootView()
-                            .environment(authManager)
-                            .environment(providerCoordinator)
-                            .environment(xboxAuthManager)
+                        UITestRootView(
+                            xboxServiceConfiguration: xboxEnvironment.service
+                        )
+                        .environment(authManager)
+                        .environment(providerCoordinator)
+                        .environment(xboxAuthManager)
                     } else {
                         productionRoot
                     }
@@ -125,6 +136,7 @@ struct CloudNowApp: App {
                     productionRoot
                 #endif
             }
+            .environment(cloudSessionCoordinator)
             .modifier(CloudAppLifecycleModifier())
             .alert(
                 L10n.text("reset_failed"),
@@ -167,14 +179,21 @@ struct CloudNowApp: App {
                         XboxCloudConfigurationRequiredView()
                     } else if xboxAuthManager.isXboxCloudAuthorized,
                               let account = xboxAuthManager.authorizedAccount,
-                              let configuration = providerCoordinator.xboxServiceConfiguration
+                              let configuration = xboxEnvironment.service
                     {
                         XboxMainTabView(
                             configuration: configuration,
-                            account: account
+                            account: account,
+                            fallbackProvider: authManager.isAuthenticated
+                                ? .geForceNow
+                                : nil
                         )
                     } else {
-                        XboxLoginView()
+                        XboxLoginView(
+                            fallbackProvider: authManager.isAuthenticated
+                                ? .geForceNow
+                                : nil
+                        )
                     }
                 }
             } else {
@@ -305,7 +324,7 @@ struct CloudNowApp: App {
             return try XboxProductionRuntimeContext.microsoftProduction()
                 .environment
         } catch {
-            return .productionMicrosoftSignIn
+            return .invalidCompatibilityProfile
         }
     }()
 }
@@ -332,10 +351,18 @@ private struct AuthRestorationView: View {
         @Environment(XboxAuthManager.self) private var xboxAuthManager
         @State private var viewModel: GamesViewModel
         private let showsServiceChooser: Bool
+        private let xboxServiceConfiguration: XboxCloudServiceConfiguration?
+        private let xboxStreamFixtureState: CloudStreamPresentationState?
 
-        init() {
+        init(
+            xboxServiceConfiguration: XboxCloudServiceConfiguration?
+        ) {
             let arguments = ProcessInfo.processInfo.arguments
+            self.xboxServiceConfiguration = xboxServiceConfiguration
             showsServiceChooser = arguments.contains("--cloudnow-ui-service-chooser")
+            xboxStreamFixtureState = Self.xboxStreamFixtureState(
+                arguments: arguments
+            )
             let syncClientMode: UITestLibrarySyncClient.Mode =
                 arguments.contains("--cloudnow-ui-library-refresh-empty")
                     ? .empty
@@ -377,7 +404,11 @@ private struct AuthRestorationView: View {
 
         var body: some View {
             Group {
-                if showsServiceChooser {
+                if let xboxStreamFixtureState {
+                    CloudStreamPresentationFixtureView(
+                        state: xboxStreamFixtureState
+                    )
+                } else if showsServiceChooser {
                     switch providerCoordinator.selectedProvider {
                     case .geForceNow:
                         MainTabView(viewModel: viewModel, loadsRemoteData: false)
@@ -386,14 +417,15 @@ private struct AuthRestorationView: View {
                             XboxCloudConfigurationRequiredView()
                         } else if xboxAuthManager.isXboxCloudAuthorized,
                                   let account = xboxAuthManager.authorizedAccount,
-                                  let configuration = providerCoordinator.xboxServiceConfiguration
+                                  let configuration = xboxServiceConfiguration
                         {
                             XboxMainTabView(
                                 configuration: configuration,
-                                account: account
+                                account: account,
+                                fallbackProvider: .geForceNow
                             )
                         } else {
-                            XboxLoginView()
+                            XboxLoginView(fallbackProvider: .geForceNow)
                         }
                     case nil:
                         CloudServiceSelectionView()
@@ -414,6 +446,45 @@ private struct AuthRestorationView: View {
                     authManager.deactivateForInactiveProvider()
                     await xboxAuthManager.deactivateForInactiveProvider()
                 }
+            }
+        }
+
+        private static func xboxStreamFixtureState(
+            arguments: [String]
+        ) -> CloudStreamPresentationState? {
+            guard let flagIndex = arguments.firstIndex(
+                of: "--cloudnow-ui-xbox-stream-state"
+            ),
+                arguments.indices.contains(flagIndex + 1)
+            else {
+                return nil
+            }
+            return switch arguments[flagIndex + 1] {
+            case "idle": .idle
+            case "allocating": .allocating
+            case "queued": .queued(position: 4, estimatedWait: 90)
+            case "provisioning": .provisioning(
+                    progress: 0.42,
+                    estimatedWait: 45
+                )
+            case "connecting": .connecting
+            case "streaming": .streaming
+            case "reconnecting": .reconnecting(
+                    attempt: 2,
+                    maximumAttempts: 3,
+                    nextDelay: 2
+                )
+            case "resumable": .resumable(
+                    expiresAt: Date().addingTimeInterval(600)
+                )
+            case "failure": .failure(
+                    CloudStreamPresentationFailure(
+                        localizationKey: "stream_failed",
+                        isRetryable: true
+                    )
+                )
+            case "stopping": .stopping
+            default: nil
             }
         }
 

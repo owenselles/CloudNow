@@ -1,16 +1,29 @@
 import Foundation
 import SwiftUI
 
+nonisolated enum XboxCloudBackgroundSessionAction: Equatable, Sendable {
+    case leave
+    case end
+}
+
+nonisolated enum XboxCloudBackgroundSessionPolicy {
+    static func action(canLeaveSession: Bool) -> XboxCloudBackgroundSessionAction {
+        canLeaveSession ? .leave : .end
+    }
+}
+
 /// Xbox-only player chrome around CloudNow's native video surface. Session,
 /// signaling, input, and WebRTC state stay below this coarse observable seam.
 struct XboxCloudPlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(CloudSessionCoordinator.self) private var cloudSessionCoordinator
     let item: XboxCatalogItem
     let route: XboxCloudTitleRoute
     let account: XboxCloudAuthorizedAccount
     let settings: XboxCloudStreamSettings
     let controller: XboxCloudStreamController
+    let continuesExistingSession: Bool
     let onStreamStarted: () -> Void
     let onStatsModeChanged: (StreamStatsMode) -> Void
     let onDismiss: () -> Void
@@ -20,6 +33,11 @@ struct XboxCloudPlayerView: View {
     @State private var launchAttempt: UInt64 = 0
     @State private var isEnding = false
     @State private var hasRecordedPlayback = false
+    @State private var serverSessionLease: CloudServerSessionLease?
+    @State private var localPeerLease: CloudLocalPeerLease?
+    @State private var localFailureMessage: String?
+    @State private var endConfirmationFailed = false
+    @State private var didLeaveSession = false
 
     var body: some View {
         ZStack {
@@ -34,20 +52,35 @@ struct XboxCloudPlayerView: View {
         .background(.black)
         .ignoresSafeArea()
         .task(id: launchAttempt) {
+            localFailureMessage = nil
+            endConfirmationFailed = false
+            guard acquireServerSessionLease() else {
+                localFailureMessage = L10n.text("cloud_session_in_use")
+                return
+            }
             do {
-                try await controller.start(
-                    // Xbox represents the access lane in the title route. Its play
-                    // request has no separate free-with-ads or ad-receipt parameter.
-                    gameID: route.titleID,
-                    account: account,
-                    locale: settings.effectiveGameLanguage(
-                        defaultLocale: L10n.localeCode
-                    ),
-                    settings: settings
-                )
+                if continuesExistingSession {
+                    try await controller.continueSession()
+                } else {
+                    try await controller.start(
+                        // Xbox represents the access lane in the title route. Its play
+                        // request has no separate free-with-ads or ad-receipt parameter.
+                        gameID: route.titleID,
+                        account: account,
+                        locale: settings.effectiveGameLanguage(
+                            defaultLocale: L10n.localeCode
+                        ),
+                        settings: settings,
+                        onSessionCreated: { sessionID in
+                            try bindServerSession(to: sessionID)
+                        }
+                    )
+                }
             } catch is CancellationError {
+                await restoreCoordinatorAfterLaunchFailure()
                 return
             } catch {
+                await restoreCoordinatorAfterLaunchFailure()
                 return
             }
         }
@@ -63,13 +96,35 @@ struct XboxCloudPlayerView: View {
             } else if previousState == .streaming {
                 MemoryLifecycleCoordinator.shared.streamDidLeavePlayback()
             }
+            switch state {
+            case .connecting, .streaming, .reconnecting:
+                if !attachLocalPeer() {
+                    endSession()
+                }
+            case .failed:
+                if !controller.canContinueSession,
+                   !controller.hasUnconfirmedSessionDeletion
+                {
+                    endSessionLease()
+                }
+            case .idle, .requestingAccess, .allocating, .waiting,
+                 .provisioning, .stopping:
+                releaseLocalPeerLease()
+            }
         }
         .onChange(of: controller.menuPressCount) { _, _ in
             toggleOverlay()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .background else { return }
-            endSession()
+            switch XboxCloudBackgroundSessionPolicy.action(
+                canLeaveSession: controller.canLeaveSession
+            ) {
+            case .leave:
+                leaveSession()
+            case .end:
+                endSession()
+            }
         }
         .onExitCommand {
             if controller.state == .streaming {
@@ -85,8 +140,12 @@ struct XboxCloudPlayerView: View {
         .onDisappear {
             controller.setInputPaused(false)
             MemoryLifecycleCoordinator.shared.streamDidClose()
+            guard !didLeaveSession, !controller.canContinueSession else {
+                releaseLocalPeerLease()
+                return
+            }
             Task {
-                await controller.stop()
+                _ = await endSessionUsingProvider()
             }
         }
     }
@@ -147,8 +206,8 @@ struct XboxCloudPlayerView: View {
                     .foregroundStyle(.tertiary)
             }
 
-            if case let .failed(message) = controller.state {
-                Text(message)
+            if let failureMessage {
+                Text(failureMessage)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -156,7 +215,11 @@ struct XboxCloudPlayerView: View {
 
                 HStack(spacing: 24) {
                     Button(L10n.text("try_again")) {
-                        launchAttempt &+= 1
+                        if endConfirmationFailed {
+                            endSession()
+                        } else {
+                            launchAttempt &+= 1
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
@@ -192,7 +255,7 @@ struct XboxCloudPlayerView: View {
             ZStack {
                 if showsOverlay {
                     pauseMenu
-                        .transition(.move(edge: .leading).combined(with: .opacity))
+                        .transition(pauseMenuTransition)
                 }
 
                 if controller.statsMode != .off {
@@ -203,12 +266,12 @@ struct XboxCloudPlayerView: View {
                             maxHeight: .infinity,
                             alignment: .topTrailing
                         )
-                        .transition(.opacity)
+                        .transition(statsHUDTransition)
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: showsOverlay)
-        .animation(.easeInOut(duration: 0.2), value: controller.statsMode)
+        .animation(overlayAnimation, value: showsOverlay)
+        .animation(overlayAnimation, value: controller.statsMode)
         .onChange(of: showsOverlay) { _, showing in
             controller.setInputPaused(showing)
         }
@@ -221,53 +284,23 @@ struct XboxCloudPlayerView: View {
     }
 
     private var pauseMenu: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Button {
-                toggleOverlay()
-            } label: {
-                Label(L10n.text("resume"), systemImage: "play.fill")
-                    .foregroundStyle(Color.black.opacity(0.84))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .tint(.green)
-            .accessibilityIdentifier("xbox-stream.resume")
-
-            Button {
+        CloudStreamPauseMenu(
+            statsMode: controller.statsMode,
+            onResume: toggleOverlay,
+            onCycleStatistics: {
                 let next = controller.statsMode.nextHUDLevel
                 controller.setStatsMode(next)
                 onStatsModeChanged(next)
-            } label: {
-                Label(
-                    L10n.format("statistics_level", controller.statsMode.label),
-                    systemImage: "chart.bar.xaxis"
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .accessibilityIdentifier("xbox-stream.statistics")
-
-            Button(role: .destructive) {
+            },
+            onLeave: leaveSession,
+            onEndRequest: {
                 showExitConfirmation = true
-            } label: {
-                Label(L10n.text("end_session"), systemImage: "xmark.circle")
-                    .foregroundStyle(Color.black.opacity(0.84))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-            .disabled(isEnding)
-            .accessibilityIdentifier("xbox-stream.end-session")
-
-            Spacer()
-        }
-        .padding(.horizontal, 48)
-        .padding(.vertical, 80)
-        .frame(width: 480)
-        .frame(maxHeight: .infinity)
-        .background(pauseMenuBackgroundColor)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .ignoresSafeArea()
+            },
+            isEndDisabled: isEnding,
+            accessibilityPrefix: "xbox-stream",
+            providerActions: { EmptyView() },
+            footer: { EmptyView() }
+        )
     }
 
     private var statsSnapshot: StatsHUDSnapshot {
@@ -278,46 +311,50 @@ struct XboxCloudPlayerView: View {
             audioStats: controller.audioStats,
             colorState: controller.colorState,
             streamingStartedAt: controller.streamingStartedAt,
-            microphoneEnabled: false,
-            headerTitle: L10n.text("xbox_cloud_gaming"),
+            microphoneEnabled: controller.microphoneEnabledForConnection,
+            headerTitle: L10n.text("app_name"),
             serverLocation: location.isEmpty ? L10n.text("unknown") : location,
-            diagnosticsEnabled: false,
-            rtcEventLogActive: false
+            diagnosticsEnabled: controller.diagnosticsEnabled,
+            rtcEventLogActive: controller.rtcEventLogActive
         )
-    }
-
-    private var pauseMenuBackgroundColor: Color {
-        colorScheme == .dark ? .black.opacity(0.75) : .white.opacity(0.82)
     }
 
     private var statusTitle: String {
         if isEnding {
-            return L10n.text("xbox_ending_session")
+            return L10n.text("ending_session")
+        }
+        if localFailureMessage != nil {
+            return L10n.text("disconnected")
         }
         return switch controller.state {
         case .idle:
             L10n.format("starting_game", item.title)
         case .requestingAccess:
-            L10n.text("xbox_requesting_access")
+            L10n.format("starting_game", item.title)
         case .allocating:
-            L10n.text("xbox_allocating_session")
+            L10n.format("starting_game", item.title)
         case .waiting:
-            L10n.text("xbox_waiting_capacity")
+            L10n.text("in_queue")
         case .provisioning:
-            L10n.text("xbox_provisioning_console")
+            L10n.text("preparing_game")
         case .connecting:
-            L10n.text("xbox_connecting_stream")
+            L10n.text("connecting_to_server")
         case .streaming:
             L10n.text("live")
+        case .reconnecting:
+            L10n.text("reconnecting")
         case .stopping:
-            L10n.text("xbox_ending_session")
+            L10n.text("ending_session")
         case .failed:
             L10n.text("disconnected")
         }
     }
 
     private var statusSymbol: String {
-        switch controller.state {
+        if localFailureMessage != nil {
+            return "exclamationmark.triangle.fill"
+        }
+        return switch controller.state {
         case .failed:
             "exclamationmark.triangle.fill"
         case .stopping:
@@ -328,6 +365,14 @@ struct XboxCloudPlayerView: View {
     }
 
     private var statusDetail: String? {
+        if case let .reconnecting(attempt, maximumAttempts, nextDelay) = controller.state {
+            let attemptText = L10n.format(
+                "reconnecting_attempt_note",
+                attempt
+            )
+            guard let nextDelay else { return attemptText }
+            return "\(attemptText) · \(Int(nextDelay.rounded(.up)))s / \(maximumAttempts)"
+        }
         let estimatedSeconds: TimeInterval? = switch controller.state {
         case let .waiting(estimatedSeconds),
              let .provisioning(estimatedSeconds):
@@ -348,7 +393,10 @@ struct XboxCloudPlayerView: View {
     }
 
     private var statusTint: Color {
-        switch controller.state {
+        if localFailureMessage != nil {
+            return .orange
+        }
+        return switch controller.state {
         case .failed:
             .orange
         case .stopping:
@@ -359,9 +407,12 @@ struct XboxCloudPlayerView: View {
     }
 
     private var showsProgress: Bool {
-        switch controller.state {
+        if localFailureMessage != nil {
+            return false
+        }
+        return switch controller.state {
         case .idle, .requestingAccess, .allocating, .waiting, .provisioning,
-             .connecting, .stopping:
+             .connecting, .reconnecting, .stopping:
             true
         case .streaming, .failed:
             false
@@ -369,6 +420,9 @@ struct XboxCloudPlayerView: View {
     }
 
     private var stateAccessibilityIdentifier: String {
+        if localFailureMessage != nil {
+            return "xbox-stream-state.failed"
+        }
         let stateName = switch controller.state {
         case .idle:
             "idle"
@@ -384,6 +438,8 @@ struct XboxCloudPlayerView: View {
             "connecting"
         case .streaming:
             "streaming"
+        case .reconnecting:
+            "reconnecting"
         case .stopping:
             "stopping"
         case .failed:
@@ -394,18 +450,179 @@ struct XboxCloudPlayerView: View {
 
     private func toggleOverlay() {
         guard controller.state == .streaming else { return }
+        guard !accessibilityReduceMotion else {
+            showsOverlay.toggle()
+            return
+        }
         withAnimation(.easeInOut(duration: 0.18)) {
             showsOverlay.toggle()
         }
     }
 
+    private var overlayAnimation: Animation? {
+        accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)
+    }
+
+    private var pauseMenuTransition: AnyTransition {
+        accessibilityReduceMotion
+            ? .identity
+            : .move(edge: .leading).combined(with: .opacity)
+    }
+
+    private var statsHUDTransition: AnyTransition {
+        accessibilityReduceMotion ? .identity : .opacity
+    }
+
     private func endSession() {
         guard !isEnding else { return }
         isEnding = true
+        endConfirmationFailed = false
         controller.setInputPaused(false)
         Task {
-            await controller.stop()
+            guard await endSessionUsingProvider() else {
+                localFailureMessage = L10n.text("cloud_service_unavailable")
+                endConfirmationFailed = true
+                isEnding = false
+                return
+            }
             onDismiss()
         }
+    }
+
+    private var failureMessage: String? {
+        if let localFailureMessage {
+            return localFailureMessage
+        }
+        guard case let .failed(message) = controller.state else { return nil }
+        #if DEBUG
+            return message
+        #else
+            return L10n.text("cloud_service_unavailable")
+        #endif
+    }
+
+    private func leaveSession() {
+        guard controller.canLeaveSession,
+              let serverSessionLease
+        else {
+            return
+        }
+        controller.leaveForBackground()
+        guard let expiresAt = controller.resumableSessionExpiresAt else {
+            endSession()
+            return
+        }
+        cloudSessionCoordinator.parkServerSession(
+            serverSessionLease,
+            expiresAt: expiresAt
+        )
+        releaseLocalPeerLease()
+        didLeaveSession = true
+        onDismiss()
+    }
+
+    private func acquireServerSessionLease() -> Bool {
+        if serverSessionLease != nil {
+            return true
+        }
+        do {
+            let actions = CloudServerSessionActions(
+                leave: { [controller] in
+                    controller.leave()
+                    return controller.resumableSessionExpiresAt
+                },
+                end: { [controller] in
+                    await controller.endSession()
+                }
+            )
+            if continuesExistingSession {
+                guard let sessionID = controller.coordinatorServerSessionID else {
+                    return false
+                }
+                serverSessionLease = try cloudSessionCoordinator
+                    .adoptParkedServerSession(
+                        provider: .xboxCloudGaming,
+                        serverSessionID: sessionID,
+                        actions: actions
+                    )
+            } else {
+                serverSessionLease = try cloudSessionCoordinator
+                    .reserveServerSession(
+                        provider: .xboxCloudGaming,
+                        serverSessionID: "\(account.activityScopeIdentifier):\(route.titleID)",
+                        actions: actions
+                    )
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func bindServerSession(to sessionID: String) throws {
+        guard let serverSessionLease else {
+            throw CloudSessionConflict.serverSessionLeaseNotOwned
+        }
+        self.serverSessionLease = try cloudSessionCoordinator.bindServerSession(
+            serverSessionLease,
+            to: sessionID
+        )
+    }
+
+    private func attachLocalPeer() -> Bool {
+        if localPeerLease != nil {
+            return true
+        }
+        do {
+            localPeerLease = try cloudSessionCoordinator.attachLocalPeer(
+                for: .xboxCloudGaming
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func releaseLocalPeerLease() {
+        guard let localPeerLease else { return }
+        cloudSessionCoordinator.releaseLocalPeer(localPeerLease)
+        self.localPeerLease = nil
+    }
+
+    private func restoreCoordinatorAfterLaunchFailure() async {
+        guard controller.canContinueSession,
+              let serverSessionLease,
+              let expiresAt = controller.resumableSessionExpiresAt
+        else {
+            if !controller.hasUnconfirmedSessionDeletion {
+                endSessionLease()
+            }
+            return
+        }
+        cloudSessionCoordinator.parkServerSession(
+            serverSessionLease,
+            expiresAt: expiresAt
+        )
+        releaseLocalPeerLease()
+    }
+
+    private func endSessionUsingProvider() async -> Bool {
+        guard let serverSessionLease else {
+            return await controller.endSession()
+        }
+        let didEnd = await cloudSessionCoordinator
+            .endServerSessionUsingProvider(serverSessionLease)
+        if didEnd {
+            self.serverSessionLease = nil
+            releaseLocalPeerLease()
+        }
+        return didEnd
+    }
+
+    private func endSessionLease() {
+        guard let serverSessionLease else { return }
+        cloudSessionCoordinator.endServerSession(serverSessionLease)
+        self.serverSessionLease = nil
+        releaseLocalPeerLease()
     }
 }

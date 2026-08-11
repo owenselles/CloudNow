@@ -6,6 +6,7 @@ import SwiftUI
 struct XboxCatalogDetailView: View {
     let item: XboxCatalogItem
     let route: XboxCloudTitleRoute
+    let isInputAvailable: Bool
     let isFavorite: Bool
     let isLoadingDetail: Bool
     let detailLoadFailed: Bool
@@ -34,8 +35,12 @@ struct XboxCatalogDetailView: View {
         presentationStyle == .embeddedCarousel
     }
 
+    private var isPlayable: Bool {
+        route.isPlayable && isInputAvailable
+    }
+
     private var preferredFocusTarget: DetailFocus {
-        if route.isPlayable {
+        if isPlayable {
             return .play
         }
         if detailLoadFailed {
@@ -203,22 +208,22 @@ struct XboxCatalogDetailView: View {
 
                     Label(accessDescription, systemImage: accessSystemImage)
                         .font(.callout.weight(.semibold))
-                        .foregroundStyle(route.isPlayable ? .green : .secondary)
+                        .foregroundStyle(isPlayable ? .green : .secondary)
 
                     HStack(spacing: 16) {
                         Button(action: onPlay) {
                             Label(
-                                route.isPlayable
+                                isPlayable
                                     ? L10n.text("play")
-                                    : L10n.text("not_eligible"),
-                                systemImage: route.isPlayable
+                                    : unavailablePlayTitle,
+                                systemImage: isPlayable
                                     ? "play.fill"
                                     : "lock.fill"
                             )
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(route.isPlayable ? .green : .gray)
-                        .disabled(!route.isPlayable)
+                        .tint(isPlayable ? .green : .gray)
+                        .disabled(!isPlayable)
                         .focused($focusedElement, equals: .play)
                         .accessibilityIdentifier("xbox-game.play.\(item.id)")
 
@@ -428,6 +433,9 @@ struct XboxCatalogDetailView: View {
     }
 
     private var accessDescription: String {
+        guard isInputAvailable else {
+            return L10n.text("compatible_input_required")
+        }
         if item.isOwned {
             return "\(L10n.text("owned")) · \(routeDescription)"
         }
@@ -448,23 +456,30 @@ struct XboxCatalogDetailView: View {
     private var routeDescription: String {
         switch route.accessKind {
         case .standard:
-            L10n.text("xbox_cloud_gaming")
+            L10n.text("cloud_gaming_access")
         case .freeWithAds:
             if route.isPlayable {
                 L10n.text("free_with_ads")
             } else {
-                L10n.text("not_eligible")
+                route.playabilityReason.label
             }
         }
     }
 
     private var accessSystemImage: String {
-        if !route.isPlayable {
+        if !isPlayable {
             return "lock.fill"
         }
         return route.accessKind == .freeWithAds
             ? "play.rectangle.on.rectangle"
             : "checkmark.circle.fill"
+    }
+
+    private var unavailablePlayTitle: String {
+        guard isInputAvailable else {
+            return L10n.text("compatible_input_required")
+        }
+        return route.playabilityReason.label
     }
 
     private func handleFocusChange(

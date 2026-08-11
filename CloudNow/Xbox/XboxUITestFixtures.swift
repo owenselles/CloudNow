@@ -50,7 +50,10 @@
         static let deviceCodeEnvironment = XboxCloudEnvironment(
             authentication: authentication,
             makeAccountAuthorizationClient: nil,
-            service: nil
+            // Keep provider availability enabled so the chooser can exercise
+            // device-code sign-in. The injected OAuth client pauses before any
+            // account authorization or service request can occur.
+            service: environment.service
         )
 
         static func makeDeviceCodeOAuthClient() -> any XboxOAuthClient {
@@ -104,7 +107,7 @@
                     title: "Fixture Preview Locked",
                     genres: ["Adventure"],
                     artworkURL: nil,
-                    supportedInputTypes: [.touch],
+                    supportedInputTypes: [.controller, .touch],
                     routes: [
                         XboxCloudTitleRoute(
                             titleID: "fixture-preview-locked",
@@ -112,6 +115,13 @@
                             availability: .requiresEligibility
                         ),
                     ]
+                ),
+                XboxCatalogItem(
+                    id: "fixture-touch-only",
+                    title: "Fixture Touch Only",
+                    genres: ["Adventure"],
+                    artworkURL: nil,
+                    supportedInputTypes: [.touch]
                 ),
                 XboxCatalogItem(
                     id: "fixture-puzzle",
