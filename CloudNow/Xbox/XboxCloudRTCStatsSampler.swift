@@ -469,9 +469,9 @@ final class XboxCloudRTCStatsSampler {
     private static func audioDeviceSample() -> XboxCloudRTCAudioDeviceSample {
         XboxCloudRTCAudioDeviceSample(
             outputLatencyMs: AVAudioSession.sharedInstance().outputLatency * 1000,
-            outputChannels: GFNAudioDevice.shared.outputNumberOfChannels,
-            outputSampleRateHz: GFNAudioDevice.shared.deviceOutputSampleRate,
-            outputRouteName: GFNAudioDevice.shared.outputRouteName
+            outputChannels: CloudAudioDevice.shared.outputNumberOfChannels,
+            outputSampleRateHz: CloudAudioDevice.shared.deviceOutputSampleRate,
+            outputRouteName: CloudAudioDevice.shared.outputRouteName
         )
     }
 

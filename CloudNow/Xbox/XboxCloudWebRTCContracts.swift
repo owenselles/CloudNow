@@ -10,7 +10,7 @@ nonisolated enum XboxCloudDataChannelKind: String, CaseIterable, Hashable, Senda
 }
 
 nonisolated struct XboxCloudDataChannelDescriptor: Equatable, Sendable {
-    static let microsoftWebRTCChannels: [Self] = [
+    static let microsoftWebRTCChannelsV1: [Self] = [
         Self(kind: .chat, label: "chat", subprotocol: "chatV1", isOrdered: true),
         Self(kind: .control, label: "control", subprotocol: "controlV1", isOrdered: true),
         Self(kind: .message, label: "message", subprotocol: "messageV1", isOrdered: true),
@@ -29,6 +29,10 @@ nonisolated struct XboxCloudDataChannelDescriptor: Equatable, Sendable {
             isOrdered: true
         ),
     ]
+
+    static var microsoftWebRTCChannels: [Self] {
+        XboxCloudCompatibilityProfile.bundledV1.dataChannelDescriptors
+    }
 
     let kind: XboxCloudDataChannelKind
     let label: String
@@ -111,9 +115,9 @@ nonisolated enum XboxCloudInputTransportMode: Equatable, Sendable {
     var requiredChannels: Set<XboxCloudDataChannelKind> {
         switch self {
         case .legacy:
-            [.control, .message, .input]
+            [.input]
         case .unreliable:
-            [.control, .message, .unreliableInput, .reliableInput]
+            [.unreliableInput, .reliableInput]
         }
     }
 
@@ -126,35 +130,126 @@ nonisolated enum XboxCloudInputTransportMode: Equatable, Sendable {
         }
     }
 
-    init(answer: XboxCloudSDPAnswer) throws {
+    init(
+        answer: XboxCloudSDPAnswer,
+        configuration: XboxCloudSDPConfiguration = .webInput
+    ) throws {
+        let supported = XboxCloudSDPConfiguration.webInput
         if let unreliableVersion = answer.unreliableinput,
-           let reliableVersion = answer.reliableinput
+           let reliableVersion = answer.reliableinput,
+           configuration.unreliableinput.contains(unreliableVersion),
+           supported.unreliableinput.contains(unreliableVersion),
+           configuration.reliableinput.contains(reliableVersion),
+           supported.reliableinput.contains(reliableVersion)
         {
-            guard (9 ... 10).contains(unreliableVersion) else {
-                throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
-                    unreliableVersion
-                )
-            }
-            guard (9 ... 10).contains(reliableVersion) else {
-                throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
-                    reliableVersion
-                )
-            }
             self = .unreliable(
                 reliableVersion: reliableVersion,
                 unreliableVersion: unreliableVersion
             )
             return
         }
-        guard let legacyVersion = answer.input else {
-            throw XboxCloudWebRTCTransportError.missingInputTransport
+
+        if let legacyVersion = answer.input,
+           configuration.input.contains(legacyVersion),
+           supported.input.contains(legacyVersion)
+        {
+            self = .legacy(version: legacyVersion)
+            return
         }
-        guard (1 ... 10).contains(legacyVersion) else {
-            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(
-                legacyVersion
+
+        if let version = answer.unreliableinput,
+           !configuration.unreliableinput.contains(version)
+           || !supported.unreliableinput.contains(version)
+        {
+            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(version)
+        }
+        if let version = answer.reliableinput,
+           !configuration.reliableinput.contains(version)
+           || !supported.reliableinput.contains(version)
+        {
+            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(version)
+        }
+        if let version = answer.input,
+           !configuration.input.contains(version)
+           || !supported.input.contains(version)
+        {
+            throw XboxCloudWebRTCTransportError.unsupportedInputVersion(version)
+        }
+        throw XboxCloudWebRTCTransportError.missingInputTransport
+    }
+}
+
+extension XboxCloudSDPAnswer {
+    /// Validates every channel selected by the service. Video and one supported
+    /// input transport are required; optional channels with missing or unknown
+    /// versions are removed from the negotiated capability view.
+    nonisolated func validated(
+        for configuration: XboxCloudSDPConfiguration
+    ) throws -> Self {
+        guard isAccepted else {
+            throw XboxCloudSignalingError.invalidPayload
+        }
+        let inputMode = try XboxCloudInputTransportMode(
+            answer: self,
+            configuration: configuration
+        )
+        let supported = XboxCloudSDPConfiguration.webInput
+        let selectedInput: Int?
+        let selectedUnreliableInput: Int?
+        let selectedReliableInput: Int?
+        switch inputMode {
+        case let .legacy(version):
+            selectedInput = version
+            selectedUnreliableInput = nil
+            selectedReliableInput = nil
+        case let .unreliable(reliableVersion, unreliableVersion):
+            selectedInput = nil
+            selectedUnreliableInput = unreliableVersion
+            selectedReliableInput = reliableVersion
+        }
+
+        return Self(
+            status: status,
+            sdpType: sdpType,
+            sdp: sdp,
+            chatStream: Self.optionalVersion(
+                chatStream,
+                requested: configuration.chatStream,
+                supported: supported.chatStream
+            ),
+            control: Self.optionalVersion(
+                control,
+                requested: configuration.control,
+                supported: supported.control
+            ),
+            input: selectedInput,
+            unreliableinput: selectedUnreliableInput,
+            reliableinput: selectedReliableInput,
+            message: Self.optionalVersion(
+                message,
+                requested: configuration.message,
+                supported: supported.message
+            ),
+            chat: Self.optionalVersion(
+                chat,
+                requested: configuration.chat,
+                supported: supported.chat
             )
+        )
+    }
+
+    private nonisolated static func optionalVersion(
+        _ version: Int?,
+        requested: XboxCloudSDPConfiguration.VersionRange,
+        supported: XboxCloudSDPConfiguration.VersionRange
+    ) -> Int? {
+        guard let version,
+              requested.contains(version),
+              supported.contains(version)
+        else {
+            return nil
         }
-        self = .legacy(version: legacyVersion)
+        return version
     }
 }
 
@@ -281,11 +376,12 @@ struct XboxCloudWebRTCNegotiationPipeline {
         let offer = try await peer.createAndSetLocalOffer()
         try Task.checkCancellation()
 
-        let answer = try await signaling.exchangeSDP(
+        let receivedAnswer = try await signaling.exchangeSDP(
             offer: offer,
             context: context,
             configuration: .webInput
         )
+        let answer = try receivedAnswer.validated(for: .webInput)
         _ = try XboxCloudInputTransportMode(answer: answer)
 
         try Task.checkCancellation()

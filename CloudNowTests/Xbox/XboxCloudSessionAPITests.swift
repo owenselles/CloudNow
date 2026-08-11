@@ -80,6 +80,93 @@ struct XboxCloudSessionAPITests {
         #expect(!access.description.contains("fixture-transfer-secret"))
     }
 
+    @Test("Every session response uses the streaming size boundary")
+    func responsesAreBoundedBeforeBuffering() async throws {
+        let transport = BoundedRecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 2:
+                StubbedHTTPResponse(json: Self.configurationJSON)
+            case 3:
+                StubbedHTTPResponse(json: #"{"accepted":true}"#)
+            case 4:
+                StubbedHTTPResponse(statusCode: 204)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+
+        let handle = try await api.createSession(makeLaunchRequest())
+        _ = try await api.pollUntilProvisioned(handle)
+        _ = try await api.keepAlive(handle)
+        try await api.delete(handle)
+
+        #expect(await transport.unboundedRequestCount() == 0)
+        #expect(await transport.maximumResponseSizes() == Array(
+            repeating: 2 * 1024 * 1024,
+            count: 5
+        ))
+    }
+
+    @Test("Oversized session responses preserve a specific bounded error")
+    func oversizedResponse() async throws {
+        let transport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: Data(repeating: 0, count: 2 * 1024 * 1024 + 1))
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+
+        await #expect(throws: XboxCloudSessionAPIError.responseTooLarge(operation: .create)) {
+            _ = try await api.createSession(makeLaunchRequest())
+        }
+    }
+
+    @Test("Lifecycle rejects a concurrent second allocation while the first is in flight")
+    func lifecycleEnforcesOneSession() async throws {
+        let entered = XboxCloudSessionGate()
+        let release = XboxCloudSessionGate()
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                await entered.signal()
+                await release.wait()
+                return StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                return StubbedHTTPResponse(statusCode: 204)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+        let lifecycle = XboxCloudSessionLifecycleClient(api: api)
+        let request = try makeLaunchRequest()
+        let first = Task {
+            try await lifecycle.createSession(request)
+        }
+        await entered.wait()
+
+        await #expect(throws: XboxCloudStreamLifecycleError.sessionAlreadyActive) {
+            _ = try await lifecycle.createSession(request)
+        }
+        await release.signal()
+        let token = try await first.value
+        #expect(await lifecycle.delete(token))
+
+        #expect(await transport.requests().count == 2)
+    }
+
     @Test("Polling follows transfer URI, connects, and returns configuration")
     func provisionedLifecycle() async throws {
         let delays = XboxCloudDelayRecorder()
@@ -141,6 +228,11 @@ struct XboxCloudSessionAPITests {
         #expect(provisioned.configuration.clientStreamingConfigOverrides == .object([
             "videoConfiguration": .object(["enableHevc": .boolean(true)]),
         ]))
+        #expect(
+            XboxCloudServiceStreamingOverrides(
+                provisioned.configuration.clientStreamingConfigOverrides
+            ).enableHEVC == true
+        )
         #expect(!provisioned.configuration.description.contains("fixture-srtp-secret"))
         #expect(signaling.endpointBaseURL.host == "transfer.gssv-play-prod.xboxlive.com")
         #expect(signaling.sessionPath == "v5/sessions/cloud/fixture-session")
@@ -337,6 +429,106 @@ struct XboxCloudSessionAPITests {
 
         #expect(await transport.requests().count == 6)
         #expect(await delays.values() == [1, 1, 1])
+    }
+
+    @Test("Capacity ETA creates a soft queue deadline")
+    func capacityQueueUsesAdaptiveDeadline() async throws {
+        let clock = XboxCloudSessionTestClock(fixedDate)
+        let delays = XboxCloudDelayRecorder()
+        let policy = try XboxCloudSessionPollingPolicy(
+            queueInterval: 10,
+            provisioningInterval: 1,
+            maximumRetryAfter: 60,
+            maximumElapsedTime: 15 * 60,
+            maximumStateRequests: 300
+        )
+        let transport = RecordingHTTPTransport { _, index in
+            index == 0
+                ? StubbedHTTPResponse(json: Self.createResponseJSON)
+                : StubbedHTTPResponse(
+                    json: #"{"state":"WaitingForResources","estimatedTotalWaitTimeInSeconds":0}"#
+                )
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            pollingPolicy: policy,
+            now: { clock.now() },
+            sleep: { delay in
+                await delays.record(delay)
+                clock.advance(by: delay)
+            }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        await #expect(throws: XboxCloudSessionAPIError.pollingTimedOut(maximumStateRequests: 300)) {
+            _ = try await api.pollUntilProvisioned(handle)
+        }
+
+        #expect(await delays.values() == [10, 10, 10, 10, 10, 10])
+        #expect(await transport.requests().count == 7)
+    }
+
+    @Test("Revised capacity estimates extend only to the hard deadline")
+    func revisedCapacityEstimateExtendsDeadline() throws {
+        let hardDeadline = fixedDate.addingTimeInterval(15 * 60)
+        let first = try #require(XboxCloudSessionAPI.updatedWaitingDeadline(
+            current: nil,
+            allocationStartedAt: fixedDate,
+            hardDeadline: hardDeadline,
+            estimatedTotalWaitTime: 0,
+            queueInterval: 10
+        ))
+        let revised = try #require(XboxCloudSessionAPI.updatedWaitingDeadline(
+            current: first,
+            allocationStartedAt: fixedDate,
+            hardDeadline: hardDeadline,
+            estimatedTotalWaitTime: 240,
+            queueInterval: 10
+        ))
+        let capped = try #require(XboxCloudSessionAPI.updatedWaitingDeadline(
+            current: revised,
+            allocationStartedAt: fixedDate,
+            hardDeadline: hardDeadline,
+            estimatedTotalWaitTime: 3600,
+            queueInterval: 10
+        ))
+
+        #expect(first == fixedDate.addingTimeInterval(60))
+        #expect(revised == fixedDate.addingTimeInterval(270))
+        #expect(capped == hardDeadline)
+    }
+
+    @Test("Capacity polling has an absolute fifteen-minute ceiling")
+    func capacityQueueHasHardCeiling() async throws {
+        let clock = XboxCloudSessionTestClock(fixedDate)
+        let policy = try XboxCloudSessionPollingPolicy(
+            queueInterval: 60,
+            provisioningInterval: 1,
+            maximumRetryAfter: 60,
+            maximumElapsedTime: 3600,
+            maximumStateRequests: 1000
+        )
+        let transport = RecordingHTTPTransport { _, index in
+            index == 0
+                ? StubbedHTTPResponse(json: Self.createResponseJSON)
+                : StubbedHTTPResponse(json: #"{"state":"WaitingForResources"}"#)
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport,
+            pollingPolicy: policy,
+            now: { clock.now() },
+            sleep: { clock.advance(by: $0) }
+        )
+        let handle = try await api.createSession(makeLaunchRequest())
+
+        await #expect(throws: XboxCloudSessionAPIError.pollingTimedOut(maximumStateRequests: 1000)) {
+            _ = try await api.pollUntilProvisioned(handle)
+        }
+
+        #expect(clock.now() == fixedDate.addingTimeInterval(15 * 60))
+        #expect(await transport.requests().count == 16)
     }
 
     @Test("A transient capacity-state transport failure is retried once")
@@ -810,5 +1002,25 @@ private actor XboxTransferTokenRecorder {
 
     func requestCount() -> Int {
         count
+    }
+}
+
+private actor XboxCloudSessionGate {
+    private var isSignaled = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isSignaled else { return }
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func signal() {
+        guard !isSignaled else { return }
+        isSignaled = true
+        let waiting = continuations
+        continuations.removeAll(keepingCapacity: false)
+        waiting.forEach { $0.resume() }
     }
 }

@@ -265,21 +265,6 @@ nonisolated enum XboxModernPausedInputPolicy {
     }
 }
 
-nonisolated enum XboxModernControllerSlotPolicy {
-    static func selectedSlot(
-        current: Int?,
-        occupiedSlots: [Bool]
-    ) -> Int? {
-        if let current,
-           occupiedSlots.indices.contains(current),
-           occupiedSlots[current]
-        {
-            return current
-        }
-        return occupiedSlots.firstIndex(of: true)
-    }
-}
-
 nonisolated enum XboxCloudOverlayGestureAction: Equatable, Sendable {
     case none
     case toggleOverlay
@@ -411,6 +396,7 @@ nonisolated enum XboxCloudOverlayInputPolicy {
         return XboxGamepadState(
             index: state.index,
             buttons: buttons,
+            isSharePressed: state.isSharePressed,
             leftThumbX: state.leftThumbX,
             leftThumbY: state.leftThumbY,
             rightThumbX: state.rightThumbX,
@@ -493,7 +479,7 @@ nonisolated struct XboxCloudInputStateCache: Sendable {
 
     private var acknowledgedStates: [XboxGamepadState?] = Array(
         repeating: nil,
-        count: 4
+        count: XboxCloudCompatibilityProfile.bundledV1.maximumControllerSlots
     )
     private var lastSendAttemptNanoseconds: UInt64?
 
@@ -546,6 +532,351 @@ nonisolated struct XboxCloudInputStateCache: Sendable {
     }
 }
 
+/// Bounded peripheral queue shared by legacy and V2 send paths. Keyboard and
+/// pointer transitions are retained in order; high-rate mouse deltas coalesce
+/// into one relative report until accepted or copied into a V2 snapshot.
+nonisolated struct XboxCloudPeripheralInputBuffer: Sendable {
+    static let maximumTransitionCount = 64
+
+    private(set) var keyboard: [XboxKeyboardReport] = []
+    private(set) var pointerFrames: [XboxPointerFrame] = []
+    private(set) var mouse = XboxMouseReport()
+    private(set) var isMouseDirty = false
+
+    var report: XboxPeripheralInputReport {
+        XboxPeripheralInputReport(
+            pointerFrames: pointerFrames,
+            keyboard: keyboard,
+            mouse: isMouseDirty ? [mouse] : []
+        )
+    }
+
+    var isEmpty: Bool {
+        report.isEmpty
+    }
+
+    mutating func appendKeyboard(_ event: XboxKeyboardReport) {
+        keyboard.append(event)
+        Self.trimOldest(&keyboard)
+    }
+
+    mutating func appendPointerFrame(_ frame: XboxPointerFrame) {
+        guard !frame.events.isEmpty else { return }
+        pointerFrames.append(frame)
+        Self.trimOldest(&pointerFrames)
+    }
+
+    mutating func addMouseMovement(x: Float, y: Float) {
+        mouse = XboxMouseReport(
+            x: Self.adding(mouse.x, x),
+            y: Self.adding(mouse.y, y),
+            wheelX: mouse.wheelX,
+            wheelY: mouse.wheelY,
+            buttons: mouse.buttons
+        )
+        isMouseDirty = true
+    }
+
+    mutating func addMouseScroll(x: Float, y: Float) {
+        mouse = XboxMouseReport(
+            x: mouse.x,
+            y: mouse.y,
+            wheelX: Self.adding(mouse.wheelX, x),
+            wheelY: Self.adding(mouse.wheelY, y),
+            buttons: mouse.buttons
+        )
+        isMouseDirty = true
+    }
+
+    mutating func setMouseButtons(_ buttons: XboxMouseButtons) {
+        mouse = XboxMouseReport(
+            x: mouse.x,
+            y: mouse.y,
+            wheelX: mouse.wheelX,
+            wheelY: mouse.wheelY,
+            buttons: buttons
+        )
+        isMouseDirty = true
+    }
+
+    mutating func clear() {
+        keyboard.removeAll(keepingCapacity: true)
+        pointerFrames.removeAll(keepingCapacity: true)
+        mouse = XboxMouseReport()
+        isMouseDirty = false
+    }
+
+    private static func trimOldest(_ values: inout [some Any]) {
+        guard values.count > maximumTransitionCount else { return }
+        values.removeFirst(values.count - maximumTransitionCount)
+    }
+
+    private static func adding(_ current: Int32, _ delta: Float) -> Int32 {
+        let rounded = Int64(delta.rounded())
+        let sum = Int64(current) + rounded
+        return Int32(clamping: sum)
+    }
+}
+
+/// Converts Apple USB-HID key codes to Windows virtual-key values accepted by
+/// Xbox Cloud. Layout and IME keys without a confirmed mapping fail closed
+/// instead of being sent with a false code.
+nonisolated enum XboxCloudKeyboardMapper {
+    private static let virtualKeys: [GCKeyCode: UInt8] = [
+        .keyA: 0x41,
+        .keyB: 0x42,
+        .keyC: 0x43,
+        .keyD: 0x44,
+        .keyE: 0x45,
+        .keyF: 0x46,
+        .keyG: 0x47,
+        .keyH: 0x48,
+        .keyI: 0x49,
+        .keyJ: 0x4A,
+        .keyK: 0x4B,
+        .keyL: 0x4C,
+        .keyM: 0x4D,
+        .keyN: 0x4E,
+        .keyO: 0x4F,
+        .keyP: 0x50,
+        .keyQ: 0x51,
+        .keyR: 0x52,
+        .keyS: 0x53,
+        .keyT: 0x54,
+        .keyU: 0x55,
+        .keyV: 0x56,
+        .keyW: 0x57,
+        .keyX: 0x58,
+        .keyY: 0x59,
+        .keyZ: 0x5A,
+        .zero: 0x30,
+        .one: 0x31,
+        .two: 0x32,
+        .three: 0x33,
+        .four: 0x34,
+        .five: 0x35,
+        .six: 0x36,
+        .seven: 0x37,
+        .eight: 0x38,
+        .nine: 0x39,
+        .returnOrEnter: 0x0D,
+        .escape: 0x1B,
+        .deleteOrBackspace: 0x08,
+        .tab: 0x09,
+        .spacebar: 0x20,
+        .hyphen: 0xBD,
+        .equalSign: 0xBB,
+        .openBracket: 0xDB,
+        .closeBracket: 0xDD,
+        .backslash: 0xDC,
+        .nonUSPound: 0xDC,
+        .semicolon: 0xBA,
+        .quote: 0xDE,
+        .graveAccentAndTilde: 0xC0,
+        .comma: 0xBC,
+        .period: 0xBE,
+        .slash: 0xBF,
+        .capsLock: 0x14,
+        .printScreen: 0x2C,
+        .scrollLock: 0x91,
+        .pause: 0x13,
+        .leftArrow: 0x25,
+        .upArrow: 0x26,
+        .rightArrow: 0x27,
+        .downArrow: 0x28,
+        .insert: 0x2D,
+        .deleteForward: 0x2E,
+        .home: 0x24,
+        .end: 0x23,
+        .pageUp: 0x21,
+        .pageDown: 0x22,
+        .F1: 0x70,
+        .F2: 0x71,
+        .F3: 0x72,
+        .F4: 0x73,
+        .F5: 0x74,
+        .F6: 0x75,
+        .F7: 0x76,
+        .F8: 0x77,
+        .F9: 0x78,
+        .F10: 0x79,
+        .F11: 0x7A,
+        .F12: 0x7B,
+        .F13: 0x7C,
+        .F14: 0x7D,
+        .F15: 0x7E,
+        .F16: 0x7F,
+        .F17: 0x80,
+        .F18: 0x81,
+        .F19: 0x82,
+        .F20: 0x83,
+        .keypadNumLock: 0x90,
+        .keypadSlash: 0x6F,
+        .keypadAsterisk: 0x6A,
+        .keypadHyphen: 0x6D,
+        .keypadPlus: 0x6B,
+        .keypadEnter: 0x0D,
+        .keypad0: 0x60,
+        .keypad1: 0x61,
+        .keypad2: 0x62,
+        .keypad3: 0x63,
+        .keypad4: 0x64,
+        .keypad5: 0x65,
+        .keypad6: 0x66,
+        .keypad7: 0x67,
+        .keypad8: 0x68,
+        .keypad9: 0x69,
+        .keypadPeriod: 0x6E,
+        .keypadEqualSign: 0x92,
+        .nonUSBackslash: 0xE2,
+        .application: 0x5D,
+        .leftShift: 0xA0,
+        .rightShift: 0xA1,
+        .leftControl: 0xA2,
+        .rightControl: 0xA3,
+        .leftAlt: 0xA4,
+        .rightAlt: 0xA5,
+        .leftGUI: 0x5B,
+        .rightGUI: 0x5C,
+    ]
+
+    static func isPauseMenuToggle(
+        keyCode: GCKeyCode,
+        isPressed: Bool
+    ) -> Bool {
+        keyCode == .escape && isPressed
+    }
+
+    static func virtualKey(for keyCode: GCKeyCode) -> UInt8? {
+        virtualKeys[keyCode]
+    }
+}
+
+/// Bounded ASCII-to-virtual-key helper retained for future or Debug-only input
+/// plumbing. It is not a Unicode/composition channel and is not advertised as
+/// generic text entry. Unsupported composed Unicode fails closed.
+nonisolated enum XboxCloudTextInputMapper {
+    private struct KeyStroke {
+        let virtualKey: UInt8
+        let requiresShift: Bool
+    }
+
+    private static let maximumCharacterCount = 1024
+    private static let maximumReportCount =
+        XboxCloudPeripheralInputBuffer.maximumTransitionCount
+    private static let shiftedDigitKeys: [Character: UInt8] = [
+        "!": 0x31,
+        "@": 0x32,
+        "#": 0x33,
+        "$": 0x34,
+        "%": 0x35,
+        "^": 0x36,
+        "&": 0x37,
+        "*": 0x38,
+        "(": 0x39,
+        ")": 0x30,
+    ]
+    private static let punctuationKeys: [Character: KeyStroke] = [
+        ";": KeyStroke(virtualKey: 0xBA, requiresShift: false),
+        ":": KeyStroke(virtualKey: 0xBA, requiresShift: true),
+        "=": KeyStroke(virtualKey: 0xBB, requiresShift: false),
+        "+": KeyStroke(virtualKey: 0xBB, requiresShift: true),
+        ",": KeyStroke(virtualKey: 0xBC, requiresShift: false),
+        "<": KeyStroke(virtualKey: 0xBC, requiresShift: true),
+        "-": KeyStroke(virtualKey: 0xBD, requiresShift: false),
+        "_": KeyStroke(virtualKey: 0xBD, requiresShift: true),
+        ".": KeyStroke(virtualKey: 0xBE, requiresShift: false),
+        ">": KeyStroke(virtualKey: 0xBE, requiresShift: true),
+        "/": KeyStroke(virtualKey: 0xBF, requiresShift: false),
+        "?": KeyStroke(virtualKey: 0xBF, requiresShift: true),
+        "`": KeyStroke(virtualKey: 0xC0, requiresShift: false),
+        "~": KeyStroke(virtualKey: 0xC0, requiresShift: true),
+        "[": KeyStroke(virtualKey: 0xDB, requiresShift: false),
+        "{": KeyStroke(virtualKey: 0xDB, requiresShift: true),
+        "\\": KeyStroke(virtualKey: 0xDC, requiresShift: false),
+        "|": KeyStroke(virtualKey: 0xDC, requiresShift: true),
+        "]": KeyStroke(virtualKey: 0xDD, requiresShift: false),
+        "}": KeyStroke(virtualKey: 0xDD, requiresShift: true),
+        "'": KeyStroke(virtualKey: 0xDE, requiresShift: false),
+        "\"": KeyStroke(virtualKey: 0xDE, requiresShift: true),
+    ]
+
+    static func reports(for text: String) -> [XboxKeyboardReport]? {
+        guard text.count <= maximumCharacterCount else { return nil }
+        var reports: [XboxKeyboardReport] = []
+        reports.reserveCapacity(text.count * 4)
+        for character in text {
+            guard let stroke = keyStroke(for: character) else { return nil }
+            let transitionCount = stroke.requiresShift ? 4 : 2
+            guard reports.count <= maximumReportCount - transitionCount else {
+                return nil
+            }
+            if stroke.requiresShift {
+                reports.append(XboxKeyboardReport(
+                    isPressed: true,
+                    keyCode: 0x10
+                ))
+            }
+            reports.append(XboxKeyboardReport(
+                isPressed: true,
+                keyCode: stroke.virtualKey
+            ))
+            reports.append(XboxKeyboardReport(
+                isPressed: false,
+                keyCode: stroke.virtualKey
+            ))
+            if stroke.requiresShift {
+                reports.append(XboxKeyboardReport(
+                    isPressed: false,
+                    keyCode: 0x10
+                ))
+            }
+        }
+        return reports
+    }
+
+    private static func keyStroke(for character: Character) -> KeyStroke? {
+        if let key = shiftedDigitKeys[character] {
+            return KeyStroke(virtualKey: key, requiresShift: true)
+        }
+        if let stroke = punctuationKeys[character] {
+            return stroke
+        }
+        guard let scalar = character.unicodeScalars.first,
+              character.unicodeScalars.count == 1
+        else {
+            return nil
+        }
+        switch scalar.value {
+        case 0x41 ... 0x5A:
+            return KeyStroke(
+                virtualKey: UInt8(scalar.value),
+                requiresShift: true
+            )
+        case 0x61 ... 0x7A:
+            return KeyStroke(
+                virtualKey: UInt8(scalar.value - 0x20),
+                requiresShift: false
+            )
+        case 0x30 ... 0x39:
+            return KeyStroke(
+                virtualKey: UInt8(scalar.value),
+                requiresShift: false
+            )
+        case 0x20:
+            return KeyStroke(virtualKey: 0x20, requiresShift: false)
+        case 0x09:
+            return KeyStroke(virtualKey: 0x09, requiresShift: false)
+        case 0x0A, 0x0D:
+            return KeyStroke(virtualKey: 0x0D, requiresShift: false)
+        case 0x08:
+            return KeyStroke(virtualKey: 0x08, requiresShift: false)
+        default:
+            return nil
+        }
+    }
+}
+
 /// All mutable Xbox input state lives on one bounded latency-sensitive queue.
 /// The unchecked conformance is safe because every mutable field below is
 /// accessed only by `queue`; public entry points enqueue or synchronize work.
@@ -565,6 +896,27 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         let claimedSystemGestures: [ClaimedSystemGesture]
     }
 
+    private struct KeyboardSlot {
+        let keyboard: GCKeyboard
+        let identifier: ObjectIdentifier
+        let previousHandlerQueue: DispatchQueue
+        let previousKeyChangedHandler: GCKeyboardValueChangedHandler?
+    }
+
+    private struct MouseButtonHandler {
+        let button: GCControllerButtonInput
+        let previousPressedChangedHandler: GCControllerButtonValueChangedHandler?
+    }
+
+    private struct MouseSlot {
+        let mouse: GCMouse
+        let identifier: ObjectIdentifier
+        let previousHandlerQueue: DispatchQueue
+        let previousMouseMovedHandler: GCMouseMoved?
+        let previousScrollHandler: GCControllerDirectionPadValueChangedHandler?
+        let buttonHandlers: [MouseButtonHandler]
+    }
+
     private enum RumblePhase {
         case starting
         case stopping
@@ -582,7 +934,8 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         var phase: RumblePhase
     }
 
-    private static let controllerCapacity = 4
+    private static let controllerCapacity = XboxCloudCompatibilityProfile
+        .bundledV1.maximumControllerSlots
     private static let sampleIntervalNanoseconds = Int(
         XboxCloudInputStateCache.minimumSendIntervalNanoseconds
     )
@@ -609,6 +962,11 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         repeating: nil,
         count: controllerCapacity
     )
+    private var keyboardSlot: KeyboardSlot?
+    private var mouseSlot: MouseSlot?
+    private var pressedVirtualKeys: Set<UInt8> = []
+    private var currentMouseButtons: XboxMouseButtons = []
+    private var peripheralInput = XboxCloudPeripheralInputBuffer()
     private var overlayInputSequences = Array(
         repeating: XboxCloudOverlayInputSequence(),
         count: controllerCapacity
@@ -631,7 +989,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var inputStateCache = XboxCloudInputStateCache()
     private var modernInputState = XboxModernInputStateTracker()
     private var modernInputSendCadence = XboxModernInputSendCadence()
-    private var modernControllerSlotIndex: Int?
     private var encoder = XboxLegacyInputEncoder()
     private var inputMode: XboxCloudInputTransportMode?
     private var controlAuthorizationData: Data?
@@ -643,6 +1000,8 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var isReliableInputChannelOpen = false
     private var isUnreliableInputChannelOpen = false
     private var isMessageChannelOpen = false
+    private var isControlChannelNegotiated = true
+    private var isMessageChannelNegotiated = true
     private var didSendClientMetadata = false
     private var didSendInitialControllerReport = false
     private var didSendMessageHandshake = false
@@ -673,6 +1032,8 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         sink: XboxCloudInputDataSink,
         correlationVector: String,
         controllers: [GCController],
+        keyboard: GCKeyboard?,
+        mice: [GCMouse],
         overlayToggleRequested: @escaping @Sendable (UInt64) -> Void,
         readinessChanged: @escaping @Sendable (UInt64, Bool) -> Void
     ) {
@@ -697,6 +1058,12 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                     resolution: preferredResolution
                 )
             controllers.forEach(attachControllerLocked)
+            if let keyboard {
+                attachKeyboardLocked(keyboard)
+            }
+            if let mouse = GCMouse.current ?? mice.first {
+                attachMouseLocked(mouse)
+            }
             sampleAndFlushLocked()
 
             let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -719,6 +1086,12 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
+    #if DEBUG
+        func pendingPeripheralReportForTesting() -> XboxPeripheralInputReport {
+            queue.sync { peripheralInput.report }
+        }
+    #endif
+
     func setNegotiatedInputMode(
         _ mode: XboxCloudInputTransportMode,
         generation expectedGeneration: UInt64
@@ -735,7 +1108,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             } else {
                 modernInputState.reset()
                 modernInputSendCadence.reset()
-                modernControllerSlotIndex = nil
             }
             resetControllerRegistrationLocked(
                 controlIsOpen: controlSendState.isOpen
@@ -758,8 +1130,26 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
-    /// Keeps the controller path alive alongside the REST heartbeat. Legacy
-    /// input invalidates its cache; V2 emits Xbox's bounded virtual-axis pulse.
+    func setNegotiatedOptionalChannels(
+        _ channels: Set<XboxCloudDataChannelKind>,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self, generation == expectedGeneration else { return }
+            isControlChannelNegotiated = channels.contains(.control)
+            isMessageChannelNegotiated = channels.contains(.message)
+            if !isControlChannelNegotiated {
+                for index in pendingControlUpdates.indices {
+                    pendingControlUpdates[index] = nil
+                }
+            }
+            sampleAndFlushLocked()
+        }
+    }
+
+    /// Keeps the controller path alive alongside the REST heartbeat without
+    /// manufacturing user input. V2 retransmits its newest unacknowledged
+    /// snapshot; legacy invalidates every attached slot for a real-state send.
     func sendKeepAlive(generation expectedGeneration: UInt64) {
         queue.async { [weak self] in
             guard let self, generation == expectedGeneration else { return }
@@ -768,10 +1158,13 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 return
             }
             if case let .unreliable(_, version) = inputMode {
-                _ = modernInputState.recordVirtualKeepAlive()
                 sendPendingModernGamepadSnapshotLocked(version: version)
             } else {
-                inputStateCache.invalidate(index: 0)
+                for index in controllerSlots.indices
+                    where controllerSlots[index] != nil
+                {
+                    inputStateCache.invalidate(index: index)
+                }
                 sendGamepadSnapshotLocked()
             }
         }
@@ -791,6 +1184,12 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             isPaused = paused
             if paused {
                 resetAllOverlayGesturesLocked()
+                peripheralInput.clear()
+                releasePressedKeysLocked()
+                if !currentMouseButtons.isEmpty {
+                    currentMouseButtons = []
+                    peripheralInput.setMouseButtons([])
+                }
                 needsPausedNeutralSnapshot = true
                 for index in rumblePlaybacks.indices {
                     cancelRumbleLocked(index: index)
@@ -823,7 +1222,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             switch kind {
             case .control:
                 if !isOpen {
-                    isTransportReady = false
+                    isControlChannelNegotiated = false
                 }
                 let wasOpen = controlSendState.isOpen
                 controlSendState.channelStateChanged(isOpen: isOpen)
@@ -838,7 +1237,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                         } else {
                             modernInputState.reset()
                             modernInputSendCadence.reset()
-                            modernControllerSlotIndex = nil
                         }
                         needsPausedNeutralSnapshot = isPaused
                     }
@@ -874,7 +1272,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 }
             case .message:
                 if !isOpen {
-                    isTransportReady = false
+                    isMessageChannelNegotiated = false
                 }
                 isMessageChannelOpen = isOpen
                 if isOpen {
@@ -988,6 +1386,124 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
+    func attachKeyboard(
+        _ keyboard: GCKeyboard,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self, generation == expectedGeneration else { return }
+            attachKeyboardLocked(keyboard)
+        }
+    }
+
+    func detachKeyboard(
+        _ keyboard: GCKeyboard,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self,
+                  generation == expectedGeneration,
+                  keyboardSlot?.identifier == ObjectIdentifier(keyboard)
+            else {
+                return
+            }
+            releasePressedKeysLocked()
+            releaseKeyboardLocked()
+            sendGamepadSnapshotLocked(force: true)
+        }
+    }
+
+    func attachMouse(
+        _ mouse: GCMouse,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self, generation == expectedGeneration else { return }
+            attachMouseLocked(mouse)
+        }
+    }
+
+    func detachMouse(
+        _ mouse: GCMouse,
+        replacement: GCMouse?,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self,
+                  generation == expectedGeneration,
+                  mouseSlot?.identifier == ObjectIdentifier(mouse)
+            else {
+                return
+            }
+            if !currentMouseButtons.isEmpty {
+                currentMouseButtons = []
+                peripheralInput.setMouseButtons([])
+            }
+            releaseMouseLocked()
+            if let replacement {
+                attachMouseLocked(replacement)
+            }
+            sendGamepadSnapshotLocked(force: true)
+        }
+    }
+
+    func enqueueKeyboard(
+        _ report: XboxKeyboardReport,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self,
+                  generation == expectedGeneration,
+                  !isPaused
+            else {
+                return
+            }
+            recordKeyboardLocked(report)
+            sendGamepadSnapshotLocked(force: true)
+        }
+    }
+
+    func enqueuePointer(
+        _ frame: XboxPointerFrame,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self,
+                  generation == expectedGeneration,
+                  !isPaused
+            else {
+                return
+            }
+            peripheralInput.appendPointerFrame(frame)
+            sendGamepadSnapshotLocked(force: true)
+        }
+    }
+
+    func enqueueMouse(
+        _ report: XboxMouseReport,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self,
+                  generation == expectedGeneration,
+                  !isPaused
+            else {
+                return
+            }
+            peripheralInput.addMouseMovement(
+                x: Float(report.x),
+                y: Float(report.y)
+            )
+            peripheralInput.addMouseScroll(
+                x: Float(report.wheelX),
+                y: Float(report.wheelY)
+            )
+            currentMouseButtons = report.buttons
+            peripheralInput.setMouseButtons(currentMouseButtons)
+            sendGamepadSnapshotLocked(force: true)
+        }
+    }
+
     private func stopLocked() {
         if controlSendState.isOpen {
             for index in controllerSlots.indices
@@ -1027,6 +1543,8 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         isReliableInputChannelOpen = false
         isUnreliableInputChannelOpen = false
         isMessageChannelOpen = false
+        isControlChannelNegotiated = true
+        isMessageChannelNegotiated = true
         didSendClientMetadata = false
         didSendInitialControllerReport = false
         didSendMessageHandshake = false
@@ -1041,7 +1559,11 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         encoder = XboxLegacyInputEncoder()
         modernInputState.reset()
         modernInputSendCadence.reset()
-        modernControllerSlotIndex = nil
+        releaseKeyboardLocked()
+        releaseMouseLocked()
+        pressedVirtualKeys.removeAll(keepingCapacity: true)
+        currentMouseButtons = []
+        peripheralInput.clear()
     }
 
     private func attachControllerLocked(_ controller: GCController) {
@@ -1082,23 +1604,13 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         )
         inputStateCache.invalidate(index: index)
         if case .unreliable = inputMode {
-            let previousSlot = modernControllerSlotIndex
-            selectModernControllerSlotLocked()
-            if previousSlot == nil, modernControllerSlotIndex != nil {
-                modernInputState.attach()
-                pendingControlUpdates[0] =
-                    XboxCloudControllerRegistrationPolicy.pendingUpdate(
-                        isAttached: true,
-                        isRegistered: registeredControllerPresence[0]
-                    )
-            }
-        } else {
-            pendingControlUpdates[index] = XboxCloudControllerRegistrationPolicy
-                .pendingUpdate(
-                    isAttached: true,
-                    isRegistered: registeredControllerPresence[index]
-                )
+            modernInputState.attach(index: UInt8(index))
         }
+        pendingControlUpdates[index] = XboxCloudControllerRegistrationPolicy
+            .pendingUpdate(
+                isAttached: true,
+                isRegistered: registeredControllerPresence[index]
+            )
         if isPaused {
             needsPausedNeutralSnapshot = true
         }
@@ -1106,6 +1618,176 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         xboxInputLog.notice(
             "[Controller] attached slot=\(index, privacy: .public) total=\(controllerCount, privacy: .public)"
         )
+    }
+
+    private func attachKeyboardLocked(_ keyboard: GCKeyboard) {
+        guard let input = keyboard.keyboardInput else { return }
+        let identifier = ObjectIdentifier(keyboard)
+        guard keyboardSlot?.identifier != identifier else { return }
+        if keyboardSlot != nil {
+            releasePressedKeysLocked()
+            releaseKeyboardLocked()
+        }
+        let previousHandlerQueue = keyboard.handlerQueue
+        let previousHandler = input.keyChangedHandler
+        keyboard.handlerQueue = queue
+        input.keyChangedHandler = { [weak self] _, _, keyCode, pressed in
+            guard let self else { return }
+            if keyCode == .escape {
+                if XboxCloudKeyboardMapper.isPauseMenuToggle(
+                    keyCode: keyCode,
+                    isPressed: pressed
+                ) {
+                    overlayToggleRequested?(generation)
+                }
+                return
+            }
+            guard !isPaused else { return }
+            guard let virtualKey = XboxCloudKeyboardMapper.virtualKey(
+                for: keyCode
+            )
+            else {
+                return
+            }
+            recordKeyboardLocked(XboxKeyboardReport(
+                isPressed: pressed,
+                keyCode: virtualKey
+            ))
+            sendGamepadSnapshotLocked(force: true)
+        }
+        keyboardSlot = KeyboardSlot(
+            keyboard: keyboard,
+            identifier: identifier,
+            previousHandlerQueue: previousHandlerQueue,
+            previousKeyChangedHandler: previousHandler
+        )
+    }
+
+    private func attachMouseLocked(_ mouse: GCMouse) {
+        guard let input = mouse.mouseInput else { return }
+        let identifier = ObjectIdentifier(mouse)
+        guard mouseSlot?.identifier != identifier else { return }
+        if mouseSlot != nil {
+            if !currentMouseButtons.isEmpty {
+                currentMouseButtons = []
+                peripheralInput.setMouseButtons([])
+            }
+            releaseMouseLocked()
+        }
+        let previousHandlerQueue = mouse.handlerQueue
+        let previousMovedHandler = input.mouseMovedHandler
+        let previousScrollHandler = input.scroll.valueChangedHandler
+        var buttonHandlers: [MouseButtonHandler] = []
+        mouse.handlerQueue = queue
+        input.mouseMovedHandler = { [weak self] _, deltaX, deltaY in
+            guard let self, !isPaused else { return }
+            peripheralInput.addMouseMovement(x: deltaX, y: -deltaY)
+            peripheralInput.setMouseButtons(currentMouseButtons)
+            sendGamepadSnapshotLocked(force: true)
+        }
+        input.scroll.valueChangedHandler = { [weak self] _, x, y in
+            guard let self, !isPaused else { return }
+            peripheralInput.addMouseScroll(x: x, y: -y)
+            peripheralInput.setMouseButtons(currentMouseButtons)
+            sendGamepadSnapshotLocked(force: true)
+        }
+        let buttons = [input.leftButton, input.rightButton, input.middleButton]
+            .compactMap { $0 } + (input.auxiliaryButtons ?? [])
+        for button in buttons {
+            buttonHandlers.append(MouseButtonHandler(
+                button: button,
+                previousPressedChangedHandler: button.pressedChangedHandler
+            ))
+            button.pressedChangedHandler = {
+                [weak self] (_: GCControllerButtonInput, _: Float, _: Bool) in
+                guard let self, !isPaused else { return }
+                sampleMouseButtonsLocked(input)
+                sendGamepadSnapshotLocked(force: true)
+            }
+        }
+        mouseSlot = MouseSlot(
+            mouse: mouse,
+            identifier: identifier,
+            previousHandlerQueue: previousHandlerQueue,
+            previousMouseMovedHandler: previousMovedHandler,
+            previousScrollHandler: previousScrollHandler,
+            buttonHandlers: buttonHandlers
+        )
+        if !isPaused {
+            sampleMouseButtonsLocked(input)
+        }
+    }
+
+    private func recordKeyboardLocked(_ report: XboxKeyboardReport) {
+        if report.isPressed {
+            guard pressedVirtualKeys.insert(report.keyCode).inserted else {
+                return
+            }
+        } else {
+            guard pressedVirtualKeys.remove(report.keyCode) != nil else {
+                return
+            }
+        }
+        peripheralInput.appendKeyboard(report)
+    }
+
+    private func releasePressedKeysLocked() {
+        for keyCode in pressedVirtualKeys.sorted() {
+            peripheralInput.appendKeyboard(XboxKeyboardReport(
+                isPressed: false,
+                keyCode: keyCode
+            ))
+        }
+        pressedVirtualKeys.removeAll(keepingCapacity: true)
+    }
+
+    private func sampleMouseButtonsLocked(_ input: GCMouseInput) {
+        var buttons: XboxMouseButtons = []
+        if input.leftButton.isPressed {
+            buttons.insert(.left)
+        }
+        if input.rightButton?.isPressed == true {
+            buttons.insert(.right)
+        }
+        if input.middleButton?.isPressed == true {
+            buttons.insert(.middle)
+        }
+        for (index, button) in (input.auxiliaryButtons ?? [])
+            .prefix(2)
+            .enumerated()
+            where button.isPressed
+        {
+            buttons.insert(index == 0 ? .auxiliary1 : .auxiliary2)
+        }
+        currentMouseButtons = buttons
+        peripheralInput.setMouseButtons(buttons)
+    }
+
+    private func releaseKeyboardLocked() {
+        guard let slot = keyboardSlot else { return }
+        slot.keyboard.keyboardInput?.keyChangedHandler = nil
+        slot.keyboard.handlerQueue = slot.previousHandlerQueue
+        slot.keyboard.keyboardInput?.keyChangedHandler =
+            slot.previousKeyChangedHandler
+        keyboardSlot = nil
+    }
+
+    private func releaseMouseLocked() {
+        guard let slot = mouseSlot else { return }
+        let input = slot.mouse.mouseInput
+        input?.mouseMovedHandler = nil
+        input?.scroll.valueChangedHandler = nil
+        for handler in slot.buttonHandlers {
+            handler.button.pressedChangedHandler = nil
+        }
+        slot.mouse.handlerQueue = slot.previousHandlerQueue
+        input?.mouseMovedHandler = slot.previousMouseMovedHandler
+        input?.scroll.valueChangedHandler = slot.previousScrollHandler
+        for handler in slot.buttonHandlers {
+            handler.button.pressedChangedHandler =
+                handler.previousPressedChangedHandler
+        }
+        mouseSlot = nil
     }
 
     private func detachControllerLocked(_ controller: GCController) {
@@ -1116,34 +1798,18 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             return
         }
 
-        let wasModernActiveController = if case .unreliable = inputMode {
-            modernControllerSlotIndex == index
-        } else {
-            false
-        }
         resetOverlayGestureLocked(index: index)
         cancelRumbleLocked(index: index)
         releaseControllerLocked(index: index)
         inputStateCache.invalidate(index: index)
         if case .unreliable = inputMode {
-            selectModernControllerSlotLocked()
-            if modernControllerSlotIndex == nil {
-                modernInputState.detach()
-                pendingControlUpdates[0] =
-                    XboxCloudControllerRegistrationPolicy.pendingUpdate(
-                        isAttached: false,
-                        isRegistered: registeredControllerPresence[0]
-                    )
-            } else if wasModernActiveController {
-                recordActiveModernControllerStateLocked()
-            }
-        } else {
-            pendingControlUpdates[index] = XboxCloudControllerRegistrationPolicy
-                .pendingUpdate(
-                    isAttached: false,
-                    isRegistered: registeredControllerPresence[index]
-                )
+            modernInputState.detach(index: UInt8(index))
         }
+        pendingControlUpdates[index] = XboxCloudControllerRegistrationPolicy
+            .pendingUpdate(
+                isAttached: false,
+                isRegistered: registeredControllerPresence[index]
+            )
         let controllerCount = attachedControllerCount
         xboxInputLog.notice(
             "[Controller] detached slot=\(index, privacy: .public) total=\(controllerCount, privacy: .public)"
@@ -1445,12 +2111,14 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             }
             inputStateCache.appendIfDirty(state, to: &sampledStates)
         }
-        guard !sampledStates.isEmpty else {
+        let peripherals = peripheralInput.report
+        guard !sampledStates.isEmpty || !peripherals.isEmpty else {
             didSendInitialControllerReport = true
             return
         }
-        guard let data = try? encoder.encodeGamepads(
-            sampledStates,
+        guard let data = try? encoder.encodeInput(
+            gamepads: sampledStates,
+            peripherals: peripherals,
             version: version,
             timestampMilliseconds: Double(timestampNanoseconds) / 1_000_000
         ) else { return }
@@ -1462,6 +2130,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         )
         if disposition == .accepted {
             didSendInitialControllerReport = true
+            peripheralInput.clear()
         }
         if disposition == .accepted, !didLogFirstInputReport {
             didLogFirstInputReport = true
@@ -1483,16 +2152,25 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         else {
             return
         }
-        if let modernControllerSlotIndex,
-           controllerSlots.indices.contains(modernControllerSlotIndex),
-           let controller = controllerSlots[modernControllerSlotIndex]?.controller,
-           let state = effectiveGamepadStateLocked(
-               controller: controller,
-               physicalSlot: modernControllerSlotIndex,
-               wireIndex: 0
-           )
-        {
-            _ = modernInputState.record(state)
+        sampledStates.removeAll(keepingCapacity: true)
+        for index in controllerSlots.indices {
+            guard let controller = controllerSlots[index]?.controller,
+                  let state = effectiveGamepadStateLocked(
+                      controller: controller,
+                      physicalSlot: index,
+                      wireIndex: UInt8(index)
+                  )
+            else {
+                continue
+            }
+            sampledStates.append(state)
+        }
+        let peripherals = peripheralInput.report
+        if modernInputState.record(
+            sampledStates,
+            peripherals: peripherals
+        ) != nil, !peripherals.isEmpty {
+            peripheralInput.clear()
         }
         sendPendingModernGamepadSnapshotLocked(
             version: version,
@@ -1571,13 +2249,15 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         {
             sampledStates.append(XboxGamepadState(index: UInt8(index)))
         }
-        guard !sampledStates.isEmpty else {
+        let peripherals = peripheralInput.report
+        guard !sampledStates.isEmpty || !peripherals.isEmpty else {
             needsPausedNeutralSnapshot = false
             return
         }
         let timestampNanoseconds = DispatchTime.now().uptimeNanoseconds
-        guard let data = try? encoder.encodeGamepads(
-            sampledStates,
+        guard let data = try? encoder.encodeInput(
+            gamepads: sampledStates,
+            peripherals: peripherals,
             version: version,
             timestampMilliseconds: Double(timestampNanoseconds) / 1_000_000
         ) else {
@@ -1591,6 +2271,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         )
         didSendInitialControllerReport = true
         needsPausedNeutralSnapshot = false
+        peripheralInput.clear()
         let reportCount = sampledStates.count
         xboxInputLog.notice(
             "[Input] paused neutral queued count=\(reportCount, privacy: .public)"
@@ -1606,10 +2287,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         else {
             return
         }
-        guard attachedControllerCount > 0 else {
-            needsPausedNeutralSnapshot = false
-            return
-        }
         guard XboxModernPausedInputPolicy.shouldAttemptSend(
             needsNeutralSnapshot: needsPausedNeutralSnapshot,
             hasUnacknowledgedFrame: modernInputState.frameForTransmission() != nil
@@ -1618,7 +2295,20 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
         let shouldCreateNeutralSnapshot = needsPausedNeutralSnapshot
         if shouldCreateNeutralSnapshot {
-            _ = modernInputState.record(XboxGamepadState(index: 0))
+            sampledStates.removeAll(keepingCapacity: true)
+            for index in controllerSlots.indices
+                where controllerSlots[index] != nil
+            {
+                sampledStates.append(XboxGamepadState(index: UInt8(index)))
+            }
+            let peripherals = peripheralInput.report
+            _ = modernInputState.record(
+                sampledStates,
+                peripherals: peripherals
+            )
+            if !peripherals.isEmpty {
+                peripheralInput.clear()
+            }
             needsPausedNeutralSnapshot = false
         }
         guard let frame = modernInputState.frameForTransmission() else {
@@ -1651,8 +2341,10 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
 
     private func updateReadinessLocked() {
         let nextValue = bootstrapState.isPublishedReady(
-            isMessageChannelOpen: isMessageChannelOpen,
-            didReceiveMessageHandshake: didReceiveMessageHandshake
+            isMessageChannelOpen: !isMessageChannelNegotiated
+                || isMessageChannelOpen,
+            didReceiveMessageHandshake: !isMessageChannelNegotiated
+                || didReceiveMessageHandshake
         )
         guard nextValue != lastReportedReadiness else { return }
         lastReportedReadiness = nextValue
@@ -1665,13 +2357,14 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             hasInputVersion: inputMode != nil,
             isInputChannelOpen: negotiatedInputChannelsAreOpen,
             didSendClientMetadata: didSendClientMetadata,
-            hasPendingControlUpdates: pendingControlUpdates.contains {
-                $0 != nil
-            },
+            hasPendingControlUpdates: isControlChannelNegotiated
+                && pendingControlUpdates.contains { $0 != nil },
             hasAttachedController: attachedControllerCount > 0,
             didSendInitialControllerReport: didSendInitialControllerReport,
-            didSendAuthorization: controlSendState.didSendAuthorization,
-            didSendResolutionUpdate: controlSendState.didSendResolutionUpdate
+            didSendAuthorization: !isControlChannelNegotiated
+                || controlSendState.didSendAuthorization,
+            didSendResolutionUpdate: !isControlChannelNegotiated
+                || controlSendState.didSendResolutionUpdate
         )
     }
 
@@ -1700,37 +2393,10 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private func resetModernInputStateLocked() {
         modernInputState.reset()
         modernInputSendCadence.reset()
-        selectModernControllerSlotLocked()
-        if modernControllerSlotIndex != nil {
-            modernInputState.attach()
-        }
-    }
-
-    private func selectModernControllerSlotLocked() {
-        modernControllerSlotIndex = XboxModernControllerSlotPolicy.selectedSlot(
-            current: modernControllerSlotIndex,
-            occupiedSlots: controllerSlots.map { $0 != nil }
-        )
-    }
-
-    private func recordActiveModernControllerStateLocked() {
-        guard let modernControllerSlotIndex,
-              controllerSlots.indices.contains(modernControllerSlotIndex),
-              let controller = controllerSlots[modernControllerSlotIndex]?.controller
-        else {
-            return
-        }
-        if !modernInputState.isAttached {
-            modernInputState.attach()
-        }
-        if isPaused {
-            _ = modernInputState.record(XboxGamepadState(index: 0))
-        } else if let state = effectiveGamepadStateLocked(
-            controller: controller,
-            physicalSlot: modernControllerSlotIndex,
-            wireIndex: 0
-        ) {
-            _ = modernInputState.record(state)
+        for index in controllerSlots.indices
+            where controllerSlots[index] != nil
+        {
+            modernInputState.attach(index: UInt8(index))
         }
     }
 
@@ -1740,14 +2406,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             pendingControlUpdates[index] = nil
         }
         guard controlIsOpen else { return }
-        if case .unreliable = inputMode {
-            pendingControlUpdates[0] =
-                XboxCloudControllerRegistrationPolicy.pendingUpdate(
-                    isAttached: attachedControllerCount > 0,
-                    isRegistered: false
-                )
-            return
-        }
         for index in controllerSlots.indices {
             pendingControlUpdates[index] =
                 XboxCloudControllerRegistrationPolicy.pendingUpdate(
@@ -1825,10 +2483,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     }
 
     private func controllerSlotIndex(forWireIndex index: UInt8) -> Int? {
-        if case .unreliable = inputMode {
-            guard index == 0 else { return nil }
-            return modernControllerSlotIndex
-        }
         let physicalIndex = Int(index)
         return controllerSlots.indices.contains(physicalIndex)
             ? physicalIndex
@@ -1916,6 +2570,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             gamepad.rightTrigger,
             gamepad.leftThumbstickButton,
             gamepad.rightThumbstickButton,
+            (gamepad as? GCXboxGamepad)?.buttonShare,
         ]
         return elements.compactMap { element in
             guard let element else { return nil }
@@ -2019,11 +2674,16 @@ nonisolated enum XboxCloudInputValueMapper {
 
         let leftTrigger = triggerValue(pad.leftTrigger.value)
         let rightTrigger = triggerValue(pad.rightTrigger.value)
+        let isSharePressed = (pad as? GCXboxGamepad)?.buttonShare?.isPressed
+            == true
         if leftTrigger > 0 {
             physicality.insert(.leftTrigger)
         }
         if rightTrigger > 0 {
             physicality.insert(.rightTrigger)
+        }
+        if isSharePressed {
+            physicality.insert(.share)
         }
 
         let leftThumb = thumbstickValues(
@@ -2052,6 +2712,7 @@ nonisolated enum XboxCloudInputValueMapper {
         return XboxGamepadState(
             index: index,
             buttons: buttons,
+            isSharePressed: isSharePressed,
             leftThumbX: leftThumb.x,
             leftThumbY: leftThumb.y,
             rightThumbX: rightThumb.x,
@@ -2211,6 +2872,8 @@ final class XboxCloudInputDriver {
             sink: sink,
             correlationVector: signalingContext.correlationVector,
             controllers: GCController.controllers(),
+            keyboard: GCKeyboard.coalesced,
+            mice: GCMouse.mice(),
             overlayToggleRequested: { [weak self] callbackGeneration in
                 Task { @MainActor [weak self] in
                     guard let self,
@@ -2244,6 +2907,15 @@ final class XboxCloudInputDriver {
         )
     }
 
+    func setNegotiatedOptionalChannels(
+        _ channels: Set<XboxCloudDataChannelKind>
+    ) {
+        worker.setNegotiatedOptionalChannels(
+            channels,
+            generation: attachmentGeneration
+        )
+    }
+
     /// Microsoft's input manager starts only after video packets are flowing.
     /// A decoded-frame callback is stronger than the early RTP-track callback.
     func setVideoFlowing() {
@@ -2260,6 +2932,49 @@ final class XboxCloudInputDriver {
 
     func setPaused(_ paused: Bool) {
         worker.setPaused(paused, generation: attachmentGeneration)
+    }
+
+    #if DEBUG
+        func pendingPeripheralReportForTesting() -> XboxPeripheralInputReport {
+            worker.pendingPeripheralReportForTesting()
+        }
+    #endif
+
+    /// Internal virtual-key hook shared with physical GCKeyboard input. It does
+    /// not provide a Unicode or committed-text composition channel.
+    func sendKeyboardEvent(isPressed: Bool, virtualKey: UInt8) {
+        worker.enqueueKeyboard(
+            XboxKeyboardReport(
+                isPressed: isPressed,
+                keyCode: virtualKey
+            ),
+            generation: attachmentGeneration
+        )
+    }
+
+    /// Encodes bounded ASCII only and fails closed for composed text.
+    @discardableResult
+    func sendTextEntry(_ text: String) -> Bool {
+        guard let reports = XboxCloudTextInputMapper.reports(for: text) else {
+            return false
+        }
+        for report in reports {
+            worker.enqueueKeyboard(
+                report,
+                generation: attachmentGeneration
+            )
+        }
+        return true
+    }
+
+    /// Absolute pointer foundation for touch/pencil surfaces owned by UI.
+    func sendPointerFrame(_ frame: XboxPointerFrame) {
+        worker.enqueuePointer(frame, generation: attachmentGeneration)
+    }
+
+    /// Relative-pointer foundation for platform adapters without GCMouse.
+    func sendMouseReport(_ report: XboxMouseReport) {
+        worker.enqueueMouse(report, generation: attachmentGeneration)
     }
 
     func stop() {
@@ -2314,6 +3029,102 @@ final class XboxCloudInputDriver {
                     }
                     self.worker.detachController(
                         controller,
+                        generation: generation
+                    )
+                }
+            },
+            notificationCenter.addObserver(
+                forName: .GCKeyboardDidConnect,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let keyboard = notification.object as? GCKeyboard else {
+                    return
+                }
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.attachmentGeneration == generation
+                    else {
+                        return
+                    }
+                    self.worker.attachKeyboard(
+                        keyboard,
+                        generation: generation
+                    )
+                }
+            },
+            notificationCenter.addObserver(
+                forName: .GCKeyboardDidDisconnect,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let keyboard = notification.object as? GCKeyboard else {
+                    return
+                }
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.attachmentGeneration == generation
+                    else {
+                        return
+                    }
+                    self.worker.detachKeyboard(
+                        keyboard,
+                        generation: generation
+                    )
+                }
+            },
+            notificationCenter.addObserver(
+                forName: .GCMouseDidConnect,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let mouse = notification.object as? GCMouse else {
+                    return
+                }
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.attachmentGeneration == generation
+                    else {
+                        return
+                    }
+                    self.worker.attachMouse(mouse, generation: generation)
+                }
+            },
+            notificationCenter.addObserver(
+                forName: .GCMouseDidBecomeCurrent,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let mouse = notification.object as? GCMouse else {
+                    return
+                }
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.attachmentGeneration == generation
+                    else {
+                        return
+                    }
+                    self.worker.attachMouse(mouse, generation: generation)
+                }
+            },
+            notificationCenter.addObserver(
+                forName: .GCMouseDidDisconnect,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let mouse = notification.object as? GCMouse else {
+                    return
+                }
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.attachmentGeneration == generation
+                    else {
+                        return
+                    }
+                    let replacement = GCMouse.current ?? GCMouse.mice().first
+                    self.worker.detachMouse(
+                        mouse,
+                        replacement: replacement,
                         generation: generation
                     )
                 }

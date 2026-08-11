@@ -1,5 +1,6 @@
 @testable import CloudNow
 import Foundation
+import GameController
 import Testing
 
 @Suite("Xbox Cloud channel protocol")
@@ -194,24 +195,26 @@ struct XboxCloudInputDriverTests {
         ))
     }
 
-    @Test("Modern input keeps one logical controller across physical hot-plug")
-    func modernControllerSlotPolicy() {
-        #expect(XboxModernControllerSlotPolicy.selectedSlot(
-            current: nil,
-            occupiedSlots: [false, true]
-        ) == 1)
-        #expect(XboxModernControllerSlotPolicy.selectedSlot(
-            current: 1,
-            occupiedSlots: [true, true]
-        ) == 1)
-        #expect(XboxModernControllerSlotPolicy.selectedSlot(
-            current: 1,
-            occupiedSlots: [true, false]
-        ) == 0)
-        #expect(XboxModernControllerSlotPolicy.selectedSlot(
-            current: 1,
-            occupiedSlots: [false, false]
-        ) == nil)
+    @MainActor
+    @Test("Paused peripheral input is discarded before it can replay")
+    func pausedPeripheralInputIsDiscarded() {
+        let driver = XboxCloudInputDriver()
+
+        driver.setPaused(true)
+        driver.sendKeyboardEvent(isPressed: true, virtualKey: 0x41)
+        driver.sendMouseReport(XboxMouseReport(
+            x: 240,
+            y: -120,
+            wheelX: 1,
+            wheelY: -2,
+            buttons: [.left]
+        ))
+
+        #expect(driver.pendingPeripheralReportForTesting().isEmpty)
+
+        driver.setPaused(false)
+
+        #expect(driver.pendingPeripheralReportForTesting().isEmpty)
     }
 
     @Test("A short Start press produces one remote Menu down then up")
@@ -318,6 +321,259 @@ struct XboxCloudInputDriverTests {
         #expect(replayed.physicalPhysicality.contains(.menu))
         #expect(replayed.buttons.contains(.a))
         #expect(replayed.physicalPhysicality.contains(.a))
+    }
+
+    @Test("Escape toggles shared pause chrome without reaching the game")
+    func escapeKeyboardPolicy() {
+        #expect(
+            XboxCloudKeyboardMapper.isPauseMenuToggle(
+                keyCode: .escape,
+                isPressed: true
+            )
+        )
+        #expect(
+            !XboxCloudKeyboardMapper.isPauseMenuToggle(
+                keyCode: .escape,
+                isPressed: false
+            )
+        )
+        #expect(
+            !XboxCloudKeyboardMapper.isPauseMenuToggle(
+                keyCode: .keyA,
+                isPressed: true
+            )
+        )
+    }
+
+    @Test("Physical alphanumeric keys map to Windows virtual keys", arguments: [
+        (GCKeyCode.keyA, UInt8(0x41)),
+        (.keyB, 0x42),
+        (.keyC, 0x43),
+        (.keyD, 0x44),
+        (.keyE, 0x45),
+        (.keyF, 0x46),
+        (.keyG, 0x47),
+        (.keyH, 0x48),
+        (.keyI, 0x49),
+        (.keyJ, 0x4A),
+        (.keyK, 0x4B),
+        (.keyL, 0x4C),
+        (.keyM, 0x4D),
+        (.keyN, 0x4E),
+        (.keyO, 0x4F),
+        (.keyP, 0x50),
+        (.keyQ, 0x51),
+        (.keyR, 0x52),
+        (.keyS, 0x53),
+        (.keyT, 0x54),
+        (.keyU, 0x55),
+        (.keyV, 0x56),
+        (.keyW, 0x57),
+        (.keyX, 0x58),
+        (.keyY, 0x59),
+        (.keyZ, 0x5A),
+        (.zero, 0x30),
+        (.one, 0x31),
+        (.two, 0x32),
+        (.three, 0x33),
+        (.four, 0x34),
+        (.five, 0x35),
+        (.six, 0x36),
+        (.seven, 0x37),
+        (.eight, 0x38),
+        (.nine, 0x39),
+    ])
+    func physicalAlphanumericMapping(
+        keyCode: GCKeyCode,
+        expectedVirtualKey: UInt8
+    ) {
+        #expect(
+            XboxCloudKeyboardMapper.virtualKey(for: keyCode)
+                == expectedVirtualKey
+        )
+    }
+
+    @Test("Physical punctuation and lock keys map to Windows virtual keys", arguments: [
+        (GCKeyCode.returnOrEnter, UInt8(0x0D)),
+        (.escape, 0x1B),
+        (.deleteOrBackspace, 0x08),
+        (.tab, 0x09),
+        (.spacebar, 0x20),
+        (.hyphen, 0xBD),
+        (.equalSign, 0xBB),
+        (.openBracket, 0xDB),
+        (.closeBracket, 0xDD),
+        (.backslash, 0xDC),
+        (.nonUSPound, 0xDC),
+        (.semicolon, 0xBA),
+        (.quote, 0xDE),
+        (.graveAccentAndTilde, 0xC0),
+        (.comma, 0xBC),
+        (.period, 0xBE),
+        (.slash, 0xBF),
+        (.capsLock, 0x14),
+        (.printScreen, 0x2C),
+        (.scrollLock, 0x91),
+        (.pause, 0x13),
+        (.nonUSBackslash, 0xE2),
+        (.application, 0x5D),
+    ])
+    func physicalPunctuationAndLockMapping(
+        keyCode: GCKeyCode,
+        expectedVirtualKey: UInt8
+    ) {
+        #expect(
+            XboxCloudKeyboardMapper.virtualKey(for: keyCode)
+                == expectedVirtualKey
+        )
+    }
+
+    @Test("Physical function keys map through F20", arguments: [
+        (GCKeyCode.F1, UInt8(0x70)),
+        (.F2, 0x71),
+        (.F3, 0x72),
+        (.F4, 0x73),
+        (.F5, 0x74),
+        (.F6, 0x75),
+        (.F7, 0x76),
+        (.F8, 0x77),
+        (.F9, 0x78),
+        (.F10, 0x79),
+        (.F11, 0x7A),
+        (.F12, 0x7B),
+        (.F13, 0x7C),
+        (.F14, 0x7D),
+        (.F15, 0x7E),
+        (.F16, 0x7F),
+        (.F17, 0x80),
+        (.F18, 0x81),
+        (.F19, 0x82),
+        (.F20, 0x83),
+    ])
+    func physicalFunctionKeyMapping(
+        keyCode: GCKeyCode,
+        expectedVirtualKey: UInt8
+    ) {
+        #expect(
+            XboxCloudKeyboardMapper.virtualKey(for: keyCode)
+                == expectedVirtualKey
+        )
+    }
+
+    @Test("Physical navigation and keypad keys map to Windows virtual keys", arguments: [
+        (GCKeyCode.insert, UInt8(0x2D)),
+        (.deleteForward, 0x2E),
+        (.home, 0x24),
+        (.end, 0x23),
+        (.pageUp, 0x21),
+        (.pageDown, 0x22),
+        (.leftArrow, 0x25),
+        (.upArrow, 0x26),
+        (.rightArrow, 0x27),
+        (.downArrow, 0x28),
+        (.keypadNumLock, 0x90),
+        (.keypadSlash, 0x6F),
+        (.keypadAsterisk, 0x6A),
+        (.keypadHyphen, 0x6D),
+        (.keypadPlus, 0x6B),
+        (.keypadEnter, 0x0D),
+        (.keypad0, 0x60),
+        (.keypad1, 0x61),
+        (.keypad2, 0x62),
+        (.keypad3, 0x63),
+        (.keypad4, 0x64),
+        (.keypad5, 0x65),
+        (.keypad6, 0x66),
+        (.keypad7, 0x67),
+        (.keypad8, 0x68),
+        (.keypad9, 0x69),
+        (.keypadPeriod, 0x6E),
+        (.keypadEqualSign, 0x92),
+    ])
+    func physicalNavigationAndKeypadMapping(
+        keyCode: GCKeyCode,
+        expectedVirtualKey: UInt8
+    ) {
+        #expect(
+            XboxCloudKeyboardMapper.virtualKey(for: keyCode)
+                == expectedVirtualKey
+        )
+    }
+
+    @Test("Physical modifier sides retain distinct Windows virtual keys", arguments: [
+        (GCKeyCode.leftShift, UInt8(0xA0)),
+        (.rightShift, 0xA1),
+        (.leftControl, 0xA2),
+        (.rightControl, 0xA3),
+        (.leftAlt, 0xA4),
+        (.rightAlt, 0xA5),
+        (.leftGUI, 0x5B),
+        (.rightGUI, 0x5C),
+    ])
+    func physicalModifierMapping(
+        keyCode: GCKeyCode,
+        expectedVirtualKey: UInt8
+    ) {
+        #expect(
+            XboxCloudKeyboardMapper.virtualKey(for: keyCode)
+                == expectedVirtualKey
+        )
+    }
+
+    @Test("Unconfirmed composition keys fail closed", arguments: [
+        GCKeyCode.international1,
+        .international9,
+        .LANG1,
+        .LANG9,
+        .power,
+    ])
+    func unconfirmedCompositionKeyMapping(keyCode: GCKeyCode) {
+        #expect(XboxCloudKeyboardMapper.virtualKey(for: keyCode) == nil)
+    }
+
+    @Test("Bounded ASCII helper maps to Windows key transitions")
+    func boundedASCIITextMapping() throws {
+        let reports = try #require(
+            XboxCloudTextInputMapper.reports(for: "Aa 1!")
+        )
+
+        #expect(reports == [
+            XboxKeyboardReport(isPressed: true, keyCode: 0x10),
+            XboxKeyboardReport(isPressed: true, keyCode: 0x41),
+            XboxKeyboardReport(isPressed: false, keyCode: 0x41),
+            XboxKeyboardReport(isPressed: false, keyCode: 0x10),
+            XboxKeyboardReport(isPressed: true, keyCode: 0x41),
+            XboxKeyboardReport(isPressed: false, keyCode: 0x41),
+            XboxKeyboardReport(isPressed: true, keyCode: 0x20),
+            XboxKeyboardReport(isPressed: false, keyCode: 0x20),
+            XboxKeyboardReport(isPressed: true, keyCode: 0x31),
+            XboxKeyboardReport(isPressed: false, keyCode: 0x31),
+            XboxKeyboardReport(isPressed: true, keyCode: 0x10),
+            XboxKeyboardReport(isPressed: true, keyCode: 0x31),
+            XboxKeyboardReport(isPressed: false, keyCode: 0x31),
+            XboxKeyboardReport(isPressed: false, keyCode: 0x10),
+        ])
+        #expect(XboxCloudTextInputMapper.reports(for: "café") == nil)
+        #expect(
+            XboxCloudTextInputMapper.reports(
+                for: String(repeating: "a", count: 32)
+            )?.count == XboxCloudPeripheralInputBuffer.maximumTransitionCount
+        )
+        #expect(
+            XboxCloudTextInputMapper.reports(
+                for: String(repeating: "a", count: 33)
+            ) == nil
+        )
+        #expect(
+            XboxCloudTextInputMapper.reports(
+                for: String(repeating: "A", count: 17)
+            ) == nil
+        )
+        #expect(
+            XboxCloudTextInputMapper.reports(
+                for: String(repeating: "a", count: 1025)
+            ) == nil
+        )
     }
 
     @Test("Overlay replay reaches legacy and modern Xbox wire encoders")

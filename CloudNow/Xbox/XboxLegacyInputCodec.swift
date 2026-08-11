@@ -34,6 +34,7 @@ nonisolated struct XboxGamepadPhysicality: OptionSet, Equatable, Sendable {
     static let leftShoulder = Self(rawValue: 1 << 8)
     static let rightShoulder = Self(rawValue: 1 << 9)
     static let nexus = Self(rawValue: 1 << 10)
+    static let share = Self(rawValue: 1 << 11)
     static let a = Self(rawValue: 1 << 12)
     static let b = Self(rawValue: 1 << 13)
     static let x = Self(rawValue: 1 << 14)
@@ -49,6 +50,7 @@ nonisolated struct XboxGamepadPhysicality: OptionSet, Equatable, Sendable {
 nonisolated struct XboxGamepadState: Equatable, Sendable {
     let index: UInt8
     let buttons: XboxGamepadButtons
+    let isSharePressed: Bool
     let leftThumbX: Int16
     let leftThumbY: Int16
     let rightThumbX: Int16
@@ -61,6 +63,7 @@ nonisolated struct XboxGamepadState: Equatable, Sendable {
     init(
         index: UInt8,
         buttons: XboxGamepadButtons = [],
+        isSharePressed: Bool = false,
         leftThumbX: Int16 = 0,
         leftThumbY: Int16 = 0,
         rightThumbX: Int16 = 0,
@@ -72,6 +75,7 @@ nonisolated struct XboxGamepadState: Equatable, Sendable {
     ) {
         self.index = index
         self.buttons = buttons
+        self.isSharePressed = isSharePressed
         self.leftThumbX = leftThumbX
         self.leftThumbY = leftThumbY
         self.rightThumbX = rightThumbX
@@ -80,6 +84,134 @@ nonisolated struct XboxGamepadState: Equatable, Sendable {
         self.rightTrigger = rightTrigger
         self.physicalPhysicality = physicalPhysicality
         self.virtualPhysicality = virtualPhysicality
+    }
+}
+
+nonisolated enum XboxPointerPhase: UInt8, Equatable, Sendable {
+    case unknown = 0
+    case began = 1
+    case ended = 2
+    case moved = 3
+}
+
+/// One absolute pointer contact in Xbox Cloud's 20-byte wire layout.
+nonisolated struct XboxPointerEvent: Equatable, Sendable {
+    let contactWidth: UInt16
+    let contactHeight: UInt16
+    let pressure: UInt8
+    let rotation: UInt16
+    let pointerID: UInt32
+    let x: UInt32
+    let y: UInt32
+    let phase: XboxPointerPhase
+
+    init(
+        contactWidth: UInt16 = 0,
+        contactHeight: UInt16 = 0,
+        pressure: UInt8 = 0,
+        rotation: UInt16 = 0,
+        pointerID: UInt32 = 0,
+        x: UInt32,
+        y: UInt32,
+        phase: XboxPointerPhase
+    ) {
+        self.contactWidth = contactWidth
+        self.contactHeight = contactHeight
+        self.pressure = pressure
+        self.rotation = rotation
+        self.pointerID = pointerID
+        self.x = x
+        self.y = y
+        self.phase = phase
+    }
+}
+
+/// Xbox groups simultaneous contacts into one pointer frame.
+nonisolated struct XboxPointerFrame: Equatable, Sendable {
+    let events: [XboxPointerEvent]
+}
+
+nonisolated struct XboxMouseButtons: OptionSet, Equatable, Sendable {
+    let rawValue: UInt8
+
+    static let left = Self(rawValue: 1 << 0)
+    static let right = Self(rawValue: 1 << 1)
+    static let middle = Self(rawValue: 1 << 2)
+    static let auxiliary1 = Self(rawValue: 1 << 3)
+    static let auxiliary2 = Self(rawValue: 1 << 4)
+}
+
+/// Relative mouse report used by both negotiated Xbox input transports.
+nonisolated struct XboxMouseReport: Equatable, Sendable {
+    let x: Int32
+    let y: Int32
+    let wheelX: Int32
+    let wheelY: Int32
+    let buttons: XboxMouseButtons
+    let isRelative: Bool
+
+    init(
+        x: Int32 = 0,
+        y: Int32 = 0,
+        wheelX: Int32 = 0,
+        wheelY: Int32 = 0,
+        buttons: XboxMouseButtons = [],
+        isRelative: Bool = true
+    ) {
+        self.x = x
+        self.y = y
+        self.wheelX = wheelX
+        self.wheelY = wheelY
+        self.buttons = buttons
+        self.isRelative = isRelative
+    }
+}
+
+nonisolated enum XboxKeyboardKeyType: UInt8, Equatable, Sendable {
+    case unknown = 0
+    case known = 1
+    case virtualKey = 2
+    case appCommand = 3
+}
+
+/// One key transition. `keyCode` is a Windows virtual-key code when `type` is
+/// `.virtualKey`, matching Xbox Cloud's browser protocol.
+nonisolated struct XboxKeyboardReport: Equatable, Sendable {
+    let type: XboxKeyboardKeyType
+    let isPressed: Bool
+    let keyCode: UInt8
+
+    init(
+        type: XboxKeyboardKeyType = .virtualKey,
+        isPressed: Bool,
+        keyCode: UInt8
+    ) {
+        self.type = type
+        self.isPressed = isPressed
+        self.keyCode = keyCode
+    }
+}
+
+/// Provider boundary consumed by physical input handlers and future UIKit
+/// text/pointer bridges. Empty sections are omitted from legacy reports and
+/// represented by zero counts in modern reports.
+nonisolated struct XboxPeripheralInputReport: Equatable, Sendable {
+    var pointerFrames: [XboxPointerFrame]
+    var keyboard: [XboxKeyboardReport]
+    var mouse: [XboxMouseReport]
+
+    init(
+        pointerFrames: [XboxPointerFrame] = [],
+        keyboard: [XboxKeyboardReport] = [],
+        mouse: [XboxMouseReport] = []
+    ) {
+        self.pointerFrames = pointerFrames
+        self.keyboard = keyboard
+        self.mouse = mouse
+    }
+
+    var isEmpty: Bool {
+        pointerFrames.isEmpty && keyboard.isEmpty && mouse.isEmpty
     }
 }
 
@@ -103,6 +235,7 @@ nonisolated enum XboxInputFeedback: Equatable, Sendable {
 nonisolated enum XboxLegacyInputCodecError: Error, Equatable, LocalizedError, Sendable {
     case unsupportedVersion
     case tooManyGamepads
+    case tooManyPeripheralEvents
     case malformedFeedback
     case unsupportedFeedback
 
@@ -112,6 +245,8 @@ nonisolated enum XboxLegacyInputCodecError: Error, Equatable, LocalizedError, Se
             "Xbox Cloud selected an unsupported input protocol version."
         case .tooManyGamepads:
             "Xbox Cloud input contains too many gamepads."
+        case .tooManyPeripheralEvents:
+            "Xbox Cloud input contains too many pointer, keyboard, or mouse events."
         case .malformedFeedback:
             "Xbox Cloud returned malformed input feedback."
         case .unsupportedFeedback:
@@ -125,7 +260,10 @@ nonisolated enum XboxLegacyInputCodecError: Error, Equatable, LocalizedError, Se
 nonisolated struct XboxLegacyInputEncoder {
     private enum MessageFlag {
         static let gamepadReport: UInt16 = 1 << 1
+        static let pointerReport: UInt16 = 1 << 2
         static let clientMetadata: UInt16 = 1 << 3
+        static let mouseReport: UInt16 = 1 << 5
+        static let keyboardReport: UInt16 = 1 << 6
     }
 
     private(set) var inputToken: UInt32 = 0
@@ -152,21 +290,103 @@ nonisolated struct XboxLegacyInputEncoder {
         version: Int,
         timestampMilliseconds: Double
     ) throws -> Data {
+        try encodeInput(
+            gamepads: gamepads,
+            version: version,
+            timestampMilliseconds: timestampMilliseconds,
+            includesEmptyGamepadSection: true
+        )
+    }
+
+    mutating func encodeInput(
+        gamepads: [XboxGamepadState] = [],
+        peripherals: XboxPeripheralInputReport = .init(),
+        version: Int,
+        timestampMilliseconds: Double
+    ) throws -> Data {
+        try encodeInput(
+            gamepads: gamepads,
+            peripherals: peripherals,
+            version: version,
+            timestampMilliseconds: timestampMilliseconds,
+            includesEmptyGamepadSection: false
+        )
+    }
+
+    private mutating func encodeInput(
+        gamepads: [XboxGamepadState],
+        peripherals: XboxPeripheralInputReport = .init(),
+        version: Int,
+        timestampMilliseconds: Double,
+        includesEmptyGamepadSection: Bool
+    ) throws -> Data {
         _ = try validatedVersion(version)
-        guard gamepads.count <= 4 else {
+        guard gamepads.count
+            <= XboxCloudCompatibilityProfile.bundledV1.maximumControllerSlots
+        else {
             throw XboxLegacyInputCodecError.tooManyGamepads
         }
+        try validatePeripheralCounts(peripherals)
 
         let gamepadSize = version >= 2 ? 23 : 15
+        let pointerSize = 1 + peripherals.pointerFrames.reduce(0) {
+            $0 + 1 + $1.events.count * 20
+        }
+        let mouseSize = 1 + peripherals.mouse.count * 18
+        let keyboardSize = 1 + peripherals.keyboard.count * 3
         var data = Data(
-            capacity: headerSize(version: version) + 1 + gamepads.count * gamepadSize
+            capacity: headerSize(version: version)
+                + (gamepads.isEmpty && !includesEmptyGamepadSection
+                    ? 0
+                    : 1 + gamepads.count * gamepadSize)
+                + (peripherals.pointerFrames.isEmpty ? 0 : pointerSize)
+                + (peripherals.mouse.isEmpty ? 0 : mouseSize)
+                + (peripherals.keyboard.isEmpty ? 0 : keyboardSize)
         )
+        var flags: UInt16 = 0
+        if !gamepads.isEmpty || includesEmptyGamepadSection {
+            flags |= MessageFlag.gamepadReport
+        }
+        if !peripherals.pointerFrames.isEmpty {
+            flags |= MessageFlag.pointerReport
+        }
+        if !peripherals.mouse.isEmpty {
+            flags |= MessageFlag.mouseReport
+        }
+        if !peripherals.keyboard.isEmpty {
+            flags |= MessageFlag.keyboardReport
+        }
         appendHeader(
-            flags: MessageFlag.gamepadReport,
+            flags: flags,
             version: version,
             timestampMilliseconds: timestampMilliseconds,
             to: &data
         )
+        appendGamepads(
+            gamepads,
+            version: version,
+            includesEmptySection: includesEmptyGamepadSection,
+            to: &data
+        )
+        appendPointerFrames(peripherals.pointerFrames, to: &data)
+        appendMouseReports(peripherals.mouse, to: &data)
+        appendKeyboardReports(peripherals.keyboard, to: &data)
+        return data
+    }
+
+    /// Reserves the next token for the modern unreliable-input encoder while
+    /// keeping reliable metadata and state reports on one sequence.
+    mutating func reserveInputToken() -> UInt32 {
+        nextInputToken()
+    }
+
+    private func appendGamepads(
+        _ gamepads: [XboxGamepadState],
+        version: Int,
+        includesEmptySection: Bool,
+        to data: inout Data
+    ) {
+        guard !gamepads.isEmpty || includesEmptySection else { return }
         data.append(UInt8(gamepads.count))
         for gamepad in gamepads {
             data.append(gamepad.index)
@@ -182,13 +402,70 @@ nonisolated struct XboxLegacyInputEncoder {
                 data.appendLittleEndian(gamepad.virtualPhysicality.rawValue)
             }
         }
-        return data
     }
 
-    /// Reserves the next token for the modern unreliable-input encoder while
-    /// keeping reliable metadata and state reports on one sequence.
-    mutating func reserveInputToken() -> UInt32 {
-        nextInputToken()
+    private func appendPointerFrames(
+        _ frames: [XboxPointerFrame],
+        to data: inout Data
+    ) {
+        guard !frames.isEmpty else { return }
+        data.append(UInt8(frames.count))
+        for frame in frames {
+            data.append(UInt8(frame.events.count))
+            for event in frame.events {
+                data.appendLittleEndian(event.contactWidth)
+                data.appendLittleEndian(event.contactHeight)
+                data.append(event.pressure)
+                data.appendLittleEndian(event.rotation)
+                data.appendLittleEndian(event.pointerID)
+                data.appendLittleEndian(event.x)
+                data.appendLittleEndian(event.y)
+                data.append(event.phase.rawValue)
+            }
+        }
+    }
+
+    private func appendMouseReports(
+        _ reports: [XboxMouseReport],
+        to data: inout Data
+    ) {
+        guard !reports.isEmpty else { return }
+        data.append(UInt8(reports.count))
+        for report in reports {
+            data.appendLittleEndian(report.x)
+            data.appendLittleEndian(report.y)
+            data.appendLittleEndian(report.wheelX)
+            data.appendLittleEndian(report.wheelY)
+            data.append(report.buttons.rawValue)
+            data.append(report.isRelative ? 1 : 0)
+        }
+    }
+
+    private func appendKeyboardReports(
+        _ reports: [XboxKeyboardReport],
+        to data: inout Data
+    ) {
+        guard !reports.isEmpty else { return }
+        data.append(UInt8(reports.count))
+        for report in reports {
+            data.append(report.type.rawValue)
+            data.append(report.isPressed ? 1 : 0)
+            data.append(report.keyCode)
+        }
+    }
+
+    private func validatePeripheralCounts(
+        _ peripherals: XboxPeripheralInputReport
+    ) throws {
+        guard peripherals.pointerFrames.count <= Int(UInt8.max),
+              peripherals.pointerFrames.allSatisfy({
+                  $0.events.count <= Int(UInt8.max)
+              }),
+              peripherals.keyboard.count <= Int(UInt8.max),
+              peripherals.mouse.count <= Int(UInt8.max)
+        else {
+            throw XboxLegacyInputCodecError.tooManyPeripheralEvents
+        }
     }
 
     private mutating func appendHeader(
@@ -341,6 +618,10 @@ private extension Data {
         append(UInt8(truncatingIfNeeded: value >> 8))
         append(UInt8(truncatingIfNeeded: value >> 16))
         append(UInt8(truncatingIfNeeded: value >> 24))
+    }
+
+    nonisolated mutating func appendLittleEndian(_ value: Int32) {
+        appendLittleEndian(UInt32(bitPattern: value))
     }
 
     nonisolated mutating func appendLittleEndian(_ value: UInt64) {

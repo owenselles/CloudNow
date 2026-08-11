@@ -61,11 +61,18 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
         let transport: any HTTPTransport
     }
 
+    @MainActor
+    private struct RetainedStreamController {
+        let accountScopeIdentifier: String
+        let controller: XboxCloudStreamController
+    }
+
     private let authorizationConfiguration: XboxLiveAuthorizationConfiguration
     private let offeringConfiguration: XboxCloudOfferingServiceConfiguration
     private let makeTransport: @Sendable () -> any HTTPTransport
     private let makeInstallationIdentity: @Sendable () -> XboxCloudInstallationIdentityStore
     private let runtimeGraph = Mutex<RuntimeGraph?>(nil)
+    @MainActor private var retainedStreamController: RetainedStreamController?
 
     init(
         authorizationConfiguration: XboxLiveAuthorizationConfiguration,
@@ -84,11 +91,12 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
     }
 
     static func microsoftProduction() throws -> XboxProductionRuntimeContext {
-        try XboxProductionRuntimeContext(
+        let profile = try XboxCloudCompatibilityProfile.validatedBundledV1()
+        return try XboxProductionRuntimeContext(
             authorizationConfiguration: XboxLiveAuthorizationConfiguration
-                .microsoftProduction(),
+                .microsoftProduction(profile: profile),
             offeringConfiguration: XboxCloudOfferingServiceConfiguration
-                .microsoftProduction()
+                .microsoftProduction(profile: profile)
         )
     }
 
@@ -110,14 +118,52 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                 },
                 makeStreamController: { [self] transferToken in
                     makeStreamController(transferToken: transferToken)
+                },
+                streamControllerRetention: XboxCloudStreamControllerRetention(
+                    retainedController: { [self] account in
+                        retainedController(for: account)
+                    },
+                    retainController: { [self] controller, account in
+                        retainController(controller, for: account)
+                    },
+                    releaseController: { [self] controller in
+                        releaseController(controller)
+                    }
+                ),
+                resolveContentAccessOfferingID: { [self] account in
+                    try await resolvedGraph().gsSessionProvider
+                        .session(for: account).offeringID
+                },
+                resolveNetworkTestTarget: { [self] account in
+                    let session = try await resolvedGraph().gsSessionProvider
+                        .session(for: account)
+                    return CloudNetworkTestTarget(
+                        address: session.defaultRegion.baseURL.absoluteString,
+                        displayName: session.defaultRegion.name
+                    )
                 }
             )
         )
     }
 
-    /// Detaching first ensures provider deactivation releases the shared Xbox
-    /// transport graph. Clearing an unused context never constructs that graph.
+    /// A full credential clear also drops any controller retained across a
+    /// provider switch. Sign-out and Reset All Data confirm End before this
+    /// boundary, so no remote session ownership may survive the credential.
     func clearLocalCredentials() async {
+        await MainActor.run {
+            retainedStreamController = nil
+        }
+        await detachAndClearRuntimeGraph()
+    }
+
+    /// Provider switching releases the shared Xbox transport graph while
+    /// preserving a resumable or deletion-quarantined stream controller.
+    /// Clearing an unused context never constructs that graph.
+    func deactivateForInactiveProvider() async {
+        await detachAndClearRuntimeGraph()
+    }
+
+    private func detachAndClearRuntimeGraph() async {
         let detachedGraph = runtimeGraph.withLock { graph in
             defer { graph = nil }
             return graph
@@ -196,20 +242,81 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                 )
             },
             makeRuntime: { settings in
-                XboxCloudNativeStreamRuntime(
-                    transport: XboxCloudWebRTCTransport(
-                        signaling: XboxCloudSignalingAPI(
-                            transport: transport
-                        )
-                    ),
-                    inputDriver: XboxCloudInputDriver(
-                        deadzone: Float(settings.controllerDeadzone),
-                        rumbleEnabled: settings.rumbleEnabled,
-                        rumbleIntensity: Float(settings.rumbleIntensity),
-                        preferredResolution: settings.displayResolution
-                    )
+                Self.makeNativeStreamRuntime(
+                    settings: settings,
+                    transport: transport
                 )
             }
+        )
+    }
+
+    @MainActor
+    private func retainedController(
+        for account: XboxCloudAuthorizedAccount
+    ) -> XboxCloudStreamController? {
+        guard let retainedStreamController else { return nil }
+        guard retainedStreamController.accountScopeIdentifier
+            == account.activityScopeIdentifier
+        else {
+            return nil
+        }
+        let controller = retainedStreamController.controller
+        if controller.hasUnconfirmedSessionDeletion {
+            return controller
+        }
+        guard controller.canContinueSession else {
+            self.retainedStreamController = nil
+            return nil
+        }
+        return controller
+    }
+
+    @MainActor
+    private func retainController(
+        _ controller: XboxCloudStreamController,
+        for account: XboxCloudAuthorizedAccount
+    ) {
+        if let retainedStreamController {
+            let retainedController = retainedStreamController.controller
+            let isProtected = retainedController.canContinueSession
+                || retainedController.hasUnconfirmedSessionDeletion
+            if retainedController !== controller, isProtected {
+                return
+            }
+        }
+        retainedStreamController = RetainedStreamController(
+            accountScopeIdentifier: account.activityScopeIdentifier,
+            controller: controller
+        )
+    }
+
+    @MainActor
+    private func releaseController(_ controller: XboxCloudStreamController) {
+        guard retainedStreamController?.controller === controller else { return }
+        retainedStreamController = nil
+    }
+
+    @MainActor
+    static func makeNativeStreamRuntime(
+        settings: XboxCloudStreamSettings,
+        transport: any HTTPTransport
+    ) -> XboxCloudNativeStreamRuntime {
+        let settings = settings.normalizedForClient
+        return XboxCloudNativeStreamRuntime(
+            transport: XboxCloudWebRTCTransport(
+                signaling: XboxCloudSignalingAPI(
+                    transport: transport
+                )
+            ),
+            inputDriver: XboxCloudInputDriver(
+                deadzone: Float(settings.controllerDeadzone),
+                rumbleEnabled: settings.rumbleEnabled,
+                rumbleIntensity: Float(settings.rumbleIntensity),
+                preferredResolution: settings.displayResolution
+            ),
+            microphoneRequested: settings.microphoneEnabled,
+            diagnosticsEnabled: settings.diagnosticsEnabled,
+            rtcEventLogRequested: settings.enableRtcEventLog
         )
     }
 

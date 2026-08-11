@@ -5,6 +5,45 @@ import Testing
 
 @Suite("Xbox production runtime context")
 struct XboxProductionRuntimeContextTests {
+    @Test("Production stream runtime forwards the microphone preference")
+    @MainActor
+    func productionRuntimeForwardsMicrophonePreference() {
+        let transportFactory = XboxRuntimeTransportFactoryProbe()
+        let enabledRuntime = XboxProductionRuntimeContext.makeNativeStreamRuntime(
+            settings: XboxCloudStreamSettings(microphoneEnabled: true),
+            transport: transportFactory.makeTransport()
+        )
+        let disabledRuntime = XboxProductionRuntimeContext.makeNativeStreamRuntime(
+            settings: XboxCloudStreamSettings(microphoneEnabled: false),
+            transport: transportFactory.makeTransport()
+        )
+
+        #expect(enabledRuntime.microphoneRequestedForConnection)
+        #expect(!disabledRuntime.microphoneRequestedForConnection)
+    }
+
+    @Test("Production stream runtime normalizes diagnostics for this build")
+    @MainActor
+    func productionRuntimeNormalizesDiagnostics() {
+        let transportFactory = XboxRuntimeTransportFactoryProbe()
+        let runtime = XboxProductionRuntimeContext.makeNativeStreamRuntime(
+            settings: XboxCloudStreamSettings(
+                diagnosticsEnabled: true,
+                enableRtcEventLog: true
+            ),
+            transport: transportFactory.makeTransport()
+        )
+
+        #if DEBUG
+            #expect(runtime.diagnosticsEnabled)
+            #expect(runtime.rtcEventLogRequestedForConnection)
+        #else
+            #expect(!runtime.diagnosticsEnabled)
+            #expect(!runtime.rtcEventLogRequestedForConnection)
+        #endif
+        #expect(!runtime.rtcEventLogActive)
+    }
+
     @Test("GeForce NOW-only setup leaves the Xbox graph dormant")
     @MainActor
     func geForceNowSetupDoesNotBuildXboxRuntime() async throws {
@@ -12,7 +51,10 @@ struct XboxProductionRuntimeContextTests {
         let context = try makeContext(transportFactory: transportFactory)
         let environment = context.environment
         _ = CloudGamingProviderCoordinator(
-            xboxEnvironment: environment,
+            capabilityProviders: [
+                GFNCapabilityAdapter(),
+                XboxCapabilityAdapter(environment: environment),
+            ],
             initialSelection: .geForceNow,
             startsReady: true
         )
@@ -91,6 +133,35 @@ struct XboxProductionRuntimeContextTests {
         )
         _ = makeAccountClient()
         #expect(transportFactory.constructionCount == 2)
+    }
+
+    @Test("Provider deactivation preserves retention; credential clear releases it")
+    @MainActor
+    func credentialClearReleasesRetainedStreamController() async throws {
+        let transportFactory = XboxRuntimeTransportFactoryProbe()
+        let context = try makeContext(transportFactory: transportFactory)
+        let service = try #require(context.environment.service)
+        let account = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "fixture-account",
+            displayName: "Fixture Player",
+            expiresAt: .distantFuture
+        )
+        var controller: XboxCloudStreamController? = service.makeStreamController {
+            "fixture-transfer-token"
+        }
+        weak var retainedController = controller
+        try service.streamControllerRetention.retainController(
+            #require(controller),
+            account
+        )
+        controller = nil
+
+        #expect(retainedController != nil)
+        await context.deactivateForInactiveProvider()
+        #expect(retainedController != nil)
+
+        await context.clearLocalCredentials()
+        #expect(retainedController == nil)
     }
 
     @Test("Detached graph purges both XSTS and cached GS credentials")

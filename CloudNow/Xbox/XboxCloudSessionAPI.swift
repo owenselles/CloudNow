@@ -350,7 +350,7 @@ nonisolated struct XboxCloudServerDetails: Codable, Equatable, Sendable, CustomS
 
     private static func isValidPort(_ value: Int?) -> Bool {
         guard let value else { return true }
-        return (0 ... 65535).contains(value)
+        return (1 ... 65535).contains(value)
     }
 }
 
@@ -491,6 +491,7 @@ nonisolated enum XboxCloudSessionAPIError: Error, Equatable, Sendable, Localized
     case unknownSession
     case invalidResponse(operation: XboxCloudSessionAPIOperation)
     case invalidPayload(operation: XboxCloudSessionAPIOperation)
+    case responseTooLarge(operation: XboxCloudSessionAPIOperation)
     case httpFailure(operation: XboxCloudSessionAPIOperation, statusCode: Int, serviceCode: String?)
     case transportFailure(operation: XboxCloudSessionAPIOperation)
     case transferTokenUnavailable
@@ -506,6 +507,8 @@ nonisolated enum XboxCloudSessionAPIError: Error, Equatable, Sendable, Localized
         case .unknownSession: "Xbox Cloud session is no longer active."
         case let .invalidResponse(operation): "Xbox Cloud \(operation.rawValue) returned an invalid HTTP response."
         case let .invalidPayload(operation): "Xbox Cloud \(operation.rawValue) returned an invalid response payload."
+        case let .responseTooLarge(operation):
+            "Xbox Cloud \(operation.rawValue) returned an oversized response."
         case let .httpFailure(operation, statusCode, serviceCode):
             if let serviceCode {
                 "Xbox Cloud \(operation.rawValue) failed with \(serviceCode) (HTTP \(statusCode))."
@@ -534,6 +537,10 @@ nonisolated enum XboxCloudSessionAPIError: Error, Equatable, Sendable, Localized
 actor XboxCloudSessionAPI {
     private static let requestTimeout: TimeInterval = 30
     private static let transientStateRetryInterval: TimeInterval = 2
+    private static let maximumResponseBytes = 2 * 1024 * 1024
+    private static let hardAllocationCeiling: TimeInterval = 15 * 60
+    private static let minimumAdaptiveQueueBudget: TimeInterval = 60
+    private static let estimatedQueueGracePeriod: TimeInterval = 30
 
     private struct SessionRecord {
         var baseURL: URL
@@ -585,7 +592,11 @@ actor XboxCloudSessionAPI {
             clientSessionId: launch.clientSessionID
         )
         let body = try encode(payload, operation: .create)
-        let url = try endpoint(baseURL: access.regionBaseURL, path: "v5/sessions/cloud/play")
+        let url = try endpoint(
+            baseURL: access.regionBaseURL,
+            path: XboxCloudCompatibilityProfile.bundledV1
+                .cloudSessionCreatePath
+        )
         let (data, _) = try await send(
             method: "POST",
             url: url,
@@ -727,15 +738,20 @@ actor XboxCloudSessionAPI {
         _ handle: XboxCloudSessionHandle,
         onState: @escaping @Sendable (XboxCloudSessionStateSnapshot) async -> Void = { _ in }
     ) async throws -> XboxCloudProvisionedSession {
-        var provisioningStartedAt: Date?
+        let allocationStartedAt = now()
+        let hardDeadline = allocationStartedAt.addingTimeInterval(
+            min(pollingPolicy.maximumElapsedTime, Self.hardAllocationCeiling)
+        )
+        var queueDeadline: Date?
         var provisioningRequests = 0
         var totalStateRequests = 0
         var consecutiveTransientFailures = 0
 
         while true {
             try Task.checkCancellation()
+            let activeDeadline = queueDeadline ?? hardDeadline
             let timeoutInterval = try stateRequestTimeout(
-                provisioningStartedAt: provisioningStartedAt,
+                deadline: activeDeadline,
                 provisioningRequests: provisioningRequests
             )
             let snapshot: XboxCloudSessionStateSnapshot
@@ -754,7 +770,7 @@ actor XboxCloudSessionAPI {
                 consecutiveTransientFailures += 1
                 xboxSessionLog.notice("Xbox state poll transient failure; retrying once")
                 try await waitBeforeTransientStateRetry(
-                    provisioningStartedAt: provisioningStartedAt
+                    deadline: activeDeadline
                 )
                 continue
             }
@@ -770,9 +786,7 @@ actor XboxCloudSessionAPI {
                 let sessionConfiguration = try await configuration(for: handle)
                 return XboxCloudProvisionedSession(handle: handle, configuration: sessionConfiguration)
             case .readyToConnect:
-                if provisioningStartedAt == nil {
-                    provisioningStartedAt = now()
-                }
+                queueDeadline = nil
                 provisioningRequests += 1
                 let wasAlreadyConnected = sessions[handle.sessionPath]?.didConnect == true
                 try await connect(handle)
@@ -780,21 +794,28 @@ actor XboxCloudSessionAPI {
                     try await waitBeforeNextProvisioningPoll(
                         pollingPolicy.provisioningInterval,
                         requests: provisioningRequests,
-                        startedAt: provisioningStartedAt ?? now()
+                        deadline: hardDeadline
                     )
                 }
             case .waitingForResources:
-                try await sleep(pollingPolicy.queueInterval)
-                try Task.checkCancellation()
+                queueDeadline = Self.updatedWaitingDeadline(
+                    current: queueDeadline,
+                    allocationStartedAt: allocationStartedAt,
+                    hardDeadline: hardDeadline,
+                    estimatedTotalWaitTime: snapshot.estimatedTotalWaitTime,
+                    queueInterval: pollingPolicy.queueInterval
+                )
+                try await waitBeforeNextQueuePoll(
+                    pollingPolicy.queueInterval,
+                    deadline: queueDeadline ?? hardDeadline
+                )
             case .provisioning:
-                if provisioningStartedAt == nil {
-                    provisioningStartedAt = now()
-                }
+                queueDeadline = nil
                 provisioningRequests += 1
                 try await waitBeforeNextProvisioningPoll(
                     pollingPolicy.provisioningInterval,
                     requests: provisioningRequests,
-                    startedAt: provisioningStartedAt ?? now()
+                    deadline: hardDeadline
                 )
             case .failed:
                 throw XboxCloudSessionAPIError.sessionFailed(serviceCode: snapshot.serviceCode)
@@ -828,15 +849,14 @@ actor XboxCloudSessionAPI {
     private func waitBeforeNextProvisioningPoll(
         _ requestedDelay: TimeInterval,
         requests: Int,
-        startedAt: Date
+        deadline: Date
     ) async throws {
         guard requests < pollingPolicy.maximumStateRequests else {
             throw XboxCloudSessionAPIError.pollingTimedOut(
                 maximumStateRequests: pollingPolicy.maximumStateRequests
             )
         }
-        let elapsed = now().timeIntervalSince(startedAt)
-        let remaining = pollingPolicy.maximumElapsedTime - elapsed
+        let remaining = deadline.timeIntervalSince(now())
         guard remaining > 0 else {
             throw XboxCloudSessionAPIError.pollingTimedOut(
                 maximumStateRequests: pollingPolicy.maximumStateRequests
@@ -850,19 +870,15 @@ actor XboxCloudSessionAPI {
     }
 
     private func stateRequestTimeout(
-        provisioningStartedAt: Date?,
+        deadline: Date,
         provisioningRequests: Int
     ) throws -> TimeInterval {
-        guard let provisioningStartedAt else {
-            return Self.requestTimeout
-        }
         guard provisioningRequests < pollingPolicy.maximumStateRequests else {
             throw XboxCloudSessionAPIError.pollingTimedOut(
                 maximumStateRequests: pollingPolicy.maximumStateRequests
             )
         }
-        let remaining = pollingPolicy.maximumElapsedTime
-            - now().timeIntervalSince(provisioningStartedAt)
+        let remaining = deadline.timeIntervalSince(now())
         guard remaining > 0 else {
             throw XboxCloudSessionAPIError.pollingTimedOut(
                 maximumStateRequests: pollingPolicy.maximumStateRequests
@@ -872,23 +888,70 @@ actor XboxCloudSessionAPI {
     }
 
     private func waitBeforeTransientStateRetry(
-        provisioningStartedAt: Date?
+        deadline: Date
     ) async throws {
-        let delay: TimeInterval
-        if let provisioningStartedAt {
-            let remaining = pollingPolicy.maximumElapsedTime
-                - now().timeIntervalSince(provisioningStartedAt)
-            guard remaining > 0 else {
-                throw XboxCloudSessionAPIError.pollingTimedOut(
-                    maximumStateRequests: pollingPolicy.maximumStateRequests
-                )
-            }
-            delay = min(Self.transientStateRetryInterval, remaining)
-        } else {
-            delay = Self.transientStateRetryInterval
+        let remaining = deadline.timeIntervalSince(now())
+        guard remaining > 0 else {
+            throw XboxCloudSessionAPIError.pollingTimedOut(
+                maximumStateRequests: pollingPolicy.maximumStateRequests
+            )
         }
+        let delay = min(Self.transientStateRetryInterval, remaining)
         try await sleep(delay)
         try Task.checkCancellation()
+    }
+
+    private func waitBeforeNextQueuePoll(
+        _ requestedDelay: TimeInterval,
+        deadline: Date
+    ) async throws {
+        let remaining = deadline.timeIntervalSince(now())
+        guard remaining > 0 else {
+            throw XboxCloudSessionAPIError.pollingTimedOut(
+                maximumStateRequests: pollingPolicy.maximumStateRequests
+            )
+        }
+        let delay = min(
+            max(0, requestedDelay),
+            pollingPolicy.maximumRetryAfter,
+            remaining
+        )
+        if delay > 0 {
+            try await sleep(delay)
+            try Task.checkCancellation()
+        }
+    }
+
+    /// Microsoft's estimate is a total allocation estimate, not an unbounded
+    /// lease extension. A revised estimate may extend the soft queue deadline,
+    /// but never past the absolute allocation ceiling.
+    nonisolated static func updatedWaitingDeadline(
+        current: Date?,
+        allocationStartedAt: Date,
+        hardDeadline: Date,
+        estimatedTotalWaitTime: TimeInterval?,
+        queueInterval: TimeInterval
+    ) -> Date? {
+        guard let estimatedTotalWaitTime,
+              estimatedTotalWaitTime.isFinite,
+              estimatedTotalWaitTime >= 0
+        else {
+            return current
+        }
+        let gracePeriod = max(
+            estimatedQueueGracePeriod,
+            min(queueInterval * 3, minimumAdaptiveQueueBudget)
+        )
+        let budget = max(
+            minimumAdaptiveQueueBudget,
+            estimatedTotalWaitTime + gracePeriod
+        )
+        let candidate = min(
+            allocationStartedAt.addingTimeInterval(budget),
+            hardDeadline
+        )
+        guard let current else { return candidate }
+        return min(max(current, candidate), hardDeadline)
     }
 
     private func send(
@@ -923,9 +986,14 @@ actor XboxCloudSessionAPI {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: Self.maximumResponseBytes
+            )
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxCloudSessionAPIError.responseTooLarge(operation: operation)
         } catch {
             throw XboxCloudSessionAPIError.transportFailure(operation: operation)
         }

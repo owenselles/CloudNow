@@ -10,6 +10,12 @@ nonisolated struct XboxCloudStreamSessionToken: Hashable, Sendable, CustomString
         self.identifier = identifier
     }
 
+    /// Stable, non-service-secret identity for the concrete handle represented
+    /// by this token. The real Microsoft session path never leaves the actor.
+    var coordinatorSessionID: String {
+        "xbox-service-\(identifier.uuidString.lowercased())"
+    }
+
     var description: String {
         "XboxCloudStreamSessionToken(identifier: <redacted>)"
     }
@@ -37,7 +43,8 @@ nonisolated protocol XboxCloudSessionLifecycleServing: Sendable {
     ) async throws -> XboxCloudPreparedStream
 
     func keepAlive(_ token: XboxCloudStreamSessionToken) async throws
-    func delete(_ token: XboxCloudStreamSessionToken) async
+    /// Returns true only when the service confirms the session is gone.
+    func delete(_ token: XboxCloudStreamSessionToken) async -> Bool
 }
 
 /// One-instance adapter over `XboxCloudSessionAPI`. The map is bounded to one
@@ -45,6 +52,7 @@ nonisolated protocol XboxCloudSessionLifecycleServing: Sendable {
 actor XboxCloudSessionLifecycleClient: XboxCloudSessionLifecycleServing {
     private let api: XboxCloudSessionAPI
     private var handle: (token: XboxCloudStreamSessionToken, value: XboxCloudSessionHandle)?
+    private var isCreatingSession = false
 
     init(api: XboxCloudSessionAPI) {
         self.api = api
@@ -53,22 +61,14 @@ actor XboxCloudSessionLifecycleClient: XboxCloudSessionLifecycleServing {
     func createSession(
         _ request: XboxCloudSessionLaunchRequest
     ) async throws -> XboxCloudStreamSessionToken {
-        guard handle == nil else {
+        guard handle == nil, !isCreatingSession else {
             throw XboxCloudStreamLifecycleError.sessionAlreadyActive
         }
+        isCreatingSession = true
+        defer { isCreatingSession = false }
         let sessionHandle = try await api.createSession(request)
         let token = XboxCloudStreamSessionToken()
         handle = (token, sessionHandle)
-        do {
-            try Task.checkCancellation()
-        } catch {
-            let api = api
-            await Task { @concurrent in
-                try? await api.delete(sessionHandle)
-            }.value
-            handle = nil
-            throw CancellationError()
-        }
         return token
     }
 
@@ -94,10 +94,33 @@ actor XboxCloudSessionLifecycleClient: XboxCloudSessionLifecycleServing {
         _ = try await api.keepAlive(sessionHandle)
     }
 
-    func delete(_ token: XboxCloudStreamSessionToken) async {
-        guard let sessionHandle = try? resolvedHandle(for: token) else { return }
-        defer { handle = nil }
-        try? await api.delete(sessionHandle)
+    func delete(_ token: XboxCloudStreamSessionToken) async -> Bool {
+        guard let current = handle else { return true }
+        guard current.token == token else { return false }
+
+        do {
+            try await api.delete(current.value)
+            if handle?.token == token {
+                handle = nil
+            }
+            return true
+        } catch XboxCloudSessionAPIError.unknownSession {
+            if handle?.token == token {
+                handle = nil
+            }
+            return true
+        } catch let XboxCloudSessionAPIError.httpFailure(
+            operation: .delete,
+            statusCode,
+            _
+        ) where statusCode == 404 || statusCode == 410 {
+            if handle?.token == token {
+                handle = nil
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func resolvedHandle(
@@ -148,6 +171,10 @@ nonisolated struct XboxCloudMediaReadinessPolicy: Equatable, Sendable {
 protocol XboxCloudStreamRuntime: AnyObject, Sendable {
     var videoTrack: LKRTCVideoTrack? { get }
     var connectionState: XboxCloudWebRTCConnectionState { get }
+    var isMediaReady: Bool { get }
+    var microphoneEnabled: Bool { get }
+    var diagnosticsEnabled: Bool { get }
+    var rtcEventLogActive: Bool { get }
 
     func connect(
         configuration: XboxCloudSessionConfiguration,
@@ -159,6 +186,7 @@ protocol XboxCloudStreamRuntime: AnyObject, Sendable {
         _ handler: (@MainActor @Sendable () -> Void)?
     )
     func setInputPaused(_ isPaused: Bool)
+    @discardableResult func sendTextEntry(_ text: String) -> Bool
     func sendInputKeepAlive()
     func disconnect()
 }
@@ -169,6 +197,8 @@ protocol XboxCloudStreamRuntime: AnyObject, Sendable {
 final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
     private let transport: XboxCloudWebRTCTransport
     private let inputDriver: XboxCloudInputDriver
+    private let microphoneRequested: Bool
+    private let diagnostics: XboxCloudDiagnosticsConfiguration
     private let readinessPolicy: XboxCloudMediaReadinessPolicy
     private let sleep: @Sendable (TimeInterval) async throws -> Void
 
@@ -180,9 +210,36 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
         transport.state
     }
 
+    var isMediaReady: Bool {
+        transport.readiness.isReady
+    }
+
+    var microphoneEnabled: Bool {
+        transport.microphoneEnabled
+    }
+
+    var diagnosticsEnabled: Bool {
+        diagnostics.isEnabled
+    }
+
+    var rtcEventLogActive: Bool {
+        transport.rtcEventLogActive
+    }
+
+    var microphoneRequestedForConnection: Bool {
+        microphoneRequested
+    }
+
+    var rtcEventLogRequestedForConnection: Bool {
+        diagnostics.isRTCEventLogEnabled
+    }
+
     init(
         transport: XboxCloudWebRTCTransport = XboxCloudWebRTCTransport(),
         inputDriver: XboxCloudInputDriver = XboxCloudInputDriver(),
+        microphoneRequested: Bool = false,
+        diagnosticsEnabled: Bool = false,
+        rtcEventLogRequested: Bool = false,
         readinessPolicy: XboxCloudMediaReadinessPolicy = .standard,
         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
             try await Task.sleep(for: .seconds(seconds))
@@ -190,6 +247,13 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
     ) {
         self.transport = transport
         self.inputDriver = inputDriver
+        self.microphoneRequested = microphoneRequested
+        diagnostics = XboxCloudDiagnosticsPolicy.resolve(
+            diagnosticsEnabled: diagnosticsEnabled,
+            rtcEventLogEnabled: rtcEventLogRequested,
+            allowsDiagnostics: XboxCloudDiagnosticsPolicy
+                .currentBuildAllowsDiagnostics
+        )
         self.readinessPolicy = readinessPolicy
         self.sleep = sleep
     }
@@ -205,9 +269,14 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
         do {
             try await transport.connect(
                 configuration: configuration,
-                signalingContext: signalingContext
+                signalingContext: signalingContext,
+                microphoneRequested: microphoneRequested,
+                rtcEventLogRequested: diagnostics.isRTCEventLogEnabled
             )
             try Task.checkCancellation()
+            inputDriver.setNegotiatedOptionalChannels(
+                transport.negotiatedOptionalChannels
+            )
             try inputDriver.setNegotiatedInputMode(
                 transport.negotiatedInputMode
             )
@@ -256,6 +325,11 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
 
     func setInputPaused(_ isPaused: Bool) {
         inputDriver.setPaused(isPaused)
+    }
+
+    @discardableResult
+    func sendTextEntry(_ text: String) -> Bool {
+        inputDriver.sendTextEntry(text)
     }
 
     func sendInputKeepAlive() {

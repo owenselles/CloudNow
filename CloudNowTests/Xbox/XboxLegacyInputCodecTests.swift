@@ -192,6 +192,62 @@ struct XboxLegacyInputCodecTests {
         )))
     }
 
+    @Test("Peripheral input uses Xbox pointer mouse and keyboard sections")
+    func encodesPeripheralSections() throws {
+        var encoder = XboxLegacyInputEncoder()
+        let data = try encoder.encodeInput(
+            peripherals: XboxPeripheralInputReport(
+                pointerFrames: [XboxPointerFrame(events: [XboxPointerEvent(
+                    x: 10,
+                    y: 20,
+                    phase: .moved
+                )])],
+                keyboard: [XboxKeyboardReport(
+                    isPressed: true,
+                    keyCode: 0x41
+                )],
+                mouse: [XboxMouseReport(
+                    x: 2,
+                    y: -3,
+                    buttons: [.left]
+                )]
+            ),
+            version: 10,
+            timestampMilliseconds: 0
+        )
+
+        #expect(data.prefix(2) == Data([0x64, 0x00]))
+        #expect(data[14] == 1)
+        #expect(data[15] == 1)
+        #expect(data[36] == 1)
+        #expect(data[55] == 1)
+        #expect(data.suffix(3) == Data([
+            XboxKeyboardKeyType.virtualKey.rawValue,
+            1,
+            0x41,
+        ]))
+        #expect(data.count == 59)
+    }
+
+    @Test("Bundled controller capacity bounds legacy reports")
+    func enforcesControllerCapacity() throws {
+        var encoder = XboxLegacyInputEncoder()
+        let data = try encoder.encodeGamepads(
+            (0 ..< 4).map { XboxGamepadState(index: UInt8($0)) },
+            version: 10,
+            timestampMilliseconds: 0
+        )
+
+        #expect(data[14] == 4)
+        #expect(throws: XboxLegacyInputCodecError.tooManyGamepads) {
+            _ = try encoder.encodeGamepads(
+                (0 ... 4).map { XboxGamepadState(index: UInt8($0)) },
+                version: 10,
+                timestampMilliseconds: 0
+            )
+        }
+    }
+
     @Test("Encoder and decoder reject unsupported or malformed data")
     func rejectsInvalidInput() throws {
         var encoder = XboxLegacyInputEncoder()
@@ -200,13 +256,6 @@ struct XboxLegacyInputCodecTests {
             _ = try encoder.encodeGamepads(
                 [],
                 version: 11,
-                timestampMilliseconds: 0
-            )
-        }
-        #expect(throws: XboxLegacyInputCodecError.tooManyGamepads) {
-            _ = try encoder.encodeGamepads(
-                (0 ... 4).map { XboxGamepadState(index: UInt8($0)) },
-                version: 10,
                 timestampMilliseconds: 0
             )
         }

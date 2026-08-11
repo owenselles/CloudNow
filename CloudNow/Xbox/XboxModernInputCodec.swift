@@ -2,11 +2,17 @@ import Foundation
 
 nonisolated enum XboxModernInputCodecError: Error, Equatable, LocalizedError, Sendable {
     case unsupportedVersion
+    case tooManyGamepads
+    case tooManyPeripheralEvents
 
     var errorDescription: String? {
         switch self {
         case .unsupportedVersion:
             "Xbox Cloud selected an unsupported modern input protocol version."
+        case .tooManyGamepads:
+            "Xbox Cloud modern input contains too many gamepads."
+        case .tooManyPeripheralEvents:
+            "Xbox Cloud modern input contains too many peripheral events."
         }
     }
 }
@@ -70,7 +76,9 @@ nonisolated struct XboxModernGamepadTransitionCounters: Equatable, Sendable {
 
     mutating func recordTransitions(
         from previous: XboxGamepadButtons,
-        to current: XboxGamepadButtons
+        to current: XboxGamepadButtons,
+        shareWasPressed: Bool = false,
+        shareIsPressed: Bool = false
     ) {
         dpadUp = Self.advanced(dpadUp, button: .dpadUp, from: previous, to: current)
         dpadDown = Self.advanced(dpadDown, button: .dpadDown, from: previous, to: current)
@@ -83,6 +91,9 @@ nonisolated struct XboxModernGamepadTransitionCounters: Equatable, Sendable {
         leftShoulder = Self.advanced(leftShoulder, button: .leftShoulder, from: previous, to: current)
         rightShoulder = Self.advanced(rightShoulder, button: .rightShoulder, from: previous, to: current)
         nexus = Self.advanced(nexus, button: .nexus, from: previous, to: current)
+        if shareWasPressed != shareIsPressed {
+            share &+= 1
+        }
         a = Self.advanced(a, button: .a, from: previous, to: current)
         b = Self.advanced(b, button: .b, from: previous, to: current)
         x = Self.advanced(x, button: .x, from: previous, to: current)
@@ -103,6 +114,7 @@ nonisolated struct XboxModernGamepadTransitionCounters: Equatable, Sendable {
 }
 
 nonisolated struct XboxModernGamepadReport: Equatable, Sendable {
+    let index: UInt8
     let transitionCounters: XboxModernGamepadTransitionCounters
     let leftTrigger: UInt16
     let rightTrigger: UInt16
@@ -114,6 +126,7 @@ nonisolated struct XboxModernGamepadReport: Equatable, Sendable {
     let virtualPhysicality: XboxGamepadPhysicality
 
     init(
+        index: UInt8 = 0,
         transitionCounters: XboxModernGamepadTransitionCounters = .init(),
         leftTrigger: UInt16 = 0,
         rightTrigger: UInt16 = 0,
@@ -124,6 +137,7 @@ nonisolated struct XboxModernGamepadReport: Equatable, Sendable {
         physicalPhysicality: XboxGamepadPhysicality = [],
         virtualPhysicality: XboxGamepadPhysicality = []
     ) {
+        self.index = index
         self.transitionCounters = transitionCounters
         self.leftTrigger = leftTrigger
         self.rightTrigger = rightTrigger
@@ -138,7 +152,30 @@ nonisolated struct XboxModernGamepadReport: Equatable, Sendable {
 
 nonisolated struct XboxModernInputFrame: Equatable, Sendable {
     let frameID: UInt32
-    let gamepad: XboxModernGamepadReport
+    let gamepads: [XboxModernGamepadReport]
+    let peripherals: XboxPeripheralInputReport
+
+    init(
+        frameID: UInt32,
+        gamepads: [XboxModernGamepadReport],
+        peripherals: XboxPeripheralInputReport = .init()
+    ) {
+        self.frameID = frameID
+        self.gamepads = gamepads
+        self.peripherals = peripherals
+    }
+
+    init(
+        frameID: UInt32,
+        gamepad: XboxModernGamepadReport
+    ) {
+        self.init(frameID: frameID, gamepads: [gamepad])
+    }
+
+    /// Compatibility accessor for single-controller call sites.
+    var gamepad: XboxModernGamepadReport {
+        gamepads.first ?? XboxModernGamepadReport()
+    }
 }
 
 /// Matches Xbox's current unreliable-input pacing: changed frames may be sent
@@ -176,9 +213,9 @@ nonisolated struct XboxModernInputSendCadence: Sendable {
     }
 }
 
-/// Encodes one slot-zero gamepad snapshot for the negotiated unreliable-input
-/// channel. The caller supplies the shared input token so reliable metadata and
-/// unreliable reports can use one token sequence.
+/// Encodes the profile's stable-index gamepad capacity for the negotiated
+/// unreliable-input channel. The caller supplies the shared input token so
+/// reliable metadata and unreliable reports can use one token sequence.
 nonisolated enum XboxModernInputEncoder {
     private enum MessageFlag {
         static let unreliableInputReport: UInt16 = 1 << 9
@@ -193,17 +230,42 @@ nonisolated enum XboxModernInputEncoder {
         guard (9 ... 10).contains(version) else {
             throw XboxModernInputCodecError.unsupportedVersion
         }
+        guard frame.gamepads.count
+            <= XboxCloudCompatibilityProfile.bundledV1.maximumControllerSlots
+        else {
+            throw XboxModernInputCodecError.tooManyGamepads
+        }
+        guard frame.peripherals.pointerFrames.count <= Int(UInt8.max),
+              frame.peripherals.pointerFrames.allSatisfy({
+                  $0.events.count <= Int(UInt8.max)
+              }),
+              frame.peripherals.keyboard.count <= Int(UInt8.max),
+              frame.peripherals.mouse.count <= Int(UInt8.max)
+        else {
+            throw XboxModernInputCodecError.tooManyPeripheralEvents
+        }
 
-        var data = Data(capacity: version >= 10 ? 61 : 60)
+        let pointerBytes = frame.peripherals.pointerFrames.reduce(0) {
+            $0 + 1 + $1.events.count * 20
+        }
+        let capacity = 24
+            + frame.gamepads.count * 37
+            + pointerBytes
+            + frame.peripherals.keyboard.count * 3
+            + frame.peripherals.mouse.count * 18
+            + (version >= 10 ? 1 : 0)
+        var data = Data(capacity: capacity)
         data.appendXboxLittleEndian(MessageFlag.unreliableInputReport)
         data.appendXboxLittleEndian(inputToken)
         data.appendXboxLittleEndian(timestampMilliseconds.bitPattern)
         data.appendXboxLittleEndian(frame.frameID)
-        data.append(1)
-        appendGamepad(frame.gamepad, to: &data)
-        data.append(0) // Pointer count.
-        data.append(0) // Keyboard absent.
-        data.append(0) // Mouse absent.
+        data.append(UInt8(frame.gamepads.count))
+        for gamepad in frame.gamepads {
+            appendGamepad(gamepad, to: &data)
+        }
+        appendPointerFrames(frame.peripherals.pointerFrames, to: &data)
+        appendKeyboardReports(frame.peripherals.keyboard, to: &data)
+        appendMouseReports(frame.peripherals.mouse, to: &data)
         if version >= 10 {
             data.append(0) // Lock-key state absent.
         }
@@ -215,7 +277,7 @@ nonisolated enum XboxModernInputEncoder {
         _ gamepad: XboxModernGamepadReport,
         to data: inout Data
     ) {
-        data.append(0) // Modern Xbox Cloud input maps the active pad to slot 0.
+        data.append(gamepad.index)
 
         let counters = gamepad.transitionCounters
         data.append(counters.dpadUp)
@@ -244,6 +306,53 @@ nonisolated enum XboxModernInputEncoder {
         data.appendXboxLittleEndian(gamepad.physicalPhysicality.rawValue)
         data.appendXboxLittleEndian(gamepad.virtualPhysicality.rawValue)
     }
+
+    private static func appendPointerFrames(
+        _ frames: [XboxPointerFrame],
+        to data: inout Data
+    ) {
+        data.append(UInt8(frames.count))
+        for frame in frames {
+            data.append(UInt8(frame.events.count))
+            for event in frame.events {
+                data.appendXboxLittleEndian(event.contactWidth)
+                data.appendXboxLittleEndian(event.contactHeight)
+                data.append(event.pressure)
+                data.appendXboxLittleEndian(event.rotation)
+                data.appendXboxLittleEndian(event.pointerID)
+                data.appendXboxLittleEndian(event.x)
+                data.appendXboxLittleEndian(event.y)
+                data.append(event.phase.rawValue)
+            }
+        }
+    }
+
+    private static func appendKeyboardReports(
+        _ reports: [XboxKeyboardReport],
+        to data: inout Data
+    ) {
+        data.append(UInt8(reports.count))
+        for report in reports {
+            data.append(report.type.rawValue)
+            data.append(report.isPressed ? 1 : 0)
+            data.append(report.keyCode)
+        }
+    }
+
+    private static func appendMouseReports(
+        _ reports: [XboxMouseReport],
+        to data: inout Data
+    ) {
+        data.append(UInt8(reports.count))
+        for report in reports {
+            data.appendXboxLittleEndian(report.x)
+            data.appendXboxLittleEndian(report.y)
+            data.appendXboxLittleEndian(report.wheelX)
+            data.appendXboxLittleEndian(report.wheelY)
+            data.append(report.buttons.rawValue)
+            data.append(report.isRelative ? 1 : 0)
+        }
+    }
 }
 
 /// Tracks the latest unreliable gamepad state until the server acknowledges
@@ -251,14 +360,32 @@ nonisolated enum XboxModernInputEncoder {
 /// delayed or absent.
 nonisolated struct XboxModernInputStateTracker: Sendable {
     static let maximumPendingSnapshotCount = 120
+    private static let controllerCapacity = XboxCloudCompatibilityProfile
+        .bundledV1.maximumControllerSlots
 
-    private(set) var isAttached = false
+    private struct ControllerState: Sendable {
+        var state: XboxGamepadState
+        var transitionCounters = XboxModernGamepadTransitionCounters()
+    }
+
     private(set) var lastAcknowledgedFrameID: UInt32?
 
     private var latestFrameID: UInt32 = 0
-    private var previousState: XboxGamepadState?
-    private var transitionCounters = XboxModernGamepadTransitionCounters()
+    private var controllers: [ControllerState?] = Array(
+        repeating: nil,
+        count: controllerCapacity
+    )
     private var pendingSnapshots: [XboxModernInputFrame] = []
+
+    var isAttached: Bool {
+        controllers.contains { $0 != nil }
+    }
+
+    var attachedIndexes: [UInt8] {
+        controllers.indices.compactMap { index in
+            controllers[index] == nil ? nil : UInt8(index)
+        }
+    }
 
     var pendingSnapshotCount: Int {
         pendingSnapshots.count
@@ -268,14 +395,16 @@ nonisolated struct XboxModernInputStateTracker: Sendable {
         pendingSnapshots.reserveCapacity(Self.maximumPendingSnapshotCount)
     }
 
-    /// Starts or restarts one physical-controller attachment. Frame IDs remain
-    /// monotonic across hotplug events, while controller counters restart from
-    /// a neutral state.
+    /// Starts or restarts one physical-controller attachment. Other slots and
+    /// their transition counters remain intact across hot-plug events.
     @discardableResult
-    mutating func attach() -> XboxModernInputFrame {
-        clearControllerState()
-        isAttached = true
-        return appendSnapshot(for: XboxGamepadState(index: 0))
+    mutating func attach(index: UInt8 = 0) -> XboxModernInputFrame {
+        let slot = Int(index)
+        precondition(controllers.indices.contains(slot))
+        controllers[slot] = ControllerState(
+            state: XboxGamepadState(index: index)
+        )
+        return appendSnapshot()
     }
 
     /// Records one sampled physical state. Unchanged samples do not allocate a
@@ -283,42 +412,65 @@ nonisolated struct XboxModernInputStateTracker: Sendable {
     /// unacknowledged frame for retransmission.
     @discardableResult
     mutating func record(_ state: XboxGamepadState) -> XboxModernInputFrame? {
-        guard isAttached else { return nil }
+        let index = Int(state.index)
+        guard controllers.indices.contains(index),
+              var controller = controllers[index]
+        else {
+            return nil
+        }
         let normalizedState = Self.normalized(state)
-        guard normalizedState != previousState else { return nil }
+        guard normalizedState != controller.state else { return nil }
 
-        transitionCounters.recordTransitions(
-            from: previousState?.buttons ?? [],
-            to: normalizedState.buttons
+        controller.transitionCounters.recordTransitions(
+            from: controller.state.buttons,
+            to: normalizedState.buttons,
+            shareWasPressed: controller.state.isSharePressed,
+            shareIsPressed: normalizedState.isSharePressed
         )
-        return appendSnapshot(for: normalizedState)
+        controller.state = normalizedState
+        controllers[index] = controller
+        return appendSnapshot()
     }
 
-    /// Produces the tiny virtual-axis delta used by Xbox's current client to
-    /// keep an otherwise idle V2 input session alive. The next physical sample
-    /// restores the real axis without changing button transition counters.
+    /// Atomically records a complete sample so one V2 frame can contain every
+    /// negotiated controller slot without transient partial snapshots.
     @discardableResult
-    mutating func recordVirtualKeepAlive() -> XboxModernInputFrame? {
-        guard isAttached, let previousState else { return nil }
-        let delta = 3277 // Approximately ten percent of the Int16 axis range.
-        let threshold = 29490 // Approximately ninety percent of the range.
-        let currentX = Int(previousState.leftThumbX)
-        let adjustedX = currentX > threshold
-            ? currentX - delta
-            : currentX + delta
-        let boundedX = min(max(adjustedX, -32767), 32767)
-        return appendSnapshot(for: XboxGamepadState(
-            index: 0,
-            buttons: previousState.buttons,
-            leftThumbX: Int16(boundedX),
-            leftThumbY: previousState.leftThumbY,
-            rightThumbX: previousState.rightThumbX,
-            rightThumbY: previousState.rightThumbY,
-            leftTrigger: previousState.leftTrigger,
-            rightTrigger: previousState.rightTrigger,
-            physicalPhysicality: previousState.physicalPhysicality,
-            virtualPhysicality: previousState.virtualPhysicality
-        ))
+    mutating func record(
+        _ states: [XboxGamepadState],
+        peripherals: XboxPeripheralInputReport = .init()
+    ) -> XboxModernInputFrame? {
+        var didChange = !peripherals.isEmpty
+        for state in states {
+            let index = Int(state.index)
+            guard controllers.indices.contains(index),
+                  var controller = controllers[index]
+            else {
+                continue
+            }
+            let normalizedState = Self.normalized(state)
+            guard normalizedState != controller.state else { continue }
+            controller.transitionCounters.recordTransitions(
+                from: controller.state.buttons,
+                to: normalizedState.buttons,
+                shareWasPressed: controller.state.isSharePressed,
+                shareIsPressed: normalizedState.isSharePressed
+            )
+            controller.state = normalizedState
+            controllers[index] = controller
+            didChange = true
+        }
+        guard didChange else { return nil }
+        return appendSnapshot(peripherals: peripherals)
+    }
+
+    /// Queues keyboard/mouse/pointer input without manufacturing controller
+    /// motion. The frame remains retransmittable until acknowledged.
+    @discardableResult
+    mutating func record(
+        peripherals: XboxPeripheralInputReport
+    ) -> XboxModernInputFrame? {
+        guard !peripherals.isEmpty else { return nil }
+        return appendSnapshot(peripherals: peripherals)
     }
 
     func frameForTransmission() -> XboxModernInputFrame? {
@@ -339,36 +491,49 @@ nonisolated struct XboxModernInputStateTracker: Sendable {
         return true
     }
 
-    /// Clears controller-specific state after a hotplug without reusing frame
-    /// IDs from the current streaming session.
-    mutating func detach() {
-        clearControllerState()
-        isAttached = false
+    /// Removes one controller without reindexing the remaining slots.
+    @discardableResult
+    mutating func detach(index: UInt8 = 0) -> XboxModernInputFrame? {
+        let slot = Int(index)
+        guard controllers.indices.contains(slot), controllers[slot] != nil else {
+            return nil
+        }
+        controllers[slot] = nil
+        return appendSnapshot()
     }
 
     /// Clears all session state. The next attachment begins again at frame 1.
     mutating func reset() {
-        detach()
+        for index in controllers.indices {
+            controllers[index] = nil
+        }
+        pendingSnapshots.removeAll(keepingCapacity: true)
+        lastAcknowledgedFrameID = nil
         latestFrameID = 0
     }
 
     private mutating func appendSnapshot(
-        for state: XboxGamepadState
+        peripherals: XboxPeripheralInputReport = .init()
     ) -> XboxModernInputFrame {
-        previousState = state
         let frame = XboxModernInputFrame(
             frameID: nextFrameID(),
-            gamepad: XboxModernGamepadReport(
-                transitionCounters: transitionCounters,
-                leftTrigger: state.leftTrigger,
-                rightTrigger: state.rightTrigger,
-                leftThumbX: state.leftThumbX,
-                leftThumbY: state.leftThumbY,
-                rightThumbX: state.rightThumbX,
-                rightThumbY: state.rightThumbY,
-                physicalPhysicality: state.physicalPhysicality,
-                virtualPhysicality: state.virtualPhysicality
-            )
+            gamepads: controllers.compactMap { controller in
+                guard let controller else { return nil }
+                let state = controller.state
+                return XboxModernGamepadReport(
+                    index: state.index,
+                    transitionCounters: controller.transitionCounters,
+                    leftTrigger: state.leftTrigger,
+                    rightTrigger: state.rightTrigger,
+                    leftThumbX: state.leftThumbX,
+                    leftThumbY: state.leftThumbY,
+                    rightThumbX: state.rightThumbX,
+                    rightThumbY: state.rightThumbY,
+                    physicalPhysicality: state.physicalPhysicality,
+                    virtualPhysicality: state.virtualPhysicality
+                )
+            },
+            peripherals: peripherals
         )
         pendingSnapshots.append(frame)
         if pendingSnapshots.count > Self.maximumPendingSnapshotCount {
@@ -384,19 +549,13 @@ nonisolated struct XboxModernInputStateTracker: Sendable {
         return latestFrameID
     }
 
-    private mutating func clearControllerState() {
-        previousState = nil
-        transitionCounters = XboxModernGamepadTransitionCounters()
-        pendingSnapshots.removeAll(keepingCapacity: true)
-        lastAcknowledgedFrameID = nil
-    }
-
     private static func normalized(
         _ state: XboxGamepadState
     ) -> XboxGamepadState {
         XboxGamepadState(
-            index: 0,
+            index: state.index,
             buttons: state.buttons,
+            isSharePressed: state.isSharePressed,
             leftThumbX: state.leftThumbX,
             leftThumbY: state.leftThumbY,
             rightThumbX: state.rightThumbX,
@@ -424,6 +583,10 @@ private extension Data {
         append(UInt8(truncatingIfNeeded: value >> 8))
         append(UInt8(truncatingIfNeeded: value >> 16))
         append(UInt8(truncatingIfNeeded: value >> 24))
+    }
+
+    nonisolated mutating func appendXboxLittleEndian(_ value: Int32) {
+        appendXboxLittleEndian(UInt32(bitPattern: value))
     }
 
     nonisolated mutating func appendXboxLittleEndian(_ value: UInt64) {

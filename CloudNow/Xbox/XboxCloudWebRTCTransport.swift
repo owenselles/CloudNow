@@ -8,6 +8,112 @@ private nonisolated let xboxWebRTCLog = Logger(
     category: "XboxWebRTC"
 )
 
+/// Allowlisted view of Microsoft's otherwise opaque streaming overrides.
+/// Unknown keys and incorrectly typed values deliberately remain inert.
+nonisolated struct XboxCloudServiceStreamingOverrides: Equatable, Sendable {
+    let enableHEVC: Bool?
+
+    init(_ value: XboxCloudJSONValue?) {
+        guard case let .object(root)? = value,
+              case let .object(videoConfiguration)? = root["videoConfiguration"],
+              case let .boolean(enableHEVC)? = videoConfiguration["enableHevc"]
+        else {
+            enableHEVC = nil
+            return
+        }
+        self.enableHEVC = enableHEVC
+    }
+}
+
+/// Provider-neutral value snapshot used to derive a safe ordering from the
+/// capabilities reported by WebRTC. `associatedPayloadType` models RTX's apt.
+nonisolated struct XboxCloudVideoCodecCapability: Equatable, Sendable {
+    let name: String
+    let preferredPayloadType: Int?
+    let associatedPayloadType: Int?
+
+    init(
+        name: String,
+        preferredPayloadType: Int? = nil,
+        associatedPayloadType: Int? = nil
+    ) {
+        self.name = name
+        self.preferredPayloadType = preferredPayloadType
+        self.associatedPayloadType = associatedPayloadType
+    }
+}
+
+nonisolated enum XboxCloudVideoCodecPreferencePolicy {
+    /// Returns capability indexes in preference order, or `nil` when WebRTC's
+    /// default order is safer. Enabling HEVC keeps every fallback codec;
+    /// disabling it also removes repair codecs associated with HEVC payloads.
+    static func preferredCapabilityIndexes(
+        _ capabilities: [XboxCloudVideoCodecCapability],
+        enableHEVC: Bool?
+    ) -> [Int]? {
+        guard let enableHEVC else { return nil }
+        let hevcIndexes = capabilities.indices.filter {
+            isHEVC(capabilities[$0].name)
+        }
+        guard !hevcIndexes.isEmpty else { return nil }
+
+        let hevcPayloadTypes = Set(hevcIndexes.compactMap {
+            capabilities[$0].preferredPayloadType
+        })
+        let associatedHEVCIndexes = capabilities.indices.filter { index in
+            guard let associatedPayloadType = capabilities[index]
+                .associatedPayloadType
+            else {
+                return false
+            }
+            return hevcPayloadTypes.contains(associatedPayloadType)
+        }
+        let hevcGroup = Set(hevcIndexes + associatedHEVCIndexes)
+
+        if enableHEVC {
+            return capabilities.indices.filter(hevcGroup.contains)
+                + capabilities.indices.filter { !hevcGroup.contains($0) }
+        }
+
+        var remaining = capabilities.indices.filter { !hevcGroup.contains($0) }
+        let remainingPayloadTypes = Set(remaining.compactMap {
+            capabilities[$0].preferredPayloadType
+        })
+        remaining.removeAll { index in
+            guard let associatedPayloadType = capabilities[index]
+                .associatedPayloadType
+            else {
+                return false
+            }
+            return !remainingPayloadTypes.contains(associatedPayloadType)
+        }
+        guard remaining.contains(where: {
+            !isAuxiliaryCodec(capabilities[$0].name)
+        }) else {
+            return nil
+        }
+        return remaining
+    }
+
+    private static func isHEVC(_ name: String) -> Bool {
+        switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "h265", "hevc":
+            true
+        default:
+            false
+        }
+    }
+
+    private static func isAuxiliaryCodec(_ name: String) -> Bool {
+        switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "rtx", "red", "ulpfec", "flexfec", "flexfec-03":
+            true
+        default:
+            false
+        }
+    }
+}
+
 nonisolated enum XboxCloudWebRTCConnectionState: Equatable, Sendable {
     case idle
     case preparing
@@ -34,10 +140,37 @@ nonisolated enum XboxCloudRequiredChannelClosurePolicy {
         inputMode: XboxCloudInputTransportMode?
     ) -> Bool {
         guard state.hasActivePeer else { return false }
-        if channel == .control || channel == .message {
-            return true
-        }
         return inputMode?.requiredChannels.contains(channel) == true
+    }
+}
+
+nonisolated enum XboxCloudChannelNegotiationPolicy {
+    static let optionalChannels: Set<XboxCloudDataChannelKind> = [
+        .chat,
+        .control,
+        .message,
+    ]
+
+    static func isRequiredForOffer(
+        _ channel: XboxCloudDataChannelKind
+    ) -> Bool {
+        !optionalChannels.contains(channel)
+    }
+
+    static func negotiatedOptionalChannels(
+        from answer: XboxCloudSDPAnswer
+    ) -> Set<XboxCloudDataChannelKind> {
+        var channels: Set<XboxCloudDataChannelKind> = []
+        if answer.chat != nil || answer.chatStream != nil {
+            channels.insert(.chat)
+        }
+        if answer.control != nil {
+            channels.insert(.control)
+        }
+        if answer.message != nil {
+            channels.insert(.message)
+        }
+        return channels
     }
 }
 
@@ -59,6 +192,321 @@ private nonisolated struct XboxCloudChannelReceiveState {
         Data,
         Bool
     ) -> Void)?
+}
+
+/// WebRTC may invoke delegate methods on different native threads. Exactly one
+/// MainActor drain preserves callback arrival order across peer, receiver, and
+/// data-channel delegates; the unchecked closure box only transports captured
+/// WebRTC references to that single actor.
+nonisolated enum XboxCloudDelegateEventPolicy: Equatable, Sendable {
+    enum CoalescingKey: Hashable, Sendable {
+        case iceConnectionState
+        case peerConnectionState
+    }
+
+    case required
+    case optional
+    case coalescing(CoalescingKey)
+}
+
+nonisolated enum XboxCloudDelegateEventEnqueueResult: Equatable, Sendable {
+    case enqueued
+    case coalesced
+    case dropped
+    case overflowed
+}
+
+final nonisolated class XboxCloudDelegateEventQueue: @unchecked Sendable {
+    fileprivate nonisolated struct Event: @unchecked Sendable {
+        let policy: XboxCloudDelegateEventPolicy
+        let operation: @MainActor () -> Void
+    }
+
+    fileprivate nonisolated struct State {
+        var events: [Event?] = []
+        var head = 0
+        var liveCount = 0
+        var coalescingIndexes: [
+            XboxCloudDelegateEventPolicy.CoalescingKey: Int
+        ] = [:]
+        var isDrainScheduled = false
+        var isOverflowed = false
+        var droppedEventCount = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let maximumPendingEvents: Int
+    private let automaticallyDrains: Bool
+
+    init(
+        maximumPendingEvents: Int = 512,
+        automaticallyDrains: Bool = true
+    ) {
+        precondition(maximumPendingEvents > 0)
+        self.maximumPendingEvents = maximumPendingEvents
+        self.automaticallyDrains = automaticallyDrains
+    }
+
+    var pendingEventCount: Int {
+        state.withLock { $0.liveCount }
+    }
+
+    var droppedEventCount: Int {
+        state.withLock { $0.droppedEventCount }
+    }
+
+    @discardableResult
+    func enqueue(
+        policy: XboxCloudDelegateEventPolicy = .required,
+        onOverflow: @escaping @MainActor () -> Void = {},
+        _ operation: @escaping @MainActor () -> Void
+    ) -> XboxCloudDelegateEventEnqueueResult {
+        let event = Event(policy: policy, operation: operation)
+        let outcome = state.withLock { state -> (
+            XboxCloudDelegateEventEnqueueResult,
+            Bool
+        ) in
+            guard !state.isOverflowed else {
+                state.droppedEventCount += 1
+                return (.dropped, false)
+            }
+
+            let result: XboxCloudDelegateEventEnqueueResult
+            if case let .coalescing(key) = policy,
+               let index = state.coalescingIndexes[key],
+               index >= state.head,
+               state.events[index] != nil
+            {
+                state.events[index] = nil
+                state.liveCount -= 1
+                state.coalescingIndexes[key] = nil
+                state.append(event)
+                result = .coalesced
+            } else if state.liveCount < maximumPendingEvents {
+                state.append(event)
+                result = .enqueued
+            } else if policy == .optional {
+                state.droppedEventCount += 1
+                result = .dropped
+            } else if state.evictFirstNonrequiredEvent() {
+                state.droppedEventCount += 1
+                state.append(event)
+                result = .enqueued
+            } else {
+                state.droppedEventCount += state.liveCount + 1
+                state.removeAllPending()
+                state.isOverflowed = true
+                state.append(Event(policy: .required, operation: onOverflow))
+                result = .overflowed
+            }
+
+            state.compactStorageIfNeeded(
+                maximumPendingEvents: maximumPendingEvents
+            )
+            guard automaticallyDrains,
+                  result != .dropped,
+                  !state.isDrainScheduled
+            else {
+                return (result, false)
+            }
+            state.isDrainScheduled = true
+            return (result, true)
+        }
+        guard outcome.1 else { return outcome.0 }
+        Task { @MainActor [self] in
+            drain()
+        }
+        return outcome.0
+    }
+
+    func removeAll() {
+        state.withLock { state in
+            state.removeAllPending()
+            state.isOverflowed = false
+        }
+    }
+
+    @MainActor
+    func drainForTesting() {
+        drain()
+    }
+
+    @MainActor
+    private func drain() {
+        while let event = state.withLock({ state -> Event? in
+            guard let event = state.popFirst(
+                maximumPendingEvents: maximumPendingEvents
+            ) else {
+                state.isDrainScheduled = false
+                state.isOverflowed = false
+                return nil
+            }
+            return event
+        }) {
+            event.operation()
+        }
+    }
+}
+
+private extension XboxCloudDelegateEventQueue.State {
+    nonisolated mutating func append(
+        _ event: XboxCloudDelegateEventQueue.Event
+    ) {
+        events.append(event)
+        liveCount += 1
+        if case let .coalescing(key) = event.policy {
+            coalescingIndexes[key] = events.endIndex - 1
+        }
+    }
+
+    nonisolated mutating func popFirst(
+        maximumPendingEvents: Int
+    ) -> XboxCloudDelegateEventQueue.Event? {
+        while head < events.count {
+            let index = head
+            head += 1
+            guard let event = events[index] else { continue }
+            events[index] = nil
+            liveCount -= 1
+            if case let .coalescing(key) = event.policy,
+               coalescingIndexes[key] == index
+            {
+                coalescingIndexes[key] = nil
+            }
+            compactStorageIfNeeded(
+                maximumPendingEvents: maximumPendingEvents
+            )
+            return event
+        }
+        removeAllPending()
+        return nil
+    }
+
+    nonisolated mutating func evictFirstNonrequiredEvent() -> Bool {
+        for index in head ..< events.count {
+            guard let event = events[index], event.policy != .required else {
+                continue
+            }
+            events[index] = nil
+            liveCount -= 1
+            if case let .coalescing(key) = event.policy,
+               coalescingIndexes[key] == index
+            {
+                coalescingIndexes[key] = nil
+            }
+            return true
+        }
+        return false
+    }
+
+    nonisolated mutating func removeAllPending() {
+        events.removeAll(keepingCapacity: true)
+        head = 0
+        liveCount = 0
+        coalescingIndexes.removeAll(keepingCapacity: true)
+    }
+
+    nonisolated mutating func compactStorageIfNeeded(
+        maximumPendingEvents: Int
+    ) {
+        let occupiedSlots = events.count - head
+        guard head >= maximumPendingEvents
+            || occupiedSlots > maximumPendingEvents * 2
+        else {
+            return
+        }
+        events = Array(events[head...])
+        head = 0
+        coalescingIndexes.removeAll(keepingCapacity: true)
+        for (index, event) in events.enumerated() {
+            if case let .coalescing(key) = event?.policy {
+                coalescingIndexes[key] = index
+            }
+        }
+    }
+}
+
+nonisolated struct XboxCloudMediaReadinessMonitor: Equatable, Sendable {
+    static let stallSampleLimit = 5
+
+    private(set) var hasVideoReceiver = false
+    private(set) var hasAudioReceiver = false
+    private(set) var videoStallSamples = 0
+    private(set) var audioStallSamples = 0
+    private(set) var hasVideoProgress = false
+    private(set) var hasAudioProgress = false
+    private var lastVideoProgress: Double?
+    private var lastAudioProgress: Double?
+
+    var hasActiveMedia: Bool {
+        hasVideoReceiver
+            && hasAudioReceiver
+            && hasVideoProgress
+            && hasAudioProgress
+            && videoStallSamples < Self.stallSampleLimit
+            && audioStallSamples < Self.stallSampleLimit
+    }
+
+    mutating func setVideoReceiver(_ present: Bool) {
+        hasVideoReceiver = present
+        lastVideoProgress = nil
+        videoStallSamples = 0
+        hasVideoProgress = false
+    }
+
+    mutating func setAudioReceiver(_ present: Bool) {
+        hasAudioReceiver = present
+        lastAudioProgress = nil
+        audioStallSamples = 0
+        hasAudioProgress = false
+    }
+
+    mutating func record(videoProgress: Double?, audioProgress: Double?) {
+        record(
+            videoProgress,
+            previous: &lastVideoProgress,
+            stalls: &videoStallSamples,
+            hasProgress: &hasVideoProgress,
+            receiverPresent: hasVideoReceiver
+        )
+        record(
+            audioProgress,
+            previous: &lastAudioProgress,
+            stalls: &audioStallSamples,
+            hasProgress: &hasAudioProgress,
+            receiverPresent: hasAudioReceiver
+        )
+    }
+
+    mutating func reset() {
+        self = XboxCloudMediaReadinessMonitor()
+    }
+
+    private func record(
+        _ progress: Double?,
+        previous: inout Double?,
+        stalls: inout Int,
+        hasProgress: inout Bool,
+        receiverPresent: Bool
+    ) {
+        guard receiverPresent else { return }
+        guard let progress, progress.isFinite else {
+            stalls = min(stalls + 1, Self.stallSampleLimit)
+            return
+        }
+        defer { previous = progress }
+        guard let previous else {
+            hasProgress = progress > 0
+            stalls = hasProgress ? 0 : min(stalls + 1, Self.stallSampleLimit)
+            return
+        }
+        if progress > previous || progress < previous {
+            hasProgress = true
+            stalls = 0
+        } else {
+            stalls = min(stalls + 1, Self.stallSampleLimit)
+        }
+    }
 }
 
 @MainActor
@@ -177,7 +625,13 @@ final class XboxCloudWebRTCTransport: NSObject {
     private(set) var state: XboxCloudWebRTCConnectionState = .idle
     private(set) var readiness = XboxCloudWebRTCReadiness()
     private(set) var videoTrack: LKRTCVideoTrack?
+    private(set) var microphoneEnabled = false
+    private(set) var negotiatedOptionalChannels: Set<XboxCloudDataChannelKind> = []
     private(set) var negotiatedInputMode: XboxCloudInputTransportMode?
+
+    var rtcEventLogActive: Bool {
+        rtcEventLog.activeURL != nil
+    }
 
     var negotiatedInputVersion: Int? {
         negotiatedInputMode?.reportVersion
@@ -202,9 +656,20 @@ final class XboxCloudWebRTCTransport: NSObject {
     }
 
     @ObservationIgnored private let negotiationPipeline: XboxCloudWebRTCNegotiationPipeline
+    @ObservationIgnored private let rtcEventLog: any XboxCloudRTCEventLogging
+    @ObservationIgnored private let audioSessionCoordinator =
+        CloudAudioSessionCoordinator()
     @ObservationIgnored private let statsSampler = XboxCloudRTCStatsSampler()
+    @ObservationIgnored private nonisolated let delegateEvents =
+        XboxCloudDelegateEventQueue()
     @ObservationIgnored private var peerConnection: LKRTCPeerConnection?
     @ObservationIgnored private var videoReceiver: LKRTCRtpReceiver?
+    @ObservationIgnored private var audioReceiver: LKRTCRtpReceiver?
+    @ObservationIgnored private var microphoneSource: LKRTCAudioSource?
+    @ObservationIgnored private var microphoneTrack: LKRTCAudioTrack?
+    @ObservationIgnored private var mediaReadinessMonitor =
+        XboxCloudMediaReadinessMonitor()
+    @ObservationIgnored private var mediaHealthTask: Task<Void, Never>?
     @ObservationIgnored private var channels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
     @ObservationIgnored private var localICECandidates: [XboxCloudICECandidate] = []
     @ObservationIgnored private var localICECandidateKeys: Set<String> = []
@@ -219,6 +684,7 @@ final class XboxCloudWebRTCTransport: NSObject {
         error: XboxCloudWebRTCTransportError
     )?
     @ObservationIgnored private var connectionGeneration: UInt64 = 0
+    @ObservationIgnored private var rtcEventLogGeneration: UInt64?
     @ObservationIgnored private let disconnectGracePeriod: Duration
     @ObservationIgnored private let peerOperationTimeout: Duration
     @ObservationIgnored private let sleep: XboxCloudBoundedCallback<Void>.Sleep
@@ -234,6 +700,7 @@ final class XboxCloudWebRTCTransport: NSObject {
 
     init(
         signaling: any XboxCloudSignalingProviding = XboxCloudSignalingAPI(),
+        rtcEventLog: any XboxCloudRTCEventLogging = XboxCloudRedactedRTCEventLog(),
         disconnectGracePeriod: Duration = standardDisconnectGracePeriod,
         peerOperationTimeout: Duration = standardPeerOperationTimeout,
         sleep: @escaping XboxCloudBoundedCallback<Void>.Sleep = { duration in
@@ -241,6 +708,7 @@ final class XboxCloudWebRTCTransport: NSObject {
         }
     ) {
         negotiationPipeline = XboxCloudWebRTCNegotiationPipeline(signaling: signaling)
+        self.rtcEventLog = rtcEventLog
         self.disconnectGracePeriod = disconnectGracePeriod
         self.peerOperationTimeout = peerOperationTimeout
         self.sleep = sleep
@@ -251,18 +719,42 @@ final class XboxCloudWebRTCTransport: NSObject {
     /// should cancel it with the launch surface lifecycle; `disconnect()` invalidates it too.
     func connect(
         configuration: XboxCloudSessionConfiguration,
-        signalingContext: XboxCloudSignalingContext
+        signalingContext: XboxCloudSignalingContext,
+        microphoneRequested: Bool = false,
+        rtcEventLogRequested: Bool = false
     ) async throws {
         connectionGeneration &+= 1
         let generation = connectionGeneration
         terminalPeerFailure = nil
         releasePeerResources(resumingICEWaiterWith: CancellationError())
         resetPublishedConnectionState(to: .preparing)
+        startRTCEventLogIfNeeded(
+            requested: rtcEventLogRequested,
+            generation: generation
+        )
 
         do {
-            try preparePeer(configuration: configuration)
+            let microphoneAuthorized = await audioSessionCoordinator
+                .requestMicrophonePermission(if: microphoneRequested)
+            try Task.checkCancellation()
             guard generation == connectionGeneration else {
                 throw CancellationError()
+            }
+            let microphoneRouteReady = audioSessionCoordinator.configure(
+                microphoneAuthorized: microphoneAuthorized
+            )
+            try preparePeer(
+                configuration: configuration,
+                microphoneAuthorized: microphoneAuthorized
+            )
+            guard generation == connectionGeneration else {
+                throw CancellationError()
+            }
+            recordRTCEvent(.peerPrepared, generation: generation)
+            if microphoneEnabled, !microphoneRouteReady {
+                xboxWebRTCLog.info(
+                    "Xbox microphone negotiated; capture awaits an input route"
+                )
             }
             state = .negotiating
 
@@ -274,9 +766,13 @@ final class XboxCloudWebRTCTransport: NSObject {
             guard generation == connectionGeneration else {
                 throw CancellationError()
             }
+            recordRTCEvent(.negotiationCompleted, generation: generation)
 
             let inputMode = try XboxCloudInputTransportMode(answer: answer)
             negotiatedInputMode = inputMode
+            negotiatedOptionalChannels = XboxCloudChannelNegotiationPolicy
+                .negotiatedOptionalChannels(from: answer)
+            reconcileOptionalChannels()
             updateReadiness { readiness in
                 readiness.setNegotiatedInputMode(inputMode)
             }
@@ -286,6 +782,9 @@ final class XboxCloudWebRTCTransport: NSObject {
             state = .connecting
             synchronizeReadinessFromPeer()
         } catch {
+            if !(error is CancellationError) {
+                recordRTCEvent(.connectionFailed, generation: generation)
+            }
             if let terminalFailure = terminalPeerFailure,
                terminalFailure.generation == generation
             {
@@ -395,6 +894,8 @@ final class XboxCloudWebRTCTransport: NSObject {
     }
 
     isolated deinit {
+        delegateEvents.removeAll()
+        stopRTCEventLog()
         localICETimeoutTask?.cancel()
         disconnectGraceTask?.cancel()
         localICEWaiter?.resume(throwing: CancellationError())
@@ -409,11 +910,14 @@ final class XboxCloudWebRTCTransport: NSObject {
         peerConnection?.close()
     }
 
-    private func preparePeer(configuration: XboxCloudSessionConfiguration) throws {
+    private func preparePeer(
+        configuration: XboxCloudSessionConfiguration,
+        microphoneAuthorized: Bool
+    ) throws {
         let stunURLs = try Self.validatedSTUNURLs(
             configuration.serverDetails.stunServerAddresses ?? []
         )
-        GFNAudioDevice.shared.requestedOutputChannels = 2
+        CloudAudioDevice.shared.requestedOutputChannels = 2
 
         let rtcConfiguration = LKRTCConfiguration()
         rtcConfiguration.sdpSemantics = .unifiedPlan
@@ -444,17 +948,33 @@ final class XboxCloudWebRTCTransport: NSObject {
                 media: "audio"
             )
         }
+        if microphoneAuthorized {
+            if let attachment = audioSessionCoordinator.attachMicrophone(
+                to: peerConnection
+            ) {
+                microphoneSource = attachment.source
+                microphoneTrack = attachment.track
+                microphoneEnabled = true
+            } else {
+                microphoneEnabled = false
+                audioSessionCoordinator.configurePlayback()
+            }
+        }
 
         let video = LKRTCRtpTransceiverInit()
         video.direction = .recvOnly
-        guard peerConnection.addTransceiver(
+        guard let videoTransceiver = peerConnection.addTransceiver(
             of: .video,
             init: video
-        ) != nil else {
+        ) else {
             throw XboxCloudWebRTCTransportError.unableToCreateTransceiver(
                 media: "video"
             )
         }
+        applyServiceVideoCodecOverride(
+            configuration.clientStreamingConfigOverrides,
+            to: videoTransceiver
+        )
         var createdChannels: [XboxCloudDataChannelKind: LKRTCDataChannel] = [:]
         for descriptor in XboxCloudDataChannelDescriptor.microsoftWebRTCChannels {
             let channelConfiguration = LKRTCDataChannelConfiguration()
@@ -468,6 +988,14 @@ final class XboxCloudWebRTCTransport: NSObject {
                 forLabel: descriptor.label,
                 configuration: channelConfiguration
             ) else {
+                if !XboxCloudChannelNegotiationPolicy.isRequiredForOffer(
+                    descriptor.kind
+                ) {
+                    xboxWebRTCLog.info(
+                        "Optional Xbox channel unavailable kind=\(descriptor.kind.rawValue, privacy: .public)"
+                    )
+                    continue
+                }
                 throw XboxCloudWebRTCTransportError.unableToCreateDataChannel(
                     label: descriptor.label
                 )
@@ -478,7 +1006,71 @@ final class XboxCloudWebRTCTransport: NSObject {
         channels = createdChannels
         let registeredChannels = createdChannels
         channelSendState.withLock { $0.channels = registeredChannels }
-        xboxWebRTCLog.info("Prepared one Xbox Cloud peer with six data channels")
+        xboxWebRTCLog.info(
+            "Prepared Xbox Cloud peer channels=\(createdChannels.count, privacy: .public)"
+        )
+    }
+
+    /// Applies only capabilities WebRTC says this receiver supports. Failure is
+    /// non-terminal: the untouched default order still provides Automatic mode.
+    private func applyServiceVideoCodecOverride(
+        _ rawOverrides: XboxCloudJSONValue?,
+        to transceiver: LKRTCRtpTransceiver
+    ) {
+        let override = XboxCloudServiceStreamingOverrides(rawOverrides)
+        guard override.enableHEVC != nil else { return }
+
+        let capabilities = CloudRTCRuntime.peerConnectionFactory
+            .rtpReceiverCapabilities(forKind: kLKRTCMediaStreamTrackKindVideo)
+            .codecs
+        let snapshots = capabilities.map { capability in
+            XboxCloudVideoCodecCapability(
+                name: capability.name,
+                preferredPayloadType: capability.preferredPayloadType?.intValue,
+                associatedPayloadType: capability.parameters["apt"].flatMap(Int.init)
+            )
+        }
+        guard let indexes = XboxCloudVideoCodecPreferencePolicy
+            .preferredCapabilityIndexes(
+                snapshots,
+                enableHEVC: override.enableHEVC
+            )
+        else {
+            xboxWebRTCLog.info(
+                "Xbox service codec override ignored because no safe supported preference exists"
+            )
+            return
+        }
+
+        let preferences = indexes.map { capabilities[$0] }
+        do {
+            try transceiver.setCodecPreferences(preferences, error: ())
+        } catch {
+            xboxWebRTCLog.info(
+                "Xbox service codec override rejected by WebRTC; using Automatic"
+            )
+            return
+        }
+        xboxWebRTCLog.info(
+            "Applied Xbox service HEVC override enabled=\(override.enableHEVC == true, privacy: .public)"
+        )
+    }
+
+    private func reconcileOptionalChannels() {
+        for kind in XboxCloudChannelNegotiationPolicy.optionalChannels
+            where !negotiatedOptionalChannels.contains(kind)
+        {
+            guard let channel = channels.removeValue(forKey: kind) else {
+                continue
+            }
+            channelSendState.withLock {
+                _ = $0.channels.removeValue(forKey: kind)
+            }
+            channel.delegate = nil
+            channel.close()
+            updateReadiness { $0.setChannel(kind, isOpen: false) }
+            onChannelStateChanged?(kind, false)
+        }
     }
 
     private func synchronizeReadinessFromPeer() {
@@ -489,7 +1081,7 @@ final class XboxCloudWebRTCTransport: NSObject {
                     || peerConnection.iceConnectionState == .connected
                     || peerConnection.iceConnectionState == .completed
             )
-            readiness.setActiveMedia(videoTrack != nil)
+            readiness.setActiveMedia(mediaReadinessMonitor.hasActiveMedia)
             for (kind, channel) in channels {
                 readiness.setChannel(kind, isOpen: channel.readyState == .open)
             }
@@ -506,12 +1098,19 @@ final class XboxCloudWebRTCTransport: NSObject {
         }
         if next.isReady, state != .connected {
             state = .connected
+            recordRTCEvent(
+                .mediaConnected,
+                generation: connectionGeneration
+            )
             xboxWebRTCLog.info("Xbox Cloud media, peer, and required channels are ready")
         }
     }
 
     private func releasePeerResources(resumingICEWaiterWith error: Error) {
+        delegateEvents.removeAll()
         cancelDisconnectGrace()
+        mediaHealthTask?.cancel()
+        mediaHealthTask = nil
         localICETimeoutTask?.cancel()
         localICETimeoutTask = nil
         if let waiter = localICEWaiter {
@@ -532,12 +1131,21 @@ final class XboxCloudWebRTCTransport: NSObject {
         peerConnection?.close()
         peerConnection = nil
         videoReceiver = nil
+        audioReceiver = nil
         videoTrack = nil
+        microphoneSource = nil
+        microphoneTrack = nil
+        if microphoneEnabled {
+            audioSessionCoordinator.configurePlayback()
+        }
+        microphoneEnabled = false
+        mediaReadinessMonitor.reset()
         statsSampler.reset()
         localICECandidates.removeAll(keepingCapacity: true)
         localICECandidateKeys.removeAll(keepingCapacity: true)
         localICECollectionError = nil
         isLocalICEGatheringComplete = false
+        stopRTCEventLog()
     }
 
     private func resetPublishedConnectionState(
@@ -546,7 +1154,102 @@ final class XboxCloudWebRTCTransport: NSObject {
         self.state = state
         readiness = XboxCloudWebRTCReadiness()
         negotiatedInputMode = nil
+        negotiatedOptionalChannels = []
         videoTrack = nil
+        microphoneEnabled = false
+    }
+
+    private func refreshMediaReadiness() {
+        updateReadiness {
+            $0.setActiveMedia(mediaReadinessMonitor.hasActiveMedia)
+        }
+        if mediaReadinessMonitor.hasVideoReceiver,
+           mediaReadinessMonitor.hasAudioReceiver
+        {
+            startMediaHealthMonitorIfNeeded()
+        } else {
+            mediaHealthTask?.cancel()
+            mediaHealthTask = nil
+        }
+    }
+
+    private func startMediaHealthMonitorIfNeeded() {
+        guard mediaHealthTask == nil else { return }
+        let generation = connectionGeneration
+        mediaHealthTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+                guard let self,
+                      generation == connectionGeneration,
+                      let peerConnection,
+                      let videoReceiver,
+                      let audioReceiver
+                else {
+                    return
+                }
+                let videoProgress = await Self.mediaProgress(
+                    peerConnection: peerConnection,
+                    receiver: videoReceiver,
+                    mediaKind: "video"
+                )
+                let audioProgress = await Self.mediaProgress(
+                    peerConnection: peerConnection,
+                    receiver: audioReceiver,
+                    mediaKind: "audio"
+                )
+                mediaReadinessMonitor.record(
+                    videoProgress: videoProgress,
+                    audioProgress: audioProgress
+                )
+                refreshMediaReadiness()
+            }
+        }
+    }
+
+    private static func mediaProgress(
+        peerConnection: LKRTCPeerConnection,
+        receiver: LKRTCRtpReceiver,
+        mediaKind: String
+    ) async -> Double? {
+        let callback = XboxCloudBoundedCallback<LKRTCStatisticsReport>(
+            timeout: .seconds(1),
+            timeoutError: .peerOperationFailed(
+                operation: "checking Xbox media flow"
+            )
+        )
+        guard let report = try? await callback.value(starting: { completion in
+            peerConnection.statistics(for: receiver) { report in
+                completion(.success(report))
+            }
+        }) else {
+            return nil
+        }
+        guard let inbound = report.statistics.values.first(where: { statistic in
+            guard statistic.type == "inbound-rtp" else { return false }
+            let kind = statistic.values["kind"] as? String
+                ?? statistic.values["mediaType"] as? String
+            return kind == nil || kind == mediaKind
+        }) else {
+            return nil
+        }
+        let preferredKey = mediaKind == "video"
+            ? "framesDecoded"
+            : "totalSamplesReceived"
+        return numericProgress(inbound.values[preferredKey])
+            ?? numericProgress(inbound.values["packetsReceived"])
+    }
+
+    private static func numericProgress(_ value: Any?) -> Double? {
+        guard let value = (value as? NSNumber)?.doubleValue,
+              value.isFinite
+        else {
+            return nil
+        }
+        return value
     }
 
     private func handlePeerConnectionState(
@@ -629,6 +1332,10 @@ final class XboxCloudWebRTCTransport: NSObject {
         let failure = XboxCloudWebRTCTransportError.peerOperationFailed(
             operation: "maintaining the network path"
         )
+        recordRTCEvent(
+            .connectionFailed,
+            generation: connectionGeneration
+        )
         terminalPeerFailure = (connectionGeneration, failure)
         connectionGeneration &+= 1
         releasePeerResources(resumingICEWaiterWith: failure)
@@ -650,6 +1357,33 @@ final class XboxCloudWebRTCTransport: NSObject {
     private func cancelDisconnectGrace() {
         disconnectGraceTask?.cancel()
         disconnectGraceTask = nil
+    }
+
+    private func startRTCEventLogIfNeeded(
+        requested: Bool,
+        generation: UInt64
+    ) {
+        rtcEventLogGeneration = nil
+        guard requested,
+              XboxCloudDiagnosticsPolicy.currentBuildAllowsDiagnostics,
+              rtcEventLog.start() != nil
+        else {
+            return
+        }
+        rtcEventLogGeneration = generation
+    }
+
+    private func recordRTCEvent(
+        _ event: XboxCloudRTCEvent,
+        generation: UInt64
+    ) {
+        guard rtcEventLogGeneration == generation else { return }
+        rtcEventLog.record(event)
+    }
+
+    private func stopRTCEventLog() {
+        rtcEventLog.stop()
+        rtcEventLogGeneration = nil
     }
 
     private func recordLocalICECandidate(
@@ -871,6 +1605,24 @@ final class XboxCloudWebRTCTransport: NSObject {
         }
         return .peerOperationFailed(operation: "negotiating media")
     }
+
+    private nonisolated func enqueueDelegateEvent(
+        policy: XboxCloudDelegateEventPolicy,
+        _ operation: @escaping @MainActor (XboxCloudWebRTCTransport) -> Void
+    ) {
+        delegateEvents.enqueue(
+            policy: policy,
+            onOverflow: { [weak self] in
+                self?.terminateActivePeer(
+                    reason: "Xbox Cloud media callbacks exceeded the safe limit."
+                )
+            },
+            { [weak self] in
+                guard let self else { return }
+                operation(self)
+            }
+        )
+    }
 }
 
 extension XboxCloudWebRTCTransport: XboxCloudWebRTCNegotiatingPeer {
@@ -1069,8 +1821,16 @@ extension XboxCloudWebRTCTransport: LKRTCPeerConnectionDelegate {
         _ source: LKRTCPeerConnection,
         didChange newState: LKRTCIceConnectionState
     ) {
-        Task { @MainActor [weak self] in
-            self?.handleICEConnectionState(newState, source: source)
+        let policy: XboxCloudDelegateEventPolicy = switch newState {
+        case .disconnected, .failed, .closed:
+            .required
+        case .new, .checking, .connected, .completed, .count:
+            .coalescing(.iceConnectionState)
+        @unknown default:
+            .required
+        }
+        enqueueDelegateEvent(policy: policy) { transport in
+            transport.handleICEConnectionState(newState, source: source)
         }
     }
 
@@ -1079,8 +1839,8 @@ extension XboxCloudWebRTCTransport: LKRTCPeerConnectionDelegate {
         didChange newState: LKRTCIceGatheringState
     ) {
         guard newState == .complete else { return }
-        Task { @MainActor [weak self] in
-            self?.markLocalICEGatheringComplete(source: source)
+        enqueueDelegateEvent(policy: .required) { transport in
+            transport.markLocalICEGatheringComplete(source: source)
         }
     }
 
@@ -1088,8 +1848,8 @@ extension XboxCloudWebRTCTransport: LKRTCPeerConnectionDelegate {
         _ source: LKRTCPeerConnection,
         didGenerate candidate: LKRTCIceCandidate
     ) {
-        Task { @MainActor [weak self] in
-            self?.recordLocalICECandidate(candidate, source: source)
+        enqueueDelegateEvent(policy: .required) { transport in
+            transport.recordLocalICECandidate(candidate, source: source)
         }
     }
 
@@ -1107,8 +1867,16 @@ extension XboxCloudWebRTCTransport: LKRTCPeerConnectionDelegate {
         _ source: LKRTCPeerConnection,
         didChange newState: LKRTCPeerConnectionState
     ) {
-        Task { @MainActor [weak self] in
-            self?.handlePeerConnectionState(newState, source: source)
+        let policy: XboxCloudDelegateEventPolicy = switch newState {
+        case .disconnected, .failed, .closed:
+            .required
+        case .new, .connecting, .connected:
+            .coalescing(.peerConnectionState)
+        @unknown default:
+            .required
+        }
+        enqueueDelegateEvent(policy: policy) { transport in
+            transport.handlePeerConnectionState(newState, source: source)
         }
     }
 
@@ -1117,12 +1885,20 @@ extension XboxCloudWebRTCTransport: LKRTCPeerConnectionDelegate {
         didAdd receiver: LKRTCRtpReceiver,
         streams _: [LKRTCMediaStream]
     ) {
-        guard let track = receiver.track as? LKRTCVideoTrack else { return }
-        Task { @MainActor [weak self] in
-            guard let self, peerConnection === source else { return }
-            videoReceiver = receiver
-            videoTrack = track
-            updateReadiness { $0.setActiveMedia(true) }
+        guard let track = receiver.track else { return }
+        enqueueDelegateEvent(policy: .required) { transport in
+            guard transport.peerConnection === source else { return }
+            if let videoTrack = track as? LKRTCVideoTrack {
+                transport.videoReceiver = receiver
+                transport.videoTrack = videoTrack
+                transport.mediaReadinessMonitor.setVideoReceiver(true)
+            } else if track is LKRTCAudioTrack {
+                transport.audioReceiver = receiver
+                transport.mediaReadinessMonitor.setAudioReceiver(true)
+            } else {
+                return
+            }
+            transport.refreshMediaReadiness()
         }
     }
 
@@ -1130,41 +1906,49 @@ extension XboxCloudWebRTCTransport: LKRTCPeerConnectionDelegate {
         _ source: LKRTCPeerConnection,
         didRemove receiver: LKRTCRtpReceiver
     ) {
-        Task { @MainActor [weak self] in
-            guard let self,
-                  peerConnection === source,
-                  videoReceiver === receiver
-            else { return }
-            videoReceiver = nil
-            videoTrack = nil
-            updateReadiness { $0.setActiveMedia(false) }
+        enqueueDelegateEvent(policy: .required) { transport in
+            guard transport.peerConnection === source else { return }
+            if transport.videoReceiver === receiver {
+                transport.videoReceiver = nil
+                transport.videoTrack = nil
+                transport.mediaReadinessMonitor.setVideoReceiver(false)
+            }
+            if transport.audioReceiver === receiver {
+                transport.audioReceiver = nil
+                transport.mediaReadinessMonitor.setAudioReceiver(false)
+            }
+            transport.refreshMediaReadiness()
         }
     }
 }
 
 extension XboxCloudWebRTCTransport: LKRTCDataChannelDelegate {
     nonisolated func dataChannelDidChangeState(_ dataChannel: LKRTCDataChannel) {
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let kind = dataChannelKind(for: dataChannel)
+        enqueueDelegateEvent(policy: .required) { transport in
+            guard let kind = transport.dataChannelKind(for: dataChannel)
             else { return }
             let isOpen = dataChannel.readyState == .open
-            updateReadiness { $0.setChannel(kind, isOpen: isOpen) }
-            onChannelStateChanged?(kind, isOpen)
-            if dataChannel.readyState == .closed {
+            let isClosed = dataChannel.readyState == .closed
+            transport.updateReadiness { $0.setChannel(kind, isOpen: isOpen) }
+            if isOpen || isClosed {
+                transport.onChannelStateChanged?(kind, isOpen)
+            }
+            if isClosed {
                 xboxWebRTCLog.error(
                     "Xbox Cloud data channel closed kind=\(kind.rawValue, privacy: .public)"
                 )
             }
             if !isOpen,
-               dataChannel.readyState == .closed,
+               isClosed,
                XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
                    channel: kind,
-                   state: state,
-                   inputMode: negotiatedInputMode
+                   state: transport.state,
+                   inputMode: transport.negotiatedInputMode
                )
             {
-                terminateActivePeer(reason: "An Xbox Cloud session channel closed.")
+                transport.terminateActivePeer(
+                    reason: "An Xbox Cloud session channel closed."
+                )
             }
         }
     }
@@ -1190,7 +1974,13 @@ extension XboxCloudWebRTCTransport: LKRTCDataChannelDelegate {
             return
         }
         let isBinary = buffer.isBinary
-        let handler = channelReceiveState.withLock { $0.onMessage }
-        handler?(kind, data, isBinary)
+        let policy: XboxCloudDelegateEventPolicy =
+            XboxCloudChannelNegotiationPolicy.isRequiredForOffer(kind)
+                ? .required
+                : .optional
+        enqueueDelegateEvent(policy: policy) { transport in
+            let handler = transport.channelReceiveState.withLock { $0.onMessage }
+            handler?(kind, data, isBinary)
+        }
     }
 }

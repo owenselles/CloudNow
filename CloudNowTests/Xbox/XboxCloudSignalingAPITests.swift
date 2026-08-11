@@ -1,5 +1,6 @@
 @testable import CloudNow
 import Foundation
+import Synchronization
 import Testing
 
 @Suite("Xbox Cloud REST signaling")
@@ -72,6 +73,113 @@ struct XboxCloudSignalingAPITests {
         #expect(answer.input == 10)
         #expect(answer.unreliableinput == nil)
         #expect(answer.reliableinput == nil)
+    }
+
+    @Test("Signaling responses use the streaming size boundary")
+    func responsesAreBoundedBeforeBuffering() async throws {
+        let transport = BoundedRecordingHTTPTransport { _, index in
+            if index == 0 {
+                return StubbedHTTPResponse(statusCode: 204)
+            }
+            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","input":10}"#
+            return StubbedHTTPResponse(json: #"{"exchangeResponse":\#(answer)}"#)
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        let answer = try await api.exchangeSDP(
+            offer: "fixture-offer",
+            context: makeContext()
+        )
+
+        #expect(answer.input == 10)
+        #expect(await transport.unboundedRequestCount() == 0)
+        #expect(await transport.maximumResponseSizes() == [
+            2 * 1024 * 1024,
+            2 * 1024 * 1024,
+        ])
+    }
+
+    @Test("Unsupported optional channel versions degrade without blocking video and input")
+    func unsupportedOptionalVersionsDegrade() async throws {
+        let transport = SignalingRecordingTransport { _, index in
+            if index == 0 {
+                return signalingResponse(statusCode: 204)
+            }
+            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","chatStream":99,"control":99,"input":10,"message":99,"chat":99}"#
+            return signalingResponse(json: #"{"exchangeResponse":\#(answer)}"#)
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        let answer = try await api.exchangeSDP(
+            offer: "fixture-offer",
+            context: makeContext()
+        )
+
+        #expect(answer.input == 10)
+        #expect(answer.chatStream == nil)
+        #expect(answer.control == nil)
+        #expect(answer.message == nil)
+        #expect(answer.chat == nil)
+    }
+
+    @Test("A supported legacy input channel safely replaces an unsupported modern pair")
+    func legacyInputFallbackFromUnsupportedModernPair() async throws {
+        let transport = SignalingRecordingTransport { _, index in
+            if index == 0 {
+                return signalingResponse(statusCode: 204)
+            }
+            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","input":10,"unreliableinput":11,"reliableinput":11}"#
+            return signalingResponse(json: #"{"exchangeResponse":\#(answer)}"#)
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        let answer = try await api.exchangeSDP(
+            offer: "fixture-offer",
+            context: makeContext()
+        )
+
+        #expect(answer.input == 10)
+        #expect(answer.unreliableinput == nil)
+        #expect(answer.reliableinput == nil)
+        #expect(try XboxCloudInputTransportMode(answer: answer) == .legacy(version: 10))
+    }
+
+    @Test("Unsupported required input fails before WebRTC applies the answer")
+    func unsupportedRequiredInputFails() async throws {
+        let transport = SignalingRecordingTransport { _, index in
+            if index == 0 {
+                return signalingResponse(statusCode: 204)
+            }
+            let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","input":11}"#
+            return signalingResponse(json: #"{"exchangeResponse":\#(answer)}"#)
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        await #expect(throws: XboxCloudWebRTCTransportError.unsupportedInputVersion(11)) {
+            _ = try await api.exchangeSDP(
+                offer: "fixture-offer",
+                context: makeContext()
+            )
+        }
+    }
+
+    @Test("A malformed required video answer is rejected")
+    func malformedVideoAnswerFails() async throws {
+        let transport = SignalingRecordingTransport { _, index in
+            if index == 0 {
+                return signalingResponse(statusCode: 204)
+            }
+            let answer = #"{"status":"success","sdpType":"offer","sdp":"fixture-answer","input":10}"#
+            return signalingResponse(json: #"{"exchangeResponse":\#(answer)}"#)
+        }
+        let api = XboxCloudSignalingAPI(transport: transport)
+
+        await #expect(throws: XboxCloudSignalingError.rejected(status: "success")) {
+            _ = try await api.exchangeSDP(
+                offer: "fixture-offer",
+                context: makeContext()
+            )
+        }
     }
 
     @Test("ICE exchange sends candidate strings and decodes remote candidates")
@@ -303,6 +411,97 @@ struct XboxCloudSignalingAPITests {
         }
     }
 
+    @Test("The absolute negotiation deadline cancels an in-flight request")
+    func absoluteDeadlineCancelsInFlightRequest() async throws {
+        let requestEntered = SignalingAsyncLatch()
+        let cancellations = SignalingCancellationRecorder()
+        let clock = SignalingTestClock(
+            Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let transport = SignalingRecordingTransport { _, _ in
+            await requestEntered.signal()
+            do {
+                try await Task.sleep(for: .seconds(60))
+                return signalingResponse(statusCode: 204)
+            } catch is CancellationError {
+                await cancellations.record()
+                throw CancellationError()
+            }
+        }
+        let deadlineDurations = SignalingDelayRecorder()
+        let api = XboxCloudSignalingAPI(
+            transport: transport,
+            negotiationTimeout: 30,
+            now: { clock.now() },
+            deadlineSleep: { duration in
+                await deadlineDurations.record(duration)
+                await requestEntered.wait()
+                clock.advance(by: duration)
+            }
+        )
+
+        await #expect(throws: XboxCloudSignalingError.pollingTimedOut) {
+            _ = try await api.exchangeSDP(
+                offer: "fixture-offer",
+                context: makeContext()
+            )
+        }
+
+        #expect(await deadlineDurations.values() == [30])
+        #expect(await cancellations.count() == 1)
+        let requests = await transport.requests()
+        #expect(requests.count == 1)
+        #expect(requests.first?.timeoutInterval == 30)
+    }
+
+    @Test("SDP and ICE share one deadline and clamp every request timeout")
+    func sharesDeadlineAndClampsRequestTimeouts() async throws {
+        let clock = SignalingTestClock(
+            Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let transport = SignalingRecordingTransport { _, index in
+            switch index {
+            case 0:
+                clock.advance(by: 12)
+                return signalingResponse(statusCode: 204)
+            case 1:
+                let answer = #"{"status":"success","sdpType":"answer","sdp":"fixture-answer","input":10}"#
+                return signalingResponse(
+                    json: #"{"exchangeResponse":\#(answer)}"#
+                )
+            case 2:
+                clock.advance(by: 3)
+                return signalingResponse(statusCode: 204)
+            default:
+                return signalingResponse(
+                    json: #"{"exchangeResponse":"[]"}"#
+                )
+            }
+        }
+        let api = XboxCloudSignalingAPI(
+            transport: transport,
+            negotiationTimeout: 30,
+            now: { clock.now() },
+            deadlineSleep: { _ in
+                try await Task.sleep(for: .seconds(60))
+            }
+        )
+        let context = try makeContext()
+
+        _ = try await api.exchangeSDP(
+            offer: "fixture-offer",
+            context: context
+        )
+        clock.advance(by: 10)
+        _ = try await api.exchangeICE(
+            candidates: [XboxCloudICECandidate(candidate: "candidate")],
+            context: context
+        )
+
+        let timeouts = await transport.requests().map(\.timeoutInterval)
+        #expect(timeouts == [30, 18, 8, 5])
+    }
+
     @Test("Descriptions and failures never expose the GS token")
     func redactsCredentials() throws {
         let context = try makeContext()
@@ -382,12 +581,8 @@ private actor SignalingRecordingTransport: HTTPTransport {
     private let handler: Handler
     private var recordedRequests: [URLRequest] = []
 
-    init(
-        handler: @escaping @Sendable (URLRequest, Int) throws -> (Data, URLResponse)
-    ) {
-        self.handler = { request, index in
-            try handler(request, index)
-        }
+    init(handler: @escaping Handler) {
+        self.handler = handler
     }
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
@@ -398,6 +593,56 @@ private actor SignalingRecordingTransport: HTTPTransport {
 
     func requests() -> [URLRequest] {
         recordedRequests
+    }
+}
+
+private actor SignalingAsyncLatch {
+    private var isSignaled = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isSignaled else { return }
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func signal() {
+        guard !isSignaled else { return }
+        isSignaled = true
+        let waiting = continuations
+        continuations.removeAll(keepingCapacity: false)
+        waiting.forEach { $0.resume() }
+    }
+}
+
+private actor SignalingCancellationRecorder {
+    private var recordedCount = 0
+
+    func record() {
+        recordedCount += 1
+    }
+
+    func count() -> Int {
+        recordedCount
+    }
+}
+
+private final class SignalingTestClock: Sendable {
+    private let value: Mutex<Date>
+
+    init(_ date: Date) {
+        value = Mutex(date)
+    }
+
+    func now() -> Date {
+        value.withLock { $0 }
+    }
+
+    func advance(by interval: TimeInterval) {
+        value.withLock { date in
+            date = date.addingTimeInterval(interval)
+        }
     }
 }
 

@@ -5,6 +5,109 @@ import Testing
 @Suite("Xbox Cloud native WebRTC transport")
 @MainActor
 struct XboxCloudWebRTCTransportTests {
+    @Test("Media readiness requires audio and video and recovers from stalls")
+    func mediaReadinessTracksReceiversAndProgress() {
+        var monitor = XboxCloudMediaReadinessMonitor()
+        monitor.setVideoReceiver(true)
+        #expect(!monitor.hasActiveMedia)
+        monitor.setAudioReceiver(true)
+        #expect(!monitor.hasActiveMedia)
+
+        monitor.record(videoProgress: 0, audioProgress: 0)
+        #expect(!monitor.hasActiveMedia)
+        monitor.record(videoProgress: 1, audioProgress: 1)
+        #expect(monitor.hasActiveMedia)
+        for _ in 0 ..< XboxCloudMediaReadinessMonitor.stallSampleLimit {
+            monitor.record(videoProgress: 1, audioProgress: 1)
+        }
+        #expect(!monitor.hasActiveMedia)
+
+        monitor.record(videoProgress: 2, audioProgress: 2)
+        #expect(monitor.hasActiveMedia)
+
+        for _ in 0 ..< XboxCloudMediaReadinessMonitor.stallSampleLimit {
+            monitor.record(videoProgress: nil, audioProgress: nil)
+        }
+        #expect(!monitor.hasActiveMedia)
+        monitor.record(videoProgress: 3, audioProgress: 3)
+        #expect(monitor.hasActiveMedia)
+
+        monitor.setAudioReceiver(false)
+        #expect(!monitor.hasActiveMedia)
+    }
+
+    @Test("Delegate callbacks drain on the main actor in arrival order")
+    func delegateEventsAreSerialized() async {
+        let queue = XboxCloudDelegateEventQueue()
+        var values: [Int] = []
+
+        await withCheckedContinuation { continuation in
+            queue.enqueue { values.append(1) }
+            queue.enqueue { values.append(2) }
+            queue.enqueue {
+                values.append(3)
+                continuation.resume()
+            }
+        }
+
+        #expect(values == [1, 2, 3])
+    }
+
+    @Test("Delegate callbacks coalesce and drop optional overflow deterministically")
+    func delegateEventsApplyBackpressure() {
+        let queue = XboxCloudDelegateEventQueue(
+            maximumPendingEvents: 3,
+            automaticallyDrains: false
+        )
+        var values: [Int] = []
+
+        #expect(queue.enqueue(policy: .optional) { values.append(1) } == .enqueued)
+        #expect(
+            queue.enqueue(policy: .coalescing(.peerConnectionState)) {
+                values.append(2)
+            } == .enqueued
+        )
+        #expect(
+            queue.enqueue(policy: .coalescing(.peerConnectionState)) {
+                values.append(3)
+            } == .coalesced
+        )
+        #expect(queue.enqueue { values.append(4) } == .enqueued)
+        #expect(queue.enqueue(policy: .optional) { values.append(5) } == .dropped)
+        #expect(queue.pendingEventCount == 3)
+        #expect(queue.droppedEventCount == 1)
+
+        queue.drainForTesting()
+
+        #expect(values == [1, 3, 4])
+        #expect(queue.pendingEventCount == 0)
+    }
+
+    @Test("Required callback saturation becomes one terminal overflow event")
+    func delegateRequiredOverflowFailsClosed() {
+        let queue = XboxCloudDelegateEventQueue(
+            maximumPendingEvents: 2,
+            automaticallyDrains: false
+        )
+        var values: [Int] = []
+
+        #expect(queue.enqueue { values.append(1) } == .enqueued)
+        #expect(queue.enqueue { values.append(2) } == .enqueued)
+        #expect(
+            queue.enqueue(
+                onOverflow: { values.append(99) },
+                { values.append(3) }
+            ) == .overflowed
+        )
+        #expect(queue.enqueue { values.append(4) } == .dropped)
+        #expect(queue.pendingEventCount == 1)
+
+        queue.drainForTesting()
+
+        #expect(values == [99])
+        #expect(queue.pendingEventCount == 0)
+    }
+
     @Test("Microsoft end-of-candidates marker is omitted from native WebRTC")
     func endOfCandidatesMarker() {
         let marker = XboxCloudICECandidate.endOfCandidates
@@ -14,6 +117,129 @@ struct XboxCloudWebRTCTransportTests {
         #expect(
             XboxCloudICECandidate(candidate: "candidate:remote")
                 .rtcCandidateSDP == "candidate:remote"
+        )
+    }
+
+    @Test("Only a Boolean service HEVC override is accepted")
+    func serviceStreamingOverrideDecoding() {
+        let enabled = XboxCloudServiceStreamingOverrides(.object([
+            "futureRootField": .string("ignored"),
+            "videoConfiguration": .object([
+                "enableHevc": .boolean(true),
+                "futureVideoField": .number(1),
+            ]),
+        ]))
+        #expect(enabled.enableHEVC == true)
+
+        let disabled = XboxCloudServiceStreamingOverrides(.object([
+            "videoConfiguration": .object([
+                "enableHevc": .boolean(false),
+            ]),
+        ]))
+        #expect(disabled.enableHEVC == false)
+
+        let invalidValues: [XboxCloudJSONValue?] = [
+            nil,
+            .null,
+            .array([]),
+            .object(["videoConfiguration": .boolean(true)]),
+            .object([
+                "videoConfiguration": .object([
+                    "enableHevc": .string("true"),
+                ]),
+            ]),
+            .object([
+                "videoConfiguration": .object([
+                    "enableHevc": .number(1),
+                ]),
+            ]),
+        ]
+        for invalidValue in invalidValues {
+            #expect(
+                XboxCloudServiceStreamingOverrides(invalidValue).enableHEVC
+                    == nil
+            )
+        }
+    }
+
+    @Test("Service HEVC enablement safely reorders receiver capabilities")
+    func serviceHEVCPreferenceOrder() {
+        let capabilities = [
+            XboxCloudVideoCodecCapability(
+                name: "H264",
+                preferredPayloadType: 96
+            ),
+            XboxCloudVideoCodecCapability(
+                name: "rtx",
+                preferredPayloadType: 97,
+                associatedPayloadType: 96
+            ),
+            XboxCloudVideoCodecCapability(
+                name: "HEVC",
+                preferredPayloadType: 98
+            ),
+            XboxCloudVideoCodecCapability(
+                name: "rtx",
+                preferredPayloadType: 99,
+                associatedPayloadType: 98
+            ),
+            XboxCloudVideoCodecCapability(
+                name: "red",
+                preferredPayloadType: 100
+            ),
+        ]
+
+        #expect(
+            XboxCloudVideoCodecPreferencePolicy.preferredCapabilityIndexes(
+                capabilities,
+                enableHEVC: true
+            ) == [2, 3, 0, 1, 4]
+        )
+        #expect(
+            XboxCloudVideoCodecPreferencePolicy.preferredCapabilityIndexes(
+                capabilities,
+                enableHEVC: false
+            ) == [0, 1, 4]
+        )
+    }
+
+    @Test("Unsupported HEVC preferences retain WebRTC Automatic ordering")
+    func unsupportedServiceHEVCPreference() {
+        let h264Only = [
+            XboxCloudVideoCodecCapability(
+                name: "H264",
+                preferredPayloadType: 96
+            ),
+        ]
+        #expect(
+            XboxCloudVideoCodecPreferencePolicy.preferredCapabilityIndexes(
+                h264Only,
+                enableHEVC: true
+            ) == nil
+        )
+        #expect(
+            XboxCloudVideoCodecPreferencePolicy.preferredCapabilityIndexes(
+                h264Only,
+                enableHEVC: nil
+            ) == nil
+        )
+
+        let hevcOnly = [
+            XboxCloudVideoCodecCapability(
+                name: "H265",
+                preferredPayloadType: 98
+            ),
+            XboxCloudVideoCodecCapability(
+                name: "rtx",
+                preferredPayloadType: 99,
+                associatedPayloadType: 98
+            ),
+        ]
+        #expect(
+            XboxCloudVideoCodecPreferencePolicy.preferredCapabilityIndexes(
+                hevcOnly,
+                enableHEVC: false
+            ) == nil
         )
     }
 
@@ -170,7 +396,7 @@ struct XboxCloudWebRTCTransportTests {
         #expect(mixedVersionMode.metadataVersion == 10)
     }
 
-    @Test("Required channel closure is terminal throughout active setup")
+    @Test("Only negotiated input channel closure is terminal")
     func requiredChannelClosurePolicy() {
         let activeStates: [XboxCloudWebRTCConnectionState] = [
             .preparing,
@@ -179,16 +405,22 @@ struct XboxCloudWebRTCTransportTests {
             .connected,
         ]
         for state in activeStates {
-            #expect(
-                XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
-                    channel: .control,
-                    state: state,
-                    inputMode: .unreliable(
-                        reliableVersion: 10,
-                        unreliableVersion: 10
+            for channel in [
+                XboxCloudDataChannelKind.chat,
+                .control,
+                .message,
+            ] {
+                #expect(
+                    !XboxCloudRequiredChannelClosurePolicy.shouldTerminate(
+                        channel: channel,
+                        state: state,
+                        inputMode: .unreliable(
+                            reliableVersion: 10,
+                            unreliableVersion: 10
+                        )
                     )
                 )
-            )
+            }
         }
 
         #expect(
@@ -239,6 +471,28 @@ struct XboxCloudWebRTCTransportTests {
                 inputMode: .legacy(version: 10)
             )
         )
+    }
+
+    @Test("Unsupported auxiliary channels are removed after SDP validation")
+    func optionalChannelNegotiation() {
+        let unsupported = Self.answer(
+            inputVersion: 10,
+            unreliableInputVersion: nil,
+            reliableInputVersion: nil,
+            chatStream: nil,
+            control: nil,
+            message: nil,
+            chat: nil
+        )
+        #expect(
+            XboxCloudChannelNegotiationPolicy.negotiatedOptionalChannels(
+                from: unsupported
+            ).isEmpty
+        )
+        #expect(!XboxCloudChannelNegotiationPolicy.isRequiredForOffer(.chat))
+        #expect(!XboxCloudChannelNegotiationPolicy.isRequiredForOffer(.control))
+        #expect(!XboxCloudChannelNegotiationPolicy.isRequiredForOffer(.message))
+        #expect(XboxCloudChannelNegotiationPolicy.isRequiredForOffer(.input))
     }
 
     @Test("Session STUN hosts are normalized without accepting arbitrary URLs")
@@ -413,6 +667,50 @@ struct XboxCloudWebRTCTransportTests {
         )
     }
 
+    @Test("RTC event logging is explicit, build-gated, and transport-owned")
+    func rtcEventLogLifecycle() async throws {
+        let signaling = XboxWebRTCBlockingSignalingStub()
+        let eventLog = XboxRTCEventLogProbe()
+        let transport = XboxCloudWebRTCTransport(
+            signaling: signaling,
+            rtcEventLog: eventLog
+        )
+        let signalingContext = try makeSignalingContext()
+        let connectTask = Task { @MainActor in
+            try await transport.connect(
+                configuration: Self.sessionConfiguration,
+                signalingContext: signalingContext,
+                rtcEventLogRequested: true
+            )
+        }
+
+        await signaling.waitUntilSDPStarts()
+        #if DEBUG
+            #expect(eventLog.startCount == 1)
+            #expect(eventLog.activeURL != nil)
+            #expect(eventLog.events == [.peerPrepared])
+        #else
+            #expect(eventLog.startCount == 0)
+            #expect(eventLog.activeURL == nil)
+            #expect(eventLog.events.isEmpty)
+        #endif
+
+        transport.terminateActivePeer(reason: "fixture peer failure")
+        await signaling.releaseSDP()
+        await #expect(throws: XboxCloudWebRTCTransportError.self) {
+            try await connectTask.value
+        }
+
+        #expect(eventLog.activeURL == nil)
+        #if DEBUG
+            #expect(eventLog.stopCount == 1)
+            #expect(eventLog.events == [.peerPrepared, .connectionFailed])
+        #else
+            #expect(eventLog.stopCount == 0)
+            #expect(eventLog.events.isEmpty)
+        #endif
+    }
+
     @Test("Transient disconnect recovers before its grace period expires")
     func transientDisconnectRecovers() async {
         let transport = XboxCloudWebRTCTransport(
@@ -567,19 +865,23 @@ struct XboxCloudWebRTCTransportTests {
     fileprivate nonisolated static func answer(
         inputVersion: Int? = 10,
         unreliableInputVersion: Int? = 10,
-        reliableInputVersion: Int? = 10
+        reliableInputVersion: Int? = 10,
+        chatStream: Int? = 1,
+        control: Int? = 3,
+        message: Int? = 1,
+        chat: Int? = 1
     ) -> XboxCloudSDPAnswer {
         XboxCloudSDPAnswer(
             status: "success",
             sdpType: "answer",
             sdp: "fixture-answer",
-            chatStream: 1,
-            control: 3,
+            chatStream: chatStream,
+            control: control,
             input: inputVersion,
             unreliableinput: unreliableInputVersion,
             reliableinput: reliableInputVersion,
-            message: 1,
-            chat: 1
+            message: message,
+            chat: chat
         )
     }
 }
@@ -635,6 +937,33 @@ private actor XboxWebRTCEventRecorder {
 
     func values() -> [String] {
         events
+    }
+}
+
+@MainActor
+private final class XboxRTCEventLogProbe: XboxCloudRTCEventLogging {
+    private(set) var activeURL: URL?
+    private(set) var events: [XboxCloudRTCEvent] = []
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+
+    @discardableResult
+    func start() -> URL? {
+        startCount += 1
+        let url = URL(fileURLWithPath: "/fixture/xbox-rtc.jsonl")
+        activeURL = url
+        return url
+    }
+
+    func record(_ event: XboxCloudRTCEvent) {
+        guard activeURL != nil else { return }
+        events.append(event)
+    }
+
+    func stop() {
+        guard activeURL != nil else { return }
+        stopCount += 1
+        activeURL = nil
     }
 }
 

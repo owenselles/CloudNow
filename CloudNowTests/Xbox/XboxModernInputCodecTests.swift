@@ -115,10 +115,41 @@ struct XboxModernInputCodecTests {
         }
     }
 
-    @Test("Tracker preserves protocol button-counter order and slot zero")
+    @Test("Bundled controller capacity bounds modern reports")
+    func enforcesControllerCapacity() throws {
+        let accepted = XboxModernInputFrame(
+            frameID: 1,
+            gamepads: (0 ..< 4).map {
+                XboxModernGamepadReport(index: UInt8($0))
+            }
+        )
+        let data = try XboxModernInputEncoder.encode(
+            accepted,
+            version: 10,
+            inputToken: 1,
+            timestampMilliseconds: 0
+        )
+
+        #expect(data[18] == 4)
+        #expect(throws: XboxModernInputCodecError.tooManyGamepads) {
+            _ = try XboxModernInputEncoder.encode(
+                XboxModernInputFrame(
+                    frameID: 2,
+                    gamepads: (0 ... 4).map {
+                        XboxModernGamepadReport(index: UInt8($0))
+                    }
+                ),
+                version: 10,
+                inputToken: 2,
+                timestampMilliseconds: 0
+            )
+        }
+    }
+
+    @Test("Tracker preserves protocol button-counter order and stable slot")
     func tracksButtonTransitions() throws {
         var tracker = XboxModernInputStateTracker()
-        let initial = tracker.attach()
+        let initial = tracker.attach(index: 3)
         #expect(initial.frameID == 1)
         #expect(initial.gamepad.transitionCounters == .init())
 
@@ -189,7 +220,7 @@ struct XboxModernInputCodecTests {
             inputToken: 1,
             timestampMilliseconds: 0
         )
-        #expect(encoded[19] == 0)
+        #expect(encoded[19] == 3)
     }
 
     @Test("Tracker retransmits the newest frame until acknowledged")
@@ -239,8 +270,8 @@ struct XboxModernInputCodecTests {
         #expect(cadence.canAttempt(frameID: 2, at: 0))
     }
 
-    @Test("Virtual keepalive creates a reversible axis delta")
-    func virtualKeepAlive() throws {
+    @Test("Retransmission never manufactures controller motion")
+    func retransmissionDoesNotMutateInput() throws {
         var tracker = XboxModernInputStateTracker()
         _ = tracker.attach()
         let physicalState = XboxGamepadState(
@@ -251,17 +282,12 @@ struct XboxModernInputCodecTests {
         )
         _ = tracker.record(physicalState)
 
-        let keepAliveValue = tracker.recordVirtualKeepAlive()
-        let keepAlive = try #require(keepAliveValue)
-        #expect(keepAlive.gamepad.leftThumbX == 3277)
-        #expect(keepAlive.gamepad.transitionCounters.a == 1)
-        #expect(keepAlive.gamepad.virtualPhysicality.isEmpty)
-
-        let restoredValue = tracker.record(physicalState)
-        let restored = try #require(restoredValue)
-        #expect(restored.gamepad.leftThumbX == 0)
-        #expect(restored.gamepad.transitionCounters.a == 1)
-        #expect(restored.gamepad.virtualPhysicality.isEmpty)
+        let before = try #require(tracker.frameForTransmission())
+        let retransmission = try #require(tracker.frameForTransmission())
+        #expect(retransmission == before)
+        #expect(retransmission.gamepad.leftThumbX == 0)
+        #expect(retransmission.gamepad.transitionCounters.a == 1)
+        #expect(tracker.record(physicalState) == nil)
     }
 
     @Test("Tracker retains no more than 120 acknowledgement snapshots")
@@ -301,19 +327,83 @@ struct XboxModernInputCodecTests {
         _ = tracker.attach()
         _ = tracker.record(XboxGamepadState(index: 0, buttons: [.a]))
 
-        tracker.detach()
+        let detached = tracker.detach()
         #expect(!tracker.isAttached)
-        #expect(tracker.pendingSnapshotCount == 0)
+        #expect(detached?.gamepads.isEmpty == true)
+        #expect(tracker.pendingSnapshotCount == 3)
         #expect(tracker.record(XboxGamepadState(index: 0)) == nil)
 
         let reattached = tracker.attach()
-        #expect(reattached.frameID == 3)
+        #expect(reattached.frameID == 4)
         #expect(reattached.gamepad.transitionCounters == .init())
 
         tracker.reset()
         #expect(!tracker.isAttached)
         #expect(tracker.pendingSnapshotCount == 0)
         #expect(tracker.attach().frameID == 1)
+    }
+
+    @Test("Four controller slots retain indexes and independent transitions")
+    func tracksFourStableControllerSlots() throws {
+        var tracker = XboxModernInputStateTracker()
+        for index in UInt8(0) ... UInt8(3) {
+            _ = tracker.attach(index: index)
+        }
+
+        let value = tracker.record([
+            XboxGamepadState(index: 0, buttons: [.a]),
+            XboxGamepadState(index: 1, buttons: [.b]),
+            XboxGamepadState(index: 2, buttons: [.menu]),
+            XboxGamepadState(index: 3, isSharePressed: true),
+        ])
+        let frame = try #require(value)
+
+        #expect(frame.gamepads.map(\.index) == [0, 1, 2, 3])
+        #expect(frame.gamepads[0].transitionCounters.a == 1)
+        #expect(frame.gamepads[1].transitionCounters.b == 1)
+        #expect(frame.gamepads[2].transitionCounters.menu == 1)
+        #expect(frame.gamepads[3].transitionCounters.share == 1)
+
+        _ = tracker.detach(index: 1)
+        #expect(tracker.frameForTransmission()?.gamepads.map(\.index) == [0, 2, 3])
+    }
+
+    @Test("Modern peripheral sections encode pointer keyboard and mouse")
+    func encodesPeripheralSections() throws {
+        let frame = XboxModernInputFrame(
+            frameID: 1,
+            gamepads: [],
+            peripherals: XboxPeripheralInputReport(
+                pointerFrames: [XboxPointerFrame(events: [XboxPointerEvent(
+                    x: 10,
+                    y: 20,
+                    phase: .moved
+                )])],
+                keyboard: [XboxKeyboardReport(
+                    isPressed: true,
+                    keyCode: 0x41
+                )],
+                mouse: [XboxMouseReport(
+                    x: 2,
+                    y: -3,
+                    buttons: [.left]
+                )]
+            )
+        )
+
+        let data = try XboxModernInputEncoder.encode(
+            frame,
+            version: 10,
+            inputToken: 1,
+            timestampMilliseconds: 0
+        )
+
+        #expect(data[18] == 0)
+        #expect(data[19] == 1)
+        #expect(data[41] == 1)
+        #expect(data[42] == XboxKeyboardKeyType.virtualKey.rawValue)
+        #expect(data[45] == 1)
+        #expect(data.count == 66)
     }
 }
 

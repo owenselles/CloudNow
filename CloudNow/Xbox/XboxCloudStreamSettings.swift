@@ -107,10 +107,39 @@ nonisolated enum XboxCloudVideoCodecPreference: String, Codable, Sendable {
     case h265 = "H265"
 }
 
-/// Account-visible Xbox quality aliases. These are preferences rather than
-/// promises: Microsoft can still adapt the negotiated stream for the title,
-/// region, device, and live network condition. Higher-quality aliases are
-/// shown only when CloudNow has confirmed the account's Ultimate membership.
+nonisolated struct XboxCloudDiagnosticsConfiguration: Equatable, Sendable {
+    let isEnabled: Bool
+    let isRTCEventLogEnabled: Bool
+}
+
+/// Keeps developer-only diagnostics fail-closed across Debug/Release settings
+/// persistence. The explicit availability parameter makes both build branches
+/// deterministic in unit tests without relying on compiler configuration.
+nonisolated enum XboxCloudDiagnosticsPolicy {
+    static var currentBuildAllowsDiagnostics: Bool {
+        #if DEBUG
+            true
+        #else
+            false
+        #endif
+    }
+
+    static func resolve(
+        diagnosticsEnabled: Bool,
+        rtcEventLogEnabled: Bool,
+        allowsDiagnostics: Bool
+    ) -> XboxCloudDiagnosticsConfiguration {
+        let isEnabled = allowsDiagnostics && diagnosticsEnabled
+        return XboxCloudDiagnosticsConfiguration(
+            isEnabled: isEnabled,
+            isRTCEventLogEnabled: isEnabled && rtcEventLogEnabled
+        )
+    }
+}
+
+/// Xbox quality aliases retained for backwards-compatible settings decoding
+/// and protocol messages. CloudNow exposes only Automatic until the live
+/// service explicitly confirms manual choices for this account and route.
 nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
     let standardResolutions: [XboxCloudDisplayResolution]
     let higherQualityResolutions: [XboxCloudDisplayResolution]
@@ -120,22 +149,12 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
     }
 
     static func resolved(
-        for membershipTier: XboxMembershipTier?,
-        isMembershipKnown: Bool
+        for _: XboxMembershipTier?,
+        isMembershipKnown _: Bool
     ) -> Self {
-        let hasHigherQuality = isMembershipKnown && membershipTier == .ultimate
-        let higherQualityResolutions: [XboxCloudDisplayResolution] = if hasHigherQuality {
-            [.hdHighQuality, .fullHDHighQuality, .qhd]
-        } else {
-            []
-        }
-        return Self(
-            standardResolutions: [
-                .automatic,
-                .hd,
-                .fullHD,
-            ],
-            higherQualityResolutions: higherQualityResolutions
+        Self(
+            standardResolutions: [.automatic],
+            higherQualityResolutions: []
         )
     }
 
@@ -145,24 +164,20 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
         guard !resolutions.contains(persistedResolution) else {
             return persistedResolution
         }
-        return switch persistedResolution {
-        case .hdHighQuality:
-            resolutions.contains(.hd) ? .hd : .automatic
-        case .fullHDHighQuality, .qhd:
-            resolutions.contains(.fullHD) ? .fullHD : .automatic
-        case .automatic, .hd, .fullHD:
-            .automatic
-        }
+        return .automatic
     }
 
     func normalized(_ settings: XboxCloudStreamSettings) -> XboxCloudStreamSettings {
-        var normalized = settings
+        var normalized = settings.normalizedForClient
         normalized.displayResolution = selectableResolution(
             for: settings.displayResolution
         )
         // Xbox selects the negotiated WebRTC codec. Retain this legacy field
         // only so older persisted settings remain decodable.
         normalized.codecPreference = .automatic
+        // Optional provider telemetry is not part of CloudNow diagnostics.
+        // Retain the legacy field only for backward-compatible decoding.
+        normalized.enableOptionalDataCollection = false
         return normalized
     }
 }
@@ -180,6 +195,8 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
     var codecPreference: XboxCloudVideoCodecPreference = .automatic
     var gameLanguage = Self.automaticGameLanguage
     var statsMode: StreamStatsMode = .off
+    var diagnosticsEnabled = false
+    var enableRtcEventLog = false
 
     var controllerDeadzone: Double = 0.15 {
         didSet {
@@ -206,24 +223,30 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
     var magnifier = false
     var highContrast = false
     var enableOptionalDataCollection = false
+    var microphoneEnabled = false
 
     init(
         displayResolution: XboxCloudDisplayResolution = .automatic,
         codecPreference: XboxCloudVideoCodecPreference = .automatic,
         gameLanguage: String = Self.automaticGameLanguage,
         statsMode: StreamStatsMode = .off,
+        diagnosticsEnabled: Bool = false,
+        enableRtcEventLog: Bool = false,
         controllerDeadzone: Double = 0.15,
         rumbleEnabled: Bool = true,
         rumbleIntensity: Double = 1,
         enableTextToSpeech: Bool = false,
         magnifier: Bool = false,
         highContrast: Bool = false,
-        enableOptionalDataCollection: Bool = false
+        enableOptionalDataCollection: Bool = false,
+        microphoneEnabled: Bool = false
     ) {
         self.displayResolution = displayResolution
         self.codecPreference = codecPreference
         self.gameLanguage = gameLanguage
         self.statsMode = statsMode
+        self.diagnosticsEnabled = diagnosticsEnabled
+        self.enableRtcEventLog = enableRtcEventLog
         self.controllerDeadzone = Self.bounded(
             controllerDeadzone,
             default: 0.15,
@@ -239,6 +262,7 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
         self.magnifier = magnifier
         self.highContrast = highContrast
         self.enableOptionalDataCollection = enableOptionalDataCollection
+        self.microphoneEnabled = microphoneEnabled
     }
 
     func effectiveGameLanguage(defaultLocale: String) -> String {
@@ -246,6 +270,20 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
             ? defaultLocale
             : gameLanguage
         return locale.replacingOccurrences(of: "_", with: "-")
+    }
+
+    var normalizedForClient: Self {
+        var normalized = self
+        let diagnostics = XboxCloudDiagnosticsPolicy.resolve(
+            diagnosticsEnabled: diagnosticsEnabled,
+            rtcEventLogEnabled: enableRtcEventLog,
+            allowsDiagnostics: XboxCloudDiagnosticsPolicy
+                .currentBuildAllowsDiagnostics
+        )
+        normalized.diagnosticsEnabled = diagnostics.isEnabled
+        normalized.enableRtcEventLog = diagnostics.isRTCEventLogEnabled
+        normalized.enableOptionalDataCollection = false
+        return normalized
     }
 
     private static func bounded(
@@ -266,6 +304,8 @@ extension XboxCloudStreamSettings {
         case codecPreference
         case gameLanguage
         case statsMode
+        case diagnosticsEnabled
+        case enableRtcEventLog
         case controllerDeadzone
         case rumbleEnabled
         case rumbleIntensity
@@ -273,6 +313,7 @@ extension XboxCloudStreamSettings {
         case magnifier
         case highContrast
         case enableOptionalDataCollection
+        case microphoneEnabled
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -295,6 +336,14 @@ extension XboxCloudStreamSettings {
                 StreamStatsMode.self,
                 forKey: .statsMode
             )) ?? defaults.statsMode,
+            diagnosticsEnabled: (try? values.decodeIfPresent(
+                Bool.self,
+                forKey: .diagnosticsEnabled
+            )) ?? defaults.diagnosticsEnabled,
+            enableRtcEventLog: (try? values.decodeIfPresent(
+                Bool.self,
+                forKey: .enableRtcEventLog
+            )) ?? defaults.enableRtcEventLog,
             controllerDeadzone: values.decodeIfPresent(
                 Double.self,
                 forKey: .controllerDeadzone
@@ -322,7 +371,11 @@ extension XboxCloudStreamSettings {
             enableOptionalDataCollection: values.decodeIfPresent(
                 Bool.self,
                 forKey: .enableOptionalDataCollection
-            ) ?? defaults.enableOptionalDataCollection
+            ) ?? defaults.enableOptionalDataCollection,
+            microphoneEnabled: (try? values.decodeIfPresent(
+                Bool.self,
+                forKey: .microphoneEnabled
+            )) ?? defaults.microphoneEnabled
         )
     }
 
@@ -332,6 +385,8 @@ extension XboxCloudStreamSettings {
         try values.encode(codecPreference, forKey: .codecPreference)
         try values.encode(gameLanguage, forKey: .gameLanguage)
         try values.encode(statsMode, forKey: .statsMode)
+        try values.encode(diagnosticsEnabled, forKey: .diagnosticsEnabled)
+        try values.encode(enableRtcEventLog, forKey: .enableRtcEventLog)
         try values.encode(controllerDeadzone, forKey: .controllerDeadzone)
         try values.encode(rumbleEnabled, forKey: .rumbleEnabled)
         try values.encode(rumbleIntensity, forKey: .rumbleIntensity)
@@ -342,5 +397,6 @@ extension XboxCloudStreamSettings {
             enableOptionalDataCollection,
             forKey: .enableOptionalDataCollection
         )
+        try values.encode(microphoneEnabled, forKey: .microphoneEnabled)
     }
 }

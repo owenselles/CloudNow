@@ -107,6 +107,11 @@ nonisolated struct XboxCloudSDPConfiguration: Codable, Equatable, Sendable {
     struct VersionRange: Codable, Equatable, Sendable {
         let minVersion: Int
         let maxVersion: Int
+
+        func contains(_ version: Int) -> Bool {
+            minVersion <= maxVersion
+                && (minVersion ... maxVersion).contains(version)
+        }
     }
 
     struct ChatFormat: Codable, Equatable, Sendable {
@@ -121,7 +126,7 @@ nonisolated struct XboxCloudSDPConfiguration: Codable, Equatable, Sendable {
         let sampleFrequencyHz: Int
     }
 
-    static let webInput = XboxCloudSDPConfiguration(
+    static let microsoftWebInputV1 = XboxCloudSDPConfiguration(
         chatStream: VersionRange(minVersion: 1, maxVersion: 1),
         control: VersionRange(minVersion: 1, maxVersion: 3),
         input: VersionRange(minVersion: 1, maxVersion: 10),
@@ -138,6 +143,10 @@ nonisolated struct XboxCloudSDPConfiguration: Codable, Equatable, Sendable {
         chat: VersionRange(minVersion: 1, maxVersion: 1)
     )
 
+    static var webInput: Self {
+        XboxCloudCompatibilityProfile.bundledV1.signalingConfiguration
+    }
+
     let chatStream: VersionRange
     let control: VersionRange
     let input: VersionRange
@@ -153,12 +162,12 @@ nonisolated struct XboxCloudSDPAnswer: Codable, Equatable, Sendable {
     let status: String
     let sdpType: String
     let sdp: String
-    let chatStream: Int
-    let control: Int
+    let chatStream: Int?
+    let control: Int?
     let input: Int?
     let unreliableinput: Int?
     let reliableinput: Int?
-    let message: Int
+    let message: Int?
     let chat: Int?
 
     var isAccepted: Bool {
@@ -293,13 +302,19 @@ actor XboxCloudSignalingAPI {
     private static let maximumResponseBytes = 2 * 1024 * 1024
     private static let maximumCandidates = 64
     private static let maximumCandidateBytes = 16384
+    private static let maximumRequestTimeout: TimeInterval = 30
+    private static let standardNegotiationTimeout: TimeInterval = 30
 
     private let transport: any HTTPTransport
     private let sleep: @Sendable (TimeInterval) async throws -> Void
+    private let deadlineSleep: @Sendable (TimeInterval) async throws -> Void
+    private let now: @Sendable () -> Date
     private let pollingInterval: TimeInterval
     private let maximumPollAttempts: Int
+    private let negotiationTimeout: TimeInterval
     private var requestID = 0
     private var correlationVectorSequence: XboxCloudCorrelationVectorSequence?
+    private var negotiationDeadlines: [String: Date] = [:]
 
     init(
         transport: any HTTPTransport = URLSessionHTTPTransport(
@@ -307,7 +322,14 @@ actor XboxCloudSignalingAPI {
         ),
         pollingInterval: TimeInterval = 0.1,
         maximumPollAttempts: Int = 300,
+        negotiationTimeout: TimeInterval = standardNegotiationTimeout,
+        now: @escaping @Sendable () -> Date = Date.init,
         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
+            try await Task.sleep(
+                nanoseconds: UInt64(max(0, $0) * 1_000_000_000)
+            )
+        },
+        deadlineSleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
             try await Task.sleep(
                 nanoseconds: UInt64(max(0, $0) * 1_000_000_000)
             )
@@ -316,13 +338,38 @@ actor XboxCloudSignalingAPI {
         self.transport = transport
         self.pollingInterval = max(0.05, min(pollingInterval, 2))
         self.maximumPollAttempts = max(1, min(maximumPollAttempts, 1200))
+        self.negotiationTimeout = max(1, min(negotiationTimeout, 60))
+        self.now = now
         self.sleep = sleep
+        self.deadlineSleep = deadlineSleep
     }
 
     func exchangeSDP(
         offer: String,
         context: XboxCloudSignalingContext,
         configuration: XboxCloudSDPConfiguration = .webInput
+    ) async throws -> XboxCloudSDPAnswer {
+        let deadline = beginNegotiation(for: context)
+        do {
+            return try await valueBeforeDeadline(deadline) { [self] in
+                try await performSDPExchange(
+                    offer: offer,
+                    context: context,
+                    configuration: configuration,
+                    deadline: deadline
+                )
+            }
+        } catch {
+            clearNegotiationDeadline(for: context, matching: deadline)
+            throw error
+        }
+    }
+
+    private func performSDPExchange(
+        offer: String,
+        context: XboxCloudSignalingContext,
+        configuration: XboxCloudSDPConfiguration,
+        deadline: Date
     ) async throws -> XboxCloudSDPAnswer {
         guard !offer.isEmpty,
               offer.utf8.count <= Self.maximumResponseBytes
@@ -343,23 +390,26 @@ actor XboxCloudSignalingAPI {
             operation: "sdp",
             body: body,
             context: context,
-            correlationVector: requestCorrelationVector
+            correlationVector: requestCorrelationVector,
+            deadline: deadline
         )
         let responseData = try await pollExchange(
             operation: "sdp",
-            context: context
+            context: context,
+            deadline: deadline
         )
         let answerFields = Self.diagnosticSDPAnswerFieldSummary(from: responseData)
         xboxSignalingLog.info(
             "Xbox signaling sdp answer fields=\(answerFields, privacy: .public)"
         )
-        let answer: XboxCloudSDPAnswer = try decode(
+        let decodedAnswer: XboxCloudSDPAnswer = try decode(
             XboxCloudSDPAnswer.self,
             from: responseData
         )
-        guard answer.isAccepted else {
-            throw XboxCloudSignalingError.rejected(status: answer.status)
+        guard decodedAnswer.isAccepted else {
+            throw XboxCloudSignalingError.rejected(status: decodedAnswer.status)
         }
+        let answer = try decodedAnswer.validated(for: configuration)
         let hasModernInput = answer.unreliableinput != nil
             && answer.reliableinput != nil
         let selectedInputVersion = hasModernInput
@@ -374,6 +424,24 @@ actor XboxCloudSignalingAPI {
     func exchangeICE(
         candidates: [XboxCloudICECandidate],
         context: XboxCloudSignalingContext
+    ) async throws -> [XboxCloudICECandidate] {
+        let deadline = deadlineForICEExchange(for: context)
+        defer {
+            clearNegotiationDeadline(for: context, matching: deadline)
+        }
+        return try await valueBeforeDeadline(deadline) { [self] in
+            try await performICEExchange(
+                candidates: candidates,
+                context: context,
+                deadline: deadline
+            )
+        }
+    }
+
+    private func performICEExchange(
+        candidates: [XboxCloudICECandidate],
+        context: XboxCloudSignalingContext,
+        deadline: Date
     ) async throws -> [XboxCloudICECandidate] {
         guard !candidates.isEmpty,
               candidates.count <= Self.maximumCandidates
@@ -398,11 +466,13 @@ actor XboxCloudSignalingAPI {
             operation: "ice",
             body: body,
             context: context,
-            correlationVector: correlationVector
+            correlationVector: correlationVector,
+            deadline: deadline
         )
         let responseData = try await pollExchange(
             operation: "ice",
-            context: context
+            context: context,
+            deadline: deadline
         )
         return try decodeICECandidates(from: responseData)
     }
@@ -411,17 +481,20 @@ actor XboxCloudSignalingAPI {
         operation: String,
         body: Data,
         context: XboxCloudSignalingContext,
-        correlationVector: String
+        correlationVector: String,
+        deadline: Date
     ) async throws {
         let endpoint = try context.endpoint(operation: operation)
-        var request = authorizedRequest(
+        var request = try authorizedRequest(
             endpoint: endpoint,
             context: context,
-            correlationVector: correlationVector
+            correlationVector: correlationVector,
+            deadline: deadline
         )
         request.httpMethod = "POST"
         request.httpBody = body
-        let (data, response) = try await perform(request)
+        let (data, response) = try await perform(request, deadline: deadline)
+        try ensureBeforeDeadline(deadline)
         let statusCode = try statusCode(from: response)
         guard data.count <= Self.maximumResponseBytes else {
             throw XboxCloudSignalingError.payloadTooLarge
@@ -477,19 +550,26 @@ actor XboxCloudSignalingAPI {
 
     private func pollExchange(
         operation: String,
-        context: XboxCloudSignalingContext
+        context: XboxCloudSignalingContext,
+        deadline: Date
     ) async throws -> Data {
         let endpoint = try context.endpoint(operation: operation)
         for attempt in 0 ..< maximumPollAttempts {
             try Task.checkCancellation()
+            try ensureBeforeDeadline(deadline)
             let correlationVector = try nextCorrelationVector(for: context)
-            var request = authorizedRequest(
+            var request = try authorizedRequest(
                 endpoint: endpoint,
                 context: context,
-                correlationVector: correlationVector
+                correlationVector: correlationVector,
+                deadline: deadline
             )
             request.httpMethod = "GET"
-            let (data, response) = try await perform(request)
+            let (data, response) = try await perform(
+                request,
+                deadline: deadline
+            )
+            try ensureBeforeDeadline(deadline)
             let statusCode = try statusCode(from: response)
             guard (200 ..< 300).contains(statusCode) else {
                 throw XboxCloudSignalingError.httpFailure(statusCode: statusCode)
@@ -525,7 +605,8 @@ actor XboxCloudSignalingAPI {
                 return responseData
             }
             guard attempt + 1 < maximumPollAttempts else { break }
-            try await sleep(pollingInterval)
+            let remaining = try remainingTime(until: deadline)
+            try await sleep(min(pollingInterval, remaining))
         }
         throw XboxCloudSignalingError.pollingTimedOut
     }
@@ -533,8 +614,9 @@ actor XboxCloudSignalingAPI {
     private func authorizedRequest(
         endpoint: URL,
         context: XboxCloudSignalingContext,
-        correlationVector: String
-    ) -> URLRequest {
+        correlationVector: String,
+        deadline: Date
+    ) throws -> URLRequest {
         var request = URLRequest(url: endpoint)
         request.setValue(
             "application/json; charset=utf-8",
@@ -553,7 +635,10 @@ actor XboxCloudSignalingAPI {
             context.routingHeader,
             forHTTPHeaderField: "X-GSSV-Routing"
         )
-        request.timeoutInterval = 30
+        request.timeoutInterval = try min(
+            Self.maximumRequestTimeout,
+            remainingTime(until: deadline)
+        )
         return request
     }
 
@@ -574,21 +659,104 @@ actor XboxCloudSignalingAPI {
     }
 
     private func perform(
-        _ request: URLRequest
+        _ request: URLRequest,
+        deadline: Date
     ) async throws -> (Data, URLResponse) {
         do {
-            return try await transport.data(for: request)
+            return try await transport.data(
+                for: request,
+                maximumResponseSize: Self.maximumResponseBytes
+            )
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxCloudSignalingError.payloadTooLarge
         } catch let error as XboxCloudSignalingError {
             throw error
         } catch {
+            if now() >= deadline {
+                throw XboxCloudSignalingError.pollingTimedOut
+            }
             let metadata = error as NSError
             xboxSignalingLog.error(
                 "Xbox signaling transport failed operation=\(request.url?.lastPathComponent ?? "unknown", privacy: .public) domain=\(metadata.domain, privacy: .public) code=\(metadata.code, privacy: .public)"
             )
             throw XboxCloudSignalingError.transportFailure
         }
+    }
+
+    private func valueBeforeDeadline<Value: Sendable>(
+        _ deadline: Date,
+        operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let remaining = try remainingTime(until: deadline)
+        let deadlineSleep = deadlineSleep
+        return try await withThrowingTaskGroup(of: Value.self) { group in
+            group.addTask { @concurrent in
+                try await operation()
+            }
+            group.addTask { @concurrent in
+                do {
+                    try await deadlineSleep(remaining)
+                    try Task.checkCancellation()
+                    throw XboxCloudSignalingError.pollingTimedOut
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as XboxCloudSignalingError {
+                    throw error
+                } catch {
+                    throw XboxCloudSignalingError.pollingTimedOut
+                }
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else {
+                throw XboxCloudSignalingError.pollingTimedOut
+            }
+            return value
+        }
+    }
+
+    private func beginNegotiation(
+        for context: XboxCloudSignalingContext
+    ) -> Date {
+        let currentDate = now()
+        negotiationDeadlines = negotiationDeadlines.filter {
+            $0.value > currentDate
+        }
+        let deadline = currentDate.addingTimeInterval(negotiationTimeout)
+        negotiationDeadlines[context.correlationVector] = deadline
+        return deadline
+    }
+
+    private func deadlineForICEExchange(
+        for context: XboxCloudSignalingContext
+    ) -> Date {
+        if let deadline = negotiationDeadlines[context.correlationVector] {
+            return deadline
+        }
+        return beginNegotiation(for: context)
+    }
+
+    private func clearNegotiationDeadline(
+        for context: XboxCloudSignalingContext,
+        matching deadline: Date
+    ) {
+        guard negotiationDeadlines[context.correlationVector] == deadline else {
+            return
+        }
+        negotiationDeadlines.removeValue(forKey: context.correlationVector)
+    }
+
+    private func remainingTime(until deadline: Date) throws -> TimeInterval {
+        let remaining = deadline.timeIntervalSince(now())
+        guard remaining.isFinite, remaining > 0 else {
+            throw XboxCloudSignalingError.pollingTimedOut
+        }
+        return remaining
+    }
+
+    private func ensureBeforeDeadline(_ deadline: Date) throws {
+        _ = try remainingTime(until: deadline)
     }
 
     private func statusCode(from response: URLResponse) throws -> Int {
