@@ -24,7 +24,10 @@ struct XboxCloudInstallationIdentityStoreTests {
     func invalidIdentityIsReplaced() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        fixture.defaults.set("invalid", forKey: "xbox.sdkInstallID.v1")
+        fixture.defaults.set(
+            "invalid",
+            forKey: XboxCloudInstallationIdentityStore.preferenceKey
+        )
 
         let identifier = XboxCloudInstallationIdentityStore(
             preferences: fixture.preferences

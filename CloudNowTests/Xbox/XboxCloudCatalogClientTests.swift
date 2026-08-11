@@ -323,6 +323,112 @@ struct XboxCloudCatalogClientTests {
         #expect(await transport.requests().count == 2)
     }
 
+    @Test("Standard routes require explicit product eligibility evidence")
+    func standardRoutesFailClosedWithoutEligibilityEvidence() async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "results": [
+                    {
+                      "titleId": "service-confirmed-route",
+                      "details": {
+                        "productId": "SERVICE-CONFIRMED",
+                        "name": "Service Confirmed",
+                        "hasEntitlement": true
+                      }
+                    },
+                    {
+                      "titleId": "denied-route",
+                      "details": {
+                        "productId": "DENIED",
+                        "name": "Denied",
+                        "hasEntitlement": false
+                      }
+                    },
+                    {
+                      "titleId": "unknown-route",
+                      "details": {
+                        "productId": "UNKNOWN",
+                        "name": "Unknown"
+                      }
+                    },
+                    {
+                      "titleId": "exhausted-route",
+                      "details": {
+                        "productId": "EXHAUSTED",
+                        "name": "Exhausted",
+                        "hasEntitlement": true,
+                        "remainingGameplayTimeInSeconds": 0
+                      }
+                    },
+                    {
+                      "titleId": "owned-route",
+                      "details": {
+                        "productId": "OWNED",
+                        "name": "Owned"
+                      }
+                    }
+                  ]
+                }
+                """#)
+            }
+            return StubbedHTTPResponse(
+                json: #"{"Products":{},"InvalidIds":[]}"#
+            )
+        }
+        let contentAccess = XboxContentAccessSnapshot(
+            membershipTier: nil,
+            fetchedAt: fixedDate,
+            productAccessByProductID: [
+                "OWNED": XboxProductCloudAccess(
+                    userAccessTypes: 1,
+                    aggregateAccessTypes: 0,
+                    streamingProgram: nil,
+                    remainingGameplayTimeInSeconds: nil,
+                    maxGameplayTimeInSeconds: nil
+                ),
+            ]
+        )
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            contentAccessProvider: XboxContentAccessProviderStub(
+                snapshot: contentAccess
+            ),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        let snapshot = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        #expect(snapshot.items.map(\.id) == [
+            "SERVICE-CONFIRMED",
+            "DENIED",
+            "UNKNOWN",
+            "EXHAUSTED",
+            "OWNED",
+        ])
+        #expect(snapshot.items.map(\.preferredRoute?.availability) == [
+            .playable,
+            .requiresEligibility,
+            .requiresEligibility,
+            .requiresEligibility,
+            .playable,
+        ])
+        #expect(snapshot.items.map(\.preferredRoute?.playabilityReason) == [
+            .authenticatedCatalog,
+            .entitlementRequired,
+            .eligibilityUnconfirmed,
+            .gameplayTimeExhausted,
+            .contentAccessConfirmed,
+        ])
+        #expect(snapshot.items.last?.isOwned == true)
+        #expect(await transport.requests().count == 2)
+    }
+
     @Test("Rich detail hydration is public, lazy, bounded, and preserves access metadata")
     func hydratesOnePublicRichDetail() async throws {
         let imageValues: [[String: Any]] = [
@@ -850,7 +956,12 @@ struct XboxCloudCatalogClientTests {
         #expect(snapshot.items.map(\.preferredRoute?.availability) == [
             .playable,
             .playable,
-            .playable,
+            .requiresEligibility,
+        ])
+        #expect(snapshot.items.map(\.preferredRoute?.playabilityReason) == [
+            .fresnoServiceConfirmed,
+            .contentAccessConfirmed,
+            .unsupportedStreamingProgram,
         ])
         #expect(snapshot.items.map(\.title) == [
             "Playable Metadata",
@@ -865,6 +976,30 @@ struct XboxCloudCatalogClientTests {
             item.supportsFreeWithAds == true
         })
         #expect(await transport.requests().count == 3)
+    }
+
+    @Test("Content Access receives the authenticated GS offering")
+    func contentAccessUsesAuthenticatedOffering() async throws {
+        let contentAccess = XboxContentAccessOfferingProbe()
+        let transport = RecordingHTTPTransport { request, _ in
+            #expect(request.httpMethod == "GET")
+            return StubbedHTTPResponse(json: #"{"results":[]}"#)
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(
+                session: makeSession(offeringID: "xgpuwebf2p")
+            ),
+            contentAccessProvider: contentAccess,
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        _ = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        #expect(await contentAccess.offeringIDs == ["xgpuwebf2p"])
     }
 
     @Test("Retries rejected Fresno metadata requests in 200-product batches")
@@ -948,7 +1083,12 @@ struct XboxCloudCatalogClientTests {
         )
 
         #expect(snapshot.items.map(\.title) == ["First Batch", "Second Batch"])
-        #expect(snapshot.items.allSatisfy { $0.preferredRoute?.availability == .playable })
+        #expect(snapshot.items.allSatisfy {
+            $0.preferredRoute?.availability == .requiresEligibility
+        })
+        #expect(snapshot.items.allSatisfy {
+            $0.preferredRoute?.playabilityReason == .entitlementRequired
+        })
         #expect(await transport.requests().count == 5)
     }
 
@@ -1292,7 +1432,7 @@ struct XboxCloudCatalogClientTests {
         ])
     }
 
-    @Test("Requires an explicit Boolean true entitlement")
+    @Test("Retains routes but requires an explicit Boolean true entitlement")
     func requiresExplicitEntitlement() async throws {
         let transport = RecordingHTTPTransport { _, _ in
             StubbedHTTPResponse(json: Self.entitlementCatalogJSON)
@@ -1308,10 +1448,25 @@ struct XboxCloudCatalogClientTests {
             account: makeAccount()
         )
 
-        #expect(snapshot.items.map(\.id) == ["ENTITLED"])
+        #expect(snapshot.items.map(\.id) == [
+            "ENTITLED",
+            "FALSE",
+            "MISSING",
+            "NUMERIC",
+            "STRING",
+            "NULL",
+        ])
+        #expect(snapshot.items.map(\.preferredRoute?.playabilityReason) == [
+            .authenticatedCatalog,
+            .entitlementRequired,
+            .eligibilityUnconfirmed,
+            .eligibilityUnconfirmed,
+            .eligibilityUnconfirmed,
+            .eligibilityUnconfirmed,
+        ])
     }
 
-    @Test("Remaining gameplay time permits missing, null, and positive finite numbers")
+    @Test("Remaining gameplay time fails closed without dropping routes")
     func validatesRemainingGameplayTime() async throws {
         let transport = RecordingHTTPTransport { _, _ in
             StubbedHTTPResponse(json: Self.remainingGameplayTimeCatalogJSON)
@@ -1332,6 +1487,22 @@ struct XboxCloudCatalogClientTests {
             "NULL-TIME",
             "POSITIVE-INTEGER",
             "POSITIVE-FRACTION",
+            "ZERO",
+            "NEGATIVE",
+            "BOOLEAN",
+            "STRING",
+            "OBJECT",
+        ])
+        #expect(snapshot.items.map(\.preferredRoute?.playabilityReason) == [
+            .authenticatedCatalog,
+            .authenticatedCatalog,
+            .authenticatedCatalog,
+            .authenticatedCatalog,
+            .gameplayTimeExhausted,
+            .eligibilityUnconfirmed,
+            .eligibilityUnconfirmed,
+            .eligibilityUnconfirmed,
+            .eligibilityUnconfirmed,
         ])
     }
 
@@ -1781,7 +1952,8 @@ struct XboxCloudCatalogClientTests {
     private func makeSession(
         regionBaseURL: URL = URL(
             string: "https://wus.gssv-play-prod.xboxlive.com"
-        )!
+        )!,
+        offeringID: String = "xgpuweb"
     ) -> XboxCloudGSSession {
         let region = XboxCloudGSRegion(
             name: "West US",
@@ -1792,7 +1964,7 @@ struct XboxCloudCatalogClientTests {
         )
         return XboxCloudGSSession(
             gsToken: "fixture-gs-secret",
-            offeringID: "xgpuweb",
+            offeringID: offeringID,
             market: "US",
             regions: [region],
             defaultRegion: region,
@@ -1994,6 +2166,22 @@ private nonisolated struct XboxContentAccessProviderStub: XboxContentAccessProvi
         offeringID _: String
     ) async throws -> XboxContentAccessSnapshot {
         snapshot
+    }
+}
+
+private actor XboxContentAccessOfferingProbe: XboxContentAccessProviding {
+    private(set) var offeringIDs: [String] = []
+
+    func fetchContentAccess(
+        for _: XboxCloudAuthorizedAccount,
+        market _: String,
+        offeringID: String
+    ) -> XboxContentAccessSnapshot {
+        offeringIDs.append(offeringID)
+        return XboxContentAccessSnapshot(
+            membershipTier: nil,
+            fetchedAt: .distantPast
+        )
     }
 }
 

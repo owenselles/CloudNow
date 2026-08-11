@@ -1,34 +1,359 @@
 import Foundation
 
+/// Versioned first-party wire compatibility values shipped with CloudNow.
+/// Keeping these values in one immutable profile makes service updates explicit
+/// and prevents one Xbox adapter from silently drifting from the others.
+nonisolated struct XboxCloudCompatibilityProfile: Equatable, Sendable {
+    static let bundledV1: Self = {
+        guard let profile = try? validatedBundledV1() else {
+            preconditionFailure("CloudNow's bundled Xbox compatibility profile is invalid.")
+        }
+        return profile
+    }()
+
+    static func validatedBundledV1() throws -> Self {
+        guard let offeringServiceBaseURL = URL(
+            string: "https://gssv-play-prod.xboxlive.com"
+        ),
+            let gamePassCatalogProductsURL = URL(
+                string: "https://catalog.gamepass.com/v3/products"
+            ),
+            let fresnoCatalogURL = URL(
+                string: "https://catalog.gamepass.com/sigls/v3"
+            ),
+            let displayCatalogProductsURL = URL(
+                string: "https://displaycatalog.mp.microsoft.com/v7.0/products"
+            ),
+            let userAuthenticationEndpoint = URL(
+                string: "https://user.auth.xboxlive.com/user/authenticate"
+            ),
+            let xstsAuthorizationEndpoint = URL(
+                string: "https://xsts.auth.xboxlive.com/xsts/authorize"
+            )
+        else {
+            throw XboxCloudCompatibilityProfileError.invalidProfile
+        }
+        return try Self(
+            version: 1,
+            offeringServiceBaseURL: offeringServiceBaseURL,
+            gamePassCatalogProductsURL: gamePassCatalogProductsURL,
+            fresnoCatalogURL: fresnoCatalogURL,
+            displayCatalogProductsURL: displayCatalogProductsURL,
+            defaultNetworkTestTargetURL: offeringServiceBaseURL,
+            contentAccessServiceHost: "contentaccess.exp.xboxservices.com",
+            userAuthenticationEndpoint: userAuthenticationEndpoint,
+            xstsAuthorizationEndpoint: xstsAuthorizationEndpoint,
+            cloudSessionCreatePath: "v5/sessions/cloud/play",
+            fresnoPlatformContext: "Cloud:XGPUWEB",
+            fresnoStreamWithAdsRailID: "51f14e5d-bdcb-4e04-b9cb-76e5057702df",
+            fresnoSupportedSubscriptionProductIDs: [
+                "CFQ7TTC10QFD",
+                "CFQ7TTC0K5DJ",
+                "CFQ7TTC0P85B",
+                "CFQ7TTC0KHS0",
+            ],
+            defaultConsumerOfferingID: "xgpuweb",
+            preferredOfferingIDs: [
+                "xgpuweb",
+                "cloudgaming",
+                "xgpu",
+                "xgpuwebf2p",
+            ],
+            contentAccessOfferingIDs: ["xgpuweb", "xgpuwebf2p"],
+            azureTrafficManagerOfferingIDs: [
+                "xgpuweb",
+                "cloudgaming",
+                "xgpuwebf2p",
+                "takehomeweb",
+            ],
+            gamePassCatalogCallingAppName: "Xbox Cloud Gaming Web",
+            gamePassCatalogCallingAppVersion: "29.19.17",
+            contentAccessCallingAppName: "CloudNow",
+            contentAccessCallingAppVersion: "1.0",
+            minimumGSSessionLifetime: 5 * 60,
+            maximumControllerSlots: 4,
+            signalingConfiguration: XboxCloudSDPConfiguration
+                .microsoftWebInputV1,
+            dataChannelDescriptors: XboxCloudDataChannelDescriptor
+                .microsoftWebRTCChannelsV1,
+            membershipTierByProductID: [
+                "CFQ7TTC0KHS0": .ultimate,
+                "CFQ7TTC0P85B": .premium,
+                "CFQ7TTC0K5DJ": .essential,
+                "CFQ7TTC0KGQ8": .pcGamePass,
+            ]
+        )
+    }
+
+    let version: Int
+    let offeringServiceBaseURL: URL
+    let gamePassCatalogProductsURL: URL
+    let fresnoCatalogURL: URL
+    let displayCatalogProductsURL: URL
+    let defaultNetworkTestTargetURL: URL
+    let contentAccessServiceHost: String
+    let userAuthenticationEndpoint: URL
+    let xstsAuthorizationEndpoint: URL
+    let cloudSessionCreatePath: String
+    let fresnoPlatformContext: String
+    let fresnoStreamWithAdsRailID: String
+    let fresnoSupportedSubscriptionProductIDs: Set<String>
+    let defaultConsumerOfferingID: String
+    let preferredOfferingIDs: [String]
+    let contentAccessOfferingIDs: Set<String>
+    let azureTrafficManagerOfferingIDs: Set<String>
+    let gamePassCatalogCallingAppName: String
+    let gamePassCatalogCallingAppVersion: String
+    let contentAccessCallingAppName: String
+    let contentAccessCallingAppVersion: String
+    let minimumGSSessionLifetime: TimeInterval
+    let maximumControllerSlots: Int
+    let signalingConfiguration: XboxCloudSDPConfiguration
+    let dataChannelDescriptors: [XboxCloudDataChannelDescriptor]
+    let membershipTierByProductID: [String: XboxMembershipTier]
+
+    init(
+        version: Int,
+        offeringServiceBaseURL: URL,
+        gamePassCatalogProductsURL: URL,
+        fresnoCatalogURL: URL,
+        displayCatalogProductsURL: URL,
+        defaultNetworkTestTargetURL: URL,
+        contentAccessServiceHost: String,
+        userAuthenticationEndpoint: URL,
+        xstsAuthorizationEndpoint: URL,
+        cloudSessionCreatePath: String,
+        fresnoPlatformContext: String,
+        fresnoStreamWithAdsRailID: String,
+        fresnoSupportedSubscriptionProductIDs: Set<String>,
+        defaultConsumerOfferingID: String,
+        preferredOfferingIDs: [String],
+        contentAccessOfferingIDs: Set<String>,
+        azureTrafficManagerOfferingIDs: Set<String>,
+        gamePassCatalogCallingAppName: String,
+        gamePassCatalogCallingAppVersion: String,
+        contentAccessCallingAppName: String,
+        contentAccessCallingAppVersion: String,
+        minimumGSSessionLifetime: TimeInterval,
+        maximumControllerSlots: Int,
+        signalingConfiguration: XboxCloudSDPConfiguration,
+        dataChannelDescriptors: [XboxCloudDataChannelDescriptor],
+        membershipTierByProductID: [String: XboxMembershipTier]
+    ) throws {
+        let endpoints = [
+            offeringServiceBaseURL,
+            gamePassCatalogProductsURL,
+            fresnoCatalogURL,
+            displayCatalogProductsURL,
+            defaultNetworkTestTargetURL,
+            userAuthenticationEndpoint,
+            xstsAuthorizationEndpoint,
+        ]
+        let preferredOfferingSet = Set(preferredOfferingIDs)
+        let channelKinds = Set(dataChannelDescriptors.map(\.kind))
+        let channelLabels = Set(dataChannelDescriptors.map(\.label))
+        let requiredInputChannels: Set<XboxCloudDataChannelKind> = [
+            .input,
+            .reliableInput,
+            .unreliableInput,
+        ]
+        guard version > 0,
+              endpoints.allSatisfy(Self.isSecureEndpoint),
+              Self.hasHost(offeringServiceBaseURL, suffix: "xboxlive.com"),
+              Self.hasHost(gamePassCatalogProductsURL, suffix: "gamepass.com"),
+              Self.hasHost(fresnoCatalogURL, suffix: "gamepass.com"),
+              displayCatalogProductsURL.host?.lowercased()
+              == "displaycatalog.mp.microsoft.com",
+              Self.hasHost(defaultNetworkTestTargetURL, suffix: "xboxlive.com"),
+              Self.hasHost(userAuthenticationEndpoint, suffix: "xboxlive.com"),
+              Self.hasHost(xstsAuthorizationEndpoint, suffix: "xboxlive.com"),
+              offeringServiceBaseURL.path.isEmpty
+              || offeringServiceBaseURL.path == "/",
+              gamePassCatalogProductsURL.path == "/v3/products",
+              fresnoCatalogURL.path == "/sigls/v3",
+              displayCatalogProductsURL.path == "/v7.0/products",
+              defaultNetworkTestTargetURL.path.isEmpty
+              || defaultNetworkTestTargetURL.path == "/",
+              userAuthenticationEndpoint.path == "/user/authenticate",
+              xstsAuthorizationEndpoint.path == "/xsts/authorize",
+              Self.isSafeDNSHost(contentAccessServiceHost),
+              contentAccessServiceHost == "xboxservices.com"
+              || contentAccessServiceHost.hasSuffix(".xboxservices.com"),
+              Self.isSafeRelativePath(cloudSessionCreatePath),
+              Self.isSafeQueryValue(fresnoPlatformContext, maximumBytes: 128),
+              UUID(uuidString: fresnoStreamWithAdsRailID) != nil,
+              !fresnoSupportedSubscriptionProductIDs.isEmpty,
+              fresnoSupportedSubscriptionProductIDs.count <= 128,
+              fresnoSupportedSubscriptionProductIDs.allSatisfy(Self.isSafeProductID),
+              !preferredOfferingIDs.isEmpty,
+              preferredOfferingIDs.count <= 32,
+              preferredOfferingSet.count == preferredOfferingIDs.count,
+              preferredOfferingIDs.allSatisfy(XboxCloudServiceURL.isSafeDNSLabel),
+              preferredOfferingSet.contains(defaultConsumerOfferingID),
+              !contentAccessOfferingIDs.isEmpty,
+              contentAccessOfferingIDs.isSubset(of: preferredOfferingSet),
+              contentAccessOfferingIDs.allSatisfy(XboxCloudServiceURL.isSafeDNSLabel),
+              !azureTrafficManagerOfferingIDs.isEmpty,
+              azureTrafficManagerOfferingIDs.count <= 32,
+              azureTrafficManagerOfferingIDs.allSatisfy(
+                  XboxCloudServiceURL.isSafeDNSLabel
+              ),
+              azureTrafficManagerOfferingIDs.contains(defaultConsumerOfferingID),
+              Self.isSafeHeaderValue(gamePassCatalogCallingAppName, maximumBytes: 128),
+              Self.isSafeHeaderValue(gamePassCatalogCallingAppVersion, maximumBytes: 64),
+              Self.isSafeHeaderValue(contentAccessCallingAppName, maximumBytes: 128),
+              Self.isSafeHeaderValue(contentAccessCallingAppVersion, maximumBytes: 64),
+              minimumGSSessionLifetime.isFinite,
+              minimumGSSessionLifetime >= 30,
+              (1 ... 4).contains(maximumControllerSlots),
+              Self.isValid(signalingConfiguration),
+              !dataChannelDescriptors.isEmpty,
+              channelKinds.count == dataChannelDescriptors.count,
+              channelLabels.count == dataChannelDescriptors.count,
+              requiredInputChannels.isSubset(of: channelKinds),
+              !membershipTierByProductID.isEmpty,
+              membershipTierByProductID.keys.allSatisfy(Self.isSafeProductID)
+        else {
+            throw XboxCloudCompatibilityProfileError.invalidProfile
+        }
+        self.version = version
+        self.offeringServiceBaseURL = offeringServiceBaseURL
+        self.gamePassCatalogProductsURL = gamePassCatalogProductsURL
+        self.fresnoCatalogURL = fresnoCatalogURL
+        self.displayCatalogProductsURL = displayCatalogProductsURL
+        self.defaultNetworkTestTargetURL = defaultNetworkTestTargetURL
+        self.contentAccessServiceHost = contentAccessServiceHost
+        self.userAuthenticationEndpoint = userAuthenticationEndpoint
+        self.xstsAuthorizationEndpoint = xstsAuthorizationEndpoint
+        self.cloudSessionCreatePath = cloudSessionCreatePath
+        self.fresnoPlatformContext = fresnoPlatformContext
+        self.fresnoStreamWithAdsRailID = fresnoStreamWithAdsRailID
+        self.fresnoSupportedSubscriptionProductIDs = fresnoSupportedSubscriptionProductIDs
+        self.defaultConsumerOfferingID = defaultConsumerOfferingID
+        self.preferredOfferingIDs = preferredOfferingIDs
+        self.contentAccessOfferingIDs = contentAccessOfferingIDs
+        self.azureTrafficManagerOfferingIDs = azureTrafficManagerOfferingIDs
+        self.gamePassCatalogCallingAppName = gamePassCatalogCallingAppName
+        self.gamePassCatalogCallingAppVersion = gamePassCatalogCallingAppVersion
+        self.contentAccessCallingAppName = contentAccessCallingAppName
+        self.contentAccessCallingAppVersion = contentAccessCallingAppVersion
+        self.minimumGSSessionLifetime = minimumGSSessionLifetime
+        self.maximumControllerSlots = maximumControllerSlots
+        self.signalingConfiguration = signalingConfiguration
+        self.dataChannelDescriptors = dataChannelDescriptors
+        self.membershipTierByProductID = membershipTierByProductID
+    }
+
+    private static func isSecureEndpoint(_ url: URL) -> Bool {
+        url.absoluteString.utf8.count <= 2048
+            && url.scheme?.lowercased() == "https"
+            && url.host != nil
+            && url.user == nil
+            && url.password == nil
+            && url.port == nil
+            && url.query == nil
+            && url.fragment == nil
+    }
+
+    private static func hasHost(_ url: URL, suffix: String) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == suffix || host.hasSuffix(".\(suffix)")
+    }
+
+    private static func isSafeDNSHost(_ value: String) -> Bool {
+        guard value.utf8.count <= 253,
+              !value.isEmpty,
+              !value.hasPrefix("."),
+              !value.hasSuffix(".")
+        else {
+            return false
+        }
+        return value.split(separator: ".").allSatisfy {
+            XboxCloudServiceURL.isSafeDNSLabel(String($0))
+        }
+    }
+
+    private static func isSafeRelativePath(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.utf8.count <= 256
+            && !value.hasPrefix("/")
+            && !value.contains("..")
+            && value.split(separator: "/").allSatisfy {
+                XboxCloudServiceURL.isSafeDNSLabel(String($0))
+            }
+    }
+
+    private static func isSafeHeaderValue(
+        _ value: String,
+        maximumBytes: Int
+    ) -> Bool {
+        !value.isEmpty
+            && value.utf8.count <= maximumBytes
+            && value.unicodeScalars.allSatisfy {
+                !CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
+    private static func isSafeQueryValue(
+        _ value: String,
+        maximumBytes: Int
+    ) -> Bool {
+        let allowedCharacters = CharacterSet.alphanumerics.union(
+            CharacterSet(charactersIn: "-._:")
+        )
+        return !value.isEmpty
+            && value.utf8.count <= maximumBytes
+            && value.unicodeScalars.allSatisfy(allowedCharacters.contains)
+    }
+
+    private static func isValid(_ configuration: XboxCloudSDPConfiguration) -> Bool {
+        let ranges = [
+            configuration.chatStream,
+            configuration.control,
+            configuration.input,
+            configuration.unreliableinput,
+            configuration.reliableinput,
+            configuration.message,
+            configuration.chat,
+        ]
+        return ranges.allSatisfy {
+            $0.minVersion > 0 && $0.minVersion <= $0.maxVersion
+        }
+    }
+
+    private static func isSafeProductID(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.utf8.count <= 128
+            && value == value.uppercased()
+            && value.allSatisfy { $0.isLetter || $0.isNumber }
+    }
+}
+
+nonisolated enum XboxCloudCompatibilityProfileError: Error, Equatable, Sendable {
+    case invalidProfile
+}
+
 /// Microsoft-owned Xbox Cloud endpoints and the supported consumer offering
 /// preference order. The current Xbox web client uses `xgpuweb` as its fixed
 /// consumer default; offering discovery is only a fallback after that login
 /// fails.
 nonisolated struct XboxCloudOfferingServiceConfiguration: Equatable, Sendable {
-    static let defaultConsumerOfferingID = "xgpuweb"
+    static let compatibilityProfile = XboxCloudCompatibilityProfile.bundledV1
+    static let defaultConsumerOfferingID = compatibilityProfile.defaultConsumerOfferingID
 
-    static let defaultPreferredOfferingIDs = [
-        defaultConsumerOfferingID,
-        "cloudgaming",
-        "xgpu",
-        "xgpuwebf2p",
-    ]
-
-    private static let azureTrafficManagerOfferingIDs: Set<String> = [
-        "xgpuweb",
-        "cloudgaming",
-        "xgpuwebf2p",
-        "takehomeweb",
-    ]
+    static let defaultPreferredOfferingIDs = compatibilityProfile.preferredOfferingIDs
 
     let serviceBaseURL: URL
     let preferredOfferingIDs: [String]
     let usesAzureTrafficManagerWhenEligible: Bool
+    private let azureTrafficManagerOfferingIDs: Set<String>
 
     init(
         serviceBaseURL: URL,
         preferredOfferingIDs: [String] = Self.defaultPreferredOfferingIDs,
-        usesAzureTrafficManagerWhenEligible: Bool = false
+        usesAzureTrafficManagerWhenEligible: Bool = false,
+        azureTrafficManagerOfferingIDs: Set<String> = Self.compatibilityProfile
+            .azureTrafficManagerOfferingIDs
     ) throws {
         self.serviceBaseURL = try XboxCloudServiceURL.validateBaseURL(serviceBaseURL)
         guard !preferredOfferingIDs.isEmpty,
@@ -48,15 +373,29 @@ nonisolated struct XboxCloudOfferingServiceConfiguration: Equatable, Sendable {
             }
             normalizedIDs.append(normalizedID)
         }
-        self.preferredOfferingIDs = normalizedIDs
-        self.usesAzureTrafficManagerWhenEligible = usesAzureTrafficManagerWhenEligible
-    }
-
-    static func microsoftProduction() throws -> Self {
-        guard let baseURL = URL(string: "https://gssv-play-prod.xboxlive.com") else {
+        guard !azureTrafficManagerOfferingIDs.isEmpty,
+              azureTrafficManagerOfferingIDs.count <= 32,
+              azureTrafficManagerOfferingIDs.allSatisfy(
+                  XboxCloudServiceURL.isSafeDNSLabel
+              )
+        else {
             throw XboxCloudOfferingServiceError.invalidConfiguration
         }
-        return try Self(serviceBaseURL: baseURL)
+        self.preferredOfferingIDs = normalizedIDs
+        self.usesAzureTrafficManagerWhenEligible = usesAzureTrafficManagerWhenEligible
+        self.azureTrafficManagerOfferingIDs = Set(
+            azureTrafficManagerOfferingIDs.map { $0.lowercased() }
+        )
+    }
+
+    static func microsoftProduction(
+        profile: XboxCloudCompatibilityProfile = .bundledV1
+    ) throws -> Self {
+        try Self(
+            serviceBaseURL: profile.offeringServiceBaseURL,
+            preferredOfferingIDs: profile.preferredOfferingIDs,
+            azureTrafficManagerOfferingIDs: profile.azureTrafficManagerOfferingIDs
+        )
     }
 
     func selectOffering(
@@ -75,7 +414,7 @@ nonisolated struct XboxCloudOfferingServiceConfiguration: Equatable, Sendable {
 
     func shouldUseAzureTrafficManager(for offeringID: String) -> Bool {
         usesAzureTrafficManagerWhenEligible
-            && Self.azureTrafficManagerOfferingIDs.contains(offeringID.lowercased())
+            && azureTrafficManagerOfferingIDs.contains(offeringID.lowercased())
     }
 
     fileprivate var offeringsEndpoint: URL {
@@ -192,6 +531,11 @@ actor XboxCloudGSSessionProvider: XboxCloudGSSessionProviding, XboxLocalCredenti
         let session: XboxCloudGSSession
     }
 
+    private struct PendingSession: Sendable {
+        let sequence: UInt64
+        let task: Task<XboxCloudGSSession, Error>
+    }
+
     private let credentialProvider: any XboxXSTSCredentialProviding
     private let configuration: XboxCloudOfferingServiceConfiguration
     private let transport: any HTTPTransport
@@ -199,6 +543,7 @@ actor XboxCloudGSSessionProvider: XboxCloudGSSessionProviding, XboxLocalCredenti
     private var sequence: UInt64 = 0
     private var generation: UInt64 = 0
     private var sessions: [String: StoredSession] = [:]
+    private var pendingSessions: [String: PendingSession] = [:]
 
     init(
         credentialProvider: any XboxXSTSCredentialProviding,
@@ -219,50 +564,92 @@ actor XboxCloudGSSessionProvider: XboxCloudGSSessionProviding, XboxLocalCredenti
             throw XboxCloudOfferingServiceError.accountUnavailable
         }
         if let storedSession = sessions[account.authorizationIdentifier],
-           storedSession.session.isUsable(at: currentDate)
+           storedSession.session.isUsable(
+               at: currentDate,
+               minimumLifetime: XboxCloudOfferingServiceConfiguration
+                   .compatibilityProfile.minimumGSSessionLifetime
+           )
         {
             return storedSession.session
         }
 
-        sessions.removeValue(forKey: account.authorizationIdentifier)
-        let operationGeneration = generation
-        let credential = try await credentialProvider.credential(
-            for: account,
-            relyingParty: .cloudGaming
-        )
-        guard credential.relyingParty == .cloudGaming,
-              credential.isUsable(at: now())
-        else {
-            throw XboxCloudOfferingServiceError.accountUnavailable
+        if let pendingSession = pendingSessions[account.authorizationIdentifier] {
+            let session = try await pendingSession.task.value
+            try Task.checkCancellation()
+            return session
         }
 
-        let service = XboxCloudOfferingService(
-            configuration: configuration,
-            transport: transport,
-            now: now
+        sessions.removeValue(forKey: account.authorizationIdentifier)
+        let operationGeneration = generation
+        sequence &+= 1
+        let operationSequence = sequence
+        let credentialProvider = credentialProvider
+        let configuration = configuration
+        let transport = transport
+        let now = now
+        let task = Task<XboxCloudGSSession, Error> { @concurrent in
+            let credential = try await credentialProvider.credential(
+                for: account,
+                relyingParty: .cloudGaming
+            )
+            guard credential.relyingParty == .cloudGaming,
+                  credential.isUsable(at: now())
+            else {
+                throw XboxCloudOfferingServiceError.accountUnavailable
+            }
+
+            let service = XboxCloudOfferingService(
+                configuration: configuration,
+                transport: transport,
+                now: now
+            )
+            return try await service.authenticate(with: credential)
+        }
+        pendingSessions[account.authorizationIdentifier] = PendingSession(
+            sequence: operationSequence,
+            task: task
         )
-        let gsSession = try await service.authenticate(with: credential)
-        try Task.checkCancellation()
+
+        let gsSession: XboxCloudGSSession
+        do {
+            gsSession = try await task.value
+        } catch {
+            if pendingSessions[account.authorizationIdentifier]?.sequence
+                == operationSequence
+            {
+                pendingSessions.removeValue(forKey: account.authorizationIdentifier)
+            }
+            throw error
+        }
         guard generation == operationGeneration else {
             throw CancellationError()
         }
 
-        sequence &+= 1
+        if pendingSessions[account.authorizationIdentifier]?.sequence
+            == operationSequence
+        {
+            pendingSessions.removeValue(forKey: account.authorizationIdentifier)
+        }
         sessions[account.authorizationIdentifier] = StoredSession(
-            sequence: sequence,
+            sequence: operationSequence,
             session: gsSession
         )
         trimSessionsIfNeeded()
+        try Task.checkCancellation()
         return gsSession
     }
 
     func removeSession(for account: XboxCloudAuthorizedAccount) {
-        generation &+= 1
+        pendingSessions.removeValue(forKey: account.authorizationIdentifier)?.task.cancel()
         sessions.removeValue(forKey: account.authorizationIdentifier)
     }
 
     func clearSessions() {
         generation &+= 1
+        for pendingSession in pendingSessions.values {
+            pendingSession.task.cancel()
+        }
+        pendingSessions.removeAll(keepingCapacity: false)
         sessions.removeAll(keepingCapacity: false)
     }
 
@@ -450,10 +837,15 @@ private nonisolated struct XboxCloudOfferingService: Sendable {
         let response: URLResponse
         do {
             try Task.checkCancellation()
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: Self.maximumResponseSize
+            )
             try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxCloudOfferingServiceError.responseTooLarge(operation)
         } catch {
             throw XboxCloudOfferingServiceError.transportFailure(operation)
         }

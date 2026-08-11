@@ -173,11 +173,12 @@ nonisolated enum XboxContentAccessError: Error, Equatable, Sendable, LocalizedEr
 /// Xbox Cloud Gaming web client. It retains only bounded subscription and
 /// product-access data with account identifiers removed.
 nonisolated struct XboxContentAccessClient: XboxContentAccessProviding, Sendable {
-    private static let serviceHost = "contentaccess.exp.xboxservices.com"
-    private static let supportedOfferingIDs: Set<String> = [
-        "xgpuweb",
-        "xgpuwebf2p",
-    ]
+    private static let compatibilityProfile = XboxCloudCompatibilityProfile
+        .bundledV1
+    private static let serviceHost = compatibilityProfile
+        .contentAccessServiceHost
+    private static let supportedOfferingIDs = compatibilityProfile
+        .contentAccessOfferingIDs
     private static let defaultMaximumResponseBytes = 8 * 1024 * 1024
     private static let maximumCredentialBytes = 131_072
     private static let requestTimeout: TimeInterval = 30
@@ -194,8 +195,10 @@ nonisolated struct XboxContentAccessClient: XboxContentAccessProviding, Sendable
         credentialProvider: any XboxXSTSCredentialProviding,
         transport: any HTTPTransport = URLSessionHTTPTransport(configuration: .ephemeral),
         maximumResponseBytes: Int = Self.defaultMaximumResponseBytes,
-        callingAppName: String = "CloudNow",
-        callingAppVersion: String = "1.0",
+        callingAppName: String = XboxCloudOfferingServiceConfiguration
+            .compatibilityProfile.contentAccessCallingAppName,
+        callingAppVersion: String = XboxCloudOfferingServiceConfiguration
+            .compatibilityProfile.contentAccessCallingAppVersion,
         now: @escaping @Sendable () -> Date = Date.init,
         makeCorrelationVector: @escaping @Sendable () -> String = Self.newCorrelationVector
     ) {
@@ -370,12 +373,8 @@ private nonisolated enum XboxContentAccessProtobufDecoder {
     private static let passesByPUIDField = 1
     private static let productsByProductIDField = 2
 
-    private static let tierByProductID: [String: XboxMembershipTier] = [
-        "CFQ7TTC0KHS0": .ultimate,
-        "CFQ7TTC0P85B": .premium,
-        "CFQ7TTC0K5DJ": .essential,
-        "CFQ7TTC0KGQ8": .pcGamePass,
-    ]
+    private static let tierByProductID = XboxCloudCompatibilityProfile
+        .bundledV1.membershipTierByProductID
     private static let tierPrecedence: [XboxMembershipTier] = [
         .ultimate,
         .premium,

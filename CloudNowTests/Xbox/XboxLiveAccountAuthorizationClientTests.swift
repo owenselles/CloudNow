@@ -54,6 +54,44 @@ struct XboxLiveAccountAuthorizationClientTests {
         }
     }
 
+    @Test("User-token SiteName follows the validated authentication endpoint host")
+    func userTokenSiteNameUsesConfiguredHost() async throws {
+        let userEndpoint = try #require(
+            URL(string: "https://fixture.user.xboxlive.com/user/authenticate")
+        )
+        let xstsEndpoint = try #require(
+            URL(string: "https://fixture.xsts.xboxlive.com/xsts/authorize")
+        )
+        let configuration = try XboxLiveAuthorizationConfiguration(
+            userAuthenticationEndpoint: userEndpoint,
+            xstsAuthorizationEndpoint: xstsEndpoint
+        )
+        let transport = RecordingHTTPTransport { request, _ in
+            #expect(request.url == userEndpoint)
+            let body = try jsonObject(from: request)
+            let properties = try #require(
+                body["Properties"] as? [String: Any]
+            )
+            #expect(
+                properties["SiteName"] as? String
+                    == "fixture.user.xboxlive.com"
+            )
+            return StubbedHTTPResponse(json: Self.userTokenJSON)
+        }
+        let client = XboxLiveTokenClient(
+            configuration: configuration,
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        _ = try await client.requestUserToken(
+            microsoftAccessToken: "fixture-microsoft-access"
+        )
+
+        #expect(configuration.userTokenSiteName == "fixture.user.xboxlive.com")
+        #expect(await transport.requests().count == 1)
+    }
+
     @Test("Account authorization performs User Token then Cloud XSTS exchange")
     func accountAuthorization() async throws {
         let fixedDate = fixedDate
@@ -116,6 +154,41 @@ struct XboxLiveAccountAuthorizationClientTests {
         await client.clearLocalCredentials()
         await #expect(throws: XboxLiveAuthorizationError.accountNotAuthorized) {
             _ = try await vault.credential(for: account, relyingParty: .cloudGaming)
+        }
+    }
+
+    @Test("Xbox Live token responses use a transport-enforced size boundary")
+    func tokenResponseBoundary() async throws {
+        let boundedTransport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(json: Self.userTokenJSON)
+        }
+        let configuration = try XboxLiveAuthorizationConfiguration
+            .microsoftProduction()
+        let client = XboxLiveTokenClient(
+            configuration: configuration,
+            transport: boundedTransport,
+            now: { fixedDate }
+        )
+
+        _ = try await client.requestUserToken(
+            microsoftAccessToken: "fixture-microsoft-access"
+        )
+
+        #expect(await boundedTransport.maximumResponseSizes() == [262_144])
+        #expect(await boundedTransport.unboundedRequestCount() == 0)
+
+        let oversizedTransport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: Data(repeating: 0x41, count: 262_145))
+        }
+        let oversizedClient = XboxLiveTokenClient(
+            configuration: configuration,
+            transport: oversizedTransport,
+            now: { fixedDate }
+        )
+        await #expect(throws: XboxLiveAuthorizationError.responseTooLarge) {
+            _ = try await oversizedClient.requestUserToken(
+                microsoftAccessToken: "fixture-microsoft-access"
+            )
         }
     }
 

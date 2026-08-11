@@ -27,24 +27,10 @@ nonisolated enum XboxFresnoCatalogDiscoveryError: Error, Equatable, Sendable {
 /// rails. The response contributes product identifiers only; authenticated
 /// title metadata and Content Access remain authoritative for playability.
 nonisolated struct XboxFresnoCatalogDiscoveryClient: XboxFresnoCatalogDiscovering, Sendable {
-    private static let serviceURL: URL = {
-        guard let url = URL(string: "https://catalog.gamepass.com/sigls/v3") else {
-            preconditionFailure("CloudNow's Xbox Fresno catalog URL is invalid.")
-        }
-        return url
-    }()
-
-    private static let platformContext = "Cloud:XGPUWEB"
+    private static let compatibilityProfile = XboxCloudCompatibilityProfile.bundledV1
     private static let maximumResponseBytes = 1_048_576
     private static let maximumProductCountPerRail = 4096
     private static let maximumSubscriptionProductCount = 128
-    private static let streamWithAdsRailID = "51f14e5d-bdcb-4e04-b9cb-76e5057702df"
-    private static let supportedSubscriptionProductIDs: Set<String> = [
-        "CFQ7TTC10QFD",
-        "CFQ7TTC0K5DJ",
-        "CFQ7TTC0P85B",
-        "CFQ7TTC0KHS0",
-    ]
 
     private let transport: any HTTPTransport
     private let now: @Sendable () -> Date
@@ -69,7 +55,7 @@ nonisolated struct XboxFresnoCatalogDiscoveryClient: XboxFresnoCatalogDiscoverin
         )
 
         let productIDs = try await fetchRail(
-            id: Self.streamWithAdsRailID,
+            id: Self.compatibilityProfile.fresnoStreamWithAdsRailID,
             requestContext: requestContext
         )
         var retainedProductIDs: [String] = []
@@ -154,7 +140,7 @@ nonisolated struct XboxFresnoCatalogDiscoveryClient: XboxFresnoCatalogDiscoverin
         requestContext: XboxFresnoCatalogRequestContext
     ) throws -> URL {
         guard var components = URLComponents(
-            url: serviceURL,
+            url: compatibilityProfile.fresnoCatalogURL,
             resolvingAgainstBaseURL: false
         ) else {
             throw XboxFresnoCatalogDiscoveryError.invalidConfiguration
@@ -163,7 +149,10 @@ nonisolated struct XboxFresnoCatalogDiscoveryClient: XboxFresnoCatalogDiscoverin
             URLQueryItem(name: "id", value: railID),
             URLQueryItem(name: "market", value: requestContext.market),
             URLQueryItem(name: "language", value: requestContext.localeIdentifier),
-            URLQueryItem(name: "platformContext", value: platformContext),
+            URLQueryItem(
+                name: "platformContext",
+                value: compatibilityProfile.fresnoPlatformContext
+            ),
         ]
         queryItems.append(
             URLQueryItem(
@@ -175,9 +164,9 @@ nonisolated struct XboxFresnoCatalogDiscoveryClient: XboxFresnoCatalogDiscoverin
         )
         components.queryItems = queryItems
         guard let endpoint = components.url,
-              endpoint.scheme == "https",
-              endpoint.host == "catalog.gamepass.com",
-              endpoint.path == "/sigls/v3",
+              endpoint.scheme == compatibilityProfile.fresnoCatalogURL.scheme,
+              endpoint.host == compatibilityProfile.fresnoCatalogURL.host,
+              endpoint.path == compatibilityProfile.fresnoCatalogURL.path,
               endpoint.absoluteString.utf8.count <= 8192
         else {
             throw XboxFresnoCatalogDiscoveryError.invalidConfiguration
@@ -216,7 +205,9 @@ nonisolated struct XboxFresnoCatalogDiscoveryClient: XboxFresnoCatalogDiscoverin
                 throw XboxFresnoCatalogDiscoveryError.invalidRequest
             }
             let canonicalProductID = normalizedProductID.uppercased()
-            if supportedSubscriptionProductIDs.contains(canonicalProductID) {
+            if compatibilityProfile.fresnoSupportedSubscriptionProductIDs
+                .contains(canonicalProductID)
+            {
                 normalizedSubscriptionIDs.insert(canonicalProductID)
             }
         }

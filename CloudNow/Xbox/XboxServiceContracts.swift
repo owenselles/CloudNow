@@ -29,6 +29,19 @@ nonisolated enum XboxCloudRouteAvailability: Equatable, Hashable, Sendable {
     case requiresEligibility
 }
 
+/// Credential-free explanation for a route's current playability decision.
+/// This keeps Fresno service hints and Content Access evidence available after
+/// catalog merging without exposing account identifiers or raw service data.
+nonisolated enum XboxCloudRoutePlayabilityReason: Equatable, Hashable, Sendable {
+    case authenticatedCatalog
+    case fresnoServiceConfirmed
+    case contentAccessConfirmed
+    case entitlementRequired
+    case unsupportedStreamingProgram
+    case gameplayTimeExhausted
+    case eligibilityUnconfirmed
+}
+
 nonisolated enum XboxCloudInputType: String, CaseIterable, Hashable, Sendable {
     case controller
     case touch
@@ -121,15 +134,22 @@ nonisolated struct XboxCloudTitleRoute: Equatable, Hashable, Sendable {
     let titleID: String
     let accessKind: XboxCloudAccessKind
     let availability: XboxCloudRouteAvailability
+    let playabilityReason: XboxCloudRoutePlayabilityReason
 
     init(
         titleID: String,
         accessKind: XboxCloudAccessKind,
-        availability: XboxCloudRouteAvailability = .playable
+        availability: XboxCloudRouteAvailability = .playable,
+        playabilityReason: XboxCloudRoutePlayabilityReason? = nil
     ) {
         self.titleID = titleID
         self.accessKind = accessKind
         self.availability = availability
+        self.playabilityReason = playabilityReason ?? (
+            availability == .playable
+                ? .authenticatedCatalog
+                : .eligibilityUnconfirmed
+        )
     }
 
     var isPlayable: Bool {
@@ -398,6 +418,15 @@ nonisolated protocol XboxCloudAccountAuthorizationClient: Sendable {
 /// full data reset can purge credentials without constructing a transport.
 nonisolated protocol XboxLocalCredentialLifecycle: Sendable {
     func clearLocalCredentials() async
+    func deactivateForInactiveProvider() async
+}
+
+nonisolated extension XboxLocalCredentialLifecycle {
+    /// Implementations without provider-scoped retained state safely use a
+    /// full credential clear when their provider becomes inactive.
+    func deactivateForInactiveProvider() async {
+        await clearLocalCredentials()
+    }
 }
 
 /// Production and test implementations remain injected so the Xbox catalog is
@@ -439,6 +468,28 @@ extension XboxCatalogClient {
     ) async {}
 }
 
+/// Provider-scoped ownership that outlives the Xbox SwiftUI mode tree. A
+/// retained controller carries only one resumable or deletion-quarantined
+/// server allocation across provider switches.
+nonisolated struct XboxCloudStreamControllerRetention: Sendable {
+    static let none = XboxCloudStreamControllerRetention(
+        retainedController: { _ in nil },
+        retainController: { _, _ in },
+        releaseController: { _ in }
+    )
+
+    let retainedController: @MainActor @Sendable (
+        XboxCloudAuthorizedAccount
+    ) -> XboxCloudStreamController?
+    let retainController: @MainActor @Sendable (
+        XboxCloudStreamController,
+        XboxCloudAuthorizedAccount
+    ) -> Void
+    let releaseController: @MainActor @Sendable (
+        XboxCloudStreamController
+    ) -> Void
+}
+
 /// Provider clients required after Xbox identity has been established. The
 /// controller factory keeps Game Streaming credentials and transport details
 /// below the UI boundary; the UI contributes only a short-lived transfer-token
@@ -449,17 +500,43 @@ nonisolated struct XboxCloudServiceConfiguration: Sendable {
     let makeStreamController: @MainActor @Sendable (
         @escaping @Sendable () async throws -> String
     ) -> XboxCloudStreamController
+    let streamControllerRetention: XboxCloudStreamControllerRetention
+    /// Resolves the same coalesced GS login used by catalog and streaming while
+    /// exposing only its non-secret offering identifier to membership metadata.
+    let resolveContentAccessOfferingID: @Sendable (
+        XboxCloudAuthorizedAccount
+    ) async throws -> String
+    let resolveNetworkTestTarget: @Sendable (
+        XboxCloudAuthorizedAccount
+    ) async throws -> CloudNetworkTestTarget
 
     init(
         makeCatalogClient: @escaping @Sendable () -> any XboxCatalogClient,
         makeContentAccessClient: (@Sendable () -> any XboxContentAccessProviding)? = nil,
         makeStreamController: @escaping @MainActor @Sendable (
             @escaping @Sendable () async throws -> String
-        ) -> XboxCloudStreamController
+        ) -> XboxCloudStreamController,
+        streamControllerRetention: XboxCloudStreamControllerRetention = .none,
+        resolveContentAccessOfferingID: @escaping @Sendable (
+            XboxCloudAuthorizedAccount
+        ) async throws -> String = { _ in
+            XboxCloudOfferingServiceConfiguration.defaultConsumerOfferingID
+        },
+        resolveNetworkTestTarget: @escaping @Sendable (
+            XboxCloudAuthorizedAccount
+        ) async throws -> CloudNetworkTestTarget = { _ in
+            CloudNetworkTestTarget(
+                address: XboxCloudCompatibilityProfile.bundledV1
+                    .defaultNetworkTestTargetURL.absoluteString
+            )
+        }
     ) {
         self.makeCatalogClient = makeCatalogClient
         self.makeContentAccessClient = makeContentAccessClient
         self.makeStreamController = makeStreamController
+        self.streamControllerRetention = streamControllerRetention
+        self.resolveContentAccessOfferingID = resolveContentAccessOfferingID
+        self.resolveNetworkTestTarget = resolveNetworkTestTarget
     }
 }
 
@@ -479,6 +556,13 @@ nonisolated struct XboxCloudEnvironment: Sendable {
     static let productionMicrosoftSignIn = XboxCloudEnvironment(
         authentication: productionMicrosoftAuthentication,
         makeAccountAuthorizationClient: nil,
+        service: nil
+    )
+
+    static let invalidCompatibilityProfile = XboxCloudEnvironment(
+        authentication: productionMicrosoftAuthentication,
+        makeAccountAuthorizationClient: nil,
+        serviceConfigurationFailure: .invalidCompatibilityProfile,
         service: nil
     )
 
@@ -502,17 +586,20 @@ nonisolated struct XboxCloudEnvironment: Sendable {
     let authentication: MicrosoftDeviceCodeOAuthConfiguration?
     let makeAccountAuthorizationClient: (@Sendable () -> any XboxCloudAccountAuthorizationClient)?
     let credentialLifecycle: (any XboxLocalCredentialLifecycle)?
+    let serviceConfigurationFailure: XboxCloudServiceConfigurationFailure?
     let service: XboxCloudServiceConfiguration?
 
     init(
         authentication: MicrosoftDeviceCodeOAuthConfiguration?,
         makeAccountAuthorizationClient: (@Sendable () -> any XboxCloudAccountAuthorizationClient)?,
         credentialLifecycle: (any XboxLocalCredentialLifecycle)? = nil,
+        serviceConfigurationFailure: XboxCloudServiceConfigurationFailure? = nil,
         service: XboxCloudServiceConfiguration?
     ) {
         self.authentication = authentication
         self.makeAccountAuthorizationClient = makeAccountAuthorizationClient
         self.credentialLifecycle = credentialLifecycle
+        self.serviceConfigurationFailure = serviceConfigurationFailure
         self.service = service
     }
 
@@ -527,4 +614,8 @@ nonisolated struct XboxCloudEnvironment: Sendable {
     var availability: XboxCloudAvailability {
         service == nil ? .awaitingMicrosoftConfiguration : .configured
     }
+}
+
+nonisolated enum XboxCloudServiceConfigurationFailure: Equatable, Sendable {
+    case invalidCompatibilityProfile
 }

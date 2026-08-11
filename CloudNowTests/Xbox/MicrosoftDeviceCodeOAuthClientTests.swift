@@ -60,6 +60,37 @@ struct MicrosoftDeviceCodeOAuthClientTests {
         #expect(authorization.pollingInterval == 2)
     }
 
+    @Test("OAuth responses use a transport-enforced size boundary")
+    func responseBoundary() async throws {
+        let boundedTransport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(json: Self.authorizationJSON)
+        }
+        let client = MicrosoftDeviceCodeOAuthClient(
+            transport: boundedTransport,
+            now: { fixedDate }
+        )
+
+        _ = try await client.requestAuthorization(
+            configuration: makeConfiguration()
+        )
+
+        #expect(await boundedTransport.maximumResponseSizes() == [262_144])
+        #expect(await boundedTransport.unboundedRequestCount() == 0)
+
+        let oversizedTransport = BoundedRecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(data: Data(repeating: 0x41, count: 262_145))
+        }
+        let oversizedClient = MicrosoftDeviceCodeOAuthClient(
+            transport: oversizedTransport,
+            now: { fixedDate }
+        )
+        await #expect(throws: MicrosoftDeviceCodeOAuthError.responseTooLarge) {
+            _ = try await oversizedClient.requestAuthorization(
+                configuration: makeConfiguration()
+            )
+        }
+    }
+
     @Test("Device authorization accepts an omitted completion URL and defaults the poll interval")
     func optionalAuthorizationFields() async throws {
         let fixedDate = fixedDate

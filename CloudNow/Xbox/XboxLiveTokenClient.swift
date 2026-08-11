@@ -3,6 +3,8 @@ import Foundation
 /// Stateless client for Microsoft's documented Microsoft Account -> Xbox User
 /// Token -> XSTS exchange. The caller owns all credential lifetime decisions.
 nonisolated struct XboxLiveTokenClient: Sendable {
+    private static let maximumResponseSize = 262_144
+
     private let configuration: XboxLiveAuthorizationConfiguration
     private let transport: any HTTPTransport
     private let now: @Sendable () -> Date
@@ -32,7 +34,7 @@ nonisolated struct XboxLiveTokenClient: Sendable {
             tokenType: "JWT",
             properties: XboxUserAuthenticationRequest.Properties(
                 authMethod: "RPS",
-                siteName: "user.auth.xboxlive.com",
+                siteName: configuration.userTokenSiteName,
                 rpsTicket: "d=\(normalizedAccessToken)"
             )
         )
@@ -99,10 +101,15 @@ nonisolated struct XboxLiveTokenClient: Sendable {
         let response: URLResponse
         do {
             try Task.checkCancellation()
-            (data, response) = try await transport.data(for: request)
+            (data, response) = try await transport.data(
+                for: request,
+                maximumResponseSize: Self.maximumResponseSize
+            )
             try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
+        } catch HTTPTransportError.responseTooLarge {
+            throw XboxLiveAuthorizationError.responseTooLarge
         } catch {
             throw XboxLiveAuthorizationError.transportFailure
         }
@@ -120,7 +127,7 @@ nonisolated struct XboxLiveTokenClient: Sendable {
     }
 
     private func parseTokenResponse(_ data: Data) throws -> ParsedXboxTokenResponse {
-        guard data.count <= 262_144,
+        guard data.count <= Self.maximumResponseSize,
               let payload = try? JSONDecoder().decode(XboxTokenResponse.self, from: data),
               payload.token.utf8.count <= 131_072,
               !payload.token.isEmpty,

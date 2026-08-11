@@ -1,11 +1,11 @@
 import Foundation
 import Synchronization
 
-/// Persists Microsoft's non-secret SDK installation identifier independently
-/// from either provider account. It is read only when an Xbox stream controller
-/// is created and Reset All Data removes it with the rest of CloudNow defaults.
+/// Persists Microsoft's non-secret SDK installation identifier as Xbox-owned
+/// state. A GeForce NOW reset preserves it; Xbox and global resets remove it.
+/// It is read only when an Xbox stream controller is created.
 final nonisolated class XboxCloudInstallationIdentityStore: Sendable {
-    private static let preferenceKey = "xbox.sdkInstallID.v1"
+    static let preferenceKey = "xbox.sdkInstallID.v1"
 
     private let preferences: any PreferencesStore
     private let lock = Mutex(false)

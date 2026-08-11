@@ -1,8 +1,9 @@
 import Foundation
 import Observation
 
-/// Persisted generic Microsoft OAuth state. This does not prove Xbox Cloud
-/// identity, entitlement, or streaming authorization.
+/// In-memory generic Microsoft OAuth state. Legacy versions persisted this
+/// complete value, but current storage retains only `XboxRefreshTokenCredential`.
+/// This does not prove Xbox Cloud identity, entitlement, or streaming access.
 nonisolated struct XboxAuthSession: Codable, Equatable, Sendable {
     let tenant: String
     let clientID: String
@@ -26,6 +27,107 @@ nonisolated struct XboxAuthSession: Codable, Equatable, Sendable {
         tenant == configuration.tenant
             && clientID == configuration.clientID
             && Set(scopes) == Set(configuration.scopes)
+    }
+}
+
+/// Keychain representation for Xbox sign-in. Only Microsoft's renewable
+/// refresh credential is persisted; access, ID, Xbox Live, XSTS, and Game
+/// Streaming tokens remain process-memory-only.
+nonisolated struct XboxRefreshTokenCredential: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = 1
+
+    let schemaVersion: Int
+    let tenant: String
+    let clientID: String
+    let scopes: [String]
+    let refreshToken: String
+    let activityScopeIdentifier: String?
+
+    init(session: XboxAuthSession) throws {
+        guard let refreshToken = session.token.refreshToken,
+              Self.isSafeCredential(refreshToken),
+              Self.isSafeLabel(session.tenant, maximumSize: 256),
+              Self.isSafeLabel(session.clientID, maximumSize: 512),
+              !session.scopes.isEmpty,
+              session.scopes.count <= 32,
+              session.scopes.allSatisfy({ Self.isSafeLabel($0, maximumSize: 2048) }),
+              session.activityScopeIdentifier.map({
+                  Self.isSafeLabel($0, maximumSize: 1024)
+              }) ?? true
+        else {
+            throw XboxAuthError.sessionExpired
+        }
+        schemaVersion = Self.currentSchemaVersion
+        tenant = session.tenant
+        clientID = session.clientID
+        scopes = session.scopes
+        self.refreshToken = refreshToken
+        activityScopeIdentifier = session.activityScopeIdentifier
+    }
+
+    func makeRefreshOnlySession() throws -> XboxAuthSession {
+        guard schemaVersion == Self.currentSchemaVersion,
+              Self.isSafeCredential(refreshToken),
+              Self.isSafeLabel(tenant, maximumSize: 256),
+              Self.isSafeLabel(clientID, maximumSize: 512),
+              !scopes.isEmpty,
+              scopes.count <= 32,
+              scopes.allSatisfy({ Self.isSafeLabel($0, maximumSize: 2048) }),
+              activityScopeIdentifier.map({
+                  Self.isSafeLabel($0, maximumSize: 1024)
+              }) ?? true
+        else {
+            throw XboxAuthError.persistenceUnavailable
+        }
+        return XboxAuthSession(
+            tenant: tenant,
+            clientID: clientID,
+            scopes: scopes,
+            token: MicrosoftOAuthToken(
+                accessToken: "",
+                refreshToken: refreshToken,
+                idToken: nil,
+                tokenType: "Bearer",
+                scopes: scopes,
+                expiresAt: .distantPast
+            ),
+            activityScopeIdentifier: activityScopeIdentifier
+        )
+    }
+
+    private static func isSafeCredential(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.utf8.count <= 131_072
+            && value.unicodeScalars.allSatisfy {
+                !CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
+    private static func isSafeLabel(
+        _ value: String,
+        maximumSize: Int
+    ) -> Bool {
+        !value.isEmpty
+            && value.utf8.count <= maximumSize
+            && value.unicodeScalars.allSatisfy {
+                !CharacterSet.controlCharacters.contains($0)
+            }
+    }
+}
+
+private extension XboxAuthSession {
+    nonisolated init(
+        tenant: String,
+        clientID: String,
+        scopes: [String],
+        token: MicrosoftOAuthToken,
+        activityScopeIdentifier: String?
+    ) {
+        self.tenant = tenant
+        self.clientID = clientID
+        self.scopes = scopes
+        self.token = token
+        self.activityScopeIdentifier = activityScopeIdentifier
     }
 }
 
@@ -105,12 +207,43 @@ nonisolated protocol XboxOAuthClient: Sendable {
 extension MicrosoftDeviceCodeOAuthClient: XboxOAuthClient {}
 
 nonisolated protocol XboxAuthSessionPersistence: Sendable {
+    nonisolated func xboxAuthSessionResetGeneration() -> UInt64
     func loadXboxAuthSession() async throws -> XboxAuthSession?
     func saveXboxAuthSession(
         _ session: XboxAuthSession,
         generation: UInt64
     ) async throws
     func deleteXboxAuthSession(generation: UInt64) async throws
+    func saveXboxAuthSession(
+        _ session: XboxAuthSession,
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws
+    func deleteXboxAuthSession(
+        generation: UInt64,
+        resetGeneration: UInt64
+    ) async throws
+}
+
+extension XboxAuthSessionPersistence {
+    nonisolated func xboxAuthSessionResetGeneration() -> UInt64 {
+        0
+    }
+
+    func saveXboxAuthSession(
+        _ session: XboxAuthSession,
+        generation: UInt64,
+        resetGeneration _: UInt64
+    ) async throws {
+        try await saveXboxAuthSession(session, generation: generation)
+    }
+
+    func deleteXboxAuthSession(
+        generation: UInt64,
+        resetGeneration _: UInt64
+    ) async throws {
+        try await deleteXboxAuthSession(generation: generation)
+    }
 }
 
 extension AppPersistenceStore: XboxAuthSessionPersistence {}
@@ -255,6 +388,7 @@ final class XboxAuthManager {
         defer { startupPhase = .ready }
         guard let configuration else { return }
         let generation = credentialGeneration
+        let resetGeneration = persistence.xboxAuthSessionResetGeneration()
         do {
             guard let restored = try await persistence.loadXboxAuthSession() else {
                 return
@@ -265,13 +399,19 @@ final class XboxAuthManager {
                 return
             }
             guard restored.matches(configuration) else {
-                try? await persistence.deleteXboxAuthSession(generation: generation)
+                try? await persistence.deleteXboxAuthSession(
+                    generation: generation,
+                    resetGeneration: resetGeneration
+                )
                 return
             }
             session = restored
         } catch {
             guard credentialGeneration == generation else { return }
-            try? await persistence.deleteXboxAuthSession(generation: generation)
+            try? await persistence.deleteXboxAuthSession(
+                generation: generation,
+                resetGeneration: resetGeneration
+            )
             return
         }
     }
@@ -297,6 +437,7 @@ final class XboxAuthManager {
         let oauthClient = resolvedOAuthClient()
         credentialGeneration &+= 1
         let generation = credentialGeneration
+        let resetGeneration = persistence.xboxAuthSessionResetGeneration()
         activeLogin = ActiveLogin(
             generation: generation,
             priorSession: session,
@@ -334,7 +475,8 @@ final class XboxAuthManager {
                 do {
                     try await persistence.saveXboxAuthSession(
                         newSession,
-                        generation: generation
+                        generation: generation,
+                        resetGeneration: resetGeneration
                     )
                 } catch {
                     guard credentialGeneration == generation else { return }
@@ -418,6 +560,7 @@ final class XboxAuthManager {
         }
         credentialGeneration &+= 1
         let rollbackGeneration = credentialGeneration
+        let resetGeneration = persistence.xboxAuthSessionResetGeneration()
         loginTask?.cancel()
         loginTask = nil
         self.activeLogin = nil
@@ -435,11 +578,13 @@ final class XboxAuthManager {
             if let priorSession = activeLogin.priorSession {
                 try? await persistence.saveXboxAuthSession(
                     priorSession,
-                    generation: rollbackGeneration
+                    generation: rollbackGeneration,
+                    resetGeneration: resetGeneration
                 )
             } else {
                 try? await persistence.deleteXboxAuthSession(
-                    generation: rollbackGeneration
+                    generation: rollbackGeneration,
+                    resetGeneration: resetGeneration
                 )
             }
         }
@@ -452,9 +597,11 @@ final class XboxAuthManager {
         let accountScopeIdentifier = catalogAccountScopeIdentifier
         invalidateAuthenticationWork()
         let generation = credentialGeneration
+        let resetGeneration = persistence.xboxAuthSessionResetGeneration()
         do {
             try await persistence.deleteXboxAuthSession(
-                generation: generation
+                generation: generation,
+                resetGeneration: resetGeneration
             )
         } catch {
             guard credentialGeneration == generation else { return }
@@ -498,6 +645,12 @@ final class XboxAuthManager {
     /// Performs network authorization only when Xbox is the active service.
     /// A restored generic Microsoft token never activates the Xbox shell alone.
     func activateXboxCloudAccess() async {
+        await activateXboxCloudAccess(forceReauthorization: false)
+    }
+
+    private func activateXboxCloudAccess(
+        forceReauthorization: Bool
+    ) async {
         guard !isCredentialMutationInProgress,
               var session
         else {
@@ -505,17 +658,20 @@ final class XboxAuthManager {
         }
         if let authorizedAccount {
             if authorizedAccount.isUsable(at: now()) {
-                scheduleAuthorizedAccountRefresh(for: authorizedAccount)
-                return
+                if !forceReauthorization {
+                    scheduleAuthorizedAccountRefresh(for: authorizedAccount)
+                    return
+                }
+            } else {
+                let expiredCatalogAccount = catalogAccountScopeIdentifier
+                    ?? authorizedAccount.activityScopeIdentifier
+                cancelAuthorizedAccountRefresh()
+                self.authorizedAccount = nil
+                catalogAccountScopeIdentifier = nil
+                await catalogCache.remove(
+                    accountAuthorizationIdentifier: expiredCatalogAccount
+                )
             }
-            let expiredCatalogAccount = catalogAccountScopeIdentifier
-                ?? authorizedAccount.activityScopeIdentifier
-            cancelAuthorizedAccountRefresh()
-            self.authorizedAccount = nil
-            catalogAccountScopeIdentifier = nil
-            await catalogCache.remove(
-                accountAuthorizationIdentifier: expiredCatalogAccount
-            )
         }
         guard let accountAuthorizationClientFactory else {
             publish(.failed(.xboxCloudAuthorizationUnavailable))
@@ -564,10 +720,12 @@ final class XboxAuthManager {
                 )
             } else {
                 publish(.failed(.microsoft(error)))
+                scheduleEarlyAuthorizationRetryIfPossible()
             }
         } catch {
             guard credentialGeneration == generation else { return }
             publish(.failed(.xboxCloudAuthorizationFailed))
+            scheduleEarlyAuthorizationRetryIfPossible()
         }
     }
 
@@ -576,7 +734,7 @@ final class XboxAuthManager {
     func deactivateForInactiveProvider() async {
         if isCredentialMutationInProgress {
             releaseRuntimeClients()
-            await credentialLifecycle?.clearLocalCredentials()
+            await credentialLifecycle?.deactivateForInactiveProvider()
             return
         }
         if activeLogin != nil {
@@ -591,7 +749,7 @@ final class XboxAuthManager {
         authorization = nil
         publish(.idle)
         releaseRuntimeClients()
-        await credentialLifecycle?.clearLocalCredentials()
+        await credentialLifecycle?.deactivateForInactiveProvider()
     }
 
     /// Stops work before Reset All Data removes both provider credentials.
@@ -663,8 +821,10 @@ final class XboxAuthManager {
             catalogAccountScopeIdentifier = nil
             releaseRuntimeClients()
             await credentialLifecycle?.clearLocalCredentials()
+            let resetGeneration = persistence.xboxAuthSessionResetGeneration()
             try? await persistence.deleteXboxAuthSession(
-                generation: generation
+                generation: generation,
+                resetGeneration: resetGeneration
             )
             if let accountScopeIdentifier {
                 await catalogCache.remove(
@@ -707,6 +867,7 @@ final class XboxAuthManager {
         )
         let oauthClient = resolvedOAuthClient()
         let generation = credentialGeneration
+        let resetGeneration = persistence.xboxAuthSessionResetGeneration()
         transferTokenTaskGeneration &+= 1
         let taskGeneration = transferTokenTaskGeneration
         let task = Task<MicrosoftOAuthToken, Error> { @MainActor [weak self] in
@@ -746,7 +907,8 @@ final class XboxAuthManager {
                 do {
                     try await persistence.saveXboxAuthSession(
                         updatedSession,
-                        generation: generation
+                        generation: generation,
+                        resetGeneration: resetGeneration
                     )
                 } catch {
                     throw XboxAuthError.persistenceUnavailable
@@ -815,6 +977,7 @@ final class XboxAuthManager {
             return session
         }
         let generation = credentialGeneration
+        let resetGeneration = persistence.xboxAuthSessionResetGeneration()
         refreshTaskGeneration &+= 1
         let taskGeneration = refreshTaskGeneration
         let task = Task<XboxAuthSession, Error> { @MainActor [weak self] in
@@ -839,22 +1002,14 @@ final class XboxAuthManager {
             )
             try await persistence.saveXboxAuthSession(
                 updated,
-                generation: generation
+                generation: generation,
+                resetGeneration: resetGeneration
             )
             try Task.checkCancellation()
             guard credentialGeneration == generation else {
                 throw CancellationError()
             }
             self.session = updated
-            let accountScopeIdentifier = catalogAccountScopeIdentifier
-            cancelAuthorizedAccountRefresh()
-            authorizedAccount = nil
-            catalogAccountScopeIdentifier = nil
-            if let accountScopeIdentifier {
-                await catalogCache.remove(
-                    accountAuthorizationIdentifier: accountScopeIdentifier
-                )
-            }
             return updated
         }
         activeRefreshTask = task
@@ -982,10 +1137,12 @@ final class XboxAuthManager {
         }
 
         session.activityScopeIdentifier = activityScopeIdentifier
+        let resetGeneration = persistence.xboxAuthSessionResetGeneration()
         do {
             try await persistence.saveXboxAuthSession(
                 session,
-                generation: generation
+                generation: generation,
+                resetGeneration: resetGeneration
             )
         } catch {
             // The already-authorized runtime remains usable if an injected or
@@ -1013,12 +1170,21 @@ final class XboxAuthManager {
         return value
     }
 
+    private static let authorizedAccountRefreshLeadTime: TimeInterval = 5 * 60
+
     private func scheduleAuthorizedAccountRefresh(
-        for account: XboxCloudAuthorizedAccount
+        for account: XboxCloudAuthorizedAccount,
+        minimumDelay: TimeInterval = 0
     ) {
         cancelAuthorizedAccountRefresh()
         guard !isCredentialMutationInProgress else { return }
-        let delay = max(0, account.expiresAt.timeIntervalSince(now()))
+        let refreshDate = account.expiresAt.addingTimeInterval(
+            -Self.authorizedAccountRefreshLeadTime
+        )
+        let delay = max(
+            minimumDelay,
+            refreshDate.timeIntervalSince(now())
+        )
         let accountIdentifier = account.authorizationIdentifier
         let accountScopeIdentifier = account.activityScopeIdentifier
         let sleep = sleep
@@ -1039,8 +1205,12 @@ final class XboxAuthManager {
                 return
             }
             authorizedAccountRefreshTask = nil
-            if account.isUsable(at: now()) {
+            if now() < refreshDate {
                 scheduleAuthorizedAccountRefresh(for: account)
+                return
+            }
+            if account.isUsable(at: now()) {
+                await activateXboxCloudAccess(forceReauthorization: true)
                 return
             }
             authorizedAccount = nil
@@ -1048,8 +1218,21 @@ final class XboxAuthManager {
             await catalogCache.remove(
                 accountAuthorizationIdentifier: accountScopeIdentifier
             )
-            await activateXboxCloudAccess()
+            await activateXboxCloudAccess(forceReauthorization: false)
         }
+    }
+
+    private func scheduleEarlyAuthorizationRetryIfPossible() {
+        guard let authorizedAccount,
+              authorizedAccount.isUsable(at: now())
+        else {
+            return
+        }
+        let remainingLifetime = authorizedAccount.expiresAt.timeIntervalSince(now())
+        scheduleAuthorizedAccountRefresh(
+            for: authorizedAccount,
+            minimumDelay: min(60, max(0, remainingLifetime))
+        )
     }
 
     private func cancelAuthorizedAccountRefresh() {
@@ -1081,8 +1264,10 @@ final class XboxAuthManager {
             )
         }
         do {
+            let resetGeneration = persistence.xboxAuthSessionResetGeneration()
             try await persistence.deleteXboxAuthSession(
-                generation: deletionGeneration
+                generation: deletionGeneration,
+                resetGeneration: resetGeneration
             )
         } catch {
             guard credentialGeneration == deletionGeneration else { return }

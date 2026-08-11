@@ -57,6 +57,7 @@ nonisolated struct XboxLiveRelyingParty: Equatable, Hashable, Sendable, CustomSt
 nonisolated struct XboxLiveAuthorizationConfiguration: Equatable, Sendable {
     let userAuthenticationEndpoint: URL
     let xstsAuthorizationEndpoint: URL
+    let userTokenSiteName: String
     let userTokenRelyingParty: XboxLiveRelyingParty
     let contractVersion: String
     let sandboxID: String
@@ -69,7 +70,11 @@ nonisolated struct XboxLiveAuthorizationConfiguration: Equatable, Sendable {
         sandboxID: String = "RETAIL"
     ) throws {
         guard Self.isSecureEndpoint(userAuthenticationEndpoint),
-              Self.isSecureEndpoint(xstsAuthorizationEndpoint)
+              Self.isSecureEndpoint(xstsAuthorizationEndpoint),
+              let userTokenSiteName = userAuthenticationEndpoint.host?
+              .lowercased(),
+              !userTokenSiteName.isEmpty,
+              userTokenSiteName.utf8.count <= 253
         else {
             throw XboxLiveAuthorizationError.invalidConfiguration(
                 "Xbox authentication endpoints must be credential-free HTTPS URLs."
@@ -103,27 +108,19 @@ nonisolated struct XboxLiveAuthorizationConfiguration: Equatable, Sendable {
 
         self.userAuthenticationEndpoint = userAuthenticationEndpoint
         self.xstsAuthorizationEndpoint = xstsAuthorizationEndpoint
+        self.userTokenSiteName = userTokenSiteName
         self.userTokenRelyingParty = userTokenRelyingParty
         self.contractVersion = normalizedContractVersion
         self.sandboxID = normalizedSandboxID
     }
 
     /// Values documented and operated by Microsoft for Xbox web authentication.
-    static func microsoftProduction() throws -> XboxLiveAuthorizationConfiguration {
-        guard let userAuthenticationEndpoint = URL(
-            string: "https://user.auth.xboxlive.com/user/authenticate"
-        ),
-            let xstsAuthorizationEndpoint = URL(
-                string: "https://xsts.auth.xboxlive.com/xsts/authorize"
-            )
-        else {
-            throw XboxLiveAuthorizationError.invalidConfiguration(
-                "Microsoft Xbox authentication endpoints could not be constructed."
-            )
-        }
-        return try XboxLiveAuthorizationConfiguration(
-            userAuthenticationEndpoint: userAuthenticationEndpoint,
-            xstsAuthorizationEndpoint: xstsAuthorizationEndpoint
+    static func microsoftProduction(
+        profile: XboxCloudCompatibilityProfile = .bundledV1
+    ) throws -> XboxLiveAuthorizationConfiguration {
+        try XboxLiveAuthorizationConfiguration(
+            userAuthenticationEndpoint: profile.userAuthenticationEndpoint,
+            xstsAuthorizationEndpoint: profile.xstsAuthorizationEndpoint
         )
     }
 
@@ -181,6 +178,7 @@ nonisolated enum XboxLiveAuthorizationError: Error, Equatable, Sendable, Localiz
     case invalidMicrosoftToken
     case microsoftTokenExpired
     case invalidResponse
+    case responseTooLarge
     case invalidPayload
     case service(statusCode: Int, xboxErrorCode: UInt64?)
     case transportFailure
@@ -198,6 +196,8 @@ nonisolated enum XboxLiveAuthorizationError: Error, Equatable, Sendable, Localiz
             "Microsoft sign-in expired. Please sign in again."
         case .invalidResponse:
             "Xbox authentication returned an invalid HTTP response."
+        case .responseTooLarge:
+            "Xbox authentication returned too much data."
         case .invalidPayload:
             "Xbox authentication returned an invalid response payload."
         case let .service(statusCode, xboxErrorCode):

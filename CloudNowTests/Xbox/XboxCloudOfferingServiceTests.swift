@@ -6,6 +6,150 @@ import Testing
 struct XboxCloudOfferingServiceTests {
     private let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test("Bundled Xbox wire compatibility profile is explicit and versioned")
+    func bundledCompatibilityProfile() {
+        let profile = XboxCloudOfferingServiceConfiguration.compatibilityProfile
+
+        #expect(profile.version == 1)
+        #expect(profile.defaultConsumerOfferingID == "xgpuweb")
+        #expect(profile.preferredOfferingIDs.first == "xgpuweb")
+        #expect(profile.gamePassCatalogCallingAppVersion == "29.19.17")
+        #expect(profile.minimumGSSessionLifetime == 5 * 60)
+        #expect(profile.maximumControllerSlots == 4)
+        #expect(
+            profile.offeringServiceBaseURL.absoluteString
+                == "https://gssv-play-prod.xboxlive.com"
+        )
+        #expect(
+            profile.gamePassCatalogProductsURL.absoluteString
+                == "https://catalog.gamepass.com/v3/products"
+        )
+        #expect(
+            profile.fresnoCatalogURL.absoluteString
+                == "https://catalog.gamepass.com/sigls/v3"
+        )
+        #expect(
+            profile.displayCatalogProductsURL.absoluteString
+                == "https://displaycatalog.mp.microsoft.com/v7.0/products"
+        )
+        #expect(
+            profile.defaultNetworkTestTargetURL.absoluteString
+                == "https://gssv-play-prod.xboxlive.com"
+        )
+        #expect(profile.fresnoPlatformContext == "Cloud:XGPUWEB")
+        #expect(
+            profile.fresnoStreamWithAdsRailID
+                == "51f14e5d-bdcb-4e04-b9cb-76e5057702df"
+        )
+        let expectedFresnoSubscriptions = Set([
+            "CFQ7TTC10QFD",
+            "CFQ7TTC0K5DJ",
+            "CFQ7TTC0P85B",
+            "CFQ7TTC0KHS0",
+        ])
+        #expect(
+            profile.fresnoSupportedSubscriptionProductIDs
+                == expectedFresnoSubscriptions
+        )
+        let expectedATMOfferings = Set([
+            "xgpuweb",
+            "cloudgaming",
+            "xgpuwebf2p",
+            "takehomeweb",
+        ])
+        #expect(profile.azureTrafficManagerOfferingIDs == expectedATMOfferings)
+        #expect(
+            profile.cloudSessionCreatePath == "v5/sessions/cloud/play"
+        )
+        #expect(profile.signalingConfiguration == .webInput)
+        #expect(
+            profile.dataChannelDescriptors
+                == XboxCloudDataChannelDescriptor.microsoftWebRTCChannels
+        )
+        #expect(profile.membershipTierByProductID["CFQ7TTC0KHS0"] == .ultimate)
+    }
+
+    @Test("Compatibility profiles reject invalid versions and untrusted endpoints")
+    func compatibilityProfileValidation() throws {
+        let bundled = XboxCloudCompatibilityProfile.bundledV1
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                version: 0
+            )
+        }
+
+        let untrustedEndpoint = try #require(
+            URL(string: "https://example.test/v3/products")
+        )
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                gamePassCatalogProductsURL: untrustedEndpoint
+            )
+        }
+
+        let untrustedDisplayEndpoint = try #require(
+            URL(string: "https://example.test/v7.0/products")
+        )
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                displayCatalogProductsURL: untrustedDisplayEndpoint
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                defaultNetworkTestTargetURL: untrustedEndpoint
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                fresnoPlatformContext: "Cloud:XGPUWEB\r\nInjected"
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                fresnoStreamWithAdsRailID: "not-a-rail-id"
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                fresnoSupportedSubscriptionProductIDs: []
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                azureTrafficManagerOfferingIDs: ["invalid.offering"]
+            )
+        }
+    }
+
+    @Test("Compatibility profile accepts supported controller capacities", arguments: 1 ... 4)
+    func acceptsControllerCapacity(_ maximumControllerSlots: Int) throws {
+        let profile = try compatibilityProfile(
+            basedOn: .bundledV1,
+            maximumControllerSlots: maximumControllerSlots
+        )
+
+        #expect(profile.maximumControllerSlots == maximumControllerSlots)
+    }
+
+    @Test("Compatibility profile rejects controller capacities outside one through four", arguments: [0, 5])
+    func rejectsControllerCapacity(_ maximumControllerSlots: Int) {
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: .bundledV1,
+                maximumControllerSlots: maximumControllerSlots
+            )
+        }
+    }
+
     @Test("Logs into the fixed web default without requiring offering discovery")
     func defaultOfferingLogin() async throws {
         let credentialProvider = XboxCloudCredentialProviderStub(
@@ -48,6 +192,66 @@ struct XboxCloudOfferingServiceTests {
         #expect(!session.description.contains("fixture-gs-secret"))
         #expect(await transport.requests().count == 1)
         #expect(await credentialProvider.requestCount() == 1)
+    }
+
+    @Test("A GS session inside the five-minute lead window refreshes early")
+    func refreshesGSSessionBeforeExpiry() async throws {
+        let transport = RecordingHTTPTransport { _, index in
+            let duration = index == 0 ? 299 : 7200
+            return StubbedHTTPResponse(
+                json: Self.loginResponseJSON.replacingOccurrences(
+                    of: "\"durationInSeconds\": 7200",
+                    with: "\"durationInSeconds\": \(duration)"
+                )
+            )
+        }
+        let provider = try makeProvider(transport: transport)
+
+        let expiring = try await provider.session(for: makeAccount())
+        let refreshed = try await provider.session(for: makeAccount())
+
+        #expect(expiring.expiresAt == fixedDate.addingTimeInterval(299))
+        #expect(refreshed.expiresAt == fixedDate.addingTimeInterval(7200))
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Concurrent requests for one account coalesce one GS login")
+    func coalescesSameAccountLogin() async throws {
+        let gate = XboxCloudOfferingRequestGate()
+        let now = XboxCloudOfferingNowProbe(fixedDate)
+        let credentialProvider = XboxCloudCredentialProviderStub(
+            credential: makeCredential()
+        )
+        let transport = RecordingHTTPTransport { _, index in
+            #expect(index == 0)
+            await gate.suspend()
+            return StubbedHTTPResponse(json: Self.loginResponseJSON)
+        }
+        let configuration = try XboxCloudOfferingServiceConfiguration
+            .microsoftProduction()
+        let provider = XboxCloudGSSessionProvider(
+            credentialProvider: credentialProvider,
+            configuration: configuration,
+            transport: transport,
+            now: { now.value }
+        )
+        let account = makeAccount()
+
+        let first = Task { try await provider.session(for: account) }
+        await gate.waitUntilSuspended()
+        let second = Task { try await provider.session(for: account) }
+        while now.readCount < 3 {
+            await Task.yield()
+        }
+
+        #expect(await transport.requests().count == 1)
+        #expect(await credentialProvider.requestCount() == 1)
+        await gate.release()
+
+        let firstSession = try await first.value
+        let secondSession = try await second.value
+        #expect(firstSession == secondSession)
+        #expect(await transport.requests().count == 1)
     }
 
     @Test("A failed web default discovers and logs into the entitled F2P fallback")
@@ -207,7 +411,7 @@ struct XboxCloudOfferingServiceTests {
             _ = try await countProvider.session(for: makeAccount())
         }
 
-        let sizeTransport = RecordingHTTPTransport { _, index in
+        let sizeTransport = BoundedRecordingHTTPTransport { _, index in
             index == 0
                 ? StubbedHTTPResponse(statusCode: 403)
                 : StubbedHTTPResponse(data: Data(repeating: 0x41, count: 524_289))
@@ -216,6 +420,8 @@ struct XboxCloudOfferingServiceTests {
         await #expect(throws: XboxCloudOfferingServiceError.responseTooLarge(.offerings)) {
             _ = try await sizeProvider.session(for: makeAccount())
         }
+        #expect(await sizeTransport.maximumResponseSizes() == [524_288, 524_288])
+        #expect(await sizeTransport.unboundedRequestCount() == 0)
     }
 
     @Test("Cancellation propagates without storing a partial GS session")
@@ -307,6 +513,29 @@ struct XboxCloudOfferingServiceTests {
         #expect(await transport.requests().count == 2)
     }
 
+    @Test("Removing one account does not cancel another account's GS login")
+    func removingAccountPreservesOtherInFlightLogin() async throws {
+        let gate = XboxCloudOfferingRequestGate()
+        let transport = RecordingHTTPTransport { _, _ in
+            await gate.suspend()
+            return StubbedHTTPResponse(json: Self.loginResponseJSON)
+        }
+        let provider = try makeProvider(transport: transport)
+        let pendingAccount = makeAccount(identifier: "pending-account")
+        let removedAccount = makeAccount(identifier: "removed-account")
+        let task = Task {
+            try await provider.session(for: pendingAccount)
+        }
+        await gate.waitUntilSuspended()
+
+        await provider.removeSession(for: removedAccount)
+        await gate.release()
+
+        let session = try await task.value
+        #expect(session.offeringID == "xgpuweb")
+        #expect(await transport.requests().count == 1)
+    }
+
     private func makeProvider(
         credentialProvider: XboxCloudCredentialProviderStub? = nil,
         transport: any HTTPTransport
@@ -374,6 +603,79 @@ struct XboxCloudOfferingServiceTests {
       }
     }
     """#
+}
+
+private func compatibilityProfile(
+    basedOn profile: XboxCloudCompatibilityProfile,
+    version: Int? = nil,
+    gamePassCatalogProductsURL: URL? = nil,
+    displayCatalogProductsURL: URL? = nil,
+    defaultNetworkTestTargetURL: URL? = nil,
+    fresnoPlatformContext: String? = nil,
+    fresnoStreamWithAdsRailID: String? = nil,
+    fresnoSupportedSubscriptionProductIDs: Set<String>? = nil,
+    azureTrafficManagerOfferingIDs: Set<String>? = nil,
+    maximumControllerSlots: Int? = nil
+) throws -> XboxCloudCompatibilityProfile {
+    try XboxCloudCompatibilityProfile(
+        version: version ?? profile.version,
+        offeringServiceBaseURL: profile.offeringServiceBaseURL,
+        gamePassCatalogProductsURL: gamePassCatalogProductsURL
+            ?? profile.gamePassCatalogProductsURL,
+        fresnoCatalogURL: profile.fresnoCatalogURL,
+        displayCatalogProductsURL: displayCatalogProductsURL
+            ?? profile.displayCatalogProductsURL,
+        defaultNetworkTestTargetURL: defaultNetworkTestTargetURL
+            ?? profile.defaultNetworkTestTargetURL,
+        contentAccessServiceHost: profile.contentAccessServiceHost,
+        userAuthenticationEndpoint: profile.userAuthenticationEndpoint,
+        xstsAuthorizationEndpoint: profile.xstsAuthorizationEndpoint,
+        cloudSessionCreatePath: profile.cloudSessionCreatePath,
+        fresnoPlatformContext: fresnoPlatformContext
+            ?? profile.fresnoPlatformContext,
+        fresnoStreamWithAdsRailID: fresnoStreamWithAdsRailID
+            ?? profile.fresnoStreamWithAdsRailID,
+        fresnoSupportedSubscriptionProductIDs: fresnoSupportedSubscriptionProductIDs
+            ?? profile.fresnoSupportedSubscriptionProductIDs,
+        defaultConsumerOfferingID: profile.defaultConsumerOfferingID,
+        preferredOfferingIDs: profile.preferredOfferingIDs,
+        contentAccessOfferingIDs: profile.contentAccessOfferingIDs,
+        azureTrafficManagerOfferingIDs: azureTrafficManagerOfferingIDs
+            ?? profile.azureTrafficManagerOfferingIDs,
+        gamePassCatalogCallingAppName: profile.gamePassCatalogCallingAppName,
+        gamePassCatalogCallingAppVersion: profile.gamePassCatalogCallingAppVersion,
+        contentAccessCallingAppName: profile.contentAccessCallingAppName,
+        contentAccessCallingAppVersion: profile.contentAccessCallingAppVersion,
+        minimumGSSessionLifetime: profile.minimumGSSessionLifetime,
+        maximumControllerSlots: maximumControllerSlots
+            ?? profile.maximumControllerSlots,
+        signalingConfiguration: profile.signalingConfiguration,
+        dataChannelDescriptors: profile.dataChannelDescriptors,
+        membershipTierByProductID: profile.membershipTierByProductID
+    )
+}
+
+private final class XboxCloudOfferingNowProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let date: Date
+    private var count = 0
+
+    init(_ date: Date) {
+        self.date = date
+    }
+
+    var value: Date {
+        lock.lock()
+        count += 1
+        lock.unlock()
+        return date
+    }
+
+    var readCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
 }
 
 private actor XboxCloudCredentialProviderStub: XboxXSTSCredentialProviding {

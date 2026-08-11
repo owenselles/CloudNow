@@ -304,14 +304,10 @@ private nonisolated struct XboxCatalogProductMetadata: Sendable {
 }
 
 private nonisolated struct XboxCloudCatalogLoader: Sendable {
-    private static let gamePassCatalogURL: URL = {
-        guard let url = URL(
-            string: "https://catalog.gamepass.com/v3/products"
-        ) else {
-            preconditionFailure("CloudNow's Xbox Game Pass Catalog URL is invalid.")
-        }
-        return url
-    }()
+    private static let compatibilityProfile = XboxCloudCompatibilityProfile
+        .bundledV1
+    private static let gamePassCatalogURL = compatibilityProfile
+        .gamePassCatalogProductsURL
 
     private static let maximumContinuationTokenSize = 4096
     private static let maximumWireResultCount = 4096
@@ -322,8 +318,10 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
     private static let fallbackFresnoMetadataBatchSize = 200
     private static let maximumFresnoRequestSize = 131_072
     private static let maximumFresnoMetadataResponseSize = 2_097_152
-    private static let gamePassCatalogCallingAppName = "Xbox Cloud Gaming Web"
-    private static let gamePassCatalogCallingAppVersion = "29.19.17"
+    private static let gamePassCatalogCallingAppName = compatibilityProfile
+        .gamePassCatalogCallingAppName
+    private static let gamePassCatalogCallingAppVersion = compatibilityProfile
+        .gamePassCatalogCallingAppVersion
 
     let sessionProvider: any XboxCloudGSSessionProviding
     let contentAccessProvider: (any XboxContentAccessProviding)?
@@ -347,7 +345,8 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         )
         async let contentAccessLoad: XboxContentAccessSnapshot? = fetchContentAccess(
             account: account,
-            market: market
+            market: market,
+            offeringID: session.offeringID
         )
 
         var continuationToken: String?
@@ -403,14 +402,15 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
 
     private func fetchContentAccess(
         account: XboxCloudAuthorizedAccount,
-        market: String
+        market: String,
+        offeringID: String
     ) async -> XboxContentAccessSnapshot? {
         guard let contentAccessProvider else { return nil }
         do {
             let snapshot = try await contentAccessProvider.fetchContentAccess(
                 for: account,
                 market: market,
-                offeringID: XboxCloudOfferingServiceConfiguration.defaultConsumerOfferingID
+                offeringID: offeringID
             )
             let values = snapshot.productAccessByProductID.values
             let ownedCount = values.count(where: \.isOwned)
@@ -472,6 +472,13 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             let metadata = candidate.normalizedProductID.flatMap {
                 metadataByProductID[$0]
             }
+            let contentAccess = candidate.normalizedProductID.flatMap {
+                contentAccess?.productAccessByProductID[$0]
+            }
+            let playability = Self.standardRoutePlayability(
+                candidate: candidate,
+                contentAccess: contentAccess
+            )
             guard let title = candidate.title ?? metadata?.title else {
                 missingMetadataCount += 1
                 return nil
@@ -484,13 +491,13 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
                 artworkURL: candidate.artworkURL ?? metadata?.artworkURL,
                 heroArtworkURL: candidate.heroArtworkURL ?? metadata?.heroArtworkURL,
                 supportedInputTypes: metadata?.supportedInputTypes ?? [],
-                isOwned: candidate.normalizedProductID.flatMap {
-                    contentAccess?.productAccessByProductID[$0]
-                }?.isOwned == true,
+                isOwned: contentAccess?.isOwned == true,
                 routes: [
                     XboxCloudTitleRoute(
                         titleID: candidate.titleID,
-                        accessKind: candidate.accessKind
+                        accessKind: candidate.accessKind,
+                        availability: playability.availability,
+                        playabilityReason: playability.reason
                     ),
                 ]
             )
@@ -499,6 +506,24 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             "Standard hydration candidates=\(candidates.count, privacy: .public) metadataRequests=\(productIDs.count, privacy: .public) hydrated=\(items.count, privacy: .public) missingMetadata=\(missingMetadataCount, privacy: .public)"
         )
         return items
+    }
+
+    private static func standardRoutePlayability(
+        candidate: XboxCloudCatalogCandidate,
+        contentAccess: XboxProductCloudAccess?
+    ) -> (
+        availability: XboxCloudRouteAvailability,
+        reason: XboxCloudRoutePlayabilityReason
+    ) {
+        guard candidate.playabilityReason == .eligibilityUnconfirmed else {
+            return (candidate.availability, candidate.playabilityReason)
+        }
+        if candidate.accessKind == .standard,
+           contentAccess?.isOwned == true
+        {
+            return (.playable, .contentAccessConfirmed)
+        }
+        return (.requiresEligibility, .eligibilityUnconfirmed)
     }
 
     private func retainedStandardCandidates(
@@ -985,6 +1010,12 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             let hasExplicitEligibilityHints = hasEntitlement
                 && hasFerdinandMetadata
                 && hasPlayableTime
+            let playability = fresnoPlayability(
+                hasEntitlement: hasEntitlement,
+                hasFerdinandMetadata: hasFerdinandMetadata,
+                hasPlayableTime: hasPlayableTime,
+                contentAccess: access
+            )
             if !hasEntitlement {
                 entitlementFalseCount += 1
             }
@@ -1009,7 +1040,9 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
                     routes: [
                         XboxCloudTitleRoute(
                             titleID: titleID,
-                            accessKind: .freeWithAds
+                            accessKind: .freeWithAds,
+                            availability: playability.availability,
+                            playabilityReason: playability.reason
                         ),
                     ]
                 )
@@ -1026,6 +1059,37 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             "Fresno titles raw=\(results.count, privacy: .public) matched=\(orderedItems.count, privacy: .public) invalidShape=\(invalidShapeCount, privacy: .public) missingTitleID=\(missingTitleIDCount, privacy: .public) missingProductID=\(missingProductIDCount, privacy: .public) missingMetadata=\(missingMetadataCount, privacy: .public) ownedMatches=\(ownedMatchCount, privacy: .public) entitlementFalse=\(entitlementFalseCount, privacy: .public) explicitEligibilityHints=\(explicitEligibilityHintCount, privacy: .public)"
         )
         return orderedItems
+    }
+
+    private static func fresnoPlayability(
+        hasEntitlement: Bool,
+        hasFerdinandMetadata: Bool,
+        hasPlayableTime: Bool,
+        contentAccess: XboxProductCloudAccess?
+    ) -> (
+        availability: XboxCloudRouteAvailability,
+        reason: XboxCloudRoutePlayabilityReason
+    ) {
+        if let contentAccess,
+           contentAccess.supportsStreamingFresnoSYOG,
+           contentAccess.isFerdinand,
+           contentAccess.hasPlayableRemainingTime
+        {
+            return (.playable, .contentAccessConfirmed)
+        }
+        if hasEntitlement, hasFerdinandMetadata, hasPlayableTime {
+            return (.playable, .fresnoServiceConfirmed)
+        }
+        if contentAccess?.isGameplayTimeExhausted == true || !hasPlayableTime {
+            return (.requiresEligibility, .gameplayTimeExhausted)
+        }
+        if !hasEntitlement {
+            return (.requiresEligibility, .entitlementRequired)
+        }
+        if !hasFerdinandMetadata || contentAccess?.isFerdinand == false {
+            return (.requiresEligibility, .unsupportedStreamingProgram)
+        }
+        return (.requiresEligibility, .eligibilityUnconfirmed)
     }
 
     private func retainedSnapshot(
@@ -1127,7 +1191,7 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             }
         }
         xboxCatalogLog.info(
-            "Catalog page raw=\(results.count, privacy: .public) accepted=\(candidates.count, privacy: .public) standard=\(diagnostics.standardCount, privacy: .public) freeWithAds=\(diagnostics.freeWithAdsCount, privacy: .public) rejectedShape=\(diagnostics.invalidShapeCount, privacy: .public) rejectedEntitlement=\(diagnostics.entitlementCount, privacy: .public) rejectedTime=\(diagnostics.remainingTimeCount, privacy: .public) rejectedIdentity=\(diagnostics.identityCount, privacy: .public) rejectedPrograms=\(diagnostics.accessMetadataCount, privacy: .public)"
+            "Catalog page raw=\(results.count, privacy: .public) accepted=\(candidates.count, privacy: .public) standard=\(diagnostics.standardCount, privacy: .public) freeWithAds=\(diagnostics.freeWithAdsCount, privacy: .public) unavailableEntitlement=\(diagnostics.entitlementRequiredCount, privacy: .public) unavailableTime=\(diagnostics.gameplayTimeExhaustedCount, privacy: .public) unavailableUnconfirmed=\(diagnostics.eligibilityUnconfirmedCount, privacy: .public) rejectedShape=\(diagnostics.invalidShapeCount, privacy: .public) rejectedIdentity=\(diagnostics.identityCount, privacy: .public) rejectedPrograms=\(diagnostics.accessMetadataCount, privacy: .public)"
         )
         let continuationToken = try parseContinuationToken(from: object)
         return XboxCloudCatalogPage(
@@ -1143,13 +1207,6 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         else {
             return .rejected(.invalidShape)
         }
-        guard hasPlayableEntitlement(details["hasEntitlement"]) else {
-            return .rejected(.entitlement)
-        }
-        guard hasRemainingGameplayTime(details["remainingGameplayTimeInSeconds"]) else {
-            return .rejected(.remainingTime)
-        }
-
         let titleID = safeIdentifier(object["titleId"])
             ?? safeIdentifier(details["titleId"])
         let productID = safeIdentifier(details["productId"])
@@ -1166,6 +1223,14 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         guard let accessKind = accessKind(from: details) else {
             return .rejected(.accessMetadata)
         }
+        let playability = standardCatalogPlayability(
+            entitlement: explicitEntitlementEvidence(
+                details["hasEntitlement"]
+            ),
+            hasRemainingGameplayTime: explicitRemainingTimeEvidence(
+                details["remainingGameplayTimeInSeconds"]
+            )
+        )
 
         return .accepted(XboxCloudCatalogCandidate(
             productID: productID,
@@ -1173,8 +1238,50 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             title: title,
             artworkURL: artworkURL(from: object, details: details),
             heroArtworkURL: heroArtworkURL(from: object, details: details),
-            accessKind: accessKind
+            accessKind: accessKind,
+            availability: playability.availability,
+            playabilityReason: playability.reason
         ))
+    }
+
+    private static func explicitEntitlementEvidence(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else {
+            return nil
+        }
+        return number.boolValue
+    }
+
+    private static func explicitRemainingTimeEvidence(_ value: Any?) -> Bool? {
+        guard let value, !(value is NSNull) else { return true }
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID()
+        else {
+            return nil
+        }
+        let seconds = number.doubleValue
+        guard seconds.isFinite, seconds >= 0 else { return nil }
+        return seconds > 0
+    }
+
+    private static func standardCatalogPlayability(
+        entitlement: Bool?,
+        hasRemainingGameplayTime: Bool?
+    ) -> (
+        availability: XboxCloudRouteAvailability,
+        reason: XboxCloudRoutePlayabilityReason
+    ) {
+        if entitlement == false {
+            return (.requiresEligibility, .entitlementRequired)
+        }
+        if hasRemainingGameplayTime == false {
+            return (.requiresEligibility, .gameplayTimeExhausted)
+        }
+        if entitlement == true, hasRemainingGameplayTime == true {
+            return (.playable, .authenticatedCatalog)
+        }
+        return (.requiresEligibility, .eligibilityUnconfirmed)
     }
 
     private static func hasPlayableEntitlement(_ value: Any?) -> Bool {
@@ -1528,8 +1635,6 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
 
 private nonisolated enum XboxCloudCatalogItemRejection: Sendable {
     case invalidShape
-    case entitlement
-    case remainingTime
     case identity
     case accessMetadata
 }
@@ -1546,6 +1651,8 @@ private nonisolated struct XboxCloudCatalogCandidate: Sendable {
     let artworkURL: URL?
     let heroArtworkURL: URL?
     let accessKind: XboxCloudAccessKind
+    let availability: XboxCloudRouteAvailability
+    let playabilityReason: XboxCloudRoutePlayabilityReason
 
     var normalizedProductID: String? {
         productID?.uppercased()
@@ -1560,8 +1667,9 @@ private nonisolated struct XboxCloudCatalogParseDiagnostics: Sendable {
     private(set) var standardCount = 0
     private(set) var freeWithAdsCount = 0
     private(set) var invalidShapeCount = 0
-    private(set) var entitlementCount = 0
-    private(set) var remainingTimeCount = 0
+    private(set) var entitlementRequiredCount = 0
+    private(set) var gameplayTimeExhaustedCount = 0
+    private(set) var eligibilityUnconfirmedCount = 0
     private(set) var identityCount = 0
     private(set) var accessMetadataCount = 0
 
@@ -1572,16 +1680,25 @@ private nonisolated struct XboxCloudCatalogParseDiagnostics: Sendable {
         case .freeWithAds:
             freeWithAdsCount += 1
         }
+        switch candidate.playabilityReason {
+        case .entitlementRequired:
+            entitlementRequiredCount += 1
+        case .gameplayTimeExhausted:
+            gameplayTimeExhaustedCount += 1
+        case .eligibilityUnconfirmed:
+            eligibilityUnconfirmedCount += 1
+        case .authenticatedCatalog,
+             .fresnoServiceConfirmed,
+             .contentAccessConfirmed,
+             .unsupportedStreamingProgram:
+            break
+        }
     }
 
     mutating func record(_ rejection: XboxCloudCatalogItemRejection) {
         switch rejection {
         case .invalidShape:
             invalidShapeCount += 1
-        case .entitlement:
-            entitlementCount += 1
-        case .remainingTime:
-            remainingTimeCount += 1
         case .identity:
             identityCount += 1
         case .accessMetadata:

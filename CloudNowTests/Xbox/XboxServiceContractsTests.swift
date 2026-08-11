@@ -186,11 +186,13 @@ struct XboxServiceContractsTests {
         let unavailableRoute = XboxCloudTitleRoute(
             titleID: "free-title",
             accessKind: .freeWithAds,
-            availability: .requiresEligibility
+            availability: .requiresEligibility,
+            playabilityReason: .entitlementRequired
         )
         let playableRoute = XboxCloudTitleRoute(
             titleID: "free-title",
-            accessKind: .freeWithAds
+            accessKind: .freeWithAds,
+            playabilityReason: .contentAccessConfirmed
         )
         let standardRoute = XboxCloudTitleRoute(
             titleID: "standard-title",
@@ -216,6 +218,7 @@ struct XboxServiceContractsTests {
 
         let item = try #require(snapshot.items.first)
         #expect(item.routes == [playableRoute, standardRoute])
+        #expect(item.routes.first?.playabilityReason == .contentAccessConfirmed)
         #expect(item.preferredRoute == standardRoute)
     }
 
@@ -335,6 +338,8 @@ struct XboxServiceContractsTests {
         let streamController = configuration.makeStreamController {
             "fixture-transfer-token"
         }
+        let networkTestTarget = try await configuration
+            .resolveNetworkTestTarget(account)
 
         let catalogResult = try await configuredCatalog.fetchCatalog(
             XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
@@ -347,6 +352,11 @@ struct XboxServiceContractsTests {
         #expect(catalogResult == snapshot)
         #expect(streamController.state == .idle)
         #expect(streamController.activeGameID == nil)
+        #expect(
+            networkTestTarget.address
+                == XboxCloudCompatibilityProfile.bundledV1
+                .defaultNetworkTestTargetURL.absoluteString
+        )
         #expect(await catalog.requests() == [XboxCatalogRequest(localeIdentifier: "en-US", market: "US")])
         #expect(await catalog.accounts() == [account])
     }

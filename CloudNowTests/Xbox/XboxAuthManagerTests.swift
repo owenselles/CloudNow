@@ -160,9 +160,142 @@ struct XboxAuthManagerTests {
         await sleeper.resumeFirstRequest()
         await sleeper.waitForRequestCount(2)
 
+        let recordedDelays = await sleeper.delays
+        let expectedDelays: [TimeInterval] = [
+            2 * 24 * 60 * 60 - 5 * 60,
+            24 * 60 * 60 - 5 * 60,
+        ]
         #expect(manager.authorizedAccount == account)
         #expect(await authorization.authorizationCount == 0)
-        #expect(await sleeper.delays == [2 * 24 * 60 * 60, 24 * 60 * 60])
+        #expect(recordedDelays == expectedDelays)
+    }
+
+    @MainActor
+    @Test("Xbox authorization refreshes five minutes before expiry")
+    func refreshesAuthorizationBeforeExpiry() async throws {
+        let clock = XboxAuthDateProbe(fixedDate)
+        let sleeper = XboxAuthSleepProbe()
+        let replacementAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "refreshed-account",
+            displayName: "Fixture Player",
+            expiresAt: fixedDate.addingTimeInterval(7200)
+        )
+        let authorization = ControllableXboxAuthorizationClient()
+        let session = try XboxAuthSession(
+            configuration: makeConfiguration(),
+            token: makeToken(expiresAt: fixedDate.addingTimeInterval(7200))
+        )
+        let expiringAccount = makeAccount(
+            authorizationIdentifier: "expiring-account"
+        )
+        let manager = try XboxAuthManager(
+            environment: makeEnvironment(
+                accountAuthorizationClient: authorization
+            ),
+            oauthClient: XboxOAuthClientStub(token: session.token),
+            now: { clock.value },
+            sleep: { delay in try await sleeper.sleep(delay) },
+            initialSession: session,
+            initialAuthorizedAccount: expiringAccount
+        )
+
+        await sleeper.waitForRequestCount(1)
+        clock.value = fixedDate.addingTimeInterval(55 * 60)
+        await sleeper.resumeFirstRequest()
+        await authorization.waitForAuthorizationRequest()
+        await authorization.resolve(with: replacementAccount)
+        await sleeper.waitForRequestCount(2)
+
+        #expect(manager.authorizedAccount?.authorizationIdentifier == "refreshed-account")
+        #expect(await sleeper.delays.first == 55 * 60)
+    }
+
+    @MainActor
+    @Test("A failed early authorization refresh keeps the usable account and retries")
+    func failedEarlyAuthorizationRefreshRetainsAccount() async throws {
+        let clock = XboxAuthDateProbe(fixedDate)
+        let sleeper = XboxAuthSleepProbe()
+        let authorization = XboxAccountAuthorizationStub(
+            account: makeAccount(authorizationIdentifier: "unused-account"),
+            failsAuthorization: true
+        )
+        let session = try XboxAuthSession(
+            configuration: makeConfiguration(),
+            token: makeToken(expiresAt: fixedDate.addingTimeInterval(7200))
+        )
+        let expiringAccount = makeAccount(
+            authorizationIdentifier: "still-usable-account"
+        )
+        let manager = try XboxAuthManager(
+            environment: makeEnvironment(
+                accountAuthorizationClient: authorization
+            ),
+            oauthClient: XboxOAuthClientStub(token: session.token),
+            now: { clock.value },
+            sleep: { delay in try await sleeper.sleep(delay) },
+            initialSession: session,
+            initialAuthorizedAccount: expiringAccount
+        )
+
+        await sleeper.waitForRequestCount(1)
+        clock.value = fixedDate.addingTimeInterval(55 * 60)
+        await sleeper.resumeFirstRequest()
+        await sleeper.waitForRequestCount(2)
+
+        let recordedDelays = await sleeper.delays
+        let expectedDelays: [TimeInterval] = [55 * 60, 60]
+        #expect(manager.authorizedAccount == expiringAccount)
+        #expect(manager.signInState == .failed(.xboxCloudAuthorizationFailed))
+        #expect(await authorization.authorizationCount == 1)
+        #expect(recordedDelays == expectedDelays)
+    }
+
+    @MainActor
+    @Test("OAuth rotation followed by failed early authorization retains the account")
+    func oauthRotationThenFailedAuthorizationRetainsAccount() async throws {
+        let clock = XboxAuthDateProbe(fixedDate)
+        let sleeper = XboxAuthSleepProbe()
+        let account = makeAccount(
+            authorizationIdentifier: "still-usable-account"
+        )
+        let session = try XboxAuthSession(
+            configuration: makeConfiguration(),
+            token: makeToken(expiresAt: fixedDate.addingTimeInterval(55 * 60))
+        )
+        let refreshedToken = makeToken(
+            accessToken: "refreshed-access",
+            expiresAt: fixedDate.addingTimeInterval(7200)
+        )
+        let authorization = XboxAccountAuthorizationStub(
+            account: makeAccount(authorizationIdentifier: "unused-account"),
+            failsAuthorization: true
+        )
+        let oauth = XboxOAuthClientStub(token: refreshedToken)
+        let persistence = XboxAuthPersistenceStub(session: session)
+        let manager = try XboxAuthManager(
+            environment: makeEnvironment(
+                accountAuthorizationClient: authorization
+            ),
+            oauthClient: oauth,
+            persistence: persistence,
+            now: { clock.value },
+            sleep: { delay in try await sleeper.sleep(delay) },
+            initialSession: session,
+            initialAuthorizedAccount: account
+        )
+
+        await sleeper.waitForRequestCount(1)
+        clock.value = fixedDate.addingTimeInterval(55 * 60)
+        await sleeper.resumeFirstRequest()
+        await sleeper.waitForRequestCount(2)
+
+        let expectedDelays: [TimeInterval] = [55 * 60, 60]
+        #expect(manager.authorizedAccount == account)
+        #expect(manager.session?.token == refreshedToken)
+        #expect(manager.signInState == .failed(.xboxCloudAuthorizationFailed))
+        #expect(await oauth.refreshCount == 1)
+        #expect(await authorization.authorizationCount == 1)
+        #expect(await sleeper.delays == expectedDelays)
     }
 
     @MainActor
@@ -248,17 +381,12 @@ struct XboxAuthManagerTests {
         )
 
         await sleeper.waitForRequestCount(1)
-        #expect(await sleeper.delays == [10])
+        let expectedInitialDelays: [TimeInterval] = [0]
+        #expect(await sleeper.delays == expectedInitialDelays)
 
         clock.value = expiringAccount.expiresAt
         await sleeper.resumeFirstRequest()
-        while await authorization.authorizationCount == 0 {
-            await Task.yield()
-        }
-        for _ in 0 ..< 100 {
-            guard manager.authorizedAccount == nil else { break }
-            await Task.yield()
-        }
+        await sleeper.waitForRequestCount(2)
 
         #expect(manager.authorizedAccount == renewedAccount)
         #expect(manager.signInState == .authorized)
@@ -359,6 +487,52 @@ struct XboxAuthManagerTests {
         #expect(manager.signInState == .idle)
         #expect(await persistence.savedSession == nil)
         #expect(await persistence.deleteGenerations == [2])
+    }
+
+    @MainActor
+    @Test("Reset generation fence rejects a delayed Xbox login rollback")
+    func resetFenceRejectsDelayedLoginRollback() async throws {
+        let configuration = try makeConfiguration()
+        let priorSession = XboxAuthSession(
+            configuration: configuration,
+            token: makeToken()
+        )
+        let harness = CredentialResetTestHarness()
+        try await harness.persistence.saveXboxAuthSession(
+            priorSession,
+            generation: 0
+        )
+        let persistence = DelayedXboxRollbackPersistence(
+            upstream: harness.persistence
+        )
+        let oauth = XboxOAuthClientStub(
+            token: makeToken(accessToken: "replacement-access"),
+            blocksAuthentication: true
+        )
+        let manager = try XboxAuthManager(
+            environment: makeEnvironment(),
+            oauthClient: oauth,
+            persistence: persistence,
+            now: { fixedDate },
+            initialSession: priorSession
+        )
+
+        let login = manager.login()
+        await oauth.waitForBlockedAuthentication()
+        manager.cancelLogin()
+        await persistence.waitUntilSaveIsBlocked()
+
+        _ = await harness.persistence.clearPersistentData(
+            for: .xboxCloudGaming
+        )
+        await persistence.releaseSave()
+        await persistence.waitUntilSaveIsForwarded()
+        await oauth.releaseAuthentication()
+        await login.value
+
+        await #expect(throws: CredentialResetTestStoreError.notFound) {
+            _ = try await harness.persistence.loadXboxAuthSession()
+        }
     }
 
     @MainActor
@@ -945,7 +1119,8 @@ struct XboxAuthManagerTests {
         #expect(manager.session == session)
         #expect(manager.authorizedAccount == account)
         #expect(manager.isXboxCloudAuthorized)
-        #expect(await sleeper.delays == [3600, 3600])
+        let expectedDelays: [TimeInterval] = [3300, 3300]
+        #expect(await sleeper.delays == expectedDelays)
 
         await sleeper.resumeFirstRequest()
         await manager.deactivateForInactiveProvider()

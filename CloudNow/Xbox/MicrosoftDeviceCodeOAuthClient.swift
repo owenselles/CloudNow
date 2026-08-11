@@ -155,6 +155,7 @@ nonisolated enum MicrosoftDeviceCodeState: Equatable, Sendable, CustomStringConv
 nonisolated enum MicrosoftDeviceCodeOAuthError: Error, Equatable, Sendable, LocalizedError {
     case invalidConfiguration(String)
     case invalidResponse
+    case responseTooLarge
     case invalidPayload
     case httpFailure(statusCode: Int)
     case server(statusCode: Int, code: String)
@@ -166,6 +167,7 @@ nonisolated enum MicrosoftDeviceCodeOAuthError: Error, Equatable, Sendable, Loca
         switch self {
         case let .invalidConfiguration(message): message
         case .invalidResponse: "Microsoft OAuth returned an invalid HTTP response."
+        case .responseTooLarge: "Microsoft OAuth returned too much data."
         case .invalidPayload: "Microsoft OAuth returned an invalid response payload."
         case let .httpFailure(statusCode): "Microsoft OAuth request failed with HTTP \(statusCode)."
         case let .server(statusCode, code): "Microsoft OAuth request failed with \(code) (HTTP \(statusCode))."
@@ -184,6 +186,8 @@ nonisolated enum MicrosoftDeviceCodeOAuthError: Error, Equatable, Sendable, Loca
 /// Generic, dependency-free client for Microsoft's documented device-code endpoints.
 /// It does not implement Xbox authentication, catalog, session, or streaming behavior.
 actor MicrosoftDeviceCodeOAuthClient {
+    private static let maximumResponseSize = 262_144
+
     private let transport: any HTTPTransport
     private let now: @Sendable () -> Date
     private let sleep: @Sendable (TimeInterval) async throws -> Void
@@ -409,7 +413,15 @@ actor MicrosoftDeviceCodeOAuthClient {
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
         try Task.checkCancellation()
-        let result = try await transport.data(for: request)
+        let result: (Data, URLResponse)
+        do {
+            result = try await transport.data(
+                for: request,
+                maximumResponseSize: Self.maximumResponseSize
+            )
+        } catch HTTPTransportError.responseTooLarge {
+            throw MicrosoftDeviceCodeOAuthError.responseTooLarge
+        }
         try Task.checkCancellation()
         return result
     }

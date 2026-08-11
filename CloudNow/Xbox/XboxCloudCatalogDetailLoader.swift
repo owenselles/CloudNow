@@ -5,14 +5,8 @@ import Foundation
 /// projection; rich descriptions and screenshots never fan out across the
 /// entire library.
 nonisolated struct XboxCloudCatalogDetailLoader: Sendable {
-    private static let endpoint: URL = {
-        guard let url = URL(
-            string: "https://displaycatalog.mp.microsoft.com/v7.0/products"
-        ) else {
-            preconditionFailure("CloudNow's Xbox detail URL is invalid.")
-        }
-        return url
-    }()
+    private static let endpoint = XboxCloudCompatibilityProfile.bundledV1
+        .displayCatalogProductsURL
 
     private static let maximumResponseSize = 4 * 1024 * 1024
     private static let maximumProductIDSize = 128
@@ -119,9 +113,9 @@ nonisolated struct XboxCloudCatalogDetailLoader: Sendable {
             URLQueryItem(name: "MS-CV", value: newCorrelationVector()),
         ]
         guard let url = components.url,
-              url.scheme == "https",
-              url.host == "displaycatalog.mp.microsoft.com",
-              url.path == "/v7.0/products",
+              url.scheme == endpoint.scheme,
+              url.host == endpoint.host,
+              url.path == endpoint.path,
               url.absoluteString.utf8.count <= 8192
         else {
             throw XboxCloudCatalogError.invalidConfiguration
