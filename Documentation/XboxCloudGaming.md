@@ -158,14 +158,32 @@ API or a separately reviewed, explicit transfer design.
    compatibility profile, but CloudNow does not advertise a live-service slot
    count until Microsoft confirms one. Xbox and PlayStation controllers,
    Menu/View/Share, physical keyboard and mouse, and Escape-to-pause share the
-   negotiated input path. The current service contract has no confirmed Unicode
-   or composition channel, so CloudNow does not advertise native text entry.
+   negotiated input path. On the tvOS Simulator only, UIKit keyboard presses
+   bridge into that same Xbox input path when `GCKeyboard` is unavailable;
+   physical Apple TV input remains exclusively GameController-backed. The
+   current service contract has no confirmed Unicode or composition channel, so
+   CloudNow does not advertise native text entry.
 9. Heartbeats retransmit unchanged input state without synthetic stick movement.
    Video and audio readiness are monitored. Media loss reconnects the existing
    allocation up to three times with exponential backoff inside one absolute
    30-second window. Microphone capture is opt-in and permission-gated; the
    shared audio device retains intent across AirPods or Continuity Microphone
    loss and restores capture when the input route returns.
+10. Xbox stream quality is a preference ceiling, not a launch requirement.
+    `Best` sends Microsoft's `1440` request for confirmed Ultimate accounts and
+    safely falls back through the service's title, region, device, and network
+    policy. Known lower tiers request `1080`; manual aliases remain available for
+    troubleshooting. After the negotiated `messageV1` handshake, CloudNow reports
+    the active display's preferred pixel dimensions and custom-resolution support
+    using Microsoft's `/streaming/characteristics/dimensionschanged` message. The
+    versioned compatibility profile identifies this native implementation as a
+    web-protocol smart-TV client consistently across allocation and launch while
+    retaining CloudNow as the app identity and tvOS as the real operating system.
+11. The current public Xbox web-streaming contract negotiates H.264 SDR video and
+    stereo Opus game audio. CloudNow does not invent unconfirmed 5.1, HEVC, or HDR
+    capabilities. Delivered resolution, codec, color format, and audio channels
+    remain visible in the diagnostics HUD; H.264 SDR8 does not by itself mean a
+    requested 1440p stream was downgraded.
 
 ## Backend decision
 
@@ -217,7 +235,8 @@ current Xbox Cloud Gaming entitlement:
 3. Complete sign-in and confirm Xbox opens its own Home, Library, and Settings
    tabs with the top-left provider dropdown visible.
 4. Validate paid subscription and free/owned access routes. Launch a title and
-   verify queue/provisioning states, video, audio, HDR where supported,
+   verify queue/provisioning states, requested-versus-delivered resolution,
+   H.264 SDR video, stereo audio, observed HDR where the service supplies it,
    cancellation, Leave, Continue without a second allocation, reconnect after a
    temporary network interruption, and explicit End.
 5. Test an Xbox controller, a PlayStation controller, keyboard and mouse,

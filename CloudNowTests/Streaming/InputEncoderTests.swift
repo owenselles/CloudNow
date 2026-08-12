@@ -1,10 +1,34 @@
 @testable import CloudNow
 import Foundation
 import Testing
+import UIKit
 
 @Suite("GFN input protocol encoding")
 struct InputEncoderTests {
     private let timestamp: UInt64 = 0x0102_0304_0506_0708
+
+    @Test(
+        "Shared responder mapping preserves GFN virtual and scan codes",
+        arguments: [
+            (UIKeyboardHIDUsage.keyboardA, UInt16(0x41), UInt16(0x1E)),
+            (.keyboardEscape, 0x1B, 0x01),
+            (.keyboardNonUSPound, 0xE2, 0x56),
+            (.keyboardF13, 0x7C, 0x64),
+            (.keyboardRightArrow, 0x27, 0xE04D),
+            (.keypadEnter, 0x0D, 0xE01C),
+            (.keyboardRightGUI, 0x5C, 0xE05C),
+        ]
+    )
+    func sharedResponderKeyMapping(
+        keyCode: UIKeyboardHIDUsage,
+        expectedVirtualKey: UInt16,
+        expectedScanCode: UInt16
+    ) {
+        #expect(CloudKeyboardHIDMapper.mapping(for: keyCode) == .init(
+            virtualKey: expectedVirtualKey,
+            scanCode: expectedScanCode
+        ))
+    }
 
     @Test("Heartbeat is always the unwrapped little-endian protocol value")
     func heartbeatEncoding() throws {

@@ -70,6 +70,11 @@ nonisolated struct XboxCloudCompatibilityProfile: Equatable, Sendable {
             gamePassCatalogCallingAppVersion: "29.19.17",
             contentAccessCallingAppName: "CloudNow",
             contentAccessCallingAppVersion: "1.0",
+            streamingClientAppType: "browser",
+            streamingClientAppVersion: "29.19.17",
+            streamingClientSDKVersion: "10.6.57",
+            streamingPlatformType: "smarttv",
+            streamingSDKType: "web",
             minimumGSSessionLifetime: 5 * 60,
             maximumControllerSlots: 4,
             signalingConfiguration: XboxCloudSDPConfiguration
@@ -106,6 +111,11 @@ nonisolated struct XboxCloudCompatibilityProfile: Equatable, Sendable {
     let gamePassCatalogCallingAppVersion: String
     let contentAccessCallingAppName: String
     let contentAccessCallingAppVersion: String
+    let streamingClientAppType: String
+    let streamingClientAppVersion: String
+    let streamingClientSDKVersion: String
+    let streamingPlatformType: String
+    let streamingSDKType: String
     let minimumGSSessionLifetime: TimeInterval
     let maximumControllerSlots: Int
     let signalingConfiguration: XboxCloudSDPConfiguration
@@ -134,6 +144,11 @@ nonisolated struct XboxCloudCompatibilityProfile: Equatable, Sendable {
         gamePassCatalogCallingAppVersion: String,
         contentAccessCallingAppName: String,
         contentAccessCallingAppVersion: String,
+        streamingClientAppType: String,
+        streamingClientAppVersion: String,
+        streamingClientSDKVersion: String,
+        streamingPlatformType: String,
+        streamingSDKType: String,
         minimumGSSessionLifetime: TimeInterval,
         maximumControllerSlots: Int,
         signalingConfiguration: XboxCloudSDPConfiguration,
@@ -203,6 +218,11 @@ nonisolated struct XboxCloudCompatibilityProfile: Equatable, Sendable {
               Self.isSafeHeaderValue(gamePassCatalogCallingAppVersion, maximumBytes: 64),
               Self.isSafeHeaderValue(contentAccessCallingAppName, maximumBytes: 128),
               Self.isSafeHeaderValue(contentAccessCallingAppVersion, maximumBytes: 64),
+              streamingClientAppType == "browser",
+              Self.isSafeHeaderValue(streamingClientAppVersion, maximumBytes: 64),
+              Self.isSafeHeaderValue(streamingClientSDKVersion, maximumBytes: 64),
+              streamingPlatformType == "smarttv",
+              streamingSDKType == "web",
               minimumGSSessionLifetime.isFinite,
               minimumGSSessionLifetime >= 30,
               (1 ... 4).contains(maximumControllerSlots),
@@ -237,6 +257,11 @@ nonisolated struct XboxCloudCompatibilityProfile: Equatable, Sendable {
         self.gamePassCatalogCallingAppVersion = gamePassCatalogCallingAppVersion
         self.contentAccessCallingAppName = contentAccessCallingAppName
         self.contentAccessCallingAppVersion = contentAccessCallingAppVersion
+        self.streamingClientAppType = streamingClientAppType
+        self.streamingClientAppVersion = streamingClientAppVersion
+        self.streamingClientSDKVersion = streamingClientSDKVersion
+        self.streamingPlatformType = streamingPlatformType
+        self.streamingSDKType = streamingSDKType
         self.minimumGSSessionLifetime = minimumGSSessionLifetime
         self.maximumControllerSlots = maximumControllerSlots
         self.signalingConfiguration = signalingConfiguration

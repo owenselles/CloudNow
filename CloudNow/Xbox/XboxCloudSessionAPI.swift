@@ -136,16 +136,17 @@ nonisolated struct XboxCloudDeviceInformation: Codable, Equatable, Sendable, Cus
         displayHeightInPixels: Int = 1080,
         pixelDensity: Double = 1
     ) -> Self {
-        Self(
+        let profile = XboxCloudCompatibilityProfile.bundledV1
+        return Self(
             clientAppID: "CloudNow",
-            clientAppType: "native",
-            clientAppVersion: "1",
-            clientSDKVersion: "1",
+            clientAppType: profile.streamingClientAppType,
+            clientAppVersion: profile.streamingClientAppVersion,
+            clientSDKVersion: profile.streamingClientSDKVersion,
             sdkInstallID: sdkInstallID,
             make: "Apple",
             model: "Apple TV",
-            platformType: "tvOS",
-            sdkType: "native",
+            platformType: profile.streamingPlatformType,
+            sdkType: profile.streamingSDKType,
             operatingSystemName: "tvOS",
             operatingSystemVersion: ProcessInfo.processInfo.operatingSystemVersionString,
             displayWidthInPixels: displayWidthInPixels,
@@ -576,6 +577,10 @@ actor XboxCloudSessionAPI {
 
     func createSession(_ launch: XboxCloudSessionLaunchRequest) async throws -> XboxCloudSessionHandle {
         try launch.settings.validate()
+        let device = access.deviceInformation
+        xboxSessionLog.notice(
+            "Xbox allocation profile appType=\(device.clientAppType, privacy: .public) sdk=\(device.clientSDKVersion, privacy: .public)/\(device.sdkType, privacy: .public) platform=\(device.platformType, privacy: .public) display=\(device.displayWidthInPixels, privacy: .public)x\(device.displayHeightInPixels, privacy: .public) density=\(device.pixelDensity, privacy: .public)"
+        )
         let selectedSystemUpdateGroup: String = if let requested = launch.preferredSystemUpdateGroup,
                                                    access.systemUpdateGroups.contains(requested)
         {

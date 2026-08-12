@@ -2,6 +2,7 @@
 import Foundation
 import GameController
 import Testing
+import UIKit
 
 @Suite("Xbox Cloud channel protocol")
 struct XboxCloudInputDriverTests {
@@ -119,24 +120,33 @@ struct XboxCloudInputDriverTests {
         #expect(state.canSendResolutionUpdate)
         #expect(!state.isPublishedReady(
             isMessageChannelOpen: true,
-            didReceiveMessageHandshake: true
+            didReceiveMessageHandshake: true,
+            didSendMessageDimensions: true
         ))
 
         state.didSendAuthorization = true
         #expect(!state.isPublishedReady(
             isMessageChannelOpen: true,
-            didReceiveMessageHandshake: false
+            didReceiveMessageHandshake: false,
+            didSendMessageDimensions: true
+        ))
+        #expect(!state.isPublishedReady(
+            isMessageChannelOpen: true,
+            didReceiveMessageHandshake: true,
+            didSendMessageDimensions: false
         ))
         #expect(state.isPublishedReady(
             isMessageChannelOpen: true,
-            didReceiveMessageHandshake: true
+            didReceiveMessageHandshake: true,
+            didSendMessageDimensions: true
         ))
 
         state.isTransportReady = false
         #expect(!state.canSendAuthorization)
         #expect(!state.isPublishedReady(
             isMessageChannelOpen: true,
-            didReceiveMessageHandshake: true
+            didReceiveMessageHandshake: true,
+            didSendMessageDimensions: true
         ))
     }
 
@@ -343,6 +353,78 @@ struct XboxCloudInputDriverTests {
                 isPressed: true
             )
         )
+    }
+
+    @Test("Simulator responder keyboard maps gameplay keys and Escape")
+    func simulatorResponderKeyboardPolicy() {
+        var state = XboxCloudResponderKeyboardState()
+
+        #expect(state.action(
+            keyCode: .keyboardA,
+            isPressed: true,
+            isSimulator: true,
+            hasGameControllerKeyboard: false
+        ) == .keyboard(isPressed: true, virtualKey: 0x41))
+        #expect(state.action(
+            keyCode: .keyboardA,
+            isPressed: false,
+            isSimulator: true,
+            hasGameControllerKeyboard: false
+        ) == .keyboard(isPressed: false, virtualKey: 0x41))
+        #expect(state.action(
+            keyCode: .keyboardEscape,
+            isPressed: true,
+            isSimulator: true,
+            hasGameControllerKeyboard: false
+        ) == .togglePauseMenu)
+        #expect(state.action(
+            keyCode: .keyboardEscape,
+            isPressed: false,
+            isSimulator: true,
+            hasGameControllerKeyboard: false
+        ) == .ignored)
+    }
+
+    @Test("Responder fallback never duplicates a GCKeyboard or device key")
+    func responderKeyboardIsolation() {
+        var state = XboxCloudResponderKeyboardState()
+
+        #expect(state.action(
+            keyCode: .keyboardW,
+            isPressed: true,
+            isSimulator: false,
+            hasGameControllerKeyboard: false
+        ) == .ignored)
+        #expect(state.action(
+            keyCode: .keyboardW,
+            isPressed: true,
+            isSimulator: true,
+            hasGameControllerKeyboard: true
+        ) == .ignored)
+        #expect(state.action(
+            keyCode: .keyboardW,
+            isPressed: false,
+            isSimulator: true,
+            hasGameControllerKeyboard: false
+        ) == .ignored)
+    }
+
+    @Test("Hot-attaching GCKeyboard still releases a responder key")
+    func responderKeyboardHotAttachRelease() {
+        var state = XboxCloudResponderKeyboardState()
+
+        #expect(state.action(
+            keyCode: .keyboardW,
+            isPressed: true,
+            isSimulator: true,
+            hasGameControllerKeyboard: false
+        ) == .keyboard(isPressed: true, virtualKey: 0x57))
+        #expect(state.action(
+            keyCode: .keyboardW,
+            isPressed: false,
+            isSimulator: true,
+            hasGameControllerKeyboard: true
+        ) == .keyboard(isPressed: false, virtualKey: 0x57))
     }
 
     @Test("Physical alphanumeric keys map to Windows virtual keys", arguments: [
@@ -745,6 +827,69 @@ struct XboxCloudInputDriverTests {
         #expect(object["version"] as? String == "messageV1")
         #expect(object["id"] as? String == id.uuidString)
         #expect(object["cv"] as? String == "fixture.3.1")
+    }
+
+    @Test("Preferred display dimensions use Microsoft's messageV1 contract")
+    func preferredDisplayDimensions() throws {
+        let id = try #require(
+            UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")
+        )
+        let data = try XboxCloudChannelProtocolCodec.dimensionsChanged(
+            id: id,
+            correlationVector: "fixture.3",
+            preferredWidth: 3840,
+            preferredHeight: 2160,
+            pixelDensity: 2
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let contentText = try #require(object["content"] as? String)
+        let contentData = try #require(contentText.data(using: .utf8))
+        let content = try #require(
+            JSONSerialization.jsonObject(with: contentData) as? [String: Any]
+        )
+
+        #expect(object["type"] as? String == "Message")
+        #expect(object["id"] as? String == id.uuidString)
+        #expect(
+            object["target"] as? String
+                == "/streaming/characteristics/dimensionschanged"
+        )
+        #expect(object["cv"] as? String == "fixture.3.1")
+        #expect(content["horizontal"] as? Int == 508)
+        #expect(content["vertical"] as? Int == 285)
+        #expect(content["preferredWidth"] as? Int == 3840)
+        #expect(content["preferredHeight"] as? Int == 2160)
+        #expect(content["safeAreaLeft"] as? Int == 0)
+        #expect(content["safeAreaTop"] as? Int == 0)
+        #expect(content["safeAreaRight"] as? Int == 3840)
+        #expect(content["safeAreaBottom"] as? Int == 2160)
+        #expect(content["supportsCustomResolution"] as? Bool == true)
+    }
+
+    @Test(
+        "Preferred display dimensions reject invalid values",
+        arguments: [
+            (width: 0, height: 2160, density: 2.0),
+            (width: 3840, height: 16385, density: 2.0),
+            (width: 3840, height: 2160, density: .infinity),
+        ]
+    )
+    func invalidPreferredDisplayDimensions(
+        width: Int,
+        height: Int,
+        density: Double
+    ) {
+        #expect(throws: XboxCloudChannelProtocolError.encodingFailed) {
+            try XboxCloudChannelProtocolCodec.dimensionsChanged(
+                id: UUID(),
+                correlationVector: "fixture.3",
+                preferredWidth: width,
+                preferredHeight: height,
+                pixelDensity: density
+            )
+        }
     }
 
     @Test("Only an exact messageV1 handshake acknowledgement opens messages")

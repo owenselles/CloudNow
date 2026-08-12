@@ -3639,7 +3639,17 @@ private struct XboxSettingsView: View {
     private var xboxResolutionOptions: [
         CloudNowStreamQualityOption<XboxCloudDisplayResolution>
     ] {
-        modeViewModel.streamCapabilities.resolutions.map(resolutionOption)
+        let available = Set(modeViewModel.streamCapabilities.resolutions)
+        return [
+            .automatic,
+            .qhd,
+            .fullHDHighQuality,
+            .fullHD,
+            .hdHighQuality,
+            .hd,
+        ]
+        .filter(available.contains)
+        .map(resolutionOption)
     }
 
     private var xboxResolutionSelection: Binding<XboxCloudDisplayResolution> {
@@ -3660,7 +3670,9 @@ private struct XboxSettingsView: View {
     ) -> CloudNowStreamQualityOption<XboxCloudDisplayResolution> {
         CloudNowStreamQualityOption(
             value: resolution,
-            title: resolution.label,
+            title: resolution == .automatic
+                ? L10n.text("best")
+                : resolution.label,
             badge: resolution == .qhd
                 ? L10n.text("maximum_abbreviation")
                 : resolution.badge,

@@ -14,6 +14,11 @@ struct XboxCloudOfferingServiceTests {
         #expect(profile.defaultConsumerOfferingID == "xgpuweb")
         #expect(profile.preferredOfferingIDs.first == "xgpuweb")
         #expect(profile.gamePassCatalogCallingAppVersion == "29.19.17")
+        #expect(profile.streamingClientAppType == "browser")
+        #expect(profile.streamingClientAppVersion == "29.19.17")
+        #expect(profile.streamingClientSDKVersion == "10.6.57")
+        #expect(profile.streamingPlatformType == "smarttv")
+        #expect(profile.streamingSDKType == "web")
         #expect(profile.minimumGSSessionLifetime == 5 * 60)
         #expect(profile.maximumControllerSlots == 4)
         #expect(
@@ -126,6 +131,12 @@ struct XboxCloudOfferingServiceTests {
             _ = try compatibilityProfile(
                 basedOn: bundled,
                 azureTrafficManagerOfferingIDs: ["invalid.offering"]
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try compatibilityProfile(
+                basedOn: bundled,
+                streamingClientAppType: "native"
             )
         }
     }
@@ -615,6 +626,7 @@ private func compatibilityProfile(
     fresnoStreamWithAdsRailID: String? = nil,
     fresnoSupportedSubscriptionProductIDs: Set<String>? = nil,
     azureTrafficManagerOfferingIDs: Set<String>? = nil,
+    streamingClientAppType: String? = nil,
     maximumControllerSlots: Int? = nil
 ) throws -> XboxCloudCompatibilityProfile {
     try XboxCloudCompatibilityProfile(
@@ -646,6 +658,12 @@ private func compatibilityProfile(
         gamePassCatalogCallingAppVersion: profile.gamePassCatalogCallingAppVersion,
         contentAccessCallingAppName: profile.contentAccessCallingAppName,
         contentAccessCallingAppVersion: profile.contentAccessCallingAppVersion,
+        streamingClientAppType: streamingClientAppType
+            ?? profile.streamingClientAppType,
+        streamingClientAppVersion: profile.streamingClientAppVersion,
+        streamingClientSDKVersion: profile.streamingClientSDKVersion,
+        streamingPlatformType: profile.streamingPlatformType,
+        streamingSDKType: profile.streamingSDKType,
         minimumGSSessionLifetime: profile.minimumGSSessionLifetime,
         maximumControllerSlots: maximumControllerSlots
             ?? profile.maximumControllerSlots,

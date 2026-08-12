@@ -244,6 +244,12 @@ struct XboxCloudPlayerView: View {
             videoTrack: controller.videoTrack,
             showsOverlay: showsOverlay,
             onMenuPress: toggleOverlay,
+            onKeyboardEvent: { isPressed, virtualKey in
+                controller.sendKeyboardEvent(
+                    isPressed: isPressed,
+                    virtualKey: virtualKey
+                )
+            },
             onDecodedVideoFormatChanged: { format in
                 Task { @MainActor in
                     controller.recordDecodedVideoFormat(format)

@@ -24,7 +24,6 @@ struct XboxCloudStreamControllerTests {
         #expect(!defaults.diagnosticsEnabled)
         #expect(!defaults.enableRtcEventLog)
         #expect(!defaults.microphoneEnabled)
-
         let settings = XboxCloudStreamSettings(
             displayResolution: .qhd,
             codecPreference: .h265,
@@ -192,46 +191,65 @@ struct XboxCloudStreamControllerTests {
         #expect(encoded == testCase.encodedValue)
     }
 
-    @Test("Xbox quality capabilities fail closed to service-confirmed automatic")
+    @Test("Xbox quality capabilities request the account ceiling and downgrade safely")
     func xboxQualityCapabilities() {
         let unknown = XboxCloudStreamCapabilities.resolved(
             for: nil,
             isMembershipKnown: false
         )
         #expect(unknown.resolutions == [.automatic])
+        #expect(unknown.requestedResolution(for: .automatic) == .qhd)
+        #expect(unknown.requestedResolution(for: .fullHD) == .qhd)
 
         let ultimate = XboxCloudStreamCapabilities.resolved(
             for: .ultimate,
             isMembershipKnown: true
         )
-        #expect(ultimate.resolutions == [.automatic])
+        #expect(ultimate.standardResolutions == [.automatic, .fullHD, .hd])
+        #expect(
+            ultimate.higherQualityResolutions
+                == [.qhd, .fullHDHighQuality, .hdHighQuality]
+        )
+        #expect(ultimate.requestedResolution(for: .automatic) == .qhd)
+        for resolution in ultimate.resolutions where resolution != .automatic {
+            #expect(ultimate.requestedResolution(for: resolution) == resolution)
+        }
 
         let pcGamePass = XboxCloudStreamCapabilities.resolved(
             for: .pcGamePass,
             isMembershipKnown: true
         )
-        #expect(pcGamePass.resolutions == [.automatic])
+        #expect(pcGamePass.resolutions == [.automatic, .fullHD, .hd])
+        #expect(pcGamePass.requestedResolution(for: .automatic) == .fullHD)
 
         let persisted = XboxCloudStreamSettings(
             displayResolution: .qhd,
             codecPreference: .h265
         )
-        let hiddenSelection = pcGamePass.normalized(persisted)
-        #expect(hiddenSelection.displayResolution == .automatic)
-        #expect(hiddenSelection.codecPreference == .automatic)
+        let downgradedSelection = pcGamePass.normalized(persisted)
+        #expect(downgradedSelection.displayResolution == .fullHD)
+        #expect(downgradedSelection.codecPreference == .automatic)
         #expect(persisted.displayResolution == .qhd)
         #expect(pcGamePass.selectableResolution(for: .hdHighQuality) == .automatic)
         #expect(pcGamePass.selectableResolution(for: .fullHDHighQuality) == .automatic)
         #expect(pcGamePass.selectableResolution(for: .qhd) == .automatic)
+        #expect(pcGamePass.selectableResolution(for: .fullHD) == .fullHD)
 
         let ultimateSelection = ultimate.normalized(
             XboxCloudStreamSettings(
-                displayResolution: .qhd,
+                displayResolution: .automatic,
                 codecPreference: .h265
             )
         )
-        #expect(ultimateSelection.displayResolution == .automatic)
+        #expect(ultimateSelection.displayResolution == .qhd)
         #expect(ultimateSelection.codecPreference == .automatic)
+
+        let unrecognizedTier = XboxCloudStreamCapabilities.resolved(
+            for: nil,
+            isMembershipKnown: true
+        )
+        #expect(unrecognizedTier.resolutions == [.automatic, .fullHD, .hd])
+        #expect(unrecognizedTier.requestedResolution(for: .automatic) == .fullHD)
     }
 
     @Test("Xbox quality labels use localized technical badges")
@@ -260,6 +278,8 @@ struct XboxCloudStreamControllerTests {
         #expect(activeMode.widthInPixels == 3840)
         #expect(activeMode.heightInPixels == 2160)
         #expect(activeMode.pixelDensity == 2)
+        #expect(activeMode.logicalWidthInPixels == 1920)
+        #expect(activeMode.logicalHeightInPixels == 1080)
 
         let nativeBounds = XboxCloudDisplayMetadata.resolved(
             currentModeSize: CGSize(width: 0, height: 0),

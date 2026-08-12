@@ -137,24 +137,39 @@ nonisolated enum XboxCloudDiagnosticsPolicy {
     }
 }
 
-/// Xbox quality aliases retained for backwards-compatible settings decoding
-/// and protocol messages. CloudNow exposes only Automatic until the live
-/// service explicitly confirms manual choices for this account and route.
+/// Account-aware Xbox request ceilings. Resolution aliases are preferences,
+/// not requirements: the service can still adapt below the requested value for
+/// the title, region, device, or live network condition.
 nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
     let standardResolutions: [XboxCloudDisplayResolution]
     let higherQualityResolutions: [XboxCloudDisplayResolution]
+    private let bestAvailableResolution: XboxCloudDisplayResolution
 
     var resolutions: [XboxCloudDisplayResolution] {
         standardResolutions + higherQualityResolutions
     }
 
     static func resolved(
-        for _: XboxMembershipTier?,
-        isMembershipKnown _: Bool
+        for membershipTier: XboxMembershipTier?,
+        isMembershipKnown: Bool
     ) -> Self {
-        Self(
-            standardResolutions: [.automatic],
-            higherQualityResolutions: []
+        guard isMembershipKnown else {
+            return Self(
+                standardResolutions: [.automatic],
+                higherQualityResolutions: [],
+                // A maximum preference is safe while access metadata loads:
+                // Xbox may adapt it down without failing session allocation.
+                bestAvailableResolution: .qhd
+            )
+        }
+
+        let isUltimate = membershipTier == .ultimate
+        return Self(
+            standardResolutions: [.automatic, .fullHD, .hd],
+            higherQualityResolutions: isUltimate
+                ? [.qhd, .fullHDHighQuality, .hdHighQuality]
+                : [],
+            bestAvailableResolution: isUltimate ? .qhd : .fullHD
         )
     }
 
@@ -167,9 +182,23 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
         return .automatic
     }
 
+    /// Converts the persisted picker selection into the service preference
+    /// sent before authorization. "Best" requests the account ceiling;
+    /// selections that became unavailable downgrade to that safe ceiling.
+    func requestedResolution(
+        for persistedResolution: XboxCloudDisplayResolution
+    ) -> XboxCloudDisplayResolution {
+        guard persistedResolution != .automatic,
+              resolutions.contains(persistedResolution)
+        else {
+            return bestAvailableResolution
+        }
+        return persistedResolution
+    }
+
     func normalized(_ settings: XboxCloudStreamSettings) -> XboxCloudStreamSettings {
         var normalized = settings.normalizedForClient
-        normalized.displayResolution = selectableResolution(
+        normalized.displayResolution = requestedResolution(
             for: settings.displayResolution
         )
         // Xbox selects the negotiated WebRTC codec. Retain this legacy field

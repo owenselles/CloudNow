@@ -13,6 +13,14 @@ nonisolated struct XboxCloudDisplayMetadata: Equatable, Sendable {
     let heightInPixels: Int
     let pixelDensity: Double
 
+    var logicalWidthInPixels: Int {
+        max(1, Int((Double(widthInPixels) / pixelDensity).rounded()))
+    }
+
+    var logicalHeightInPixels: Int {
+        max(1, Int((Double(heightInPixels) / pixelDensity).rounded()))
+    }
+
     static func resolved(
         currentModeSize: CGSize?,
         nativeBoundsSize: CGSize?,
@@ -228,8 +236,8 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                 let display = Self.currentDisplayMetadata
                 return .cloudNowTV(
                     sdkInstallID: installationIdentity.loadOrCreateSDKInstallID(),
-                    displayWidthInPixels: display.widthInPixels,
-                    displayHeightInPixels: display.heightInPixels,
+                    displayWidthInPixels: display.logicalWidthInPixels,
+                    displayHeightInPixels: display.logicalHeightInPixels,
                     pixelDensity: display.pixelDensity
                 )
             },
@@ -302,6 +310,7 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
         transport: any HTTPTransport
     ) -> XboxCloudNativeStreamRuntime {
         let settings = settings.normalizedForClient
+        let display = currentDisplayMetadata
         return XboxCloudNativeStreamRuntime(
             transport: XboxCloudWebRTCTransport(
                 signaling: XboxCloudSignalingAPI(
@@ -312,7 +321,10 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                 deadzone: Float(settings.controllerDeadzone),
                 rumbleEnabled: settings.rumbleEnabled,
                 rumbleIntensity: Float(settings.rumbleIntensity),
-                preferredResolution: settings.displayResolution
+                preferredResolution: settings.displayResolution,
+                preferredDisplayWidth: display.widthInPixels,
+                preferredDisplayHeight: display.heightInPixels,
+                pixelDensity: display.pixelDensity
             ),
             microphoneRequested: settings.microphoneEnabled,
             diagnosticsEnabled: settings.diagnosticsEnabled,

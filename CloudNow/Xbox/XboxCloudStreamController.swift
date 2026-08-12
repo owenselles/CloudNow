@@ -828,6 +828,14 @@ final class XboxCloudStreamController {
         activeOperation?.runtime?.setInputPaused(isPaused)
     }
 
+    func sendKeyboardEvent(isPressed: Bool, virtualKey: UInt8) {
+        guard state == .streaming else { return }
+        activeOperation?.runtime?.sendKeyboardEvent(
+            isPressed: isPressed,
+            virtualKey: virtualKey
+        )
+    }
+
     /// Sends bounded ASCII-compatible text over the negotiated keyboard
     /// channel. Product UI does not expose this for composed Unicode input.
     @discardableResult

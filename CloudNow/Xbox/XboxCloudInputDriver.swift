@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import GameController
 import Observation
 import os
+@preconcurrency import UIKit
 
 private nonisolated let xboxInputLog = Logger(
     subsystem: "com.owenselles.CloudNow2",
@@ -50,6 +51,26 @@ nonisolated enum XboxCloudChannelProtocolCodec {
         let resolutionAlias: String
     }
 
+    private struct Message: Encodable {
+        let type = "Message"
+        let content: String
+        let id: String
+        let target: String
+        let cv: String
+    }
+
+    private struct DimensionsChanged: Encodable {
+        let horizontal: Int
+        let vertical: Int
+        let preferredWidth: Int
+        let preferredHeight: Int
+        let safeAreaLeft = 0
+        let safeAreaTop = 0
+        let safeAreaRight: Int
+        let safeAreaBottom: Int
+        let supportsCustomResolution = true
+    }
+
     static func messageHandshake(
         id: UUID,
         correlationVector: String
@@ -94,6 +115,58 @@ nonisolated enum XboxCloudChannelProtocolCodec {
                     resolutionAlias: resolution.rawValue
                 )
             )
+        } catch {
+            throw XboxCloudChannelProtocolError.encodingFailed
+        }
+    }
+
+    static func dimensionsChanged(
+        id: UUID,
+        correlationVector: String,
+        preferredWidth: Int,
+        preferredHeight: Int,
+        pixelDensity: Double
+    ) throws -> Data {
+        guard (1 ... 16384).contains(preferredWidth),
+              (1 ... 16384).contains(preferredHeight),
+              pixelDensity.isFinite,
+              (0.1 ... 16).contains(pixelDensity)
+        else {
+            throw XboxCloudChannelProtocolError.encodingFailed
+        }
+        let millimetersPerInch = 25.4
+        let logicalPixelsPerInch = 96.0
+        let horizontal = max(1, Int(
+            Double(preferredWidth) / pixelDensity
+                / logicalPixelsPerInch * millimetersPerInch
+        ))
+        let vertical = max(1, Int(
+            Double(preferredHeight) / pixelDensity
+                / logicalPixelsPerInch * millimetersPerInch
+        ))
+        do {
+            let contentData = try JSONEncoder().encode(DimensionsChanged(
+                horizontal: horizontal,
+                vertical: vertical,
+                preferredWidth: preferredWidth,
+                preferredHeight: preferredHeight,
+                safeAreaRight: preferredWidth,
+                safeAreaBottom: preferredHeight
+            ))
+            guard let content = String(data: contentData, encoding: .utf8)
+            else {
+                throw XboxCloudChannelProtocolError.encodingFailed
+            }
+            return try JSONEncoder().encode(Message(
+                content: content,
+                id: id.uuidString,
+                target: "/streaming/characteristics/dimensionschanged",
+                cv: extendedCorrelationVector(
+                    correlationVector
+                )
+            ))
+        } catch let error as XboxCloudChannelProtocolError {
+            throw error
         } catch {
             throw XboxCloudChannelProtocolError.encodingFailed
         }
@@ -234,13 +307,15 @@ nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
 
     func isPublishedReady(
         isMessageChannelOpen: Bool,
-        didReceiveMessageHandshake: Bool
+        didReceiveMessageHandshake: Bool,
+        didSendMessageDimensions: Bool
     ) -> Bool {
         canSendAuthorization
             && didSendAuthorization
             && didSendResolutionUpdate
             && isMessageChannelOpen
             && didReceiveMessageHandshake
+            && didSendMessageDimensions
     }
 }
 
@@ -752,6 +827,52 @@ nonisolated enum XboxCloudKeyboardMapper {
     }
 }
 
+nonisolated enum XboxCloudResponderKeyboardAction: Equatable, Sendable {
+    case ignored
+    case togglePauseMenu
+    case keyboard(isPressed: Bool, virtualKey: UInt8)
+}
+
+/// State for the UIKit responder fallback used by tvOS Simulator. Physical
+/// keyboards continue through GCKeyboard; when one is available this path
+/// fails closed so the same key cannot be sent twice.
+nonisolated struct XboxCloudResponderKeyboardState: Sendable {
+    private var forwardedKeys: [Int: UInt8] = [:]
+
+    mutating func action(
+        keyCode: UIKeyboardHIDUsage,
+        isPressed: Bool,
+        isSimulator: Bool,
+        hasGameControllerKeyboard: Bool
+    ) -> XboxCloudResponderKeyboardAction {
+        let identifier = Int(keyCode.rawValue)
+        if !isPressed,
+           let virtualKey = forwardedKeys.removeValue(forKey: identifier)
+        {
+            return .keyboard(isPressed: false, virtualKey: virtualKey)
+        }
+
+        guard isPressed,
+              isSimulator,
+              !hasGameControllerKeyboard
+        else {
+            return .ignored
+        }
+        if keyCode == .keyboardEscape {
+            return .togglePauseMenu
+        }
+        guard forwardedKeys[identifier] == nil,
+              let mapping = CloudKeyboardHIDMapper.mapping(for: keyCode),
+              mapping.virtualKey <= UInt8.max
+        else {
+            return .ignored
+        }
+        let virtualKey = UInt8(mapping.virtualKey)
+        forwardedKeys[identifier] = virtualKey
+        return .keyboard(isPressed: true, virtualKey: virtualKey)
+    }
+}
+
 /// Bounded ASCII-to-virtual-key helper retained for future or Debug-only input
 /// plumbing. It is not a Unicode/composition channel and is not advertised as
 /// generic text entry. Unsupported composed Unicode fails closed.
@@ -953,6 +1074,9 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private let rumbleEnabled: Bool
     private let rumbleIntensity: Float
     private let preferredResolution: XboxCloudDisplayResolution
+    private let preferredDisplayWidth: Int
+    private let preferredDisplayHeight: Int
+    private let pixelDensity: Double
 
     private var generation: UInt64 = 0
     private var sink: XboxCloudInputDataSink?
@@ -993,6 +1117,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var inputMode: XboxCloudInputTransportMode?
     private var controlAuthorizationData: Data?
     private var messageHandshakeData: Data?
+    private var messageDimensionsData: Data?
     private var resolutionUpdateData: Data?
     private var controlSendState = XboxCloudControlSendState()
     private var isTransportReady = false
@@ -1006,6 +1131,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var didSendInitialControllerReport = false
     private var didSendMessageHandshake = false
     private var didReceiveMessageHandshake = false
+    private var didSendMessageDimensions = false
     private var lastReportedReadiness = false
     private var isPaused = false
     private var needsPausedNeutralSnapshot = false
@@ -1018,12 +1144,18 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         deadzone: Float,
         rumbleEnabled: Bool,
         rumbleIntensity: Float,
-        preferredResolution: XboxCloudDisplayResolution
+        preferredResolution: XboxCloudDisplayResolution,
+        preferredDisplayWidth: Int,
+        preferredDisplayHeight: Int,
+        pixelDensity: Double
     ) {
         self.deadzone = deadzone
         self.rumbleEnabled = rumbleEnabled
         self.rumbleIntensity = rumbleIntensity
         self.preferredResolution = preferredResolution
+        self.preferredDisplayWidth = preferredDisplayWidth
+        self.preferredDisplayHeight = preferredDisplayHeight
+        self.pixelDensity = pixelDensity
         sampledStates.reserveCapacity(Self.controllerCapacity)
     }
 
@@ -1052,6 +1184,14 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 .messageHandshake(
                     id: UUID(),
                     correlationVector: correlationVector
+                )
+            messageDimensionsData = try? XboxCloudChannelProtocolCodec
+                .dimensionsChanged(
+                    id: UUID(),
+                    correlationVector: correlationVector,
+                    preferredWidth: preferredDisplayWidth,
+                    preferredHeight: preferredDisplayHeight,
+                    pixelDensity: pixelDensity
                 )
             resolutionUpdateData = try? XboxCloudChannelProtocolCodec
                 .userRequestedResolutionUpdate(
@@ -1278,6 +1418,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 if isOpen {
                     didSendMessageHandshake = false
                     didReceiveMessageHandshake = false
+                    didSendMessageDimensions = false
                 }
             case .chat:
                 break
@@ -1536,6 +1677,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         inputMode = nil
         controlAuthorizationData = nil
         messageHandshakeData = nil
+        messageDimensionsData = nil
         resolutionUpdateData = nil
         controlSendState.reset()
         isTransportReady = false
@@ -1549,6 +1691,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         didSendInitialControllerReport = false
         didSendMessageHandshake = false
         didReceiveMessageHandshake = false
+        didSendMessageDimensions = false
         lastReportedReadiness = false
         isPaused = false
         needsPausedNeutralSnapshot = false
@@ -1819,6 +1962,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private func sampleAndFlushLocked() {
         let forceInputReport = sampleOverlayGesturesLocked()
         flushMessageHandshakeLocked()
+        flushMessageDimensionsLocked()
         flushClientMetadataLocked()
         flushControlUpdatesLocked()
         if isPaused {
@@ -2032,6 +2176,26 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
         didSendMessageHandshake =
             sink.sendMessage(messageHandshakeData) == .accepted
+    }
+
+    private func flushMessageDimensionsLocked() {
+        guard isMessageChannelOpen,
+              didReceiveMessageHandshake,
+              !didSendMessageDimensions,
+              let sink,
+              let messageDimensionsData
+        else {
+            return
+        }
+        didSendMessageDimensions =
+            sink.sendMessage(messageDimensionsData) == .accepted
+        if didSendMessageDimensions {
+            let width = preferredDisplayWidth
+            let height = preferredDisplayHeight
+            xboxInputLog.notice(
+                "[Message] preferred dimensions queued \(width, privacy: .public)x\(height, privacy: .public) custom=true"
+            )
+        }
     }
 
     private func flushClientMetadataLocked() {
@@ -2344,7 +2508,9 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             isMessageChannelOpen: !isMessageChannelNegotiated
                 || isMessageChannelOpen,
             didReceiveMessageHandshake: !isMessageChannelNegotiated
-                || didReceiveMessageHandshake
+                || didReceiveMessageHandshake,
+            didSendMessageDimensions: !isMessageChannelNegotiated
+                || didSendMessageDimensions
         )
         guard nextValue != lastReportedReadiness else { return }
         lastReportedReadiness = nextValue
@@ -2793,14 +2959,30 @@ final class XboxCloudInputDriver {
         deadzone: Float = 0.15,
         rumbleEnabled: Bool = true,
         rumbleIntensity: Float = 1,
-        preferredResolution: XboxCloudDisplayResolution = .automatic
+        preferredResolution: XboxCloudDisplayResolution = .automatic,
+        preferredDisplayWidth: Int = 1920,
+        preferredDisplayHeight: Int = 1080,
+        pixelDensity: Double = 1
     ) {
         self.notificationCenter = notificationCenter
+        let displayWidth = (1 ... 16384).contains(preferredDisplayWidth)
+            ? preferredDisplayWidth
+            : 1920
+        let displayHeight = (1 ... 16384).contains(preferredDisplayHeight)
+            ? preferredDisplayHeight
+            : 1080
+        let displayDensity = pixelDensity.isFinite
+            && (0.1 ... 16).contains(pixelDensity)
+            ? pixelDensity
+            : 1
         worker = XboxCloudInputWorker(
             deadzone: min(max(deadzone, 0), 0.95),
             rumbleEnabled: rumbleEnabled,
             rumbleIntensity: min(max(rumbleIntensity, 0), 1),
-            preferredResolution: preferredResolution
+            preferredResolution: preferredResolution,
+            preferredDisplayWidth: displayWidth,
+            preferredDisplayHeight: displayHeight,
+            pixelDensity: displayDensity
         )
     }
 

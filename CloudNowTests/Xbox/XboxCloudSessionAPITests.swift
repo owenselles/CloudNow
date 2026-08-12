@@ -19,6 +19,11 @@ struct XboxCloudSessionAPITests {
         #expect(information.displayWidthInPixels == 3840)
         #expect(information.displayHeightInPixels == 2160)
         #expect(information.pixelDensity == 2)
+        #expect(information.clientAppType == "browser")
+        #expect(information.clientAppVersion == "29.19.17")
+        #expect(information.clientSDKVersion == "10.6.57")
+        #expect(information.platformType == "smarttv")
+        #expect(information.sdkType == "web")
     }
 
     @Test("Create sends the cloud play contract with redacted credentials")

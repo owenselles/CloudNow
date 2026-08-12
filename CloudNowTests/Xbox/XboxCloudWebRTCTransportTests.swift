@@ -198,6 +198,12 @@ struct XboxCloudWebRTCTransportTests {
         #expect(
             XboxCloudVideoCodecPreferencePolicy.preferredCapabilityIndexes(
                 capabilities,
+                enableHEVC: nil
+            ) == nil
+        )
+        #expect(
+            XboxCloudVideoCodecPreferencePolicy.preferredCapabilityIndexes(
+                capabilities,
                 enableHEVC: false
             ) == [0, 1, 4]
         )
@@ -241,6 +247,21 @@ struct XboxCloudWebRTCTransportTests {
                 enableHEVC: false
             ) == nil
         )
+    }
+
+    @Test("Local offer diagnostics detect only explicit resolution ceilings")
+    func localOfferResolutionLimits() {
+        let unrestricted = XboxCloudLocalOfferSummary(
+            sdp: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n"
+        )
+        #expect(!unrestricted.hasImageAttribute)
+        #expect(!unrestricted.hasMaximumFrameSize)
+
+        let restricted = XboxCloudLocalOfferSummary(
+            sdp: "a=imageattr:96 recv [x=[0:1920],y=[0:1080]]\r\na=fmtp:96 max-fs=8160\r\n"
+        )
+        #expect(restricted.hasImageAttribute)
+        #expect(restricted.hasMaximumFrameSize)
     }
 
     @Test("Microsoft channel labels, protocols, and reliability are exact")

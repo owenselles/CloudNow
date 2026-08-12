@@ -114,6 +114,17 @@ nonisolated enum XboxCloudVideoCodecPreferencePolicy {
     }
 }
 
+nonisolated struct XboxCloudLocalOfferSummary: Equatable, Sendable {
+    let hasImageAttribute: Bool
+    let hasMaximumFrameSize: Bool
+
+    init(sdp: String) {
+        let normalized = sdp.lowercased()
+        hasImageAttribute = normalized.contains("a=imageattr:")
+        hasMaximumFrameSize = normalized.contains("max-fs=")
+    }
+}
+
 nonisolated enum XboxCloudWebRTCConnectionState: Equatable, Sendable {
     case idle
     case preparing
@@ -1686,6 +1697,10 @@ extension XboxCloudWebRTCTransport: XboxCloudWebRTCNegotiatingPeer {
         else {
             throw XboxCloudWebRTCTransportError.unableToCreateOffer
         }
+        let summary = XboxCloudLocalOfferSummary(sdp: localDescription.sdp)
+        xboxWebRTCLog.notice(
+            "Xbox local offer resolution limits imageattr=\(summary.hasImageAttribute, privacy: .public) maxFs=\(summary.hasMaximumFrameSize, privacy: .public)"
+        )
         return localDescription.sdp
     }
 

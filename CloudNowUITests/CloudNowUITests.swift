@@ -587,9 +587,12 @@ final class CloudNowUITests: XCTestCase {
         )
         XCTAssertTrue(xboxLanguage.waitForExistence(timeout: 3))
         XCTAssertTrue(xboxLanguage.isEnabled)
-        XCTAssertFalse(
-            element("settings.stream-quality.resolution", in: xboxApp).exists
+        let xboxResolution = element(
+            "settings.stream-quality.resolution",
+            in: xboxApp
         )
+        XCTAssertTrue(xboxResolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(xboxResolution.isEnabled)
         XCTAssertFalse(
             element("settings.stream-quality.frame-rate", in: xboxApp).exists
         )
