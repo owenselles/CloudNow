@@ -75,7 +75,7 @@ nonisolated struct CredentialResetTestHarness {
     }
 }
 
-actor DelayedGeForceNowRollbackPersistence: AuthSessionPersistence {
+actor DelayedGeForceNowRollbackPersistence {
     private nonisolated let upstream: AppPersistenceStore
     private var isSaveBlocked = false
     private var didForwardSave = false
@@ -149,7 +149,10 @@ actor DelayedGeForceNowRollbackPersistence: AuthSessionPersistence {
     }
 }
 
-actor DelayedXboxRollbackPersistence: XboxAuthSessionPersistence {
+/// Kept separate so Sendable isolation inference does not apply to the actor declaration.
+extension DelayedGeForceNowRollbackPersistence: AuthSessionPersistence {}
+
+actor DelayedXboxRollbackPersistence {
     private nonisolated let upstream: AppPersistenceStore
     private var isSaveBlocked = false
     private var didForwardSave = false
@@ -222,3 +225,6 @@ actor DelayedXboxRollbackPersistence: XboxAuthSessionPersistence {
         }
     }
 }
+
+/// Kept separate so Sendable isolation inference does not apply to the actor declaration.
+extension DelayedXboxRollbackPersistence: XboxAuthSessionPersistence {}
