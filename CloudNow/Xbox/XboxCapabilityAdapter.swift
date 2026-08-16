@@ -73,11 +73,7 @@ nonisolated struct XboxCapabilityAdapter: CloudGamingCapabilityProviding {
             ),
             streamOptions: .supported(
                 CloudStreamOptionsCapability(
-                    qualityControls: XboxCloudQualityBetaPolicy
-                        .qualityControls(
-                            allowsBandwidthPreference: XboxCloudQualityBetaPolicy
-                                .currentBuildAllowsBandwidthPreference
-                        ),
+                    qualityControls: [.automatic, .resolution],
                     audioControls: [.automatic],
                     hdrControls: [.automatic],
                     supportsServiceConfirmedRegions: false

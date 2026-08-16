@@ -13,11 +13,6 @@ struct XboxCloudStreamControllerTests {
         let encodedValue: String
     }
 
-    struct BandwidthNormalizationCase: Sendable {
-        let requestedKbps: Int
-        let expectedKbps: Int
-    }
-
     @Test("Xbox settings stay separate, bounded, and resilient")
     func xboxSettings() throws {
         let defaults = try JSONDecoder().decode(
@@ -29,11 +24,8 @@ struct XboxCloudStreamControllerTests {
         #expect(!defaults.diagnosticsEnabled)
         #expect(!defaults.enableRtcEventLog)
         #expect(!defaults.microphoneEnabled)
-        #expect(defaults.bandwidthPreference == .automatic)
-        #expect(defaults.bandwidthPreference.maximumRequestedBitrateKbps == nil)
         let settings = XboxCloudStreamSettings(
             displayResolution: .qhd,
-            bandwidthPreference: .manual(maximumBitrateKbps: 100_000),
             codecPreference: .h265,
             gameLanguage: "fr_FR",
             statsMode: .standard,
@@ -55,7 +47,6 @@ struct XboxCloudStreamControllerTests {
         )
         #expect(roundTrip == settings)
         #expect(roundTrip.displayResolution == .qhd)
-        #expect(roundTrip.bandwidthPreference.maximumRequestedBitrateKbps == 100_000)
         #expect(roundTrip.codecPreference == .h265)
         #expect(roundTrip.statsMode == .standard)
         #expect(roundTrip.diagnosticsEnabled)
@@ -70,7 +61,6 @@ struct XboxCloudStreamControllerTests {
             )
         )
         #expect(futureValues.displayResolution == .automatic)
-        #expect(futureValues.bandwidthPreference == .automatic)
         #expect(futureValues.codecPreference == .automatic)
         #expect(
             futureValues.effectiveGameLanguage(defaultLocale: "de-DE") == "de-DE"
@@ -82,134 +72,14 @@ struct XboxCloudStreamControllerTests {
                 #"{"bandwidthPreference":true,"microphoneEnabled":"future"}"#.utf8
             )
         )
-        #expect(malformedMicrophone.bandwidthPreference == .automatic)
         #expect(!malformedMicrophone.microphoneEnabled)
-    }
-
-    @Test(
-        "Xbox manual bandwidth normalizes to 15–100 Mbps in 5 Mbps steps",
-        arguments: [
-            BandwidthNormalizationCase(
-                requestedKbps: Int.min,
-                expectedKbps: 15000
-            ),
-            BandwidthNormalizationCase(
-                requestedKbps: 15000,
-                expectedKbps: 15000
-            ),
-            BandwidthNormalizationCase(
-                requestedKbps: 17499,
-                expectedKbps: 15000
-            ),
-            BandwidthNormalizationCase(
-                requestedKbps: 17500,
-                expectedKbps: 20000
-            ),
-            BandwidthNormalizationCase(
-                requestedKbps: 99999,
-                expectedKbps: 100_000
-            ),
-            BandwidthNormalizationCase(
-                requestedKbps: Int.max,
-                expectedKbps: 100_000
-            ),
-        ]
-    )
-    func bandwidthNormalization(
-        testCase: BandwidthNormalizationCase
-    ) throws {
-        let preference = XboxCloudBandwidthPreference.manual(
-            maximumBitrateKbps: testCase.requestedKbps
+        let encoded = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(futureValues)
+            ) as? [String: Any]
         )
-
-        #expect(
-            preference.maximumRequestedBitrateKbps
-                == testCase.expectedKbps
-        )
-        let roundTrip = try JSONDecoder().decode(
-            XboxCloudBandwidthPreference.self,
-            from: JSONEncoder().encode(preference)
-        )
-        #expect(roundTrip == preference)
-    }
-
-    @Test("Xbox bandwidth decoding accepts legacy scalars and fails closed")
-    func bandwidthResilientDecoding() throws {
-        let automaticRoundTrip = try JSONDecoder().decode(
-            XboxCloudBandwidthPreference.self,
-            from: JSONEncoder().encode(
-                XboxCloudBandwidthPreference.automatic
-            )
-        )
-        let numeric = try JSONDecoder().decode(
-            XboxCloudBandwidthPreference.self,
-            from: Data("25000".utf8)
-        )
-        let numericString = try JSONDecoder().decode(
-            XboxCloudBandwidthPreference.self,
-            from: Data(#""35000""#.utf8)
-        )
-        let automaticString = try JSONDecoder().decode(
-            XboxCloudBandwidthPreference.self,
-            from: Data(#""automatic""#.utf8)
-        )
-        let missingManualValue = try JSONDecoder().decode(
-            XboxCloudBandwidthPreference.self,
-            from: Data(#"{"mode":"manual"}"#.utf8)
-        )
-        let malformed = try JSONDecoder().decode(
-            XboxCloudBandwidthPreference.self,
-            from: Data("true".utf8)
-        )
-
-        #expect(automaticRoundTrip == .automatic)
-        #expect(numeric.maximumRequestedBitrateKbps == 25000)
-        #expect(numericString.maximumRequestedBitrateKbps == 35000)
-        #expect(automaticString == .automatic)
-        #expect(missingManualValue == .automatic)
-        #expect(malformed == .automatic)
-    }
-
-    @Test("Xbox bandwidth adjustment keeps Automatic above the manual range")
-    func bandwidthAdjustment() {
-        let automatic = XboxCloudBandwidthPreference.automatic
-        let minimum = XboxCloudBandwidthPreference.manual(
-            maximumBitrateKbps: 15000
-        )
-        let maximum = XboxCloudBandwidthPreference.manual(
-            maximumBitrateKbps: 100_000
-        )
-
-        #expect(automatic.canDecrease)
-        #expect(!automatic.canIncrease)
-        #expect(automatic.increased() == .automatic)
-        #expect(automatic.decreased() == maximum)
-        #expect(minimum.canDecrease == false)
-        #expect(minimum.canIncrease)
-        #expect(minimum.decreased() == minimum)
-        #expect(
-            minimum.increased().maximumRequestedBitrateKbps == 20000
-        )
-        #expect(maximum.canDecrease)
-        #expect(maximum.canIncrease)
-        #expect(
-            maximum.decreased().maximumRequestedBitrateKbps == 95000
-        )
-        #expect(maximum.increased() == .automatic)
-    }
-
-    @Test("Xbox bandwidth capability remains beta gated")
-    func bandwidthCapabilityPolicy() {
-        #expect(
-            XboxCloudQualityBetaPolicy.qualityControls(
-                allowsBandwidthPreference: false
-            ) == [.automatic, .resolution]
-        )
-        #expect(
-            XboxCloudQualityBetaPolicy.qualityControls(
-                allowsBandwidthPreference: true
-            ) == [.automatic, .bitrate, .resolution]
-        )
+        #expect(encoded["bandwidthPreference"] == nil)
+        #expect(encoded["qualityProfile"] == nil)
     }
 
     @Test(
@@ -365,19 +235,10 @@ struct XboxCloudStreamControllerTests {
 
         let persisted = XboxCloudStreamSettings(
             displayResolution: .qhd,
-            bandwidthPreference: .manual(maximumBitrateKbps: 100_000),
             codecPreference: .h265
         )
         let downgradedSelection = pcGamePass.normalized(persisted)
         #expect(downgradedSelection.displayResolution == .fullHD)
-        #if XBOX_QUALITY_BETA
-            #expect(
-                downgradedSelection.bandwidthPreference
-                    == persisted.bandwidthPreference
-            )
-        #else
-            #expect(downgradedSelection.bandwidthPreference == .automatic)
-        #endif
         #expect(downgradedSelection.codecPreference == .automatic)
         #expect(persisted.displayResolution == .qhd)
         #expect(pcGamePass.selectableResolution(for: .hdHighQuality) == .automatic)
@@ -515,17 +376,14 @@ struct XboxCloudStreamControllerTests {
         #expect(await lifecycle.deleteCount() == 1)
     }
 
-    @Test("Allocation profile follows the quality Beta compilation gate")
-    func allocationProfileGate() async throws {
+    @Test("Allocation always uses the production Microsoft web profile")
+    func allocationProfile() async throws {
         let lifecycle = try XboxStreamLifecycleStub()
         let lifecycleFactory = XboxLifecycleFactoryStub([lifecycle])
         let runtimeFactory = XboxRuntimeFactoryStub([
             XboxStreamRuntimeStub(),
         ])
-        let requestedSettings = XboxCloudStreamSettings(
-            bandwidthPreference: .manual(maximumBitrateKbps: 100_000),
-            qualityProfile: .microsoftWeb
-        )
+        let requestedSettings = XboxCloudStreamSettings()
         let controller = makeController(
             lifecycleFactory: lifecycleFactory,
             runtimeFactory: runtimeFactory
@@ -541,22 +399,7 @@ struct XboxCloudStreamControllerTests {
         let access = try #require(lifecycleFactory.receivedAccess.first)
         let runtimeSettings = try #require(runtimeFactory.receivedSettings.first)
         #expect(controller.activeStreamSettings == runtimeSettings)
-        #if XBOX_QUALITY_BETA
-            #expect(
-                access.compatibilityProfile.identifier
-                    == XboxCloudQualityProfilePreference.microsoftWeb.rawValue
-            )
-            #expect(
-                runtimeSettings.bandwidthPreference
-                    == requestedSettings.bandwidthPreference
-            )
-        #else
-            #expect(
-                access.compatibilityProfile.identifier
-                    == XboxCloudQualityProfilePreference.nativeTVControl.rawValue
-            )
-            #expect(runtimeSettings.bandwidthPreference == .automatic)
-        #endif
+        #expect(access.compatibilityProfile == .microsoftWeb)
         #expect(await controller.stop())
     }
 
@@ -1196,8 +1039,6 @@ struct XboxCloudStreamControllerTests {
 
         let launchSettings = XboxCloudStreamSettings(
             displayResolution: .qhd,
-            bandwidthPreference: .manual(maximumBitrateKbps: 100_000),
-            qualityProfile: .microsoftWeb,
             microphoneEnabled: true
         )
         let activeSettings = launchSettings.normalizedForClient

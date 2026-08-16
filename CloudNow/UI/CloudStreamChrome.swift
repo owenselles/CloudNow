@@ -123,7 +123,7 @@ private extension View {
     }
 }
 
-#if DEBUG || XBOX_QUALITY_BETA
+#if DEBUG
     /// Network-free UI automation surface for every shared lifecycle state.
     /// It deliberately consumes the same provider-neutral model as adapters.
     struct CloudStreamPresentationFixtureView: View {
@@ -328,18 +328,9 @@ private extension View {
                 diagnosticsEnabled: false,
                 rtcEventLogActive: false,
                 qualityRequest: StatsHUDQualityRequest(
-                    resolution: "1440p",
-                    bandwidth: requestedBandwidth
+                    resolution: "1440p"
                 )
             )
-        }
-
-        private var requestedBandwidth: String? {
-            #if XBOX_QUALITY_BETA
-                "100 Mbps"
-            #else
-                nil
-            #endif
         }
     }
 #endif

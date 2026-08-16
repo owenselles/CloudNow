@@ -235,8 +235,6 @@ final class XboxCloudStreamController {
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var resumeExpiryTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsGeneration: UInt64 = 0
-    @ObservationIgnored private var qualityTelemetrySampleCount = 0
-    @ObservationIgnored private var qualityTelemetryResolution: [Int] = []
     @ObservationIgnored private var activeOperation: ActiveOperation?
     @ObservationIgnored private var pendingSessionDeletions: [
         XboxCloudStreamSessionToken: SessionDeletion
@@ -601,22 +599,12 @@ final class XboxCloudStreamController {
         generation operationGeneration: UInt64
     ) async throws {
         do {
-            #if XBOX_QUALITY_BETA
-                XboxCloudQualityTelemetry.shared.record(
-                    .qualityRequest(
-                        resolution: settings.displayResolution,
-                        maximumBitrateKbps: settings.bandwidthPreference
-                            .maximumRequestedBitrateKbps
-                    )
-                )
-            #endif
             let gsSession = try await sessionProvider.session(for: account)
             try ensureCurrent(operationGeneration)
             serverLocation = gsSession.defaultRegion.name
             let access = try gsSession.makeSessionAccessContext(
                 deviceInformation: deviceInformation,
-                compatibilityProfile: XboxCloudQualityBetaPolicy
-                    .compatibilityProfile(for: settings.qualityProfile),
+                compatibilityProfile: .microsoftWeb,
                 msaTransferToken: transferToken
             )
             let lifecycle = makeSessionLifecycle(access)
@@ -832,7 +820,7 @@ final class XboxCloudStreamController {
     func setStatsMode(_ mode: StreamStatsMode) {
         guard statsMode != mode else { return }
         statsMode = mode
-        if mode == .off, !XboxQualityBetaBuild.isEnabled {
+        if mode == .off {
             stopStatisticsMonitor()
             return
         }
@@ -934,7 +922,7 @@ final class XboxCloudStreamController {
     }
 
     private var shouldCollectStatistics: Bool {
-        statsMode != .off || XboxQualityBetaBuild.isEnabled
+        statsMode != .off
     }
 
     private func applyStatistics(_ snapshot: XboxCloudRTCStatsSnapshot) {
@@ -946,50 +934,12 @@ final class XboxCloudStreamController {
         if snapshot.audio != audioStats {
             audioStats = snapshot.audio
         }
-        recordQualityTelemetryIfNeeded(
-            stream: nextStats,
-            audio: snapshot.audio
-        )
-    }
-
-    private func recordQualityTelemetryIfNeeded(
-        stream: StreamStats,
-        audio: AudioStats
-    ) {
-        #if XBOX_QUALITY_BETA
-            guard stream.resolutionWidth > 0,
-                  stream.resolutionHeight > 0
-            else {
-                return
-            }
-            qualityTelemetrySampleCount &+= 1
-            let resolution = [stream.resolutionWidth, stream.resolutionHeight]
-            let resolutionChanged = resolution != qualityTelemetryResolution
-            guard resolutionChanged || qualityTelemetrySampleCount.isMultiple(of: 10)
-            else {
-                return
-            }
-            qualityTelemetryResolution = resolution
-            XboxCloudQualityTelemetry.shared.record(
-                .streamDelivery(
-                    width: stream.resolutionWidth,
-                    height: stream.resolutionHeight,
-                    framesPerSecond: max(0, Int(stream.fps.rounded())),
-                    bitrateKbps: max(0, stream.bitrateKbps),
-                    codec: XboxCloudQualityTelemetryCodec(name: stream.codec),
-                    colorMode: colorState.detectedMode,
-                    audioChannels: max(0, audio.codecChannels)
-                )
-            )
-        #endif
     }
 
     private func resetStatistics(settings: XboxCloudStreamSettings) {
         stopStatisticsMonitor()
         stats = StreamStats()
         audioStats = AudioStats()
-        qualityTelemetrySampleCount = 0
-        qualityTelemetryResolution = []
         statsMode = settings.statsMode
         diagnosticsEnabled = false
         rtcEventLogActive = false

@@ -110,7 +110,7 @@ cp Local.xcconfig.example Local.xcconfig
 Edit `Local.xcconfig` and replace `YOUR_TEAM_ID_HERE` with your Team ID (find it at [developer.apple.com](https://developer.apple.com) → Account → Membership).
 
 Then attach it to the project in Xcode:
-**Project navigator → CloudNow project → Info tab → Configurations → expand Debug, Beta, and Release → set "Based on" to `Local.xcconfig`** for all three.
+**Project navigator → CloudNow project → Info tab → Configurations → expand Debug and Release → set "Based on" to `Local.xcconfig`** for both.
 
 `Local.xcconfig` is gitignored and should never be committed.
 
@@ -129,19 +129,10 @@ These commands require the exact tool versions pinned by CI: SwiftFormat 0.62.1 
 
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
-For ordinary development and final archives, use the shared `CloudNow` scheme.
-For physical Xbox 1440p profile testing, select the shared `CloudNow Beta`
-scheme. Its `Beta` configuration defines `XBOX_QUALITY_BETA`, exposes the native
-tvOS control and pinned Microsoft-web profiles, enables bounded redacted quality
-telemetry, and shows the Xbox Automatic/unlimited or 15–100 Mbps bandwidth
-preference. The bandwidth value is persisted and observed but is not yet sent as
-a bitrate-control message or SDP limit. Archiving this scheme produces the
-quality TestFlight build; the final `Release` configuration omits these beta
-controls and uses the native control profile.
-
-Follow the exact Cyberpunk 2077 A/B procedure in [Xbox Cloud Gaming
-integration](Documentation/XboxCloudGaming.md#xbox-1440p-profile-ab) before
-enabling any bitrate, codec, HDR, surround-audio, or Xbox RTC-runtime experiment.
+Use the shared `CloudNow` scheme for development and final archives. Xbox `Best`
+requests 1440p for eligible Ultimate accounts through the validated Microsoft-web
+profile, while the in-stream HUD distinguishes requested from delivered
+resolution.
 
 On first launch, choose **GeForce NOW** or **Xbox Cloud Gaming**. CloudNow then shows that provider's QR code and PIN; scan it or visit the displayed URL on another device to complete sign-in, then return to the TV. The two accounts are stored independently, so you can sign into both and use the top-left provider dropdown to move between their separate modes without signing in again.
 
@@ -297,9 +288,6 @@ Scripts/test.sh --unit
 # UI automation only
 Scripts/test.sh --ui
 
-# Xbox quality Beta protocol, settings, and UI coverage
-Scripts/test.sh --beta
-
 # Explicit full-suite form; equivalent to no argument
 Scripts/test.sh --full
 ```
@@ -316,8 +304,6 @@ TestArtifacts/<timestamp>-<mode>/Coverage/targets.txt
 TestArtifacts/<timestamp>-<mode>/Coverage/targets.json
 TestArtifacts/<timestamp>-<mode>/Coverage/required-sources.txt
 TestArtifacts/<timestamp>-<mode>/Coverage/required-sources.json
-TestArtifacts/<timestamp>-beta/Coverage/xbox-quality-beta-sources.txt
-TestArtifacts/<timestamp>-beta/Coverage/xbox-quality-beta-sources.json
 ```
 
 Successful full and unit runs require 100% xccov executable-line coverage for
@@ -327,17 +313,6 @@ Apple Swift 6.3.3), LLVM reports a zero branch denominator for these Swift
 sources. The gate therefore measures executable lines only and does not claim
 an unavailable branch-coverage percentage; deterministic tests enumerate the
 behavioral paths separately.
-
-Beta runs enforce a separate 100% executable-line gate for the deterministic
-Xbox quality logic listed in `Scripts/xbox-quality-beta-coverage.json`. Each
-manifest entry is bounded by unique source markers, so unrelated executable
-lines in the same large Swift file cannot inflate the result. Missing,
-reversed, duplicate, overlapping, or non-executable regions fail the gate. The
-scope covers sanitized and bounded telemetry, compatibility-profile validation,
-22-character session identifiers, profile-specific headers and launch settings,
-bandwidth and Beta normalization, display dimensions, and control bootstrap
-ordering. Asynchronous framework and hardware glue remains scenario-tested and
-is not represented as line or branch coverage.
 
 `TestArtifacts/` is gitignored. Unit and integration tests use Swift Testing (`import Testing`, `@Suite`, `@Test`, `#expect`, and `#require`). XCTest is reserved for `XCUIApplication` UI automation.
 

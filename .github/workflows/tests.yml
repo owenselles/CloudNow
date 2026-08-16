@@ -30,9 +30,6 @@ jobs:
       - name: Run tvOS test plan
         run: Scripts/test.sh
 
-      - name: Run Xbox quality Beta tests
-        run: Scripts/test.sh --beta
-
       - name: Upload compact coverage
         if: always()
         uses: actions/upload-artifact@v7
@@ -41,7 +38,6 @@ jobs:
           path: |
             TestArtifacts/**/Coverage/targets.*
             TestArtifacts/**/Coverage/required-sources.*
-            TestArtifacts/**/Coverage/xbox-quality-beta-sources.*
           if-no-files-found: ignore
           retention-days: 14
 

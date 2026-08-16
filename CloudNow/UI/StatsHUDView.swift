@@ -2,7 +2,6 @@ import SwiftUI
 
 nonisolated struct StatsHUDQualityRequest: Equatable {
     let resolution: String
-    let bandwidth: String?
 }
 
 /// Provider-neutral values rendered by CloudNow's in-stream statistics HUD.
@@ -414,12 +413,6 @@ private struct CoreStatsColumn: View {
                     value: String(format: "%.1f ms / %.1f %%", stats.jitterMs, stats.packetLossPercent)
                 )
                 StatsRow(label: L10n.text("bitrate"), value: bitrateValue)
-                if let requestedBandwidth = qualityRequest?.bandwidth {
-                    StatsRow(
-                        label: L10n.text("max_bitrate"),
-                        value: requestedBandwidth
-                    )
-                }
                 StatsRow(
                     label: L10n.text("connection"),
                     value: L10n.text(stats.selectedNetworkPath)

@@ -74,38 +74,19 @@ struct XboxCloudOfferingServiceTests {
         #expect(profile.membershipTierByProductID["CFQ7TTC0KHS0"] == .ultimate)
     }
 
-    @Test(
-        "Session compatibility profiles are explicit and versioned",
-        arguments: [
-            (
-                XboxCloudSessionCompatibilityProfile.nativeTVControl,
-                "xbox-native-tvos-control-v1",
-                XboxCloudSessionLaunchEnvelope.nativeTVControl,
-                true
-            ),
-            (
-                XboxCloudSessionCompatibilityProfile.officialWebBeta,
-                "xbox-web-www-29.19.17-sdk-10.6.57",
-                XboxCloudSessionLaunchEnvelope.microsoftWeb,
-                false
-            ),
-        ]
-    )
-    func sessionCompatibilityProfiles(
-        _ profile: XboxCloudSessionCompatibilityProfile,
-        identifier: String,
-        launchEnvelope: XboxCloudSessionLaunchEnvelope,
-        usesRegionalAllocationHints: Bool
-    ) {
-        #expect(profile.identifier == identifier)
-        #expect(profile.launchEnvelope == launchEnvelope)
-        #expect(profile.usesRegionalAllocationHints == usesRegionalAllocationHints)
+    @Test("Production session compatibility profile is explicit and versioned")
+    func sessionCompatibilityProfile() {
+        let profile = XboxCloudSessionCompatibilityProfile.microsoftWeb
+
+        #expect(profile.identifier == "xbox-web-www-29.19.17-sdk-10.6.57")
+        #expect(profile.launchEnvelope == .microsoftWeb)
+        #expect(!profile.usesRegionalAllocationHints)
         #expect(profile.launchSDKType == "web")
     }
 
-    @Test("Microsoft web beta identity matches its versioned request profile")
-    func officialWebBetaProfile() throws {
-        let profile = XboxCloudSessionCompatibilityProfile.officialWebBeta
+    @Test("Microsoft web identity matches its versioned request profile")
+    func microsoftWebProfile() throws {
+        let profile = XboxCloudSessionCompatibilityProfile.microsoftWeb
         let identity = try #require(profile.deviceIdentity)
 
         #expect(identity.clientAppID == "www.xbox.com")
@@ -137,7 +118,7 @@ struct XboxCloudOfferingServiceTests {
         arguments: [15, 33]
     )
     func sessionProfileIdentifierLength(_ length: Int) {
-        let webProfile = XboxCloudSessionCompatibilityProfile.officialWebBeta
+        let webProfile = XboxCloudSessionCompatibilityProfile.microsoftWeb
         #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
             _ = try XboxCloudSessionCompatibilityProfile(
                 identifier: "xbox-invalid-session-id-policy",
@@ -154,16 +135,17 @@ struct XboxCloudOfferingServiceTests {
 
     @Test("Session profiles reject unsafe identifiers and incomplete web identities")
     func sessionProfileValidation() {
-        let webProfile = XboxCloudSessionCompatibilityProfile.officialWebBeta
+        let webProfile = XboxCloudSessionCompatibilityProfile.microsoftWeb
         #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
             _ = try XboxCloudSessionCompatibilityProfile(
                 identifier: "Xbox-Unsafe",
-                deviceIdentity: nil,
-                launchEnvelope: .nativeTVControl,
+                deviceIdentity: webProfile.deviceIdentity,
+                launchEnvelope: .microsoftWeb,
                 launchSDKType: "web",
-                launchOSName: "tvOS",
-                usesRegionalAllocationHints: true,
-                clientSessionIDPolicy: .provided
+                launchOSName: "macOS",
+                usesRegionalAllocationHints: false,
+                clientSessionIDPolicy: .lowercaseHex(length: 22),
+                httpUserAgent: webProfile.httpUserAgent
             )
         }
         #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
@@ -176,7 +158,7 @@ struct XboxCloudOfferingServiceTests {
                 usesRegionalAllocationHints: false,
                 clientSessionIDPolicy: .lowercaseHex(length: 22),
                 httpUserAgent: XboxCloudSessionCompatibilityProfile
-                    .officialWebBeta.httpUserAgent
+                    .microsoftWeb.httpUserAgent
             )
         }
         #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {

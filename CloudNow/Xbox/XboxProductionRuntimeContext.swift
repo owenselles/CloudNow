@@ -334,7 +334,6 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                     )
                 }
             ),
-            bandwidthPreference: settings.bandwidthPreference,
             microphoneRequested: settings.microphoneEnabled,
             diagnosticsEnabled: settings.diagnosticsEnabled,
             rtcEventLogRequested: settings.enableRtcEventLog

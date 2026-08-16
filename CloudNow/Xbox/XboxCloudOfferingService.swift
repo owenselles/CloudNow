@@ -1,12 +1,10 @@
 import Foundation
 
 nonisolated enum XboxCloudSessionLaunchEnvelope: Equatable, Sendable {
-    case nativeTVControl
     case microsoftWeb
 }
 
 nonisolated enum XboxCloudClientSessionIDPolicy: Equatable, Sendable {
-    case provided
     case lowercaseHex(length: Int)
 }
 
@@ -31,27 +29,10 @@ nonisolated struct XboxCloudSessionDeviceIdentity: Equatable, Sendable {
 
 /// Xbox-only allocation identity and launch-envelope policy.
 ///
-/// The native profile deliberately preserves CloudNow's existing values. The
-/// web profile is opt-in so beta selection cannot silently alter production
-/// allocation requests.
+/// This profile mirrors the versioned Microsoft web identity proven to receive
+/// the account's highest available stream resolution.
 nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
-    static let nativeTVControl: Self = {
-        guard let profile = try? Self(
-            identifier: "xbox-native-tvos-control-v1",
-            deviceIdentity: nil,
-            launchEnvelope: .nativeTVControl,
-            launchSDKType: "web",
-            launchOSName: "tvOS",
-            usesRegionalAllocationHints: true,
-            clientSessionIDPolicy: .provided,
-            httpUserAgent: nil
-        ) else {
-            preconditionFailure("CloudNow's native Xbox session profile is invalid.")
-        }
-        return profile
-    }()
-
-    static let officialWebBeta: Self = {
+    static let microsoftWeb: Self = {
         guard let profile = try? Self(
             identifier: "xbox-web-www-29.19.17-sdk-10.6.57",
             deviceIdentity: XboxCloudSessionDeviceIdentity(
@@ -93,7 +74,6 @@ nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
     let clientSessionIDPolicy: XboxCloudClientSessionIDPolicy
     let httpUserAgent: String?
 
-    // xbox-quality-beta-coverage:session-profile-validation:start
     init(
         identifier: String,
         deviceIdentity: XboxCloudSessionDeviceIdentity?,
@@ -117,7 +97,7 @@ nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
               Self.isSafeValue(launchOSName, maximumBytes: 64),
               hasSafeUserAgent,
               Self.isValid(clientSessionIDPolicy),
-              Self.isValid(deviceIdentity, for: launchEnvelope),
+              Self.isValid(deviceIdentity),
               Self.isCoherent(
                   envelope: launchEnvelope,
                   identity: deviceIdentity,
@@ -142,10 +122,9 @@ nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
     }
 
     private static func isValid(
-        _ identity: XboxCloudSessionDeviceIdentity?,
-        for envelope: XboxCloudSessionLaunchEnvelope
+        _ identity: XboxCloudSessionDeviceIdentity?
     ) -> Bool {
-        guard let identity else { return envelope == .nativeTVControl }
+        guard let identity else { return false }
         let values = [
             identity.clientAppID,
             identity.clientAppType,
@@ -161,8 +140,7 @@ nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
             identity.operatingSystemVersion,
             identity.operatingSystemPlatform,
         ]
-        return envelope == .microsoftWeb
-            && values.allSatisfy { isSafeValue($0, maximumBytes: 256) }
+        return values.allSatisfy { isSafeValue($0, maximumBytes: 256) }
             && identity.clientAppType == "browser"
             && identity.platformType == "desktop"
             && identity.sdkType == "web"
@@ -175,8 +153,6 @@ nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
 
     private static func isValid(_ policy: XboxCloudClientSessionIDPolicy) -> Bool {
         switch policy {
-        case .provided:
-            true
         case let .lowercaseHex(length):
             (16 ... 32).contains(length)
         }
@@ -192,13 +168,6 @@ nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
         httpUserAgent: String?
     ) -> Bool {
         switch envelope {
-        case .nativeTVControl:
-            identity == nil
-                && launchSDKType == "web"
-                && launchOSName == "tvOS"
-                && usesRegionalAllocationHints
-                && clientSessionIDPolicy == .provided
-                && httpUserAgent == nil
         case .microsoftWeb:
             identity?.sdkType == launchSDKType
                 && identity?.operatingSystemName == launchOSName
@@ -218,7 +187,6 @@ nonisolated struct XboxCloudSessionCompatibilityProfile: Equatable, Sendable {
                 !CharacterSet.controlCharacters.contains($0)
             }
     }
-    // xbox-quality-beta-coverage:session-profile-validation:end
 }
 
 /// Versioned first-party wire compatibility values shipped with CloudNow.
@@ -741,7 +709,7 @@ nonisolated struct XboxCloudGSSession: Equatable, Sendable, CustomStringConverti
 
     func makeSessionAccessContext(
         deviceInformation: XboxCloudDeviceInformation = .cloudNowTV(),
-        compatibilityProfile: XboxCloudSessionCompatibilityProfile = .nativeTVControl,
+        compatibilityProfile: XboxCloudSessionCompatibilityProfile = .microsoftWeb,
         msaTransferToken: @escaping @Sendable () async throws -> String
     ) throws -> XboxCloudSessionAccessContext {
         try XboxCloudSessionAccessContext(

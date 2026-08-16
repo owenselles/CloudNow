@@ -29,7 +29,7 @@ nonisolated struct XboxCloudSessionAccessContext: Sendable, CustomStringConverti
         systemUpdateGroups: [String],
         routingHeader: String = "AFD",
         deviceInformation: XboxCloudDeviceInformation = .cloudNowTV(),
-        compatibilityProfile: XboxCloudSessionCompatibilityProfile = .nativeTVControl,
+        compatibilityProfile: XboxCloudSessionCompatibilityProfile = .microsoftWeb,
         msaTransferToken: @escaping @Sendable () async throws -> String
     ) throws {
         guard Self.isSafeCredential(gsToken) else {
@@ -347,14 +347,10 @@ nonisolated struct XboxCloudSessionLaunchRequest: Equatable, Sendable {
 }
 
 private extension XboxCloudSessionCompatibilityProfile {
-    // xbox-quality-beta-coverage:client-session-id:start
     nonisolated func clientSessionID(
-        provided: String,
         generator: @Sendable () -> String
     ) throws -> String {
         switch clientSessionIDPolicy {
-        case .provided:
-            return provided
         case let .lowercaseHex(length):
             let generated = generator()
             let allowedCharacters = CharacterSet(
@@ -370,7 +366,6 @@ private extension XboxCloudSessionCompatibilityProfile {
             return generated
         }
     }
-    // xbox-quality-beta-coverage:client-session-id:end
 }
 
 /// Opaque handle for one server-side Xbox Cloud session.
@@ -690,27 +685,6 @@ actor XboxCloudSessionAPI {
     func createSession(_ launch: XboxCloudSessionLaunchRequest) async throws -> XboxCloudSessionHandle {
         try launch.settings.validate()
         let profile = access.compatibilityProfile
-        #if XBOX_QUALITY_BETA
-            let device = access.deviceInformation.applying(profile)
-            xboxSessionLog.notice(
-                "Xbox allocation profile=\(profile.identifier, privacy: .public) appType=\(device.clientAppType, privacy: .public) sdk=\(device.clientSDKVersion, privacy: .public)/\(device.sdkType, privacy: .public) platform=\(device.platformType, privacy: .public) display=\(device.displayWidthInPixels, privacy: .public)x\(device.displayHeightInPixels, privacy: .public) density=\(device.pixelDensity, privacy: .public)"
-            )
-            XboxCloudQualityTelemetry.shared.record(
-                .compatibilityProfile(
-                    XboxCloudQualityTelemetryProfile(
-                        identifier: profile.identifier
-                    )
-                )
-            )
-            XboxCloudQualityTelemetry.shared.record(
-                .display(
-                    signal: .allocationHeader,
-                    width: device.displayWidthInPixels,
-                    height: device.displayHeightInPixels,
-                    pixelDensity: device.pixelDensity
-                )
-            )
-        #endif
         let selectedSystemUpdateGroup: String = if profile.usesRegionalAllocationHints,
                                                    let requested = launch.preferredSystemUpdateGroup,
                                                    access.systemUpdateGroups.contains(requested)
@@ -720,7 +694,6 @@ actor XboxCloudSessionAPI {
             ""
         }
         let clientSessionID = try profile.clientSessionID(
-            provided: launch.clientSessionID,
             generator: clientSessionIDGenerator
         )
         let payload = CreateSessionPayload(
@@ -1123,11 +1096,9 @@ actor XboxCloudSessionAPI {
             access.routingHeader,
             forHTTPHeaderField: "X-GSSV-Routing"
         )
-        // xbox-quality-beta-coverage:profile-user-agent-header:start
         if let userAgent = access.compatibilityProfile.httpUserAgent {
             request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         }
-        // xbox-quality-beta-coverage:profile-user-agent-header:end
         request.httpBody = body
         if includesDeviceInformation {
             try request.setValue(encodedDeviceInformation(), forHTTPHeaderField: "X-MS-Device-Info")
@@ -1441,7 +1412,6 @@ private nonisolated struct CreateSessionSettingsPayload: Encodable {
     let settings: XboxCloudSessionLaunchSettings
     let profile: XboxCloudSessionCompatibilityProfile
 
-    // xbox-quality-beta-coverage:session-settings-envelope:start
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(settings.nanoVersion, forKey: .nanoVersion)
@@ -1449,7 +1419,7 @@ private nonisolated struct CreateSessionSettingsPayload: Encodable {
             settings.enableTextToSpeech,
             forKey: .enableTextToSpeech
         )
-        if profile.launchEnvelope == .nativeTVControl || settings.magnifier {
+        if settings.magnifier {
             try container.encode(settings.magnifier, forKey: .magnifier)
         }
         try container.encode(settings.highContrast, forKey: .highContrast)
@@ -1464,14 +1434,7 @@ private nonisolated struct CreateSessionSettingsPayload: Encodable {
         )
         try container.encode(profile.launchSDKType, forKey: .sdkType)
         try container.encode(profile.launchOSName, forKey: .osName)
-        if profile.launchEnvelope == .nativeTVControl {
-            try container.encode(
-                settings.enableOptionalDataCollection,
-                forKey: .enableOptionalDataCollection
-            )
-        }
     }
-    // xbox-quality-beta-coverage:session-settings-envelope:end
 }
 
 private nonisolated struct CreateSessionResponse: Decodable {

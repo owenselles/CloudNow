@@ -323,8 +323,7 @@ struct XboxCloudPlayerView: View {
             diagnosticsEnabled: controller.diagnosticsEnabled,
             rtcEventLogActive: controller.rtcEventLogActive,
             qualityRequest: StatsHUDQualityRequest(
-                resolution: requestedResolutionLabel,
-                bandwidth: requestedBandwidthLabel
+                resolution: requestedResolutionLabel
             )
         )
     }
@@ -334,20 +333,6 @@ struct XboxCloudPlayerView: View {
         return [resolution.label, resolution.badge]
             .compactMap { $0 }
             .joined(separator: " ")
-    }
-
-    private var requestedBandwidthLabel: String? {
-        guard XboxCloudQualityBetaPolicy
-            .currentBuildAllowsBandwidthPreference
-        else {
-            return nil
-        }
-        guard let maximumBitrateKbps = activeStreamSettings.bandwidthPreference
-            .maximumRequestedBitrateKbps
-        else {
-            return "\(L10n.text("automatic")) · ∞"
-        }
-        return "\(maximumBitrateKbps / 1000) Mbps"
     }
 
     private var activeStreamSettings: XboxCloudStreamSettings {

@@ -8,7 +8,6 @@ import argparse
 import hashlib
 import json
 import pathlib
-import subprocess
 import sys
 from collections.abc import Mapping
 from typing import Any
@@ -16,6 +15,9 @@ from typing import Any
 
 DEFAULT_MANIFEST = pathlib.Path("Scripts/gfn-frozen-sources.json")
 LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
+ESTABLISHED_FILE_MANIFEST_SHA256 = (
+    "302ebee16c5e61901ea0f5deac49fe3ab85f5a18c1cab67e96344ca4242d7af2"
+)
 
 
 class ManifestError(ValueError):
@@ -57,35 +59,33 @@ def _load_manifest(path: pathlib.Path) -> tuple[str, Mapping[str, str]]:
     return baseline_commit, files
 
 
-def _baseline_file_hash(
-    repository_root: pathlib.Path,
-    baseline_commit: str,
-    relative_path: str,
-) -> tuple[str | None, str | None]:
-    result = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repository_root),
-            "show",
-            f"{baseline_commit}:{relative_path}",
-        ],
-        check=False,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        return None, detail or "git show failed"
-    return hashlib.sha256(result.stdout).hexdigest(), None
+def _file_manifest_hash(files: Mapping[str, str]) -> str:
+    encoded = json.dumps(
+        files,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def verify(
     repository_root: pathlib.Path,
     manifest_path: pathlib.Path,
+    expected_manifest_hash: str = ESTABLISHED_FILE_MANIFEST_SHA256,
 ) -> tuple[str, list[str]]:
     baseline_commit, files = _load_manifest(manifest_path)
     resolved_root = repository_root.resolve()
     failures: list[str] = []
+
+    actual_manifest_hash = _file_manifest_hash(files)
+    if actual_manifest_hash != expected_manifest_hash:
+        failures.append(
+            "frozen file manifest hash "
+            f"{actual_manifest_hash} does not match established hash "
+            f"{expected_manifest_hash}"
+        )
+        return baseline_commit, failures
 
     for relative_path, expected_hash in sorted(files.items()):
         manifest_path = pathlib.PurePosixPath(relative_path)
@@ -103,24 +103,6 @@ def verify(
             failures.append(f"{relative_path}: path escapes repository root")
             continue
 
-        baseline_hash, baseline_error = _baseline_file_hash(
-            resolved_root,
-            baseline_commit,
-            relative_path,
-        )
-        if baseline_hash is None:
-            failures.append(
-                f"{relative_path}: cannot read established baseline "
-                f"{baseline_commit} ({baseline_error})"
-            )
-            continue
-        if baseline_hash != expected_hash:
-            failures.append(
-                f"{relative_path}: manifest hash {expected_hash} does not match "
-                f"established baseline hash {baseline_hash}"
-            )
-            continue
-
         try:
             actual_hash = hashlib.sha256(candidate.read_bytes()).hexdigest()
         except OSError as error:
@@ -128,7 +110,7 @@ def verify(
             continue
         if actual_hash != expected_hash:
             failures.append(
-                f"{relative_path}: established baseline hash {expected_hash}, "
+                f"{relative_path}: frozen baseline hash {expected_hash}, "
                 f"worktree hash {actual_hash}"
             )
 

@@ -16,12 +16,12 @@ struct CloudNowApp: App {
     @State private var cloudSessionCoordinator = CloudSessionCoordinator()
     @State private var hasRestoredApplicationState = false
     private let xboxEnvironment: XboxCloudEnvironment
-    #if DEBUG || XBOX_QUALITY_BETA
+    #if DEBUG
         private let usesUITestFixtures: Bool
     #endif
 
     init() {
-        #if DEBUG || XBOX_QUALITY_BETA
+        #if DEBUG
             let usesUITestFixtures =
                 ProcessInfo.processInfo.arguments.contains("--cloudnow-ui-testing")
                     || ProcessInfo.processInfo.environment["CLOUDNOW_UI_TESTING"] == "1"
@@ -99,7 +99,7 @@ struct CloudNowApp: App {
             memoryCapacity: 50 * 1024 * 1024,
             diskCapacity: 200 * 1024 * 1024
         )
-        #if DEBUG || XBOX_QUALITY_BETA
+        #if DEBUG
             guard !usesUITestFixtures else { return }
         #endif
 
@@ -121,7 +121,7 @@ struct CloudNowApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                #if DEBUG || XBOX_QUALITY_BETA
+                #if DEBUG
                     if usesUITestFixtures {
                         UITestRootView(
                             xboxServiceConfiguration: xboxEnvironment.service
@@ -292,7 +292,7 @@ struct CloudNowApp: App {
         }
     }
 
-    #if DEBUG || XBOX_QUALITY_BETA
+    #if DEBUG
         private static let uiTestAuthSession = AuthSession(
             provider: LoginProvider(
                 idpId: "fixture",
@@ -344,7 +344,7 @@ private struct AuthRestorationView: View {
     }
 }
 
-#if DEBUG || XBOX_QUALITY_BETA
+#if DEBUG
     private struct UITestRootView: View {
         @Environment(AuthManager.self) private var authManager
         @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator

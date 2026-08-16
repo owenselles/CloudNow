@@ -16,7 +16,7 @@ import unittest
 SCRIPT_DIRECTORY = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
-from verify_gfn_frozen import verify  # noqa: E402
+from verify_gfn_frozen import _file_manifest_hash, verify  # noqa: E402
 
 
 class FrozenGFNSourceGuardTests(unittest.TestCase):
@@ -41,25 +41,25 @@ class FrozenGFNSourceGuardTests(unittest.TestCase):
     def test_passes_when_manifest_and_worktree_match_baseline(self) -> None:
         self._write_manifest(self.baseline_hash)
 
-        _, failures = verify(self.repository_root, self.manifest_path)
+        _, failures = self._verify()
 
         self.assertEqual(failures, [])
 
-    def test_rejects_manifest_hash_not_anchored_to_baseline(self) -> None:
+    def test_rejects_manifest_hash_not_anchored_to_frozen_digest(self) -> None:
         changed = b"changed\n"
         self.source_path.write_bytes(changed)
         self._write_manifest(hashlib.sha256(changed).hexdigest())
 
-        _, failures = verify(self.repository_root, self.manifest_path)
+        _, failures = self._verify(expected_hash=self.baseline_hash)
 
         self.assertEqual(len(failures), 1)
-        self.assertIn("does not match established baseline hash", failures[0])
+        self.assertIn("does not match established hash", failures[0])
 
     def test_rejects_worktree_change_after_baseline_anchor_check(self) -> None:
         self._write_manifest(self.baseline_hash)
         self.source_path.write_text("changed\n", encoding="utf-8")
 
-        _, failures = verify(self.repository_root, self.manifest_path)
+        _, failures = self._verify()
 
         self.assertEqual(len(failures), 1)
         self.assertIn("worktree hash", failures[0])
@@ -71,12 +71,23 @@ class FrozenGFNSourceGuardTests(unittest.TestCase):
         }
         self.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
-        _, failures = verify(self.repository_root, self.manifest_path)
+        _, failures = verify(
+            self.repository_root,
+            self.manifest_path,
+            expected_manifest_hash=_file_manifest_hash(payload["files"]),
+        )
 
         self.assertEqual(
             failures,
             ["../GFN.swift: invalid repository-relative path"],
         )
+
+    def test_does_not_require_baseline_commit_to_exist(self) -> None:
+        self._write_manifest(self.baseline_hash, baseline_commit="f" * 40)
+
+        _, failures = self._verify()
+
+        self.assertEqual(failures, [])
 
     def _git(self, *arguments: str) -> str:
         result = subprocess.run(
@@ -87,9 +98,26 @@ class FrozenGFNSourceGuardTests(unittest.TestCase):
         )
         return result.stdout
 
-    def _write_manifest(self, expected_hash: str) -> None:
+    def _verify(self, expected_hash: str | None = None) -> tuple[str, list[str]]:
+        payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest_hash = _file_manifest_hash(payload["files"])
+        if expected_hash is not None:
+            manifest_hash = _file_manifest_hash(
+                {"CloudNow/GFN.swift": expected_hash}
+            )
+        return verify(
+            self.repository_root,
+            self.manifest_path,
+            expected_manifest_hash=manifest_hash,
+        )
+
+    def _write_manifest(
+        self,
+        expected_hash: str,
+        baseline_commit: str | None = None,
+    ) -> None:
         payload = {
-            "baselineCommit": self.baseline_commit,
+            "baselineCommit": baseline_commit or self.baseline_commit,
             "files": {"CloudNow/GFN.swift": expected_hash},
         }
         self.manifest_path.write_text(json.dumps(payload), encoding="utf-8")

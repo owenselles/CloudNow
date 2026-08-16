@@ -107,199 +107,6 @@ nonisolated enum XboxCloudVideoCodecPreference: String, Codable, Sendable {
     case h265 = "H265"
 }
 
-/// Temporary Xbox allocation profiles exposed only by the quality Beta build.
-/// Release normalization always returns to the native control profile.
-nonisolated enum XboxCloudQualityProfilePreference: String, Codable, CaseIterable, Identifiable, Sendable {
-    case microsoftWeb = "xbox-web-www-29.19.17-sdk-10.6.57"
-    case nativeTVControl = "xbox-native-tvos-control-v1"
-
-    var id: Self {
-        self
-    }
-}
-
-// xbox-quality-beta-coverage:bandwidth-preference:start
-/// Xbox-only bandwidth preference. Automatic deliberately means CloudNow
-/// applies no client-side ceiling; manual values remain dormant until a
-/// physical quality experiment proves the service control is effective.
-nonisolated struct XboxCloudBandwidthPreference: Codable, Equatable, Hashable, Sendable {
-    static let minimumBitrateKbps = 15000
-    static let maximumBitrateKbps = 100_000
-    static let bitrateStepKbps = 5000
-    static let automatic = XboxCloudBandwidthPreference(manualBitrateKbps: nil)
-
-    private let manualBitrateKbps: Int?
-
-    var maximumRequestedBitrateKbps: Int? {
-        manualBitrateKbps
-    }
-
-    var isAutomatic: Bool {
-        manualBitrateKbps == nil
-    }
-
-    var canDecrease: Bool {
-        isAutomatic || manualBitrateKbps != Self.minimumBitrateKbps
-    }
-
-    var canIncrease: Bool {
-        !isAutomatic
-    }
-
-    static func manual(maximumBitrateKbps: Int) -> Self {
-        Self(
-            manualBitrateKbps: normalizedManualBitrateKbps(
-                maximumBitrateKbps
-            )
-        )
-    }
-
-    func decreased() -> Self {
-        guard let manualBitrateKbps else {
-            return .manual(maximumBitrateKbps: Self.maximumBitrateKbps)
-        }
-        return .manual(
-            maximumBitrateKbps: max(
-                Self.minimumBitrateKbps,
-                manualBitrateKbps - Self.bitrateStepKbps
-            )
-        )
-    }
-
-    func increased() -> Self {
-        guard let manualBitrateKbps else { return self }
-        guard manualBitrateKbps < Self.maximumBitrateKbps else {
-            return .automatic
-        }
-        return .manual(
-            maximumBitrateKbps: manualBitrateKbps + Self.bitrateStepKbps
-        )
-    }
-
-    private init(manualBitrateKbps: Int?) {
-        self.manualBitrateKbps = manualBitrateKbps
-    }
-
-    private static func normalizedManualBitrateKbps(_ value: Int) -> Int {
-        let bounded = min(
-            max(value, minimumBitrateKbps),
-            maximumBitrateKbps
-        )
-        let offset = bounded - minimumBitrateKbps
-        let roundedStepCount = (offset + bitrateStepKbps / 2)
-            / bitrateStepKbps
-        return minimumBitrateKbps + roundedStepCount * bitrateStepKbps
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case mode
-        case maximumBitrateKbps
-    }
-
-    private enum Mode: String, Codable {
-        case automatic
-        case manual
-    }
-
-    nonisolated init(from decoder: Decoder) throws {
-        if let values = try? decoder.container(keyedBy: CodingKeys.self),
-           let mode = try? values.decode(Mode.self, forKey: .mode)
-        {
-            if mode == .manual,
-               let value = try? values.decode(
-                   Int.self,
-                   forKey: .maximumBitrateKbps
-               )
-            {
-                self = .manual(maximumBitrateKbps: value)
-            } else {
-                self = .automatic
-            }
-            return
-        }
-
-        if let value = try? decoder.singleValueContainer().decode(Int.self) {
-            self = .manual(maximumBitrateKbps: value)
-            return
-        }
-
-        if let value = try? decoder.singleValueContainer().decode(String.self),
-           let bitrate = Int(value)
-        {
-            self = .manual(maximumBitrateKbps: bitrate)
-            return
-        }
-
-        self = .automatic
-    }
-
-    nonisolated func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
-        if let manualBitrateKbps {
-            try values.encode(Mode.manual, forKey: .mode)
-            try values.encode(
-                manualBitrateKbps,
-                forKey: .maximumBitrateKbps
-            )
-        } else {
-            try values.encode(Mode.automatic, forKey: .mode)
-        }
-    }
-}
-
-// xbox-quality-beta-coverage:bandwidth-preference:end
-
-// xbox-quality-beta-coverage:quality-policy:start
-/// Compile-time seam for Xbox quality experiments. Final Release builds fail
-/// closed unless the dedicated beta configuration defines this condition.
-nonisolated enum XboxCloudQualityBetaPolicy {
-    static var currentBuildAllowsBandwidthPreference: Bool {
-        #if XBOX_QUALITY_BETA
-            true
-        #else
-            false
-        #endif
-    }
-
-    static func qualityControls(
-        allowsBandwidthPreference: Bool
-    ) -> Set<CloudQualityControl> {
-        var controls: Set<CloudQualityControl> = [.automatic, .resolution]
-        if allowsBandwidthPreference {
-            controls.insert(.bitrate)
-        }
-        return controls
-    }
-
-    static func normalizedBandwidthPreference(
-        _ preference: XboxCloudBandwidthPreference,
-        betaEnabled: Bool = XboxQualityBetaBuild.isEnabled
-    ) -> XboxCloudBandwidthPreference {
-        betaEnabled ? preference : .automatic
-    }
-
-    static func normalizedProfile(
-        _ preference: XboxCloudQualityProfilePreference,
-        betaEnabled: Bool = XboxQualityBetaBuild.isEnabled
-    ) -> XboxCloudQualityProfilePreference {
-        betaEnabled ? preference : .nativeTVControl
-    }
-
-    static func compatibilityProfile(
-        for preference: XboxCloudQualityProfilePreference,
-        betaEnabled: Bool = XboxQualityBetaBuild.isEnabled
-    ) -> XboxCloudSessionCompatibilityProfile {
-        switch normalizedProfile(preference, betaEnabled: betaEnabled) {
-        case .microsoftWeb:
-            .officialWebBeta
-        case .nativeTVControl:
-            .nativeTVControl
-        }
-    }
-}
-
-// xbox-quality-beta-coverage:quality-policy:end
-
 nonisolated struct XboxCloudDiagnosticsConfiguration: Equatable, Sendable {
     let isEnabled: Bool
     let isRTCEventLogEnabled: Bool
@@ -414,8 +221,6 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
     static let automaticGameLanguage = "automatic"
 
     var displayResolution: XboxCloudDisplayResolution = .automatic
-    var bandwidthPreference: XboxCloudBandwidthPreference = .automatic
-    var qualityProfile: XboxCloudQualityProfilePreference = .nativeTVControl
     var codecPreference: XboxCloudVideoCodecPreference = .automatic
     var gameLanguage = Self.automaticGameLanguage
     var statsMode: StreamStatsMode = .off
@@ -451,8 +256,6 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
 
     init(
         displayResolution: XboxCloudDisplayResolution = .automatic,
-        bandwidthPreference: XboxCloudBandwidthPreference = .automatic,
-        qualityProfile: XboxCloudQualityProfilePreference = .nativeTVControl,
         codecPreference: XboxCloudVideoCodecPreference = .automatic,
         gameLanguage: String = Self.automaticGameLanguage,
         statsMode: StreamStatsMode = .off,
@@ -468,8 +271,6 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
         microphoneEnabled: Bool = false
     ) {
         self.displayResolution = displayResolution
-        self.bandwidthPreference = bandwidthPreference
-        self.qualityProfile = qualityProfile
         self.codecPreference = codecPreference
         self.gameLanguage = gameLanguage
         self.statsMode = statsMode
@@ -511,10 +312,6 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
         normalized.diagnosticsEnabled = diagnostics.isEnabled
         normalized.enableRtcEventLog = diagnostics.isRTCEventLogEnabled
         normalized.enableOptionalDataCollection = false
-        normalized.bandwidthPreference = XboxCloudQualityBetaPolicy
-            .normalizedBandwidthPreference(bandwidthPreference)
-        normalized.qualityProfile = XboxCloudQualityBetaPolicy
-            .normalizedProfile(qualityProfile)
         return normalized
     }
 
@@ -533,6 +330,8 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
 extension XboxCloudStreamSettings {
     private enum CodingKeys: String, CodingKey {
         case displayResolution
+        // Legacy experiment keys remain known so persisted Beta settings can
+        // be decoded and replaced without affecting the production profile.
         case bandwidthPreference
         case qualityProfile
         case codecPreference
@@ -558,14 +357,6 @@ extension XboxCloudStreamSettings {
                 XboxCloudDisplayResolution.self,
                 forKey: .displayResolution
             )) ?? defaults.displayResolution,
-            bandwidthPreference: (try? values.decodeIfPresent(
-                XboxCloudBandwidthPreference.self,
-                forKey: .bandwidthPreference
-            )) ?? defaults.bandwidthPreference,
-            qualityProfile: (try? values.decodeIfPresent(
-                XboxCloudQualityProfilePreference.self,
-                forKey: .qualityProfile
-            )) ?? defaults.qualityProfile,
             codecPreference: (try? values.decodeIfPresent(
                 XboxCloudVideoCodecPreference.self,
                 forKey: .codecPreference
@@ -624,8 +415,6 @@ extension XboxCloudStreamSettings {
     nonisolated func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(displayResolution, forKey: .displayResolution)
-        try values.encode(bandwidthPreference, forKey: .bandwidthPreference)
-        try values.encode(qualityProfile, forKey: .qualityProfile)
         try values.encode(codecPreference, forKey: .codecPreference)
         try values.encode(gameLanguage, forKey: .gameLanguage)
         try values.encode(statsMode, forKey: .statsMode)

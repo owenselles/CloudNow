@@ -54,39 +54,40 @@ struct XboxCloudSessionAPITests {
                 "httpEnvironment",
                 "sdkInstallId",
             ])
-            #expect(environment["clientAppId"] as? String == "CloudNowTests")
+            #expect(environment["clientAppId"] as? String == "www.xbox.com")
             #expect(environment["sdkInstallId"] as? String == "fixture-install-id")
             let dev = try #require(device["dev"] as? [String: Any])
             let displayInfo = try #require(dev["displayInfo"] as? [String: Any])
             let dimensions = try #require(
                 displayInfo["dimensions"] as? [String: Any]
             )
-            #expect(dimensions["widthInPixels"] as? Int == 1920)
-            #expect(dimensions["heightInPixels"] as? Int == 1080)
+            #expect(dimensions["widthInPixels"] as? Int == 3024)
+            #expect(dimensions["heightInPixels"] as? Int == 1964)
             let hardware = try #require(dev["hw"] as? [String: Any])
-            #expect(hardware["platformType"] as? String == "tvOS")
+            #expect(hardware["platformType"] as? String == "desktop")
 
             let body = try jsonObject(from: request)
             #expect(body["titleId"] as? String == "123456789")
-            #expect(body["systemUpdateGroup"] as? String == "flight-a")
+            #expect(body["systemUpdateGroup"] as? String == "")
             #expect(body["serverId"] as? String == "")
-            #expect(body["clientSessionId"] as? String == "fixture-client-session")
-            #expect(body["fallbackRegionNames"] as? [String] == ["West US", "North Europe"])
+            #expect(body["clientSessionId"] as? String == "abcdef0123456789abcdef")
+            #expect(body["fallbackRegionNames"] as? [String] == [])
             let settings = try #require(body["settings"] as? [String: Any])
             #expect(settings["nanoVersion"] as? String == "V3;WebrtcTransport.dll")
             #expect(settings["locale"] as? String == "en-US")
             #expect(settings["timezoneOffsetMinutes"] as? Int == 120)
             #expect(settings["useIceConnection"] as? Bool == false)
             #expect(settings["sdkType"] as? String == "web")
-            #expect(settings["osName"] as? String == "tvOS")
-            #expect(settings["magnifier"] as? Bool == false)
-            #expect(settings["enableOptionalDataCollection"] as? Bool == false)
+            #expect(settings["osName"] as? String == "macOS")
+            #expect(settings["magnifier"] == nil)
+            #expect(settings["enableOptionalDataCollection"] == nil)
             return StubbedHTTPResponse(json: Self.createResponseJSON)
         }
         let api = XboxCloudSessionAPI(
             access: access,
             transport: transport,
-            correlationVectorBase: "ABCDEFGHIJKLMNOPQRSTUV"
+            correlationVectorBase: "ABCDEFGHIJKLMNOPQRSTUV",
+            clientSessionIDGenerator: { "abcdef0123456789abcdef" }
         )
 
         let handle = try await api.createSession(makeLaunchRequest())
@@ -96,9 +97,9 @@ struct XboxCloudSessionAPITests {
         #expect(!access.description.contains("fixture-transfer-secret"))
     }
 
-    @Test("Microsoft web beta sends the exact safe device and launch envelope")
-    func officialWebCreateSession() async throws {
-        let access = try makeAccessContext(profile: .officialWebBeta)
+    @Test("Microsoft web production sends the exact safe device and launch envelope")
+    func microsoftWebCreateSession() async throws {
+        let access = try makeAccessContext(profile: .microsoftWeb)
         let transport = RecordingHTTPTransport { request, index in
             #expect(index == 0)
             #expect(
@@ -228,8 +229,8 @@ struct XboxCloudSessionAPITests {
         _ = try await api.createSession(makeLaunchRequest())
     }
 
-    @Test("Microsoft web beta preserves an enabled magnifier request")
-    func officialWebMagnifier() async throws {
+    @Test("Microsoft web production preserves an enabled magnifier request")
+    func microsoftWebMagnifier() async throws {
         let transport = RecordingHTTPTransport { request, index in
             #expect(index == 0)
             let body = try jsonObject(from: request)
@@ -238,7 +239,7 @@ struct XboxCloudSessionAPITests {
             return StubbedHTTPResponse(json: Self.createResponseJSON)
         }
         let api = try XboxCloudSessionAPI(
-            access: makeAccessContext(profile: .officialWebBeta),
+            access: makeAccessContext(profile: .microsoftWeb),
             transport: transport,
             clientSessionIDGenerator: { "abcdef0123456789abcdef" }
         )
@@ -246,13 +247,13 @@ struct XboxCloudSessionAPITests {
         _ = try await api.createSession(makeLaunchRequest(magnifier: true))
     }
 
-    @Test("Microsoft web beta rejects an invalid generated session identifier")
+    @Test("Microsoft web production rejects an invalid generated session identifier")
     func invalidGeneratedClientSessionID() async throws {
         let transport = RecordingHTTPTransport { _, index in
             throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
         }
         let api = try XboxCloudSessionAPI(
-            access: makeAccessContext(profile: .officialWebBeta),
+            access: makeAccessContext(profile: .microsoftWeb),
             transport: transport,
             clientSessionIDGenerator: { "INVALID-SESSION-ID" }
         )
@@ -1073,7 +1074,7 @@ struct XboxCloudSessionAPITests {
     }
 
     private func makeAccessContext(
-        profile: XboxCloudSessionCompatibilityProfile = .nativeTVControl,
+        profile: XboxCloudSessionCompatibilityProfile = .microsoftWeb,
         transferToken: @escaping @Sendable () async throws -> String = { "fixture-transfer-secret" }
     ) throws -> XboxCloudSessionAccessContext {
         try XboxCloudSessionAccessContext(

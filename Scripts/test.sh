@@ -4,12 +4,11 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: Scripts/test.sh [--full | --unit | --ui | --beta]
+Usage: Scripts/test.sh [--full | --unit | --ui]
 
   --full  Run the complete CloudNow test plan (default).
   --unit  Run only the CloudNowTests target.
   --ui    Run only the CloudNowUITests target.
-  --beta  Run targeted Xbox quality Beta unit and UI coverage.
 EOF
 }
 
@@ -36,9 +35,6 @@ if [[ $# -eq 1 ]]; then
         --ui)
             mode="ui"
             ;;
-        --beta)
-            mode="beta"
-            ;;
         --help | -h)
             usage
             exit 0
@@ -53,13 +49,7 @@ fi
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_directory/.." && pwd)"
 project_path="$repository_root/CloudNow.xcodeproj"
-if [[ "$mode" == "beta" ]]; then
-    scheme_name="${CLOUDNOW_TEST_SCHEME:-CloudNow Beta}"
-    build_configuration="${CLOUDNOW_BUILD_CONFIGURATION:-Beta}"
-else
-    scheme_name="${CLOUDNOW_TEST_SCHEME:-CloudNow}"
-    build_configuration="${CLOUDNOW_BUILD_CONFIGURATION:-Debug}"
-fi
+scheme_name="${CLOUDNOW_TEST_SCHEME:-CloudNow}"
 test_plan_name="${CLOUDNOW_TEST_PLAN:-CloudNow}"
 test_configuration_name="${CLOUDNOW_TEST_CONFIGURATION:-Deterministic}"
 artifact_root="${CLOUDNOW_TEST_ARTIFACTS_DIR:-$repository_root/TestArtifacts}"
@@ -207,7 +197,7 @@ test_command=(
     -scheme "$scheme_name"
     -testPlan "$test_plan_name"
     -only-test-configuration "$test_configuration_name"
-    -configuration "$build_configuration"
+    -configuration Debug
     -destination "$destination"
     -resultBundlePath "$result_bundle"
     -enableCodeCoverage YES
@@ -228,21 +218,6 @@ case "$mode" in
         ;;
     ui)
         test_command+=("-only-testing:CloudNowUITests")
-        ;;
-    beta)
-        test_command+=(
-            "-only-testing:CloudNowTests/CloudGamingCapabilitiesTests"
-            "-only-testing:CloudNowTests/XboxCloudInputDriverTests"
-            "-only-testing:CloudNowTests/XboxCloudOfferingServiceTests"
-            "-only-testing:CloudNowTests/XboxCloudQualityBetaPolicyTests"
-            "-only-testing:CloudNowTests/XboxCloudQualityTelemetryTests"
-            "-only-testing:CloudNowTests/XboxCloudSessionAPITests"
-            "-only-testing:CloudNowTests/XboxCloudStreamControllerTests"
-            "-only-testing:CloudNowTests/XboxProductionRuntimeContextTests"
-            "-only-testing:CloudNowUITests/CloudNowUITests/testStreamQualityUsesCloudNowRowsInBothModes"
-            "-only-testing:CloudNowUITests/CloudNowUITests/testXboxQualityBetaControlsAreFocusable"
-            "-only-testing:CloudNowUITests/CloudNowUITests/testXboxRequestedVersusDeliveredQualityHUD"
-        )
         ;;
 esac
 test_command+=(test)
@@ -280,23 +255,7 @@ if [[ -d "$result_bundle" ]]; then
         coverage_status=$?
     fi
 
-    if [[ "$mode" == "beta" && $test_status -eq 0 ]]; then
-        beta_coverage_gate_command=(
-            python3
-            "$repository_root/Scripts/validate_coverage.py"
-            --result-bundle "$result_bundle"
-            --manifest "$repository_root/Scripts/xbox-quality-beta-coverage.json"
-            --source-root "$repository_root"
-            --text-report "$coverage_directory/xbox-quality-beta-sources.txt"
-            --json-report "$coverage_directory/xbox-quality-beta-sources.json"
-        )
-        print_command "${beta_coverage_gate_command[@]}"
-        if "${beta_coverage_gate_command[@]}"; then
-            :
-        else
-            coverage_status=$?
-        fi
-    elif [[ "$mode" != "ui" && $test_status -eq 0 ]]; then
+    if [[ "$mode" != "ui" && $test_status -eq 0 ]]; then
         coverage_gate_command=(
             python3
             "$repository_root/Scripts/validate_coverage.py"

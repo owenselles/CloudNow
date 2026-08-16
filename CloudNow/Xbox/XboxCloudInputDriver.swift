@@ -15,7 +15,6 @@ nonisolated enum XboxCloudChannelProtocolError: Error, Equatable, Sendable {
     case encodingFailed
 }
 
-// xbox-quality-beta-coverage:display-dimensions-state:start
 nonisolated struct XboxCloudDisplayDimensions: Equatable, Sendable {
     static let default1080p = Self(
         uncheckedPreferredWidth: 1920,
@@ -92,8 +91,6 @@ nonisolated struct XboxCloudMessageDimensionsSendState: Equatable, Sendable {
         didAcceptForChannel = false
     }
 }
-
-// xbox-quality-beta-coverage:display-dimensions-state:end
 
 nonisolated enum XboxCloudChannelProtocolCodec {
     /// Public access key sent by Microsoft's Xbox web client after its initial
@@ -300,7 +297,6 @@ nonisolated enum XboxCloudChannelProtocolCodec {
     }
 }
 
-// xbox-quality-beta-coverage:control-bootstrap-state:start
 /// Tracks accepted sends for one control-channel lifecycle. The bootstrap
 /// predicate below supplies the ordering and backpressure dependencies.
 nonisolated struct XboxCloudControlSendState: Sendable {
@@ -404,8 +400,6 @@ nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
             && didSendMessageDimensions
     }
 }
-
-// xbox-quality-beta-coverage:control-bootstrap-state:end
 
 nonisolated enum XboxCloudControllerRegistrationPolicy {
     static func pendingUpdate(
@@ -1307,7 +1301,7 @@ final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
-    #if DEBUG || XBOX_QUALITY_BETA
+    #if DEBUG
         func pendingPeripheralReportForTesting() -> XboxPeripheralInputReport {
             queue.sync { peripheralInput.report }
         }
@@ -2308,16 +2302,6 @@ final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             xboxInputLog.notice(
                 "[Message] preferred dimensions queued \(width, privacy: .public)x\(height, privacy: .public) custom=true"
             )
-            #if XBOX_QUALITY_BETA
-                XboxCloudQualityTelemetry.shared.record(
-                    .display(
-                        signal: .messageDimensions,
-                        width: width,
-                        height: height,
-                        pixelDensity: messageDimensionsState.current.pixelDensity
-                    )
-                )
-            #endif
         }
     }
 
@@ -3266,7 +3250,7 @@ final class XboxCloudInputDriver {
         worker.setPaused(paused, generation: attachmentGeneration)
     }
 
-    #if DEBUG || XBOX_QUALITY_BETA
+    #if DEBUG
         func pendingPeripheralReportForTesting() -> XboxPeripheralInputReport {
             worker.pendingPeripheralReportForTesting()
         }
