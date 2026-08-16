@@ -16,6 +16,53 @@ credentials, fails closed, and keeps provider-specific failures contained inside
 Xbox mode. No Microsoft client secret is embedded and no CloudNow backend is
 required by the current public-client flow.
 
+## Xbox 1440p quality beta
+
+The shared `CloudNow Beta` scheme builds the dedicated `Beta` configuration with
+`XBOX_QUALITY_BETA`. That configuration is suitable for local physical-device
+runs and Xbox quality TestFlight archives. The ordinary `CloudNow` scheme's
+final `Release` configuration does not define the flag, hides the experimental
+controls, and always normalizes Xbox allocation back to the native control
+profile.
+
+The beta compares two validated, Xbox-owned compatibility profiles while leaving
+GeForce NOW unchanged:
+
+- `xbox-native-tvos-control-v1` preserves CloudNow's existing native tvOS
+  allocation identity and launch envelope.
+- `xbox-web-www-29.19.17-sdk-10.6.57` uses the pinned Microsoft web app/SDK
+  versions, coherent browser/web/desktop identity, a minimal web launch envelope,
+  and a lowercase 22-character client session identifier.
+
+Both profiles send the resolution alias before authorization as soon as the Xbox
+control path is initialized. Neither request waits for decoded video, controller
+registration, or the first controller report. Gameplay input remains gated on
+media readiness. After the negotiated message-channel handshake, CloudNow sends
+the active output dimensions and sends an updated dimensions message when the
+display geometry changes.
+
+The beta also exposes an Xbox-only bandwidth preference. `Automatic` is
+unlimited from the client's perspective; manual values run from 15 to 100 Mbps
+in 5 Mbps steps. CloudNow persists the preference separately for Xbox and
+reports the requested value in its beta telemetry and HUD. It does **not** yet
+send a bitrate-control message or add an SDP `b=AS` ceiling, so selecting 100
+Mbps cannot currently force the service to deliver that bitrate.
+
+Quality telemetry is enabled only in the beta. Its in-memory trace is
+process-local and fixed at 256 records. Each already-sanitized typed event is
+also mirrored to Apple's unified log for physical-device collection; that
+system-managed mirror follows Apple's retention policy rather than the
+in-memory 256-record limit. Both outputs contain only allowlisted profile IDs,
+requested resolution and bandwidth, sanitized offered/selected codec summaries,
+display dimensions, and delivered resolution, FPS, bitrate, color mode, and
+audio-channel count. Neither output receives credentials, endpoints, raw SDP,
+ICE candidates, account or session identifiers, or data-channel payloads.
+
+H.264, SDR8, and stereo remain valid results at 1440p. HEVC, HDR/10-bit, 5.1,
+periodic bitrate messages, and a dedicated Xbox RTC runtime are deliberately
+deferred until the physical profile comparison proves 1440p delivery. Failed or
+ignored experiments must not become Release settings.
+
 ## Clean-room rule
 
 The Xbox implementation is independently authored. No Stratix source code, UI,
@@ -101,6 +148,11 @@ CloudNow deliberately keeps separate:
 - Xbox legacy-input encoding, channel handshake, feedback, and rumble decoding.
 - Xbox stream preferences, accessibility flags, UI state, and player lifecycle.
 
+The quality beta retains the existing shared RTC factory, audio device, and
+passive renderer. A dedicated `XboxCloudRTCRuntime` and Xbox-owned codec/audio
+policy remain a later isolation step, performed only after 1440p quality is
+proven so the profile/bootstrap experiment keeps one attributable variable.
+
 Provider-scoped Clear Cache removes only attributable catalog, routing, and
 diagnostic-cache artifacts for the selected provider. The decoded-artwork cache
 and shared `URLCache` are deliberately preserved because their entries do not
@@ -121,6 +173,11 @@ not advertise local diagnostic export for either provider on tvOS and does not
 invent a network-upload path. Logs remain in the app cache and are removable
 through cache maintenance; a future export surface requires a supported tvOS
 API or a separately reviewed, explicit transfer design.
+
+The Xbox quality-beta trace described above is separate from the opt-in RTC
+event log. Its in-memory ring is bounded, and both that ring and the unified-log
+mirror are sanitized by the same typed event model. Neither path makes raw
+signaling or identifiers exportable.
 
 ### Xbox request path
 
@@ -173,12 +230,14 @@ API or a separately reviewed, explicit transfer design.
     `Best` sends Microsoft's `1440` request for confirmed Ultimate accounts and
     safely falls back through the service's title, region, device, and network
     policy. Known lower tiers request `1080`; manual aliases remain available for
-    troubleshooting. After the negotiated `messageV1` handshake, CloudNow reports
-    the active display's preferred pixel dimensions and custom-resolution support
-    using Microsoft's `/streaming/characteristics/dimensionschanged` message. The
-    versioned compatibility profile identifies this native implementation as a
-    web-protocol smart-TV client consistently across allocation and launch while
-    retaining CloudNow as the app identity and tvOS as the real operating system.
+    troubleshooting. The resolution request is sent before authorization during
+    control bootstrap, independently of decoded-video and controller readiness.
+    After the negotiated `messageV1` handshake, CloudNow reports the active
+    display's preferred pixel dimensions and custom-resolution support using
+    Microsoft's `/streaming/characteristics/dimensionschanged` message, and
+    reports later geometry changes through the same path. Beta builds can compare
+    the native control and pinned Microsoft-web compatibility profiles documented
+    above; final Release builds always use the native control profile.
 11. The current public Xbox web-streaming contract negotiates H.264 SDR video and
     stereo Opus game audio. CloudNow does not invent unconfirmed 5.1, HEVC, or HDR
     capabilities. Delivered resolution, codec, color format, and audio channels
@@ -227,6 +286,34 @@ infer a pass from simulator coverage.
 Use a physical Apple TV, a supported controller, and a Microsoft account with a
 current Xbox Cloud Gaming entitlement:
 
+### Xbox 1440p profile A/B
+
+Run the quality comparison before interpreting the general release checklist:
+
+1. Use the same Ultimate account, region, display, and network for the reference
+   and CloudNow runs. Start a fresh Cyberpunk 2077 session for each run.
+2. Establish the reference on [xbox.com/play](https://www.xbox.com/play) under
+   those matched conditions. If the reference itself does not reach 1440p, mark
+   the comparison inconclusive; do not treat either CloudNow profile as failed.
+3. On a physical Apple TV, build or archive the shared `CloudNow Beta` scheme.
+   Run `xbox-native-tvos-control-v1` and
+   `xbox-web-www-29.19.17-sdk-10.6.57` for at least 90 seconds each, changing
+   only the profile and using a fresh session each time.
+4. Record requested and delivered resolution, resolution transitions, FPS,
+   bitrate, codec, color mode, and audio channels. Startup at 1080p is allowed;
+   success requires delivered 2560×1440 for at least 30 consecutive seconds.
+   H.264, SDR8, or stereo does not invalidate an otherwise successful 1440p run.
+5. Repeat the winning result three times under the same conditions. Use Halo
+   Infinite as the secondary title after Cyberpunk 2077 proves the primary path.
+
+Do not enable a periodic `rateControlBitrateUpdate`, HEVC, HDR/10-bit, 5.1, or
+the dedicated Xbox RTC split during this comparison. If neither profile proves
+1440p while xbox.com does, investigate the recorded identity/bootstrap evidence
+first, then test one Xbox-owned variable at a time. Remove the losing profile,
+selector, and any ignored experiment before a final Release.
+
+### General provider validation
+
 1. Reset CloudNow's provider selection and confirm the fresh-launch screen shows
    equal GeForce NOW and Xbox Cloud Gaming choices.
 2. Select Xbox and confirm its QR code and device code remain visible until the
@@ -251,6 +338,26 @@ current Xbox Cloud Gaming entitlement:
 8. Background and foreground CloudNow once in each mode. Confirm the inactive
    provider performs no refresh, Xbox leaves and can continue the same unexpired
    session, and End Session permits a later launch to create a fresh session.
+9. Run the established GeForce NOW login, catalog, Library, Store, game-detail,
+   and Settings smoke tests. Confirm the same account, tier-neutral copy,
+   filters, focus behavior, saved settings, and launch flow as the frozen
+   pre-quality baseline.
+10. On a GeForce NOW title/account/server combination that exposes them, verify
+    the existing H.265 Main10, 5.1 output, microphone permission, AirPods or
+    Continuity Microphone hot-swap, controller input/rumble, and pause HUD paths.
+    Confirm unavailable media modes continue to use the established GFN
+    fallback instead of being treated as an Xbox result.
+11. Interrupt and restore the GeForce NOW network path, then exercise Retry,
+    background/foreground, Exit, End Session, and a new launch. Confirm its
+    existing reconnect and session-lifecycle behavior remains unchanged and no
+    Xbox allocation or authorization work occurs in the GFN-only run.
+
+For every physical run, record the date, CloudNow commit, build configuration,
+Apple TV/tvOS and display/output route, provider/profile, account entitlement,
+region, title, controller/input route, requested settings, delivered HUD values,
+duration, and Pass/Fail/Inconclusive result. A release pass requires a recorded
+result for every Xbox and GFN item above; an unavailable prerequisite is
+Inconclusive, not an inferred pass.
 
 Record the displayed CloudNow error and redacted diagnostics if a live request
 fails. Do not capture or share Microsoft, Xbox Live, XSTS, Game Streaming, or
