@@ -603,7 +603,37 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertFalse(xboxApp.buttons["Codec"].exists)
         XCTAssertFalse(xboxApp.buttons["Color Mode"].exists)
         XCTAssertFalse(xboxApp.buttons["Audio Format"].exists)
-        XCTAssertFalse(xboxApp.buttons["Max Bitrate"].exists)
+        #if XBOX_QUALITY_BETA
+            XCTAssertTrue(
+                element(
+                    "settings.stream-quality.max-bitrate.value",
+                    in: xboxApp
+                ).waitForExistence(timeout: 3)
+            )
+        #else
+            XCTAssertFalse(
+                element(
+                    "settings.stream-quality.max-bitrate.value",
+                    in: xboxApp
+                ).exists
+            )
+            XCTAssertFalse(
+                xboxApp.buttons[
+                    "settings.stream-quality.max-bitrate.decrease"
+                ].exists
+            )
+            XCTAssertFalse(
+                xboxApp.buttons[
+                    "settings.stream-quality.max-bitrate.increase"
+                ].exists
+            )
+            XCTAssertFalse(
+                element(
+                    "xbox-settings.quality-beta-profile",
+                    in: xboxApp
+                ).exists
+            )
+        #endif
 
         XCTAssertFalse(
             xboxApp.cells
@@ -615,6 +645,119 @@ final class CloudNowUITests: XCTestCase {
                 .matching(NSPredicate(format: "label == %@", "Game Pass Ultimate"))
                 .firstMatch.exists
         )
+    }
+
+    #if XBOX_QUALITY_BETA
+        @MainActor
+        func testXboxQualityBetaControlsAreFocusable() {
+            let app = makeApp(extraArguments: [
+                "--cloudnow-ui-service-chooser",
+                "--cloudnow-ui-xbox-configured",
+            ])
+            app.launch()
+            let xboxChoice = app.buttons["Xbox Cloud Gaming"]
+            XCTAssertTrue(xboxChoice.waitForExistence(timeout: 8))
+            XCUIRemote.shared.press(.right)
+            XCTAssertTrue(xboxChoice.hasFocus)
+            XCUIRemote.shared.press(.select)
+
+            let settings = app.buttons["Settings"]
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            selectTab(settings, movingRight: 2)
+
+            let profile = app.buttons[
+                "xbox-settings.quality-beta-profile"
+            ]
+            let bandwidthDecrease = app.buttons[
+                "settings.stream-quality.max-bitrate.decrease"
+            ]
+            let bandwidthIncrease = app.buttons[
+                "settings.stream-quality.max-bitrate.increase"
+            ]
+            let bandwidthValue = app.staticTexts[
+                "settings.stream-quality.max-bitrate.value"
+            ]
+            XCTAssertTrue(profile.waitForExistence(timeout: 3))
+            XCTAssertTrue(profile.isEnabled)
+            XCTAssertTrue(bandwidthDecrease.waitForExistence(timeout: 3))
+            XCTAssertTrue(bandwidthIncrease.waitForExistence(timeout: 3))
+            XCTAssertTrue(bandwidthValue.waitForExistence(timeout: 3))
+
+            for _ in 0 ..< 30
+                where !bandwidthDecrease.hasFocus && !bandwidthIncrease.hasFocus
+            {
+                XCUIRemote.shared.press(.down)
+            }
+            let adjustment = bandwidthDecrease.hasFocus
+                ? bandwidthDecrease
+                : bandwidthIncrease
+            XCTAssertTrue(adjustment.hasFocus)
+            XCTAssertTrue(adjustment.isEnabled)
+            let previousBandwidth = accessibilityText(of: bandwidthValue)
+            XCUIRemote.shared.press(.select)
+            XCTAssertTrue(
+                waitForAccessibilityTextChange(
+                    from: previousBandwidth,
+                    in: bandwidthValue
+                )
+            )
+
+            focus(
+                profile,
+                directions: [.up, .down],
+                pressesPerDirection: 30
+            )
+            let previousProfile = accessibilityText(of: profile)
+            XCUIRemote.shared.press(.select)
+            XCTAssertTrue(
+                waitForAccessibilityTextChange(
+                    from: previousProfile,
+                    in: profile
+                )
+            )
+        }
+    #endif
+
+    @MainActor
+    func testXboxRequestedVersusDeliveredQualityHUD() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-xbox-quality-hud",
+        ])
+        app.launch()
+
+        XCTAssertTrue(
+            element("xbox-quality-hud-fixture", in: app)
+                .waitForExistence(timeout: 8)
+        )
+        let deliveredResolution = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND value == %@",
+                "Resolution",
+                "2560×1440"
+            ))
+            .firstMatch
+        let requestedResolution = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND value == %@",
+                "Max Stream Quality",
+                "1440p"
+            ))
+            .firstMatch
+        XCTAssertTrue(deliveredResolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(requestedResolution.waitForExistence(timeout: 3))
+
+        let requestedBandwidth = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND value == %@",
+                "Max Bitrate",
+                "100 Mbps"
+            ))
+            .firstMatch
+        #if XBOX_QUALITY_BETA
+            XCTAssertTrue(requestedBandwidth.waitForExistence(timeout: 3))
+        #else
+            XCTAssertFalse(requestedBandwidth.exists)
+        #endif
     }
 
     @MainActor
@@ -1113,6 +1256,28 @@ final class CloudNowUITests: XCTestCase {
     @MainActor
     private func accessibilityValue(of element: XCUIElement) -> String {
         element.value as? String ?? ""
+    }
+
+    @MainActor
+    private func accessibilityText(of element: XCUIElement) -> String {
+        "\(element.label) \(accessibilityValue(of: element))"
+    }
+
+    @MainActor
+    private func waitForAccessibilityTextChange(
+        from previousText: String,
+        in element: XCUIElement,
+        timeout: TimeInterval = 3
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let element = object as? XCUIElement else { return false }
+                let value = element.value as? String ?? ""
+                return previousText != "\(element.label) \(value)"
+            },
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     @MainActor

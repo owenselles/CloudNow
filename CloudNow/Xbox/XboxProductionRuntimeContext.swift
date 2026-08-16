@@ -324,8 +324,17 @@ final nonisolated class XboxProductionRuntimeContext: XboxLocalCredentialLifecyc
                 preferredResolution: settings.displayResolution,
                 preferredDisplayWidth: display.widthInPixels,
                 preferredDisplayHeight: display.heightInPixels,
-                pixelDensity: display.pixelDensity
+                pixelDensity: display.pixelDensity,
+                displayDimensionsProvider: {
+                    let display = currentDisplayMetadata
+                    return XboxCloudDisplayDimensions(
+                        preferredWidth: display.widthInPixels,
+                        preferredHeight: display.heightInPixels,
+                        pixelDensity: display.pixelDensity
+                    )
+                }
             ),
+            bandwidthPreference: settings.bandwidthPreference,
             microphoneRequested: settings.microphoneEnabled,
             diagnosticsEnabled: settings.diagnosticsEnabled,
             rtcEventLogRequested: settings.enableRtcEventLog

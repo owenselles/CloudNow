@@ -127,6 +127,7 @@ final class XboxCloudStreamController {
         let lifecycle: any XboxCloudSessionLifecycleServing
         let token: XboxCloudStreamSessionToken
         let serviceExpiresAt: Date
+        let streamSettings: XboxCloudStreamSettings
         var preparedStream: XboxCloudPreparedStream?
         var runtime: (any XboxCloudStreamRuntime)?
     }
@@ -200,6 +201,13 @@ final class XboxCloudStreamController {
         !pendingSessionDeletions.isEmpty
     }
 
+    /// Normalized settings retained by the live or resumable allocation.
+    /// Continue reuses that allocation and its runtime, so player presentation
+    /// must not substitute preferences changed after the original launch.
+    var activeStreamSettings: XboxCloudStreamSettings? {
+        activeOperation?.streamSettings
+    }
+
     @ObservationIgnored private let sessionProvider: any XboxCloudGSSessionProviding
     @ObservationIgnored private let transferToken: @Sendable () async throws -> String
     @ObservationIgnored private let deviceInformationProvider: @MainActor @Sendable () -> XboxCloudDeviceInformation
@@ -227,6 +235,8 @@ final class XboxCloudStreamController {
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var resumeExpiryTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsGeneration: UInt64 = 0
+    @ObservationIgnored private var qualityTelemetrySampleCount = 0
+    @ObservationIgnored private var qualityTelemetryResolution: [Int] = []
     @ObservationIgnored private var activeOperation: ActiveOperation?
     @ObservationIgnored private var pendingSessionDeletions: [
         XboxCloudStreamSessionToken: SessionDeletion
@@ -343,6 +353,8 @@ final class XboxCloudStreamController {
             state = .failed(message: error.localizedDescription)
             throw error
         }
+
+        let settings = settings.normalizedForClient
 
         let deviceInformation = deviceInformationProvider()
         generation &+= 1
@@ -537,7 +549,7 @@ final class XboxCloudStreamController {
                 runtime: runtime,
                 generation: continueGeneration
             )
-            if statsMode != .off {
+            if shouldCollectStatistics {
                 startStatisticsMonitor(
                     runtime: runtime,
                     generation: continueGeneration
@@ -589,11 +601,22 @@ final class XboxCloudStreamController {
         generation operationGeneration: UInt64
     ) async throws {
         do {
+            #if XBOX_QUALITY_BETA
+                XboxCloudQualityTelemetry.shared.record(
+                    .qualityRequest(
+                        resolution: settings.displayResolution,
+                        maximumBitrateKbps: settings.bandwidthPreference
+                            .maximumRequestedBitrateKbps
+                    )
+                )
+            #endif
             let gsSession = try await sessionProvider.session(for: account)
             try ensureCurrent(operationGeneration)
             serverLocation = gsSession.defaultRegion.name
             let access = try gsSession.makeSessionAccessContext(
                 deviceInformation: deviceInformation,
+                compatibilityProfile: XboxCloudQualityBetaPolicy
+                    .compatibilityProfile(for: settings.qualityProfile),
                 msaTransferToken: transferToken
             )
             let lifecycle = makeSessionLifecycle(access)
@@ -626,6 +649,7 @@ final class XboxCloudStreamController {
                 lifecycle: lifecycle,
                 token: token,
                 serviceExpiresAt: gsSession.expiresAt,
+                streamSettings: settings,
                 preparedStream: nil,
                 runtime: nil
             )
@@ -683,7 +707,7 @@ final class XboxCloudStreamController {
                 runtime: runtime,
                 generation: operationGeneration
             )
-            if statsMode != .off {
+            if shouldCollectStatistics {
                 startStatisticsMonitor(
                     runtime: runtime,
                     generation: operationGeneration
@@ -808,7 +832,7 @@ final class XboxCloudStreamController {
     func setStatsMode(_ mode: StreamStatsMode) {
         guard statsMode != mode else { return }
         statsMode = mode
-        if mode == .off {
+        if mode == .off, !XboxQualityBetaBuild.isEnabled {
             stopStatisticsMonitor()
             return
         }
@@ -906,7 +930,11 @@ final class XboxCloudStreamController {
     ) -> Bool {
         statisticsGeneration == monitorGeneration
             && isActive(operationGeneration)
-            && statsMode != .off
+            && shouldCollectStatistics
+    }
+
+    private var shouldCollectStatistics: Bool {
+        statsMode != .off || XboxQualityBetaBuild.isEnabled
     }
 
     private func applyStatistics(_ snapshot: XboxCloudRTCStatsSnapshot) {
@@ -918,12 +946,50 @@ final class XboxCloudStreamController {
         if snapshot.audio != audioStats {
             audioStats = snapshot.audio
         }
+        recordQualityTelemetryIfNeeded(
+            stream: nextStats,
+            audio: snapshot.audio
+        )
+    }
+
+    private func recordQualityTelemetryIfNeeded(
+        stream: StreamStats,
+        audio: AudioStats
+    ) {
+        #if XBOX_QUALITY_BETA
+            guard stream.resolutionWidth > 0,
+                  stream.resolutionHeight > 0
+            else {
+                return
+            }
+            qualityTelemetrySampleCount &+= 1
+            let resolution = [stream.resolutionWidth, stream.resolutionHeight]
+            let resolutionChanged = resolution != qualityTelemetryResolution
+            guard resolutionChanged || qualityTelemetrySampleCount.isMultiple(of: 10)
+            else {
+                return
+            }
+            qualityTelemetryResolution = resolution
+            XboxCloudQualityTelemetry.shared.record(
+                .streamDelivery(
+                    width: stream.resolutionWidth,
+                    height: stream.resolutionHeight,
+                    framesPerSecond: max(0, Int(stream.fps.rounded())),
+                    bitrateKbps: max(0, stream.bitrateKbps),
+                    codec: XboxCloudQualityTelemetryCodec(name: stream.codec),
+                    colorMode: colorState.detectedMode,
+                    audioChannels: max(0, audio.codecChannels)
+                )
+            )
+        #endif
     }
 
     private func resetStatistics(settings: XboxCloudStreamSettings) {
         stopStatisticsMonitor()
         stats = StreamStats()
         audioStats = AudioStats()
+        qualityTelemetrySampleCount = 0
+        qualityTelemetryResolution = []
         statsMode = settings.statsMode
         diagnosticsEnabled = false
         rtcEventLogActive = false
@@ -1074,7 +1140,7 @@ final class XboxCloudStreamController {
                     runtime: runtime,
                     generation: operationGeneration
                 )
-                if statsMode != .off {
+                if shouldCollectStatistics {
                     startStatisticsMonitor(
                         runtime: runtime,
                         generation: operationGeneration

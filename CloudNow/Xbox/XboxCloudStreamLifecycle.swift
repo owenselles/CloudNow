@@ -207,6 +207,10 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
     private let readinessPolicy: XboxCloudMediaReadinessPolicy
     private let sleep: @Sendable (TimeInterval) async throws -> Void
 
+    /// Immutable experiment input retained at the Xbox runtime boundary. No
+    /// transport or SDP behavior consumes it until physical validation passes.
+    let bandwidthPreference: XboxCloudBandwidthPreference
+
     var videoTrack: LKRTCVideoTrack? {
         transport.videoTrack
     }
@@ -242,6 +246,7 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
     init(
         transport: XboxCloudWebRTCTransport = XboxCloudWebRTCTransport(),
         inputDriver: XboxCloudInputDriver = XboxCloudInputDriver(),
+        bandwidthPreference: XboxCloudBandwidthPreference = .automatic,
         microphoneRequested: Bool = false,
         diagnosticsEnabled: Bool = false,
         rtcEventLogRequested: Bool = false,
@@ -252,6 +257,7 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
     ) {
         self.transport = transport
         self.inputDriver = inputDriver
+        self.bandwidthPreference = bandwidthPreference
         self.microphoneRequested = microphoneRequested
         diagnostics = XboxCloudDiagnosticsPolicy.resolve(
             diagnosticsEnabled: diagnosticsEnabled,

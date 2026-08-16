@@ -3412,6 +3412,91 @@ enum XboxSettingsSignOutWorkflow {
     }
 }
 
+private struct XboxCloudBandwidthSettingsRow: View {
+    @Binding var preference: XboxCloudBandwidthPreference
+
+    var body: some View {
+        LabeledContent(L10n.text("max_bitrate")) {
+            HStack(spacing: 16) {
+                Button {
+                    preference = preference.decreased()
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.plain)
+                .disabled(!preference.canDecrease)
+                .accessibilityLabel(
+                    "\(L10n.text("max_bitrate")) −"
+                )
+                .accessibilityValue(formattedValue)
+                .accessibilityIdentifier(
+                    "settings.stream-quality.max-bitrate.decrease"
+                )
+
+                Text(formattedValue)
+                    .monospacedDigit()
+                    .frame(minWidth: 96)
+                    .padding(.horizontal, 24)
+                    .accessibilityIdentifier(
+                        "settings.stream-quality.max-bitrate.value"
+                    )
+
+                Button {
+                    preference = preference.increased()
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .buttonStyle(.plain)
+                .disabled(!preference.canIncrease)
+                .accessibilityLabel(
+                    "\(L10n.text("max_bitrate")) +"
+                )
+                .accessibilityValue(formattedValue)
+                .accessibilityIdentifier(
+                    "settings.stream-quality.max-bitrate.increase"
+                )
+            }
+            .focusSection()
+        }
+    }
+
+    private var formattedValue: String {
+        guard let maximumBitrateKbps = preference.maximumRequestedBitrateKbps
+        else {
+            return "\(L10n.text("automatic")) · ∞"
+        }
+        return "\(maximumBitrateKbps / 1000) Mbps"
+    }
+}
+
+#if XBOX_QUALITY_BETA
+    private struct XboxCloudQualityProfileSettingsRow: View {
+        @Binding var preference: XboxCloudQualityProfilePreference
+
+        var body: some View {
+            LabeledContent(L10n.text("cloud_service")) {
+                Button {
+                    preference = switch preference {
+                    case .microsoftWeb: .nativeTVControl
+                    case .nativeTVControl: .microsoftWeb
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(preference.rawValue)
+                        Image(systemName: "chevron.right")
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.text("cloud_service"))
+                .accessibilityValue(preference.rawValue)
+                .accessibilityIdentifier(
+                    "xbox-settings.quality-beta-profile"
+                )
+            }
+        }
+    }
+#endif
+
 private struct XboxSettingsView: View {
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
     @Environment(CloudSessionCoordinator.self) private var sessionCoordinator
@@ -3435,14 +3520,30 @@ private struct XboxSettingsView: View {
                     onSelectProvider: switchProvider
                 )
 
-                if supportsManualResolution {
+                if supportsManualResolution || supportsBandwidthPreference {
                     CloudNowStreamQualitySection {
-                        CloudNowStreamQualityPicker(
-                            L10n.text("resolution"),
-                            selection: xboxResolutionSelection,
-                            accessibilityIdentifier: "settings.stream-quality.resolution",
-                            options: xboxResolutionOptions
-                        )
+                        if supportsManualResolution {
+                            CloudNowStreamQualityPicker(
+                                L10n.text("resolution"),
+                                selection: xboxResolutionSelection,
+                                accessibilityIdentifier: "settings.stream-quality.resolution",
+                                options: xboxResolutionOptions
+                            )
+                        }
+
+                        if supportsBandwidthPreference {
+                            XboxCloudBandwidthSettingsRow(
+                                preference: $modeViewModel.streamSettings
+                                    .bandwidthPreference
+                            )
+                        }
+
+                        #if XBOX_QUALITY_BETA
+                            XboxCloudQualityProfileSettingsRow(
+                                preference: $modeViewModel.streamSettings
+                                    .qualityProfile
+                            )
+                        #endif
                     }
                     .disabled(isBusy)
                 }
@@ -3626,6 +3727,12 @@ private struct XboxSettingsView: View {
         xboxCapabilities.streamOptions.value?.qualityControls.contains(
             .resolution
         ) == true && xboxResolutionOptions.count > 1
+    }
+
+    private var supportsBandwidthPreference: Bool {
+        xboxCapabilities.streamOptions.value?.qualityControls.contains(
+            .bitrate
+        ) == true
     }
 
     private var supportsMicrophone: Bool {

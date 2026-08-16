@@ -1,6 +1,7 @@
 @testable import CloudNow
 import Foundation
 import GameController
+import Synchronization
 import Testing
 import UIKit
 
@@ -75,12 +76,12 @@ struct XboxCloudInputDriverTests {
         #expect(state.shouldSendResolutionUpdate)
     }
 
-    @Test("Preferred resolution follows input bootstrap and precedes authorization")
+    @Test("Preferred resolution starts before gameplay and precedes authorization")
     func bootstrapOrdering() {
         var state = XboxCloudInputBootstrapState(
             isTransportReady: false,
-            hasInputVersion: true,
-            isInputChannelOpen: true,
+            hasInputVersion: false,
+            isInputChannelOpen: false,
             didSendClientMetadata: false,
             hasPendingControlUpdates: true,
             hasAttachedController: true,
@@ -94,37 +95,46 @@ struct XboxCloudInputDriverTests {
         #expect(!state.canSendResolutionUpdate)
         #expect(!state.canSendAuthorization)
 
-        state.didSendClientMetadata = true
+        state.hasInputVersion = true
         #expect(!state.canSendControlUpdates)
         #expect(!state.canSendControllerReport)
         #expect(!state.canSendResolutionUpdate)
         #expect(!state.canSendAuthorization)
 
-        state.isTransportReady = true
-        #expect(state.canSendControlUpdates)
+        state.isInputChannelOpen = true
+        #expect(!state.canSendControlUpdates)
         #expect(!state.canSendControllerReport)
-        #expect(!state.canSendResolutionUpdate)
-        #expect(!state.canSendAuthorization)
-
-        state.hasPendingControlUpdates = false
-        #expect(state.canSendControllerReport)
-        #expect(!state.canSendResolutionUpdate)
-        #expect(!state.canSendAuthorization)
-
-        state.didSendInitialControllerReport = true
         #expect(state.canSendResolutionUpdate)
         #expect(!state.canSendAuthorization)
 
         state.didSendResolutionUpdate = true
         #expect(state.canSendAuthorization)
         #expect(state.canSendResolutionUpdate)
+
+        state.didSendAuthorization = true
         #expect(!state.isPublishedReady(
             isMessageChannelOpen: true,
             didReceiveMessageHandshake: true,
             didSendMessageDimensions: true
         ))
 
-        state.didSendAuthorization = true
+        state.didSendClientMetadata = true
+        #expect(!state.canSendControlUpdates)
+        #expect(!state.canSendControllerReport)
+
+        state.isTransportReady = true
+        #expect(state.canSendControlUpdates)
+        #expect(!state.canSendControllerReport)
+
+        state.hasPendingControlUpdates = false
+        #expect(state.canSendControllerReport)
+        #expect(!state.isPublishedReady(
+            isMessageChannelOpen: true,
+            didReceiveMessageHandshake: true,
+            didSendMessageDimensions: true
+        ))
+
+        state.didSendInitialControllerReport = true
         #expect(!state.isPublishedReady(
             isMessageChannelOpen: true,
             didReceiveMessageHandshake: false,
@@ -142,12 +152,153 @@ struct XboxCloudInputDriverTests {
         ))
 
         state.isTransportReady = false
-        #expect(!state.canSendAuthorization)
+        #expect(state.canSendResolutionUpdate)
+        #expect(state.canSendAuthorization)
         #expect(!state.isPublishedReady(
             isMessageChannelOpen: true,
             didReceiveMessageHandshake: true,
             didSendMessageDimensions: true
         ))
+    }
+
+    @Test("Worker sends resolution before authorization without media or controllers")
+    func workerBootstrapOrdering() {
+        let recorded = Mutex((messages: [String](), resolutionAttempts: 0))
+        let sink = XboxCloudInputDataSink(
+            sendInput: { _ in .accepted },
+            sendReliableInput: { _ in .accepted },
+            sendUnreliableInput: { _ in .accepted },
+            sendControl: { data in
+                let message = (
+                    (try? JSONSerialization.jsonObject(with: data))
+                        as? [String: Any]
+                )?["message"] as? String ?? "unknown"
+                return recorded.withLock { state in
+                    state.messages.append(message)
+                    if message == "userRequestedResolutionUpdate" {
+                        state.resolutionAttempts += 1
+                        if state.resolutionAttempts == 1 {
+                            return .backpressured
+                        }
+                    }
+                    return .accepted
+                }
+            },
+            sendMessage: { _ in .accepted }
+        )
+        let worker = XboxCloudInputWorker(
+            deadzone: 0.15,
+            rumbleEnabled: false,
+            rumbleIntensity: 0,
+            preferredResolution: .qhd,
+            displayDimensions: .default1080p
+        )
+        defer { worker.stop() }
+
+        worker.start(
+            generation: 1,
+            sink: sink,
+            correlationVector: "ABCDEFGHIJKLMNOPQRSTUV",
+            controllers: [],
+            keyboard: nil,
+            mice: [],
+            overlayToggleRequested: { _ in },
+            readinessChanged: { _, _ in },
+            startsSamplingTimer: false
+        )
+        worker.setNegotiatedInputMode(.legacy(version: 1), generation: 1)
+        worker.channelStateChanged(.input, isOpen: true, generation: 1)
+        worker.channelStateChanged(.control, isOpen: true, generation: 1)
+        worker.flushForTesting()
+
+        worker.channelStateChanged(.control, isOpen: false, generation: 1)
+        worker.channelStateChanged(.control, isOpen: true, generation: 1)
+        worker.flushForTesting()
+
+        #expect(recorded.withLock { $0.messages } == [
+            "userRequestedResolutionUpdate",
+            "userRequestedResolutionUpdate",
+            "authorizationRequest",
+            "userRequestedResolutionUpdate",
+            "authorizationRequest",
+        ])
+    }
+
+    @Test("Dynamic display dimensions retry and resend after channel reopen")
+    func dynamicDisplayDimensions() throws {
+        var state = XboxCloudMessageDimensionsSendState(
+            current: .default1080p
+        )
+
+        #expect(state.hasPendingUpdate)
+        #expect(!state.didAcceptForChannel)
+
+        state.record(.backpressured)
+        #expect(state.hasPendingUpdate)
+        #expect(!state.didAcceptForChannel)
+
+        state.record(.accepted)
+        #expect(!state.hasPendingUpdate)
+        #expect(state.didAcceptForChannel)
+        let didChangeToSameDimensions = state.update(.default1080p)
+        #expect(!didChangeToSameDimensions)
+
+        let qhd = try #require(XboxCloudDisplayDimensions(
+            preferredWidth: 2560,
+            preferredHeight: 1440,
+            pixelDensity: 1
+        ))
+        let didChangeToQHD = state.update(qhd)
+        #expect(didChangeToQHD)
+        #expect(state.hasPendingUpdate)
+        #expect(state.didAcceptForChannel)
+
+        state.record(.accepted)
+        #expect(!state.hasPendingUpdate)
+
+        state.channelOpened()
+        #expect(state.hasPendingUpdate)
+        #expect(!state.didAcceptForChannel)
+    }
+
+    @MainActor
+    @Test("Every attachment refreshes current output dimensions")
+    func attachmentRefreshesDisplayDimensions() throws {
+        let qhd = try #require(XboxCloudDisplayDimensions(
+            preferredWidth: 2560,
+            preferredHeight: 1440,
+            pixelDensity: 1
+        ))
+        let uhd = try #require(XboxCloudDisplayDimensions(
+            preferredWidth: 3840,
+            preferredHeight: 2160,
+            pixelDensity: 2
+        ))
+        let currentDisplay = Mutex(qhd)
+        let driver = XboxCloudInputDriver(
+            displayDimensionsProvider: {
+                currentDisplay.withLock { $0 }
+            }
+        )
+        let transport = XboxCloudWebRTCTransport()
+        let endpointBaseURL = try #require(URL(
+            string: "https://region.gssv-play-prod.xboxlive.com"
+        ))
+        let signalingContext = try XboxCloudSignalingContext(
+            endpointBaseURL: endpointBaseURL,
+            sessionPath: "v5/sessions/cloud/fixture-session",
+            gsToken: "fixture-gs-token",
+            correlationVector: "fixture-cv"
+        )
+        defer { driver.stop() }
+
+        driver.attach(to: transport, signalingContext: signalingContext)
+        #expect(driver.preferredDisplayDimensionsForTesting() == qhd)
+
+        driver.stop()
+        currentDisplay.withLock { $0 = uhd }
+        driver.attach(to: transport, signalingContext: signalingContext)
+        #expect(driver.preferredDisplayDimensionsForTesting() == uhd)
     }
 
     @Test("No controller makes the initial input snapshot vacuously complete")

@@ -123,7 +123,7 @@ private extension View {
     }
 }
 
-#if DEBUG
+#if DEBUG || XBOX_QUALITY_BETA
     /// Network-free UI automation surface for every shared lifecycle state.
     /// It deliberately consumes the same provider-neutral model as adapters.
     struct CloudStreamPresentationFixtureView: View {
@@ -276,6 +276,70 @@ private extension View {
             case .streaming, .resumable, .failure:
                 false
             }
+        }
+    }
+
+    /// Network-free Xbox quality fixture using the same provider-neutral HUD
+    /// snapshot rendered by a live stream.
+    struct CloudStreamQualityHUDFixtureView: View {
+        var body: some View {
+            ZStack(alignment: .topTrailing) {
+                Color.black.ignoresSafeArea()
+                StatsHUDView(snapshot: snapshot)
+                    .padding(40)
+            }
+            .accessibilityIdentifier("xbox-quality-hud-fixture")
+        }
+
+        private var snapshot: StatsHUDSnapshot {
+            var stats = StreamStats()
+            stats.bitrateKbps = 18000
+            stats.availableIncomingBitrateKbps = 100_000
+            stats.resolutionWidth = 2560
+            stats.resolutionHeight = 1440
+            stats.fps = 60
+            stats.gameFps = 60
+            stats.rttMs = 18
+            stats.codec = "H264"
+            stats.selectedNetworkPath = "wired"
+
+            var audioStats = AudioStats()
+            audioStats.codecName = "opus"
+            audioStats.codecChannels = 2
+            audioStats.outputChannels = 2
+            audioStats.outputSampleRateHz = 48000
+
+            return StatsHUDSnapshot(
+                mode: .standard,
+                stats: stats,
+                audioStats: audioStats,
+                colorState: StreamColorState(
+                    preference: .automatic,
+                    requestedMode: .sdr8,
+                    negotiatedMode: .sdr8,
+                    detectedMode: .sdr8,
+                    displayHDRSupport: .unsupported,
+                    fallbackReason: nil
+                ),
+                streamingStartedAt: Date(),
+                microphoneEnabled: false,
+                headerTitle: "Xbox Cloud",
+                serverLocation: "West Europe",
+                diagnosticsEnabled: false,
+                rtcEventLogActive: false,
+                qualityRequest: StatsHUDQualityRequest(
+                    resolution: "1440p",
+                    bandwidth: requestedBandwidth
+                )
+            )
+        }
+
+        private var requestedBandwidth: String? {
+            #if XBOX_QUALITY_BETA
+                "100 Mbps"
+            #else
+                nil
+            #endif
         }
     }
 #endif

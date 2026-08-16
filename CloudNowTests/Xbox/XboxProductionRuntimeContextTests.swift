@@ -22,6 +22,27 @@ struct XboxProductionRuntimeContextTests {
         #expect(!disabledRuntime.microphoneRequestedForConnection)
     }
 
+    @Test("Production stream runtime applies the build bandwidth gate")
+    @MainActor
+    func productionRuntimeAppliesBandwidthGate() {
+        let transportFactory = XboxRuntimeTransportFactoryProbe()
+        let preference = XboxCloudBandwidthPreference.manual(
+            maximumBitrateKbps: 100_000
+        )
+        let runtime = XboxProductionRuntimeContext.makeNativeStreamRuntime(
+            settings: XboxCloudStreamSettings(
+                bandwidthPreference: preference
+            ),
+            transport: transportFactory.makeTransport()
+        )
+
+        #if XBOX_QUALITY_BETA
+            #expect(runtime.bandwidthPreference == preference)
+        #else
+            #expect(runtime.bandwidthPreference == .automatic)
+        #endif
+    }
+
     @Test("Production stream runtime normalizes diagnostics for this build")
     @MainActor
     func productionRuntimeNormalizesDiagnostics() {
@@ -149,7 +170,8 @@ struct XboxProductionRuntimeContextTests {
         var controller: XboxCloudStreamController? = service.makeStreamController {
             "fixture-transfer-token"
         }
-        weak var retainedController = controller
+        weak var retainedController: XboxCloudStreamController?
+        retainedController = controller
         try service.streamControllerRetention.retainController(
             #require(controller),
             account

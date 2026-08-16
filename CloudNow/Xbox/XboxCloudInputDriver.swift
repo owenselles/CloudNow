@@ -15,6 +15,86 @@ nonisolated enum XboxCloudChannelProtocolError: Error, Equatable, Sendable {
     case encodingFailed
 }
 
+// xbox-quality-beta-coverage:display-dimensions-state:start
+nonisolated struct XboxCloudDisplayDimensions: Equatable, Sendable {
+    static let default1080p = Self(
+        uncheckedPreferredWidth: 1920,
+        preferredHeight: 1080,
+        pixelDensity: 1
+    )
+
+    let preferredWidth: Int
+    let preferredHeight: Int
+    let pixelDensity: Double
+
+    init?(
+        preferredWidth: Int,
+        preferredHeight: Int,
+        pixelDensity: Double
+    ) {
+        guard (1 ... 16384).contains(preferredWidth),
+              (1 ... 16384).contains(preferredHeight),
+              pixelDensity.isFinite,
+              (0.1 ... 16).contains(pixelDensity)
+        else {
+            return nil
+        }
+        self.init(
+            uncheckedPreferredWidth: preferredWidth,
+            preferredHeight: preferredHeight,
+            pixelDensity: pixelDensity
+        )
+    }
+
+    private init(
+        uncheckedPreferredWidth preferredWidth: Int,
+        preferredHeight: Int,
+        pixelDensity: Double
+    ) {
+        self.preferredWidth = preferredWidth
+        self.preferredHeight = preferredHeight
+        self.pixelDensity = pixelDensity
+    }
+}
+
+/// Tracks the latest display geometry independently from the message-channel
+/// handshake. A geometry change after startup is retried without making the
+/// already-published gameplay path unready.
+nonisolated struct XboxCloudMessageDimensionsSendState: Equatable, Sendable {
+    private(set) var current: XboxCloudDisplayDimensions
+    private(set) var lastAccepted: XboxCloudDisplayDimensions?
+    private(set) var didAcceptForChannel = false
+
+    var hasPendingUpdate: Bool {
+        lastAccepted != current
+    }
+
+    @discardableResult
+    mutating func update(_ dimensions: XboxCloudDisplayDimensions) -> Bool {
+        guard dimensions != current else { return false }
+        current = dimensions
+        return true
+    }
+
+    mutating func record(_ disposition: XboxCloudDataSendDisposition) {
+        guard hasPendingUpdate, disposition == .accepted else { return }
+        lastAccepted = current
+        didAcceptForChannel = true
+    }
+
+    mutating func channelOpened() {
+        lastAccepted = nil
+        didAcceptForChannel = false
+    }
+
+    mutating func resetSendLifecycle() {
+        lastAccepted = nil
+        didAcceptForChannel = false
+    }
+}
+
+// xbox-quality-beta-coverage:display-dimensions-state:end
+
 nonisolated enum XboxCloudChannelProtocolCodec {
     /// Public access key sent by Microsoft's Xbox web client after its initial
     /// preferred-resolution update on the same control channel.
@@ -127,31 +207,32 @@ nonisolated enum XboxCloudChannelProtocolCodec {
         preferredHeight: Int,
         pixelDensity: Double
     ) throws -> Data {
-        guard (1 ... 16384).contains(preferredWidth),
-              (1 ... 16384).contains(preferredHeight),
-              pixelDensity.isFinite,
-              (0.1 ... 16).contains(pixelDensity)
+        guard let dimensions = XboxCloudDisplayDimensions(
+            preferredWidth: preferredWidth,
+            preferredHeight: preferredHeight,
+            pixelDensity: pixelDensity
+        )
         else {
             throw XboxCloudChannelProtocolError.encodingFailed
         }
         let millimetersPerInch = 25.4
         let logicalPixelsPerInch = 96.0
         let horizontal = max(1, Int(
-            Double(preferredWidth) / pixelDensity
+            Double(dimensions.preferredWidth) / dimensions.pixelDensity
                 / logicalPixelsPerInch * millimetersPerInch
         ))
         let vertical = max(1, Int(
-            Double(preferredHeight) / pixelDensity
+            Double(dimensions.preferredHeight) / dimensions.pixelDensity
                 / logicalPixelsPerInch * millimetersPerInch
         ))
         do {
             let contentData = try JSONEncoder().encode(DimensionsChanged(
                 horizontal: horizontal,
                 vertical: vertical,
-                preferredWidth: preferredWidth,
-                preferredHeight: preferredHeight,
-                safeAreaRight: preferredWidth,
-                safeAreaBottom: preferredHeight
+                preferredWidth: dimensions.preferredWidth,
+                preferredHeight: dimensions.preferredHeight,
+                safeAreaRight: dimensions.preferredWidth,
+                safeAreaBottom: dimensions.preferredHeight
             ))
             guard let content = String(data: contentData, encoding: .utf8)
             else {
@@ -219,6 +300,7 @@ nonisolated enum XboxCloudChannelProtocolCodec {
     }
 }
 
+// xbox-quality-beta-coverage:control-bootstrap-state:start
 /// Tracks accepted sends for one control-channel lifecycle. The bootstrap
 /// predicate below supplies the ordering and backpressure dependencies.
 nonisolated struct XboxCloudControlSendState: Sendable {
@@ -262,9 +344,9 @@ nonisolated struct XboxCloudControlSendState: Sendable {
     }
 }
 
-/// Pure bootstrap predicate shared by the worker and focused tests. Each
-/// accepted frame unlocks only the next protocol phase. Controller bootstrap
-/// precedes the preferred-resolution update, which precedes authorization.
+/// Pure bootstrap predicate shared by the worker and focused tests. Quality
+/// negotiation starts as soon as the input manager and its channels exist;
+/// decoded media and controller registration continue to gate gameplay only.
 nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
     var isTransportReady: Bool
     var hasInputVersion: Bool
@@ -288,21 +370,25 @@ nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
         !hasAttachedController || didSendInitialControllerReport
     }
 
-    private var canStartControlBootstrap: Bool {
-        isTransportReady
-            && hasInputVersion
+    private var canStartQualityBootstrap: Bool {
+        hasInputVersion
             && isInputChannelOpen
+    }
+
+    private var isGameplayBootstrapComplete: Bool {
+        isTransportReady
+            && canStartQualityBootstrap
             && didSendClientMetadata
             && !hasPendingControlUpdates
             && initialControllerReportSatisfied
     }
 
     var canSendResolutionUpdate: Bool {
-        canStartControlBootstrap
+        canStartQualityBootstrap
     }
 
     var canSendAuthorization: Bool {
-        canStartControlBootstrap && didSendResolutionUpdate
+        canStartQualityBootstrap && didSendResolutionUpdate
     }
 
     func isPublishedReady(
@@ -310,7 +396,7 @@ nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
         didReceiveMessageHandshake: Bool,
         didSendMessageDimensions: Bool
     ) -> Bool {
-        canSendAuthorization
+        isGameplayBootstrapComplete
             && didSendAuthorization
             && didSendResolutionUpdate
             && isMessageChannelOpen
@@ -318,6 +404,8 @@ nonisolated struct XboxCloudInputBootstrapState: Equatable, Sendable {
             && didSendMessageDimensions
     }
 }
+
+// xbox-quality-beta-coverage:control-bootstrap-state:end
 
 nonisolated enum XboxCloudControllerRegistrationPolicy {
     static func pendingUpdate(
@@ -538,7 +626,7 @@ nonisolated struct XboxCloudInboundMessageBudget: Sendable {
     }
 }
 
-private nonisolated struct XboxCloudInputDataSink: Sendable {
+nonisolated struct XboxCloudInputDataSink: Sendable {
     let sendInput: @Sendable (Data) -> XboxCloudDataSendDisposition
     let sendReliableInput: @Sendable (Data) -> XboxCloudDataSendDisposition
     let sendUnreliableInput: @Sendable (Data) -> XboxCloudDataSendDisposition
@@ -1001,7 +1089,7 @@ nonisolated enum XboxCloudTextInputMapper {
 /// All mutable Xbox input state lives on one bounded latency-sensitive queue.
 /// The unchecked conformance is safe because every mutable field below is
 /// accessed only by `queue`; public entry points enqueue or synchronize work.
-private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
+final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private struct ClaimedSystemGesture {
         let element: GCControllerElement
         let previousState: GCControllerElement.SystemGestureState
@@ -1074,9 +1162,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private let rumbleEnabled: Bool
     private let rumbleIntensity: Float
     private let preferredResolution: XboxCloudDisplayResolution
-    private let preferredDisplayWidth: Int
-    private let preferredDisplayHeight: Int
-    private let pixelDensity: Double
 
     private var generation: UInt64 = 0
     private var sink: XboxCloudInputDataSink?
@@ -1117,7 +1202,9 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var inputMode: XboxCloudInputTransportMode?
     private var controlAuthorizationData: Data?
     private var messageHandshakeData: Data?
-    private var messageDimensionsData: Data?
+    private var messageDimensionsID: UUID?
+    private var messageCorrelationVector: String?
+    private var messageDimensionsState: XboxCloudMessageDimensionsSendState
     private var resolutionUpdateData: Data?
     private var controlSendState = XboxCloudControlSendState()
     private var isTransportReady = false
@@ -1131,7 +1218,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private var didSendInitialControllerReport = false
     private var didSendMessageHandshake = false
     private var didReceiveMessageHandshake = false
-    private var didSendMessageDimensions = false
     private var lastReportedReadiness = false
     private var isPaused = false
     private var needsPausedNeutralSnapshot = false
@@ -1145,17 +1231,15 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         rumbleEnabled: Bool,
         rumbleIntensity: Float,
         preferredResolution: XboxCloudDisplayResolution,
-        preferredDisplayWidth: Int,
-        preferredDisplayHeight: Int,
-        pixelDensity: Double
+        displayDimensions: XboxCloudDisplayDimensions
     ) {
         self.deadzone = deadzone
         self.rumbleEnabled = rumbleEnabled
         self.rumbleIntensity = rumbleIntensity
         self.preferredResolution = preferredResolution
-        self.preferredDisplayWidth = preferredDisplayWidth
-        self.preferredDisplayHeight = preferredDisplayHeight
-        self.pixelDensity = pixelDensity
+        messageDimensionsState = XboxCloudMessageDimensionsSendState(
+            current: displayDimensions
+        )
         sampledStates.reserveCapacity(Self.controllerCapacity)
     }
 
@@ -1167,7 +1251,8 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         keyboard: GCKeyboard?,
         mice: [GCMouse],
         overlayToggleRequested: @escaping @Sendable (UInt64) -> Void,
-        readinessChanged: @escaping @Sendable (UInt64, Bool) -> Void
+        readinessChanged: @escaping @Sendable (UInt64, Bool) -> Void,
+        startsSamplingTimer: Bool = true
     ) {
         queue.sync {
             stopLocked()
@@ -1185,14 +1270,9 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                     id: UUID(),
                     correlationVector: correlationVector
                 )
-            messageDimensionsData = try? XboxCloudChannelProtocolCodec
-                .dimensionsChanged(
-                    id: UUID(),
-                    correlationVector: correlationVector,
-                    preferredWidth: preferredDisplayWidth,
-                    preferredHeight: preferredDisplayHeight,
-                    pixelDensity: pixelDensity
-                )
+            messageDimensionsID = UUID()
+            messageCorrelationVector = correlationVector
+            messageDimensionsState.resetSendLifecycle()
             resolutionUpdateData = try? XboxCloudChannelProtocolCodec
                 .userRequestedResolutionUpdate(
                     resolution: preferredResolution
@@ -1205,6 +1285,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 attachMouseLocked(mouse)
             }
             sampleAndFlushLocked()
+            guard startsSamplingTimer else { return }
 
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(
@@ -1226,9 +1307,17 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         }
     }
 
-    #if DEBUG
+    #if DEBUG || XBOX_QUALITY_BETA
         func pendingPeripheralReportForTesting() -> XboxPeripheralInputReport {
             queue.sync { peripheralInput.report }
+        }
+
+        func preferredDisplayDimensionsForTesting() -> XboxCloudDisplayDimensions {
+            queue.sync { messageDimensionsState.current }
+        }
+
+        func flushForTesting() {
+            queue.sync { sampleAndFlushLocked() }
         }
     #endif
 
@@ -1266,6 +1355,18 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self, generation == expectedGeneration else { return }
             isTransportReady = isReady
+            sampleAndFlushLocked()
+        }
+    }
+
+    func setPreferredDisplayDimensions(
+        _ dimensions: XboxCloudDisplayDimensions,
+        generation expectedGeneration: UInt64
+    ) {
+        queue.async { [weak self] in
+            guard let self, generation == expectedGeneration else { return }
+            guard messageDimensionsState.update(dimensions) else { return }
+            messageDimensionsID = UUID()
             sampleAndFlushLocked()
         }
     }
@@ -1418,7 +1519,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
                 if isOpen {
                     didSendMessageHandshake = false
                     didReceiveMessageHandshake = false
-                    didSendMessageDimensions = false
+                    messageDimensionsState.channelOpened()
                 }
             case .chat:
                 break
@@ -1677,7 +1778,9 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         inputMode = nil
         controlAuthorizationData = nil
         messageHandshakeData = nil
-        messageDimensionsData = nil
+        messageDimensionsID = nil
+        messageCorrelationVector = nil
+        messageDimensionsState.resetSendLifecycle()
         resolutionUpdateData = nil
         controlSendState.reset()
         isTransportReady = false
@@ -1691,7 +1794,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         didSendInitialControllerReport = false
         didSendMessageHandshake = false
         didReceiveMessageHandshake = false
-        didSendMessageDimensions = false
         lastReportedReadiness = false
         isPaused = false
         needsPausedNeutralSnapshot = false
@@ -1963,6 +2065,8 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         let forceInputReport = sampleOverlayGesturesLocked()
         flushMessageHandshakeLocked()
         flushMessageDimensionsLocked()
+        flushResolutionUpdateLocked()
+        flushControlAuthorizationLocked()
         flushClientMetadataLocked()
         flushControlUpdatesLocked()
         if isPaused {
@@ -1970,8 +2074,6 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
         } else {
             sendGamepadSnapshotLocked(force: forceInputReport)
         }
-        flushResolutionUpdateLocked()
-        flushControlAuthorizationLocked()
         updateReadinessLocked()
     }
 
@@ -2181,20 +2283,41 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
     private func flushMessageDimensionsLocked() {
         guard isMessageChannelOpen,
               didReceiveMessageHandshake,
-              !didSendMessageDimensions,
+              messageDimensionsState.hasPendingUpdate,
               let sink,
-              let messageDimensionsData
+              let messageDimensionsID,
+              let messageCorrelationVector,
+              let messageDimensionsData = try?
+              XboxCloudChannelProtocolCodec.dimensionsChanged(
+                  id: messageDimensionsID,
+                  correlationVector: messageCorrelationVector,
+                  preferredWidth: messageDimensionsState.current
+                      .preferredWidth,
+                  preferredHeight: messageDimensionsState.current
+                      .preferredHeight,
+                  pixelDensity: messageDimensionsState.current.pixelDensity
+              )
         else {
             return
         }
-        didSendMessageDimensions =
-            sink.sendMessage(messageDimensionsData) == .accepted
-        if didSendMessageDimensions {
-            let width = preferredDisplayWidth
-            let height = preferredDisplayHeight
+        let disposition = sink.sendMessage(messageDimensionsData)
+        messageDimensionsState.record(disposition)
+        if disposition == .accepted {
+            let width = messageDimensionsState.current.preferredWidth
+            let height = messageDimensionsState.current.preferredHeight
             xboxInputLog.notice(
                 "[Message] preferred dimensions queued \(width, privacy: .public)x\(height, privacy: .public) custom=true"
             )
+            #if XBOX_QUALITY_BETA
+                XboxCloudQualityTelemetry.shared.record(
+                    .display(
+                        signal: .messageDimensions,
+                        width: width,
+                        height: height,
+                        pixelDensity: messageDimensionsState.current.pixelDensity
+                    )
+                )
+            #endif
         }
     }
 
@@ -2510,7 +2633,7 @@ private final nonisolated class XboxCloudInputWorker: @unchecked Sendable {
             didReceiveMessageHandshake: !isMessageChannelNegotiated
                 || didReceiveMessageHandshake,
             didSendMessageDimensions: !isMessageChannelNegotiated
-                || didSendMessageDimensions
+                || messageDimensionsState.didAcceptForChannel
         )
         guard nextValue != lastReportedReadiness else { return }
         lastReportedReadiness = nextValue
@@ -2949,6 +3072,7 @@ final class XboxCloudInputDriver {
 
     @ObservationIgnored private weak var transport: XboxCloudWebRTCTransport?
     @ObservationIgnored private let notificationCenter: NotificationCenter
+    @ObservationIgnored private let displayDimensionsProvider: @MainActor @Sendable () -> XboxCloudDisplayDimensions?
     @ObservationIgnored private let worker: XboxCloudInputWorker
     @ObservationIgnored private var observerTokens: [NSObjectProtocol] = []
     @ObservationIgnored private var attachmentGeneration: UInt64 = 0
@@ -2962,27 +3086,24 @@ final class XboxCloudInputDriver {
         preferredResolution: XboxCloudDisplayResolution = .automatic,
         preferredDisplayWidth: Int = 1920,
         preferredDisplayHeight: Int = 1080,
-        pixelDensity: Double = 1
+        pixelDensity: Double = 1,
+        displayDimensionsProvider: @escaping @MainActor @Sendable () -> XboxCloudDisplayDimensions? = {
+            nil
+        }
     ) {
         self.notificationCenter = notificationCenter
-        let displayWidth = (1 ... 16384).contains(preferredDisplayWidth)
-            ? preferredDisplayWidth
-            : 1920
-        let displayHeight = (1 ... 16384).contains(preferredDisplayHeight)
-            ? preferredDisplayHeight
-            : 1080
-        let displayDensity = pixelDensity.isFinite
-            && (0.1 ... 16).contains(pixelDensity)
-            ? pixelDensity
-            : 1
+        self.displayDimensionsProvider = displayDimensionsProvider
+        let displayDimensions = XboxCloudDisplayDimensions(
+            preferredWidth: preferredDisplayWidth,
+            preferredHeight: preferredDisplayHeight,
+            pixelDensity: pixelDensity
+        ) ?? .default1080p
         worker = XboxCloudInputWorker(
             deadzone: min(max(deadzone, 0), 0.95),
             rumbleEnabled: rumbleEnabled,
             rumbleIntensity: min(max(rumbleIntensity, 0), 1),
             preferredResolution: preferredResolution,
-            preferredDisplayWidth: displayWidth,
-            preferredDisplayHeight: displayHeight,
-            pixelDensity: displayDensity
+            displayDimensions: displayDimensions
         )
     }
 
@@ -3031,6 +3152,7 @@ final class XboxCloudInputDriver {
             }
         }
         installControllerObservers(generation: generation)
+        installDisplayObservers(generation: generation)
 
         let sink = XboxCloudInputDataSink(
             sendInput: { [weak transport] data in
@@ -3077,6 +3199,12 @@ final class XboxCloudInputDriver {
                 }
             }
         )
+        if let dimensions = displayDimensionsProvider() {
+            worker.setPreferredDisplayDimensions(
+                dimensions,
+                generation: generation
+            )
+        }
     }
 
     func setNegotiatedInputMode(_ mode: XboxCloudInputTransportMode?) throws {
@@ -3098,8 +3226,30 @@ final class XboxCloudInputDriver {
         )
     }
 
-    /// Microsoft's input manager starts only after video packets are flowing.
-    /// A decoded-frame callback is stronger than the early RTP-track callback.
+    /// Queues an updated dimensions message after the existing messageV1
+    /// handshake. Invalid display routes fail closed and retain the last value.
+    @discardableResult
+    func updateDisplayGeometry(
+        preferredWidth: Int,
+        preferredHeight: Int,
+        pixelDensity: Double
+    ) -> Bool {
+        guard let dimensions = XboxCloudDisplayDimensions(
+            preferredWidth: preferredWidth,
+            preferredHeight: preferredHeight,
+            pixelDensity: pixelDensity
+        ) else {
+            return false
+        }
+        worker.setPreferredDisplayDimensions(
+            dimensions,
+            generation: attachmentGeneration
+        )
+        return true
+    }
+
+    /// Gameplay reports start only after video packets are flowing. Quality
+    /// and authorization bootstrap independently when input channels open.
     func setVideoFlowing() {
         hasDecodedVideo = true
         worker.setTransportReady(
@@ -3116,9 +3266,13 @@ final class XboxCloudInputDriver {
         worker.setPaused(paused, generation: attachmentGeneration)
     }
 
-    #if DEBUG
+    #if DEBUG || XBOX_QUALITY_BETA
         func pendingPeripheralReportForTesting() -> XboxPeripheralInputReport {
             worker.pendingPeripheralReportForTesting()
+        }
+
+        func preferredDisplayDimensionsForTesting() -> XboxCloudDisplayDimensions {
+            worker.preferredDisplayDimensionsForTesting()
         }
     #endif
 
@@ -3312,5 +3466,32 @@ final class XboxCloudInputDriver {
                 }
             },
         ]
+    }
+
+    private func installDisplayObservers(generation: UInt64) {
+        let names: [Notification.Name] = [
+            UIScreen.modeDidChangeNotification,
+            UIScene.didActivateNotification,
+        ]
+        observerTokens.append(contentsOf: names.map { name in
+            notificationCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.attachmentGeneration == generation,
+                          let dimensions = self.displayDimensionsProvider()
+                    else {
+                        return
+                    }
+                    self.worker.setPreferredDisplayDimensions(
+                        dimensions,
+                        generation: generation
+                    )
+                }
+            }
+        })
     }
 }

@@ -46,6 +46,14 @@ struct XboxCloudSessionAPITests {
             )
             let appInfo = try #require(device["appInfo"] as? [String: Any])
             let environment = try #require(appInfo["env"] as? [String: Any])
+            #expect(Set(environment.keys) == [
+                "clientAppId",
+                "clientAppType",
+                "clientAppVersion",
+                "clientSdkVersion",
+                "httpEnvironment",
+                "sdkInstallId",
+            ])
             #expect(environment["clientAppId"] as? String == "CloudNowTests")
             #expect(environment["sdkInstallId"] as? String == "fixture-install-id")
             let dev = try #require(device["dev"] as? [String: Any])
@@ -70,6 +78,9 @@ struct XboxCloudSessionAPITests {
             #expect(settings["timezoneOffsetMinutes"] as? Int == 120)
             #expect(settings["useIceConnection"] as? Bool == false)
             #expect(settings["sdkType"] as? String == "web")
+            #expect(settings["osName"] as? String == "tvOS")
+            #expect(settings["magnifier"] as? Bool == false)
+            #expect(settings["enableOptionalDataCollection"] as? Bool == false)
             return StubbedHTTPResponse(json: Self.createResponseJSON)
         }
         let api = XboxCloudSessionAPI(
@@ -83,6 +94,176 @@ struct XboxCloudSessionAPITests {
         #expect(!handle.description.contains("fixture-session"))
         #expect(!access.description.contains("fixture-gs-secret"))
         #expect(!access.description.contains("fixture-transfer-secret"))
+    }
+
+    @Test("Microsoft web beta sends the exact safe device and launch envelope")
+    func officialWebCreateSession() async throws {
+        let access = try makeAccessContext(profile: .officialWebBeta)
+        let transport = RecordingHTTPTransport { request, index in
+            #expect(index == 0)
+            #expect(
+                request.url?.absoluteString
+                    == "https://region.gssv-play-prod.xboxlive.com/v5/sessions/cloud/play"
+            )
+            #expect(request.httpMethod == "POST")
+            let headers = Dictionary(uniqueKeysWithValues:
+                (request.allHTTPHeaderFields ?? [:]).map {
+                    ($0.key.lowercased(), $0.value)
+                })
+            #expect(Set(headers.keys) == [
+                "accept",
+                "authorization",
+                "content-type",
+                "ms-cv",
+                "user-agent",
+                "x-gssv-routing",
+                "x-ms-device-info",
+                "x-xbl-market",
+            ])
+            #expect(headers["accept"] == "application/json")
+            #expect(headers["authorization"] == "Bearer fixture-gs-secret")
+            #expect(headers["content-type"] == "application/json; charset=utf-8")
+            #expect(headers["ms-cv"] == "ABCDEFGHIJKLMNOPQRSTUV.0")
+            #expect(headers["x-gssv-routing"] == "AFD")
+            #expect(headers["x-xbl-market"] == "US")
+            #expect(
+                headers["user-agent"]
+                    == "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+            )
+
+            let deviceHeader = try #require(
+                request.value(forHTTPHeaderField: "X-MS-Device-Info")
+            )
+            let device = try #require(
+                JSONSerialization.jsonObject(
+                    with: Data(deviceHeader.utf8)
+                ) as? [String: Any]
+            )
+            #expect(Set(device.keys) == ["appInfo", "dev"])
+            let appInfo = try #require(device["appInfo"] as? [String: Any])
+            let environment = try #require(appInfo["env"] as? [String: Any])
+            #expect(Set(environment.keys) == [
+                "clientAppId",
+                "clientAppType",
+                "clientAppVersion",
+                "clientSdkVersion",
+                "httpEnvironment",
+                "sdkInstallId",
+            ])
+            #expect(environment["clientAppId"] as? String == "www.xbox.com")
+            #expect(environment["clientAppType"] as? String == "browser")
+            #expect(environment["clientAppVersion"] as? String == "29.19.17")
+            #expect(environment["clientSdkVersion"] as? String == "10.6.57")
+            #expect(environment["httpEnvironment"] as? String == "prod")
+            #expect(environment["sdkInstallId"] as? String == "fixture-install-id")
+
+            let dev = try #require(device["dev"] as? [String: Any])
+            #expect(Set(dev.keys) == ["browser", "displayInfo", "hw", "os"])
+            let displayInfo = try #require(dev["displayInfo"] as? [String: Any])
+            let dimensions = try #require(
+                displayInfo["dimensions"] as? [String: Any]
+            )
+            let density = try #require(
+                displayInfo["pixelDensity"] as? [String: Any]
+            )
+            #expect(dimensions["widthInPixels"] as? Int == 3024)
+            #expect(dimensions["heightInPixels"] as? Int == 1964)
+            #expect(density["dpiX"] as? Double == 1)
+            #expect(density["dpiY"] as? Double == 1)
+            let browser = try #require(dev["browser"] as? [String: Any])
+            #expect(browser["browserName"] as? String == "chrome")
+            #expect(browser["browserVersion"] as? String == "148.0.0.0")
+            let hardware = try #require(dev["hw"] as? [String: Any])
+            #expect(hardware["make"] as? String == "Apple")
+            #expect(hardware["model"] as? String == "unknown")
+            #expect(hardware["platformType"] as? String == "desktop")
+            #expect(hardware["sdkType"] as? String == "web")
+            let operatingSystem = try #require(dev["os"] as? [String: Any])
+            #expect(operatingSystem["name"] as? String == "macOS")
+            #expect(operatingSystem["ver"] as? String == "10.15.7")
+            #expect(operatingSystem["platform"] as? String == "desktop")
+
+            let body = try jsonObject(from: request)
+            #expect(Set(body.keys) == [
+                "clientSessionId",
+                "fallbackRegionNames",
+                "serverId",
+                "settings",
+                "systemUpdateGroup",
+                "titleId",
+            ])
+            #expect(body["clientSessionId"] as? String == "abcdef0123456789abcdef")
+            #expect(body["fallbackRegionNames"] as? [String] == [])
+            #expect(body["systemUpdateGroup"] as? String == "")
+            #expect(body["serverId"] as? String == "")
+            #expect(body["titleId"] as? String == "123456789")
+            let settings = try #require(body["settings"] as? [String: Any])
+            #expect(Set(settings.keys) == [
+                "enableTextToSpeech",
+                "highContrast",
+                "locale",
+                "nanoVersion",
+                "osName",
+                "sdkType",
+                "timezoneOffsetMinutes",
+                "useIceConnection",
+            ])
+            #expect(settings["nanoVersion"] as? String == "V3;WebrtcTransport.dll")
+            #expect(settings["enableTextToSpeech"] as? Bool == false)
+            #expect(settings["highContrast"] as? Int == 0)
+            #expect(settings["locale"] as? String == "en-US")
+            #expect(settings["useIceConnection"] as? Bool == false)
+            #expect(settings["timezoneOffsetMinutes"] as? Int == 120)
+            #expect(settings["sdkType"] as? String == "web")
+            #expect(settings["osName"] as? String == "macOS")
+            return StubbedHTTPResponse(json: Self.createResponseJSON)
+        }
+        let api = XboxCloudSessionAPI(
+            access: access,
+            transport: transport,
+            correlationVectorBase: "ABCDEFGHIJKLMNOPQRSTUV",
+            clientSessionIDGenerator: { "abcdef0123456789abcdef" }
+        )
+
+        _ = try await api.createSession(makeLaunchRequest())
+    }
+
+    @Test("Microsoft web beta preserves an enabled magnifier request")
+    func officialWebMagnifier() async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            #expect(index == 0)
+            let body = try jsonObject(from: request)
+            let settings = try #require(body["settings"] as? [String: Any])
+            #expect(settings["magnifier"] as? Bool == true)
+            return StubbedHTTPResponse(json: Self.createResponseJSON)
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(profile: .officialWebBeta),
+            transport: transport,
+            clientSessionIDGenerator: { "abcdef0123456789abcdef" }
+        )
+
+        _ = try await api.createSession(makeLaunchRequest(magnifier: true))
+    }
+
+    @Test("Microsoft web beta rejects an invalid generated session identifier")
+    func invalidGeneratedClientSessionID() async throws {
+        let transport = RecordingHTTPTransport { _, index in
+            throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(profile: .officialWebBeta),
+            transport: transport,
+            clientSessionIDGenerator: { "INVALID-SESSION-ID" }
+        )
+
+        await #expect(
+            throws: XboxCloudSessionAPIError.invalidLaunchRequest(
+                "Xbox Cloud generated an invalid client session identifier."
+            )
+        ) {
+            _ = try await api.createSession(makeLaunchRequest())
+        }
     }
 
     @Test("Every session response uses the streaming size boundary")
@@ -892,6 +1073,7 @@ struct XboxCloudSessionAPITests {
     }
 
     private func makeAccessContext(
+        profile: XboxCloudSessionCompatibilityProfile = .nativeTVControl,
         transferToken: @escaping @Sendable () async throws -> String = { "fixture-transfer-secret" }
     ) throws -> XboxCloudSessionAccessContext {
         try XboxCloudSessionAccessContext(
@@ -916,16 +1098,20 @@ struct XboxCloudSessionAPITests {
                 displayHeightInPixels: 1080,
                 pixelDensity: 1
             ),
+            compatibilityProfile: profile,
             msaTransferToken: transferToken
         )
     }
 
-    private func makeLaunchRequest() throws -> XboxCloudSessionLaunchRequest {
+    private func makeLaunchRequest(
+        magnifier: Bool = false
+    ) throws -> XboxCloudSessionLaunchRequest {
         try XboxCloudSessionLaunchRequest(
             titleID: "123456789",
             preferredSystemUpdateGroup: "flight-a",
             clientSessionID: "fixture-client-session",
             settings: XboxCloudSessionLaunchSettings(
+                magnifier: magnifier,
                 locale: "en-US",
                 timezoneOffsetMinutes: 120
             )

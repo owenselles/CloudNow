@@ -1701,6 +1701,13 @@ extension XboxCloudWebRTCTransport: XboxCloudWebRTCNegotiatingPeer {
         xboxWebRTCLog.notice(
             "Xbox local offer resolution limits imageattr=\(summary.hasImageAttribute, privacy: .public) maxFs=\(summary.hasMaximumFrameSize, privacy: .public)"
         )
+        #if XBOX_QUALITY_BETA
+            XboxCloudQualityTelemetry.shared.record(
+                .localOffer(
+                    XboxCloudQualitySDPSummary(sdp: localDescription.sdp)
+                )
+            )
+        #endif
         return localDescription.sdp
     }
 
@@ -1737,6 +1744,11 @@ extension XboxCloudWebRTCTransport: XboxCloudWebRTCNegotiatingPeer {
         guard self.peerConnection === peerConnection else {
             throw CancellationError()
         }
+        #if XBOX_QUALITY_BETA
+            XboxCloudQualityTelemetry.shared.record(
+                .remoteAnswer(XboxCloudQualitySDPSummary(sdp: answer.sdp))
+            )
+        #endif
     }
 
     func waitForLocalICECandidates() async throws -> [XboxCloudICECandidate] {

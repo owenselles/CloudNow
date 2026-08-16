@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || XBOX_QUALITY_BETA
     import Foundation
 
     /// Deterministic, network-free Xbox configuration used only by simulator UI

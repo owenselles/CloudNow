@@ -74,6 +74,125 @@ struct XboxCloudOfferingServiceTests {
         #expect(profile.membershipTierByProductID["CFQ7TTC0KHS0"] == .ultimate)
     }
 
+    @Test(
+        "Session compatibility profiles are explicit and versioned",
+        arguments: [
+            (
+                XboxCloudSessionCompatibilityProfile.nativeTVControl,
+                "xbox-native-tvos-control-v1",
+                XboxCloudSessionLaunchEnvelope.nativeTVControl,
+                true
+            ),
+            (
+                XboxCloudSessionCompatibilityProfile.officialWebBeta,
+                "xbox-web-www-29.19.17-sdk-10.6.57",
+                XboxCloudSessionLaunchEnvelope.microsoftWeb,
+                false
+            ),
+        ]
+    )
+    func sessionCompatibilityProfiles(
+        _ profile: XboxCloudSessionCompatibilityProfile,
+        identifier: String,
+        launchEnvelope: XboxCloudSessionLaunchEnvelope,
+        usesRegionalAllocationHints: Bool
+    ) {
+        #expect(profile.identifier == identifier)
+        #expect(profile.launchEnvelope == launchEnvelope)
+        #expect(profile.usesRegionalAllocationHints == usesRegionalAllocationHints)
+        #expect(profile.launchSDKType == "web")
+    }
+
+    @Test("Microsoft web beta identity matches its versioned request profile")
+    func officialWebBetaProfile() throws {
+        let profile = XboxCloudSessionCompatibilityProfile.officialWebBeta
+        let identity = try #require(profile.deviceIdentity)
+
+        #expect(identity.clientAppID == "www.xbox.com")
+        #expect(identity.clientAppType == "browser")
+        #expect(identity.clientAppVersion == "29.19.17")
+        #expect(identity.clientSDKVersion == "10.6.57")
+        #expect(identity.browserName == "chrome")
+        #expect(identity.browserVersion == "148.0.0.0")
+        #expect(identity.hardwareMake == "Apple")
+        #expect(identity.hardwareModel == "unknown")
+        #expect(identity.platformType == "desktop")
+        #expect(identity.sdkType == "web")
+        #expect(identity.operatingSystemName == "macOS")
+        #expect(identity.operatingSystemVersion == "10.15.7")
+        #expect(identity.operatingSystemPlatform == "desktop")
+        #expect(identity.displayWidthInPixels == 3024)
+        #expect(identity.displayHeightInPixels == 1964)
+        #expect(identity.pixelDensity == 1)
+        #expect(profile.launchOSName == "macOS")
+        #expect(profile.clientSessionIDPolicy == .lowercaseHex(length: 22))
+        #expect(
+            profile.httpUserAgent
+                == "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+        )
+    }
+
+    @Test(
+        "Session profiles reject unsupported generated identifier lengths",
+        arguments: [15, 33]
+    )
+    func sessionProfileIdentifierLength(_ length: Int) {
+        let webProfile = XboxCloudSessionCompatibilityProfile.officialWebBeta
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try XboxCloudSessionCompatibilityProfile(
+                identifier: "xbox-invalid-session-id-policy",
+                deviceIdentity: webProfile.deviceIdentity,
+                launchEnvelope: .microsoftWeb,
+                launchSDKType: "web",
+                launchOSName: "macOS",
+                usesRegionalAllocationHints: false,
+                clientSessionIDPolicy: .lowercaseHex(length: length),
+                httpUserAgent: webProfile.httpUserAgent
+            )
+        }
+    }
+
+    @Test("Session profiles reject unsafe identifiers and incomplete web identities")
+    func sessionProfileValidation() {
+        let webProfile = XboxCloudSessionCompatibilityProfile.officialWebBeta
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try XboxCloudSessionCompatibilityProfile(
+                identifier: "Xbox-Unsafe",
+                deviceIdentity: nil,
+                launchEnvelope: .nativeTVControl,
+                launchSDKType: "web",
+                launchOSName: "tvOS",
+                usesRegionalAllocationHints: true,
+                clientSessionIDPolicy: .provided
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try XboxCloudSessionCompatibilityProfile(
+                identifier: "xbox-web-missing-identity",
+                deviceIdentity: nil,
+                launchEnvelope: .microsoftWeb,
+                launchSDKType: "web",
+                launchOSName: "macOS",
+                usesRegionalAllocationHints: false,
+                clientSessionIDPolicy: .lowercaseHex(length: 22),
+                httpUserAgent: XboxCloudSessionCompatibilityProfile
+                    .officialWebBeta.httpUserAgent
+            )
+        }
+        #expect(throws: XboxCloudCompatibilityProfileError.invalidProfile) {
+            _ = try XboxCloudSessionCompatibilityProfile(
+                identifier: "xbox-web-unsafe-user-agent",
+                deviceIdentity: webProfile.deviceIdentity,
+                launchEnvelope: .microsoftWeb,
+                launchSDKType: "web",
+                launchOSName: "macOS",
+                usesRegionalAllocationHints: false,
+                clientSessionIDPolicy: .lowercaseHex(length: 22),
+                httpUserAgent: "Mozilla/5.0\r\nX-Injected: true"
+            )
+        }
+    }
+
     @Test("Compatibility profiles reject invalid versions and untrusted endpoints")
     func compatibilityProfileValidation() throws {
         let bundled = XboxCloudCompatibilityProfile.bundledV1

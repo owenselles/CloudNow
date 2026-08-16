@@ -1,5 +1,10 @@
 import SwiftUI
 
+nonisolated struct StatsHUDQualityRequest: Equatable {
+    let resolution: String
+    let bandwidth: String?
+}
+
 /// Provider-neutral values rendered by CloudNow's in-stream statistics HUD.
 /// Providers own metric collection; this value keeps the presentation shared.
 nonisolated struct StatsHUDSnapshot: Equatable {
@@ -13,6 +18,7 @@ nonisolated struct StatsHUDSnapshot: Equatable {
     var serverLocation: String
     var diagnosticsEnabled: Bool
     var rtcEventLogActive: Bool
+    var qualityRequest: StatsHUDQualityRequest?
 }
 
 /// In-game statistics HUD mirroring the official GeForce NOW overlay. Compact shows
@@ -70,7 +76,8 @@ struct StatsHUDView: View {
                     headerTitle: snapshot.headerTitle,
                     serverLocation: snapshot.serverLocation,
                     diagnosticsEnabled: snapshot.diagnosticsEnabled,
-                    rtcEventLogActive: snapshot.rtcEventLogActive
+                    rtcEventLogActive: snapshot.rtcEventLogActive,
+                    qualityRequest: snapshot.qualityRequest
                 )
             }
         }
@@ -99,7 +106,8 @@ struct StatsHUDView: View {
                     automaticServerId: automaticServerId
                 ),
                 diagnosticsEnabled: controller.diagnosticsEnabled,
-                rtcEventLogActive: controller.rtcEventLogURL != nil
+                rtcEventLogActive: controller.rtcEventLogURL != nil,
+                qualityRequest: nil
             )
         }
     }
@@ -153,6 +161,7 @@ private struct StandardStatsPanel: View {
     let serverLocation: String
     let diagnosticsEnabled: Bool
     let rtcEventLogActive: Bool
+    let qualityRequest: StatsHUDQualityRequest?
 
     var body: some View {
         StatsPanel(contentWidth: StatsHUDLayout.columnWidth) {
@@ -164,7 +173,8 @@ private struct StandardStatsPanel: View {
                     audioStats: audioStats,
                     colorState: colorState,
                     streamingStartedAt: streamingStartedAt,
-                    serverLocation: serverLocation
+                    serverLocation: serverLocation,
+                    qualityRequest: qualityRequest
                 )
                 .frame(width: StatsHUDLayout.columnWidth, alignment: .topLeading)
 
@@ -394,6 +404,7 @@ private struct CoreStatsColumn: View {
     let colorState: StreamColorState
     let streamingStartedAt: Date?
     let serverLocation: String
+    let qualityRequest: StatsHUDQualityRequest?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -403,6 +414,12 @@ private struct CoreStatsColumn: View {
                     value: String(format: "%.1f ms / %.1f %%", stats.jitterMs, stats.packetLossPercent)
                 )
                 StatsRow(label: L10n.text("bitrate"), value: bitrateValue)
+                if let requestedBandwidth = qualityRequest?.bandwidth {
+                    StatsRow(
+                        label: L10n.text("max_bitrate"),
+                        value: requestedBandwidth
+                    )
+                }
                 StatsRow(
                     label: L10n.text("connection"),
                     value: L10n.text(stats.selectedNetworkPath)
@@ -419,6 +436,12 @@ private struct CoreStatsColumn: View {
                     label: L10n.text("resolution"),
                     value: "\(stats.resolutionWidth)×\(stats.resolutionHeight)"
                 )
+                if let requestedResolution = qualityRequest?.resolution {
+                    StatsRow(
+                        label: L10n.text("max_stream_quality"),
+                        value: requestedResolution
+                    )
+                }
                 StatsRow(
                     label: L10n.text("drops_freezes"),
                     value: "\(stats.framesDropped) / \(stats.freezeCount)"

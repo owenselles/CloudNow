@@ -16,12 +16,12 @@ struct CloudNowApp: App {
     @State private var cloudSessionCoordinator = CloudSessionCoordinator()
     @State private var hasRestoredApplicationState = false
     private let xboxEnvironment: XboxCloudEnvironment
-    #if DEBUG
+    #if DEBUG || XBOX_QUALITY_BETA
         private let usesUITestFixtures: Bool
     #endif
 
     init() {
-        #if DEBUG
+        #if DEBUG || XBOX_QUALITY_BETA
             let usesUITestFixtures =
                 ProcessInfo.processInfo.arguments.contains("--cloudnow-ui-testing")
                     || ProcessInfo.processInfo.environment["CLOUDNOW_UI_TESTING"] == "1"
@@ -99,7 +99,7 @@ struct CloudNowApp: App {
             memoryCapacity: 50 * 1024 * 1024,
             diskCapacity: 200 * 1024 * 1024
         )
-        #if DEBUG
+        #if DEBUG || XBOX_QUALITY_BETA
             guard !usesUITestFixtures else { return }
         #endif
 
@@ -121,7 +121,7 @@ struct CloudNowApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                #if DEBUG
+                #if DEBUG || XBOX_QUALITY_BETA
                     if usesUITestFixtures {
                         UITestRootView(
                             xboxServiceConfiguration: xboxEnvironment.service
@@ -292,7 +292,7 @@ struct CloudNowApp: App {
         }
     }
 
-    #if DEBUG
+    #if DEBUG || XBOX_QUALITY_BETA
         private static let uiTestAuthSession = AuthSession(
             provider: LoginProvider(
                 idpId: "fixture",
@@ -344,13 +344,14 @@ private struct AuthRestorationView: View {
     }
 }
 
-#if DEBUG
+#if DEBUG || XBOX_QUALITY_BETA
     private struct UITestRootView: View {
         @Environment(AuthManager.self) private var authManager
         @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
         @Environment(XboxAuthManager.self) private var xboxAuthManager
         @State private var viewModel: GamesViewModel
         private let showsServiceChooser: Bool
+        private let showsXboxQualityHUD: Bool
         private let xboxServiceConfiguration: XboxCloudServiceConfiguration?
         private let xboxStreamFixtureState: CloudStreamPresentationState?
 
@@ -360,6 +361,9 @@ private struct AuthRestorationView: View {
             let arguments = ProcessInfo.processInfo.arguments
             self.xboxServiceConfiguration = xboxServiceConfiguration
             showsServiceChooser = arguments.contains("--cloudnow-ui-service-chooser")
+            showsXboxQualityHUD = arguments.contains(
+                "--cloudnow-ui-xbox-quality-hud"
+            )
             xboxStreamFixtureState = Self.xboxStreamFixtureState(
                 arguments: arguments
             )
@@ -404,7 +408,9 @@ private struct AuthRestorationView: View {
 
         var body: some View {
             Group {
-                if let xboxStreamFixtureState {
+                if showsXboxQualityHUD {
+                    CloudStreamQualityHUDFixtureView()
+                } else if let xboxStreamFixtureState {
                     CloudStreamPresentationFixtureView(
                         state: xboxStreamFixtureState
                     )

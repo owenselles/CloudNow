@@ -321,8 +321,37 @@ struct XboxCloudPlayerView: View {
             headerTitle: L10n.text("app_name"),
             serverLocation: location.isEmpty ? L10n.text("unknown") : location,
             diagnosticsEnabled: controller.diagnosticsEnabled,
-            rtcEventLogActive: controller.rtcEventLogActive
+            rtcEventLogActive: controller.rtcEventLogActive,
+            qualityRequest: StatsHUDQualityRequest(
+                resolution: requestedResolutionLabel,
+                bandwidth: requestedBandwidthLabel
+            )
         )
+    }
+
+    private var requestedResolutionLabel: String {
+        let resolution = activeStreamSettings.displayResolution
+        return [resolution.label, resolution.badge]
+            .compactMap { $0 }
+            .joined(separator: " ")
+    }
+
+    private var requestedBandwidthLabel: String? {
+        guard XboxCloudQualityBetaPolicy
+            .currentBuildAllowsBandwidthPreference
+        else {
+            return nil
+        }
+        guard let maximumBitrateKbps = activeStreamSettings.bandwidthPreference
+            .maximumRequestedBitrateKbps
+        else {
+            return "\(L10n.text("automatic")) · ∞"
+        }
+        return "\(maximumBitrateKbps / 1000) Mbps"
+    }
+
+    private var activeStreamSettings: XboxCloudStreamSettings {
+        controller.activeStreamSettings ?? settings.normalizedForClient
     }
 
     private var statusTitle: String {

@@ -209,7 +209,13 @@ struct CloudGamingCapabilitiesTests {
             .subscription,
             .unavailableReason,
         ])
-        #expect(options.qualityControls == [.automatic, .resolution])
+        #expect(
+            options.qualityControls == XboxCloudQualityBetaPolicy
+                .qualityControls(
+                    allowsBandwidthPreference: XboxCloudQualityBetaPolicy
+                        .currentBuildAllowsBandwidthPreference
+                )
+        )
         #expect(options.audioControls == [.automatic])
         #expect(options.hdrControls == [.automatic])
         #expect(input.devices == [.controller, .keyboardMouse])

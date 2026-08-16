@@ -137,6 +137,7 @@ struct PersistenceStoreTests {
         geForceNowSettings.maxBitrateKbps = 42000
         let xboxSettings = XboxCloudStreamSettings(
             displayResolution: .qhd,
+            bandwidthPreference: .manual(maximumBitrateKbps: 100_000),
             codecPreference: .h265,
             gameLanguage: "de_DE",
             controllerDeadzone: 0.25,
@@ -181,6 +182,7 @@ struct PersistenceStoreTests {
         geForceNowSettings.maxBitrateKbps = 42000
         let xboxSettings = XboxCloudStreamSettings(
             displayResolution: .qhd,
+            bandwidthPreference: .manual(maximumBitrateKbps: 100_000),
             gameLanguage: "de-DE"
         )
         try await harness.store.saveAuthSession(
