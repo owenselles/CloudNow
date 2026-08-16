@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "scope": "xbox-quality-beta-deterministic",
+  "title": "Xbox quality Beta deterministic coverage",
+  "metric": "xccov-executable-lines",
+  "requiredCoverage": 1.0,
+  "regions": [
+    {
+      "label": "sanitized quality telemetry",
+      "path": "CloudNow/Xbox/XboxCloudQualityTelemetry.swift",
+      "startMarker": "xbox-quality-beta-coverage:telemetry-sanitization:start",
+      "endMarker": "xbox-quality-beta-coverage:telemetry-sanitization:end"
+    },
+    {
+      "label": "bounded quality telemetry buffer",
+      "path": "CloudNow/Xbox/XboxCloudQualityTelemetry.swift",
+      "startMarker": "xbox-quality-beta-coverage:telemetry-buffer:start",
+      "endMarker": "xbox-quality-beta-coverage:telemetry-buffer:end"
+    },
+    {
+      "label": "session profile validation",
+      "path": "CloudNow/Xbox/XboxCloudOfferingService.swift",
+      "startMarker": "xbox-quality-beta-coverage:session-profile-validation:start",
+      "endMarker": "xbox-quality-beta-coverage:session-profile-validation:end"
+    },
+    {
+      "label": "client session identifier policy",
+      "path": "CloudNow/Xbox/XboxCloudSessionAPI.swift",
+      "startMarker": "xbox-quality-beta-coverage:client-session-id:start",
+      "endMarker": "xbox-quality-beta-coverage:client-session-id:end"
+    },
+    {
+      "label": "profile user-agent header",
+      "path": "CloudNow/Xbox/XboxCloudSessionAPI.swift",
+      "startMarker": "xbox-quality-beta-coverage:profile-user-agent-header:start",
+      "endMarker": "xbox-quality-beta-coverage:profile-user-agent-header:end"
+    },
+    {
+      "label": "session settings envelope",
+      "path": "CloudNow/Xbox/XboxCloudSessionAPI.swift",
+      "startMarker": "xbox-quality-beta-coverage:session-settings-envelope:start",
+      "endMarker": "xbox-quality-beta-coverage:session-settings-envelope:end"
+    },
+    {
+      "label": "bandwidth preference",
+      "path": "CloudNow/Xbox/XboxCloudStreamSettings.swift",
+      "startMarker": "xbox-quality-beta-coverage:bandwidth-preference:start",
+      "endMarker": "xbox-quality-beta-coverage:bandwidth-preference:end"
+    },
+    {
+      "label": "quality beta policy",
+      "path": "CloudNow/Xbox/XboxCloudStreamSettings.swift",
+      "startMarker": "xbox-quality-beta-coverage:quality-policy:start",
+      "endMarker": "xbox-quality-beta-coverage:quality-policy:end"
+    },
+    {
+      "label": "display dimensions state",
+      "path": "CloudNow/Xbox/XboxCloudInputDriver.swift",
+      "startMarker": "xbox-quality-beta-coverage:display-dimensions-state:start",
+      "endMarker": "xbox-quality-beta-coverage:display-dimensions-state:end"
+    },
+    {
+      "label": "control bootstrap state",
+      "path": "CloudNow/Xbox/XboxCloudInputDriver.swift",
+      "startMarker": "xbox-quality-beta-coverage:control-bootstrap-state:start",
+      "endMarker": "xbox-quality-beta-coverage:control-bootstrap-state:end"
+    }
+  ]
+}
