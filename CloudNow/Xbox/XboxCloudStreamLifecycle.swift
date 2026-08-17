@@ -187,6 +187,7 @@ protocol XboxCloudStreamRuntime: AnyObject, Sendable {
     )
     func setInputPaused(_ isPaused: Bool)
     func sendKeyboardEvent(isPressed: Bool, virtualKey: UInt8)
+    func sendMouseReport(_ report: XboxMouseReport)
     @discardableResult func sendTextEntry(_ text: String) -> Bool
     func sendInputKeepAlive()
     func disconnect()
@@ -194,6 +195,7 @@ protocol XboxCloudStreamRuntime: AnyObject, Sendable {
 
 extension XboxCloudStreamRuntime {
     func sendKeyboardEvent(isPressed _: Bool, virtualKey _: UInt8) {}
+    func sendMouseReport(_: XboxMouseReport) {}
 }
 
 /// Owns the provider-specific data-channel lifecycle around CloudNow's shared
@@ -337,6 +339,10 @@ final class XboxCloudNativeStreamRuntime: XboxCloudStreamRuntime {
             isPressed: isPressed,
             virtualKey: virtualKey
         )
+    }
+
+    func sendMouseReport(_ report: XboxMouseReport) {
+        inputDriver.sendMouseReport(report)
     }
 
     @discardableResult

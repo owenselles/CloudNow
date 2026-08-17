@@ -513,69 +513,135 @@ struct XboxCloudInputDriverTests {
         #expect(state.action(
             keyCode: .keyboardA,
             isPressed: true,
-            isSimulator: true,
-            hasGameControllerKeyboard: false
+            isSimulator: true
         ) == .keyboard(isPressed: true, virtualKey: 0x41))
         #expect(state.action(
             keyCode: .keyboardA,
             isPressed: false,
-            isSimulator: true,
-            hasGameControllerKeyboard: false
+            isSimulator: true
         ) == .keyboard(isPressed: false, virtualKey: 0x41))
         #expect(state.action(
             keyCode: .keyboardEscape,
             isPressed: true,
-            isSimulator: true,
-            hasGameControllerKeyboard: false
+            isSimulator: true
         ) == .togglePauseMenu)
         #expect(state.action(
             keyCode: .keyboardEscape,
+            isPressed: true,
+            isSimulator: true
+        ) == .ignored)
+        #expect(state.action(
+            keyCode: .keyboardEscape,
             isPressed: false,
+            isSimulator: true
+        ) == .ignored)
+        #expect(state.action(
+            keyCode: .keyboardEscape,
+            isPressed: true,
             isSimulator: true,
-            hasGameControllerKeyboard: false
+            hasGameControllerKeyboard: true
         ) == .ignored)
     }
 
-    @Test("Responder fallback never duplicates a GCKeyboard or device key")
+    @Test("Responder fallback remains Simulator-only")
     func responderKeyboardIsolation() {
         var state = XboxCloudResponderKeyboardState()
 
         #expect(state.action(
             keyCode: .keyboardW,
             isPressed: true,
-            isSimulator: false,
-            hasGameControllerKeyboard: false
+            isSimulator: false
         ) == .ignored)
         #expect(state.action(
             keyCode: .keyboardW,
             isPressed: true,
-            isSimulator: true,
-            hasGameControllerKeyboard: true
-        ) == .ignored)
-        #expect(state.action(
-            keyCode: .keyboardW,
-            isPressed: false,
-            isSimulator: true,
-            hasGameControllerKeyboard: false
-        ) == .ignored)
-    }
-
-    @Test("Hot-attaching GCKeyboard still releases a responder key")
-    func responderKeyboardHotAttachRelease() {
-        var state = XboxCloudResponderKeyboardState()
-
+            isSimulator: true
+        ) == .keyboard(isPressed: true, virtualKey: 0x57))
+        state.resetGameplayKeys()
         #expect(state.action(
             keyCode: .keyboardW,
             isPressed: true,
-            isSimulator: true,
-            hasGameControllerKeyboard: false
+            isSimulator: true
         ) == .keyboard(isPressed: true, virtualKey: 0x57))
         #expect(state.action(
             keyCode: .keyboardW,
             isPressed: false,
-            isSimulator: true,
-            hasGameControllerKeyboard: true
+            isSimulator: true
         ) == .keyboard(isPressed: false, virtualKey: 0x57))
+    }
+
+    @Test("Simulator surface routes fallback input without changing device routing")
+    func simulatorSurfaceInputRouting() {
+        #expect(XboxCloudVideoSurfaceInputRouting.resolve(
+            isSimulator: true,
+            showsOverlay: false,
+            hasGamepadController: false
+        ) == XboxCloudVideoSurfaceInputRouting(
+            controllerUserInteractionEnabled: true,
+            gamepadModeActive: false
+        ))
+        #expect(XboxCloudVideoSurfaceInputRouting.resolve(
+            isSimulator: true,
+            showsOverlay: false,
+            hasGamepadController: true
+        ) == XboxCloudVideoSurfaceInputRouting(
+            controllerUserInteractionEnabled: false,
+            gamepadModeActive: false
+        ))
+        #expect(XboxCloudVideoSurfaceInputRouting.resolve(
+            isSimulator: false,
+            showsOverlay: false,
+            hasGamepadController: false
+        ) == XboxCloudVideoSurfaceInputRouting(
+            controllerUserInteractionEnabled: false,
+            gamepadModeActive: true
+        ))
+        #expect(XboxCloudVideoSurfaceInputRouting.resolve(
+            isSimulator: false,
+            showsOverlay: true,
+            hasGamepadController: true
+        ) == XboxCloudVideoSurfaceInputRouting(
+            controllerUserInteractionEnabled: true,
+            gamepadModeActive: true
+        ))
+    }
+
+    @Test("Simulator responder mouse retains buttons across relative reports")
+    func simulatorResponderMouseState() throws {
+        var state = XboxCloudResponderMouseState()
+
+        let stationary = state.moved(dx: 0, dy: 0)
+        let idleScroll = state.scrolled(delta: 0)
+        let invalidButton = state.changedButton(0, isPressed: true)
+        #expect(stationary == nil)
+        #expect(idleScroll == nil)
+        #expect(invalidButton == nil)
+
+        let pressedReport = state.changedButton(1, isPressed: true)
+        let pressed = try #require(pressedReport)
+        #expect(pressed == XboxMouseReport(buttons: [.left]))
+        let moved = state.moved(dx: 12, dy: -8)
+        #expect(moved == XboxMouseReport(
+            x: 12,
+            y: -8,
+            buttons: [.left]
+        ))
+        let scrolled = state.scrolled(delta: 3)
+        #expect(scrolled == XboxMouseReport(
+            wheelY: 3,
+            buttons: [.left]
+        ))
+        let rightPressed = state.changedButton(3, isPressed: true)
+        #expect(rightPressed == XboxMouseReport(
+            buttons: [.left, .right]
+        ))
+        let leftReleased = state.changedButton(1, isPressed: false)
+        #expect(leftReleased == XboxMouseReport(
+            buttons: [.right]
+        ))
+        state.reset()
+        let movedAfterReset = state.moved(dx: 1, dy: 1)
+        #expect(movedAfterReset == XboxMouseReport(x: 1, y: 1))
     }
 
     @Test("Physical alphanumeric keys map to Windows virtual keys", arguments: [

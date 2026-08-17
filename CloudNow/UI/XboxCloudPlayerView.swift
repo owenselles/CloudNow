@@ -18,6 +18,7 @@ struct XboxCloudPlayerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(CloudSessionCoordinator.self) private var cloudSessionCoordinator
+    @Environment(CloudInputDeviceMonitor.self) private var inputDeviceMonitor
     let item: XboxCatalogItem
     let route: XboxCloudTitleRoute
     let account: XboxCloudAuthorizedAccount
@@ -243,6 +244,9 @@ struct XboxCloudPlayerView: View {
         XboxVideoSurfaceView(
             videoTrack: controller.videoTrack,
             showsOverlay: showsOverlay,
+            hasGamepadController: inputDeviceMonitor.connectedDevices.contains(
+                .controller
+            ),
             onMenuPress: toggleOverlay,
             onKeyboardEvent: { isPressed, virtualKey in
                 controller.sendKeyboardEvent(
@@ -250,6 +254,7 @@ struct XboxCloudPlayerView: View {
                     virtualKey: virtualKey
                 )
             },
+            onMouseReport: controller.sendMouseReport,
             onDecodedVideoFormatChanged: { format in
                 Task { @MainActor in
                     controller.recordDecodedVideoFormat(format)

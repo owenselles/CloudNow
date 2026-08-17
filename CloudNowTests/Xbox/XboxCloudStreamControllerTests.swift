@@ -232,6 +232,23 @@ struct XboxCloudStreamControllerTests {
         )
         #expect(pcGamePass.resolutions == [.automatic, .fullHD, .hd])
         #expect(pcGamePass.requestedResolution(for: .automatic) == .fullHD)
+        for tier in [XboxMembershipTier.premium, .essential] {
+            let capabilities = XboxCloudStreamCapabilities.resolved(
+                for: tier,
+                isMembershipKnown: true
+            )
+            #expect(
+                capabilities.requestedResolution(for: .automatic) == .fullHD
+            )
+            #expect(
+                capabilities.normalized(XboxCloudStreamSettings())
+                    .displayResolution.rawValue == "1080"
+            )
+        }
+        #expect(
+            ultimate.normalized(XboxCloudStreamSettings())
+                .displayResolution.rawValue == "1440"
+        )
 
         let persisted = XboxCloudStreamSettings(
             displayResolution: .qhd,
@@ -577,12 +594,21 @@ struct XboxCloudStreamControllerTests {
         controller.setInputPaused(true)
         controller.setInputPaused(false)
         #expect(runtime.inputPausedStates == [true, false])
+        let mouseReport = XboxMouseReport(
+            x: 24,
+            y: -12,
+            buttons: [.left]
+        )
+        controller.sendMouseReport(mouseReport)
+        #expect(runtime.receivedMouseReports == [mouseReport])
         #expect(controller.sendTextEntry("Cloud Now"))
         #expect(runtime.receivedTextEntries == ["Cloud Now"])
 
         controller.setStatsMode(.off)
         #expect(controller.statsMode == .off)
         await controller.stop()
+        controller.sendMouseReport(XboxMouseReport(x: 1))
+        #expect(runtime.receivedMouseReports == [mouseReport])
         #expect(!controller.sendTextEntry("after stop"))
         runtime.requestMenuToggle()
         #expect(controller.menuPressCount == 1)
@@ -1655,6 +1681,7 @@ private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
     private(set) var inputKeepAliveCount = 0
     private(set) var decodedVideoFrameCount = 0
     private(set) var inputPausedStates: [Bool] = []
+    private(set) var receivedMouseReports: [XboxMouseReport] = []
     private(set) var receivedTextEntries: [String] = []
     private(set) var connectionState: XboxCloudWebRTCConnectionState = .connected
     private(set) var isMediaReady = true
@@ -1769,6 +1796,10 @@ private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
 
     func setInputPaused(_ isPaused: Bool) {
         inputPausedStates.append(isPaused)
+    }
+
+    func sendMouseReport(_ report: XboxMouseReport) {
+        receivedMouseReports.append(report)
     }
 
     func sendTextEntry(_ text: String) -> Bool {

@@ -916,18 +916,34 @@ nonisolated enum XboxCloudResponderKeyboardAction: Equatable, Sendable {
 }
 
 /// State for the UIKit responder fallback used by tvOS Simulator. Physical
-/// keyboards continue through GCKeyboard; when one is available this path
-/// fails closed so the same key cannot be sent twice.
+/// devices continue through GameController. Simulator responder routing is
+/// selected before events arrive; the worker deduplicates transitions if a
+/// simulated keyboard also appears through GameController.
 nonisolated struct XboxCloudResponderKeyboardState: Sendable {
     private var forwardedKeys: [Int: UInt8] = [:]
+    private var escapeIsPressed = false
 
     mutating func action(
         keyCode: UIKeyboardHIDUsage,
         isPressed: Bool,
         isSimulator: Bool,
-        hasGameControllerKeyboard: Bool
+        hasGameControllerKeyboard: Bool = false
     ) -> XboxCloudResponderKeyboardAction {
         let identifier = Int(keyCode.rawValue)
+        if keyCode == .keyboardEscape {
+            if !isPressed {
+                escapeIsPressed = false
+                return .ignored
+            }
+            guard isSimulator,
+                  !hasGameControllerKeyboard,
+                  !escapeIsPressed
+            else {
+                return .ignored
+            }
+            escapeIsPressed = true
+            return .togglePauseMenu
+        }
         if !isPressed,
            let virtualKey = forwardedKeys.removeValue(forKey: identifier)
         {
@@ -935,13 +951,9 @@ nonisolated struct XboxCloudResponderKeyboardState: Sendable {
         }
 
         guard isPressed,
-              isSimulator,
-              !hasGameControllerKeyboard
+              isSimulator
         else {
             return .ignored
-        }
-        if keyCode == .keyboardEscape {
-            return .togglePauseMenu
         }
         guard forwardedKeys[identifier] == nil,
               let mapping = CloudKeyboardHIDMapper.mapping(for: keyCode),
@@ -952,6 +964,15 @@ nonisolated struct XboxCloudResponderKeyboardState: Sendable {
         let virtualKey = UInt8(mapping.virtualKey)
         forwardedKeys[identifier] = virtualKey
         return .keyboard(isPressed: true, virtualKey: virtualKey)
+    }
+
+    mutating func resetGameplayKeys() {
+        forwardedKeys.removeAll(keepingCapacity: true)
+    }
+
+    mutating func reset() {
+        resetGameplayKeys()
+        escapeIsPressed = false
     }
 }
 

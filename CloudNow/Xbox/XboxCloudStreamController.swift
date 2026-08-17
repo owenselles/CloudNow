@@ -848,6 +848,11 @@ final class XboxCloudStreamController {
         )
     }
 
+    func sendMouseReport(_ report: XboxMouseReport) {
+        guard state == .streaming else { return }
+        activeOperation?.runtime?.sendMouseReport(report)
+    }
+
     /// Sends bounded ASCII-compatible text over the negotiated keyboard
     /// channel. Product UI does not expose this for composed Unicode input.
     @discardableResult
