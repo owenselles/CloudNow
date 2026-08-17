@@ -856,7 +856,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     var searchText = "" {
         didSet {
             guard searchText != oldValue else { return }
-            resetBrowsePagination()
+            resetBrowsePagination(debouncesSearch: true)
         }
     }
 
@@ -887,11 +887,16 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     @ObservationIgnored private let account: XboxCloudAuthorizedAccount
     @ObservationIgnored private let cache: any XboxCatalogCaching
     @ObservationIgnored private let activityPersistence: any XboxCatalogActivityPersistence
+    @ObservationIgnored private let presentationBuilder: any XboxCatalogPresentationBuilding
+    @ObservationIgnored private let searchDebounce: @Sendable () async throws -> Void
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let freshnessInterval: TimeInterval
     @ObservationIgnored private var allItems: [XboxCatalogItem] = []
     @ObservationIgnored private var visibleItemLimit = 96
+    @ObservationIgnored private var presentationGeneration: UInt64 = 0
+    @ObservationIgnored private var presentationTask: Task<Void, Never>?
     @ObservationIgnored private var loadGeneration: UInt64 = 0
+    @ObservationIgnored private var needsAutomaticRevalidation = false
     @ObservationIgnored private var refreshGeneration: UInt64 = 0
     @ObservationIgnored private var activityGeneration: UInt64 = 0
     @ObservationIgnored private var hasLoadedActivity = false
@@ -905,8 +910,12 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     init(
         client: any XboxCatalogClient,
         account: XboxCloudAuthorizedAccount,
-        cache: any XboxCatalogCaching = XboxCatalogMemoryCache.shared,
+        cache: any XboxCatalogCaching = XboxCatalogCache.shared,
         activityPersistence: any XboxCatalogActivityPersistence = AppPersistenceStore.shared,
+        presentationBuilder: any XboxCatalogPresentationBuilding = XboxCatalogPresentationWorker(),
+        searchDebounce: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .milliseconds(150))
+        },
         now: @escaping @Sendable () -> Date = Date.init,
         freshnessInterval: TimeInterval = 15 * 60
     ) {
@@ -914,6 +923,8 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         self.account = account
         self.cache = cache
         self.activityPersistence = activityPersistence
+        self.presentationBuilder = presentationBuilder
+        self.searchDebounce = searchDebounce
         self.now = now
         self.freshnessInterval = freshnessInterval
     }
@@ -921,8 +932,12 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     init(
         makeClient: @escaping @Sendable () -> any XboxCatalogClient,
         account: XboxCloudAuthorizedAccount,
-        cache: any XboxCatalogCaching = XboxCatalogMemoryCache.shared,
+        cache: any XboxCatalogCaching = XboxCatalogCache.shared,
         activityPersistence: any XboxCatalogActivityPersistence = AppPersistenceStore.shared,
+        presentationBuilder: any XboxCatalogPresentationBuilding = XboxCatalogPresentationWorker(),
+        searchDebounce: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .milliseconds(150))
+        },
         now: @escaping @Sendable () -> Date = Date.init,
         freshnessInterval: TimeInterval = 15 * 60
     ) {
@@ -930,6 +945,8 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         self.account = account
         self.cache = cache
         self.activityPersistence = activityPersistence
+        self.presentationBuilder = presentationBuilder
+        self.searchDebounce = searchDebounce
         self.now = now
         self.freshnessInterval = freshnessInterval
     }
@@ -962,9 +979,16 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     }
 
     private func load(forceRefresh: Bool) async {
-        guard phase == .idle || (forceRefresh && phase == .loaded) else {
+        let canRetryAutomaticRevalidation = !forceRefresh
+            && phase == .loaded
+            && needsAutomaticRevalidation
+        guard phase == .idle
+            || canRetryAutomaticRevalidation
+            || (forceRefresh && phase == .loaded)
+        else {
             return
         }
+        needsAutomaticRevalidation = false
         loadGeneration &+= 1
         let generation = loadGeneration
         let request = XboxCatalogRequest(
@@ -978,25 +1002,29 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         )
         var loadedCachedSnapshot = forceRefresh && phase == .loaded
         showsRefreshWarning = false
-        if forceRefresh {
-            if !loadedCachedSnapshot {
+        do {
+            if forceRefresh {
+                if !loadedCachedSnapshot {
+                    phase = .loading
+                }
+            } else if let cached = await cache.snapshot(for: cacheKey) {
+                try Task.checkCancellation()
+                guard loadGeneration == generation else { return }
+                loadedCachedSnapshot = true
+                allItems = cached.items
+                catalogLastUpdatedAt = cached.fetchedAt
+                try await rebuildPresentation()
+                guard loadGeneration == generation else { return }
+                phase = .loaded
+                let cacheAge = now().timeIntervalSince(cached.fetchedAt)
+                let isStale = cacheAge < 0 || cacheAge >= freshnessInterval
+                showsRefreshWarning = isStale
+                if !isStale {
+                    return
+                }
+            } else {
                 phase = .loading
             }
-        } else if let cached = await cache.snapshot(for: cacheKey) {
-            guard loadGeneration == generation else { return }
-            loadedCachedSnapshot = true
-            allItems = cached.items
-            catalogLastUpdatedAt = cached.fetchedAt
-            publishVisibleItems()
-            phase = .loaded
-            let isStale = now().timeIntervalSince(cached.fetchedAt)
-                >= freshnessInterval
-            showsRefreshWarning = isStale
-            return
-        } else {
-            phase = .loading
-        }
-        do {
             let client = resolvedClient()
             if forceRefresh {
                 await client.refreshAccountState(for: account)
@@ -1010,13 +1038,23 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
             try Task.checkCancellation()
             guard loadGeneration == generation else { return }
             await cache.store(snapshot, for: cacheKey)
+            try Task.checkCancellation()
             guard loadGeneration == generation else { return }
             allItems = snapshot.items
             catalogLastUpdatedAt = snapshot.fetchedAt
-            publishVisibleItems()
+            try await rebuildPresentation()
+            guard loadGeneration == generation else { return }
             phase = .loaded
             showsRefreshWarning = false
         } catch is CancellationError {
+            guard loadGeneration == generation else { return }
+            if loadedCachedSnapshot {
+                phase = .loaded
+                showsRefreshWarning = true
+                needsAutomaticRevalidation = true
+            } else {
+                phase = .idle
+            }
             return
         } catch {
             guard loadGeneration == generation else { return }
@@ -1027,12 +1065,13 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
 
     func loadNextPageIfNeeded(_ item: XboxCatalogItem) {
         guard item.id == visibleItems.last?.id,
+              visibleItemLimit <= visibleItems.count,
               visibleItems.count < carouselItems.count
         else {
             return
         }
         visibleItemLimit = min(visibleItemLimit + 96, carouselItems.count)
-        publishVisibleItems()
+        schedulePresentationUpdate()
     }
 
     func isFavorite(_ item: XboxCatalogItem) -> Bool {
@@ -1061,7 +1100,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
                 favoriteIDs.remove(evictedID)
             }
         }
-        publishVisibleItems()
+        schedulePresentationUpdate()
         enqueueFavoriteSave()
     }
 
@@ -1072,7 +1111,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         recentlyPlayedIDs = Array(
             itemIDs.prefix(CloudCatalogActivitySnapshot.maximumRecentlyPlayedCount)
         )
-        publishVisibleItems()
+        schedulePresentationUpdate()
         enqueueRecentlyPlayedSave()
     }
 
@@ -1120,12 +1159,14 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     func cancel() {
         refreshGeneration &+= 1
         isRefreshing = false
+        cancelPresentationUpdate()
         cancelDetailLoads()
         cancelCatalogRequest()
     }
 
     private func cancelCatalogRequest() {
         loadGeneration &+= 1
+        needsAutomaticRevalidation = false
         client?.cancel()
         client = nil
     }
@@ -1149,6 +1190,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         browseFilterBaseCount = 0
         filteredItemCount = 0
         visibleItemLimit = 96
+        needsAutomaticRevalidation = false
     }
 
     func prepareForPersistentDataClear() {
@@ -1169,58 +1211,6 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         prepareForCacheClear()
     }
 
-    private func publishVisibleItems() {
-        let presentableItems = allItems.filter { !$0.isTouchOnlyOnTVOS }
-        let availableAccessKinds = Set(presentableItems.flatMap(\.accessKinds))
-        let playableAccessKinds = Set(presentableItems.flatMap { item in
-            item.routes.compactMap { route in
-                route.isPlayable ? route.accessKind : nil
-            }
-        })
-        let searchedItems = search(presentableItems)
-        let carouselItems = sort(filter(searchedItems, state: filterState))
-        let items = Array(carouselItems.prefix(visibleItemLimit))
-        let favoriteItems = presentableItems.filter {
-            favoriteIDs.contains($0.id)
-        }
-        let itemsByID = Dictionary(
-            presentableItems.map { ($0.id, $0) },
-            uniquingKeysWith: { retained, _ in retained }
-        )
-        let recentlyPlayedItems = recentlyPlayedIDs.compactMap { itemsByID[$0] }
-        let filterOptions = makeFilterOptions()
-        totalItemCount = presentableItems.count
-        browseFilterBaseCount = searchedItems.count
-        filteredItemCount = carouselItems.count
-        if availableAccessKinds != self.availableAccessKinds {
-            self.availableAccessKinds = availableAccessKinds
-        }
-        if playableAccessKinds != self.playableAccessKinds {
-            self.playableAccessKinds = playableAccessKinds
-        }
-        if carouselItems != self.carouselItems {
-            self.carouselItems = carouselItems
-        }
-        if favoriteItems != self.favoriteItems {
-            self.favoriteItems = favoriteItems
-        }
-        if recentlyPlayedItems != self.recentlyPlayedItems {
-            self.recentlyPlayedItems = recentlyPlayedItems
-        }
-        if filterOptions != self.filterOptions {
-            self.filterOptions = filterOptions
-        }
-        guard items != visibleItems else { return }
-        visibleItems = items
-    }
-
-    func browsePreviewCount(for state: XboxCatalogFilterState) -> Int {
-        filter(
-            search(allItems.filter { !$0.isTouchOnlyOnTVOS }),
-            state: state
-        ).count
-    }
-
     func item(forTitleID titleID: String) -> XboxCatalogItem? {
         allItems.first { item in
             item.routes.contains { $0.titleID == titleID }
@@ -1231,182 +1221,123 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         filterState.clear()
     }
 
-    private func resetBrowsePagination() {
+    func waitForPendingPresentationUpdate() async {
+        await presentationTask?.value
+    }
+
+    private func resetBrowsePagination(debouncesSearch: Bool = false) {
         visibleItemLimit = 96
-        publishVisibleItems()
+        schedulePresentationUpdate(debouncesSearch: debouncesSearch)
     }
 
-    private func search(_ items: [XboxCatalogItem]) -> [XboxCatalogItem] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return items }
-        return items.filter { item in
-            item.title.localizedCaseInsensitiveContains(query)
+    private func rebuildPresentation() async throws {
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
+        presentationTask?.cancel()
+        presentationTask = nil
+        do {
+            let snapshot = try await presentationBuilder.build(
+                presentationInput()
+            )
+            try Task.checkCancellation()
+            guard presentationGeneration == generation else { return }
+            applyPresentation(snapshot)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return
         }
     }
 
-    private func filter(
-        _ items: [XboxCatalogItem],
-        state: XboxCatalogFilterState
-    ) -> [XboxCatalogItem] {
-        guard !state.isEmpty else { return items }
-        return items.filter { item in
-            if !state.collections.isEmpty {
-                let matchesCollection =
-                    state.collections.contains(.favorites)
-                        && favoriteIDs.contains(item.id)
-                if !matchesCollection {
-                    return false
+    private func schedulePresentationUpdate(
+        debouncesSearch: Bool = false
+    ) {
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
+        presentationTask?.cancel()
+        let builder = presentationBuilder
+        let input = presentationInput()
+        let debounce = searchDebounce
+        presentationTask = Task { @concurrent [weak self] in
+            do {
+                if debouncesSearch {
+                    try await debounce()
                 }
-            }
-
-            if !state.access.isEmpty {
-                let matchesAccess = state.access.contains { access in
-                    switch access {
-                    case .standard:
-                        item.accessKinds.contains(.standard)
-                    case .freeWithAds:
-                        item.supportsFreeWithAds
-                    case .owned:
-                        item.isOwned
-                    }
+                try Task.checkCancellation()
+                let snapshot = try await builder.build(input)
+                try Task.checkCancellation()
+                await MainActor.run { [weak self] in
+                    self?.applyPresentation(
+                        snapshot,
+                        generation: generation
+                    )
                 }
-                if !matchesAccess {
-                    return false
-                }
-            }
-
-            if !state.playability.isEmpty {
-                let hasPlayableRoute = item.routes.contains(where: \.isPlayable)
-                let matchesPlayability =
-                    state.playability.contains(.playable) && hasPlayableRoute
-                        || state.playability.contains(.unavailable)
-                        && !hasPlayableRoute
-                if !matchesPlayability {
-                    return false
-                }
-            }
-
-            if !state.unavailableReasons.isEmpty {
-                let itemReasons = Set(
-                    item.routes.compactMap { route in
-                        route.isPlayable ? nil : route.playabilityReason
-                    }
-                )
-                if state.unavailableReasons.isDisjoint(with: itemReasons) {
-                    return false
-                }
-            }
-
-            if !state.inputTypes.isEmpty,
-               state.inputTypes.isDisjoint(with: item.supportedInputTypes)
-            {
-                return false
-            }
-
-            if !state.genres.isEmpty {
-                let itemGenres = Set(item.genres.compactMap(genreID))
-                if state.genres.isDisjoint(with: itemGenres) {
-                    return false
-                }
-            }
-
-            return true
-        }
-    }
-
-    private func sort(_ items: [XboxCatalogItem]) -> [XboxCatalogItem] {
-        switch sortOrder {
-        case .default:
-            items
-        case .titleAZ:
-            items.sorted {
-                $0.title.localizedStandardCompare($1.title) == .orderedAscending
-            }
-        case .titleZA:
-            items.sorted {
-                $0.title.localizedStandardCompare($1.title) == .orderedDescending
-            }
-        case .recentFirst:
-            items.sorted { left, right in
-                let leftRank = recentlyPlayedIDs.firstIndex(of: left.id) ?? .max
-                let rightRank = recentlyPlayedIDs.firstIndex(of: right.id) ?? .max
-                if leftRank != rightRank {
-                    return leftRank < rightRank
-                }
-                return left.title.localizedStandardCompare(right.title)
-                    == .orderedAscending
+            } catch {
+                return
             }
         }
     }
 
-    private func makeFilterOptions() -> XboxCatalogFilterOptions {
-        var genreLabels: [String: String] = [:]
-        var genreCounts: [String: Int] = [:]
-        var inputTypeCounts: [XboxCloudInputType: Int] = [:]
-        var unavailableReasonCounts: [
-            XboxCloudRoutePlayabilityReason: Int
-        ] = [:]
+    private func cancelPresentationUpdate() {
+        presentationGeneration &+= 1
+        presentationTask?.cancel()
+        presentationTask = nil
+    }
 
-        let presentableItems = allItems.filter { !$0.isTouchOnlyOnTVOS }
-        for item in presentableItems {
-            for inputType in item.supportedInputTypes where inputType != .touch {
-                inputTypeCounts[inputType, default: 0] += 1
-            }
-            let unavailableReasons = Set(item.routes.compactMap { route in
-                route.isPlayable ? nil : route.playabilityReason
-            })
-            for reason in unavailableReasons {
-                unavailableReasonCounts[reason, default: 0] += 1
-            }
-            var itemGenreIDs: Set<String> = []
-            for genre in item.genres {
-                let label = genre.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard let id = genreID(label), itemGenreIDs.insert(id).inserted else {
-                    continue
-                }
-                genreLabels[id] = genreLabels[id] ?? label
-                genreCounts[id, default: 0] += 1
-            }
-        }
-
-        let genres = genreCounts.compactMap { id, count in
-            genreLabels[id].map {
-                XboxCatalogGenreFilterOption(id: id, label: $0, count: count)
-            }
-        }.sorted {
-            $0.label.localizedStandardCompare($1.label) == .orderedAscending
-        }
-
-        return XboxCatalogFilterOptions(
-            genres: genres,
-            inputTypeCounts: inputTypeCounts,
-            favoriteCount: presentableItems.count {
-                favoriteIDs.contains($0.id)
-            },
-            standardCount: presentableItems.count {
-                $0.accessKinds.contains(.standard)
-            },
-            freeWithAdsCount: presentableItems.count(
-                where: \.supportsFreeWithAds
-            ),
-            ownedCount: presentableItems.count(where: \.isOwned),
-            playableCount: presentableItems.count { item in
-                item.routes.contains(where: \.isPlayable)
-            },
-            unavailableCount: presentableItems.count { item in
-                !item.routes.contains(where: \.isPlayable)
-            },
-            unavailableReasonCounts: unavailableReasonCounts
+    private func presentationInput() -> XboxCatalogPresentationInput {
+        XboxCatalogPresentationInput(
+            items: allItems,
+            favoriteIDs: favoriteIDs,
+            recentlyPlayedIDs: recentlyPlayedIDs,
+            searchText: searchText,
+            sortOrder: sortOrder,
+            filterState: filterState,
+            visibleItemLimit: visibleItemLimit
         )
     }
 
-    private func genreID(_ genre: String) -> String? {
-        let genre = genre.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !genre.isEmpty else { return nil }
-        return genre.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: Locale.current
-        ).lowercased()
+    private func applyPresentation(
+        _ snapshot: XboxCatalogPresentationSnapshot,
+        generation: UInt64
+    ) {
+        guard presentationGeneration == generation else { return }
+        presentationTask = nil
+        applyPresentation(snapshot)
+    }
+
+    private func applyPresentation(
+        _ snapshot: XboxCatalogPresentationSnapshot
+    ) {
+        if snapshot.visibleItems != visibleItems {
+            visibleItems = snapshot.visibleItems
+        }
+        if snapshot.carouselItems != carouselItems {
+            carouselItems = snapshot.carouselItems
+        }
+        if snapshot.favoriteItems != favoriteItems {
+            favoriteItems = snapshot.favoriteItems
+        }
+        if snapshot.recentlyPlayedItems != recentlyPlayedItems {
+            recentlyPlayedItems = snapshot.recentlyPlayedItems
+        }
+        if snapshot.availableAccessKinds != availableAccessKinds {
+            availableAccessKinds = snapshot.availableAccessKinds
+        }
+        if snapshot.playableAccessKinds != playableAccessKinds {
+            playableAccessKinds = snapshot.playableAccessKinds
+        }
+        if snapshot.filterOptions != filterOptions {
+            filterOptions = snapshot.filterOptions
+        }
+        if snapshot.totalItemCount != totalItemCount {
+            totalItemCount = snapshot.totalItemCount
+        }
+        if snapshot.browseFilterBaseCount != browseFilterBaseCount {
+            browseFilterBaseCount = snapshot.browseFilterBaseCount
+        }
+        if snapshot.filteredItemCount != filteredItemCount {
+            filteredItemCount = snapshot.filteredItemCount
+        }
     }
 
     private func loadActivityIfNeeded() async {
@@ -1437,7 +1368,12 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         favoriteIDs = lease.snapshot.favoriteIDs
         recentlyPlayedIDs = lease.snapshot.recentlyPlayedIDs
         hasLoadedActivity = true
-        publishVisibleItems()
+        do {
+            try await rebuildPresentation()
+        } catch {
+            guard generation == activityGeneration else { return }
+            hasLoadedActivity = false
+        }
     }
 
     private func enqueueFavoriteSave() {
@@ -2296,7 +2232,7 @@ private struct XboxCatalogFilterBar: View {
                     state: $viewModel.filterState,
                     options: viewModel.filterOptions,
                     totalCount: viewModel.browseFilterBaseCount,
-                    previewCount: viewModel.browsePreviewCount,
+                    previewCount: viewModel.filteredItemCount,
                     onClose: { isPresented.wrappedValue = false }
                 )
             }
@@ -2403,7 +2339,7 @@ private struct XboxCatalogFilterSheet: View {
     @Binding var state: XboxCatalogFilterState
     let options: XboxCatalogFilterOptions
     let totalCount: Int
-    let previewCount: (XboxCatalogFilterState) -> Int
+    let previewCount: Int
     let onClose: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -2480,7 +2416,7 @@ private struct XboxCatalogFilterSheet: View {
             Text(
                 L10n.format(
                     "games_result_count",
-                    previewCount(state),
+                    previewCount,
                     totalCount
                 )
             )

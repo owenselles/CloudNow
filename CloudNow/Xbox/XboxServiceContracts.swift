@@ -19,12 +19,12 @@ nonisolated struct XboxCatalogRequest: Equatable, Sendable {
     let market: String?
 }
 
-nonisolated enum XboxCloudAccessKind: Equatable, Hashable, Sendable {
+nonisolated enum XboxCloudAccessKind: String, Codable, Equatable, Hashable, Sendable {
     case standard
     case freeWithAds
 }
 
-nonisolated enum XboxCloudRouteAvailability: Equatable, Hashable, Sendable {
+nonisolated enum XboxCloudRouteAvailability: String, Codable, Equatable, Hashable, Sendable {
     case playable
     case requiresEligibility
 }
@@ -32,7 +32,7 @@ nonisolated enum XboxCloudRouteAvailability: Equatable, Hashable, Sendable {
 /// Credential-free explanation for a route's current playability decision.
 /// This keeps Fresno service hints and Content Access evidence available after
 /// catalog merging without exposing account identifiers or raw service data.
-nonisolated enum XboxCloudRoutePlayabilityReason: Equatable, Hashable, Sendable {
+nonisolated enum XboxCloudRoutePlayabilityReason: String, Codable, Equatable, Hashable, Sendable {
     case authenticatedCatalog
     case fresnoServiceConfirmed
     case contentAccessConfirmed
@@ -42,7 +42,7 @@ nonisolated enum XboxCloudRoutePlayabilityReason: Equatable, Hashable, Sendable 
     case eligibilityUnconfirmed
 }
 
-nonisolated enum XboxCloudInputType: String, CaseIterable, Hashable, Sendable {
+nonisolated enum XboxCloudInputType: String, CaseIterable, Codable, Hashable, Sendable {
     case controller
     case touch
     case mouseAndKeyboard
@@ -130,7 +130,7 @@ nonisolated enum XboxArtworkURLPolicy {
 /// The service title identifier and access path required to launch one catalog
 /// product. A product can expose more than one route without changing its
 /// stable catalog identity.
-nonisolated struct XboxCloudTitleRoute: Equatable, Hashable, Sendable {
+nonisolated struct XboxCloudTitleRoute: Codable, Equatable, Hashable, Sendable {
     let titleID: String
     let accessKind: XboxCloudAccessKind
     let availability: XboxCloudRouteAvailability
@@ -157,7 +157,7 @@ nonisolated struct XboxCloudTitleRoute: Equatable, Hashable, Sendable {
     }
 }
 
-nonisolated struct XboxCatalogItem: Equatable, Identifiable, Sendable {
+nonisolated struct XboxCatalogItem: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let title: String
     let longDescription: String?
@@ -205,6 +205,68 @@ nonisolated struct XboxCatalogItem: Equatable, Identifiable, Sendable {
                 accessKind: .standard
             ),
         ]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case longDescription
+        case genres
+        case developer
+        case publisher
+        case contentRating
+        case artworkURL
+        case heroArtworkURL
+        case screenshotURLs
+        case supportedInputTypes
+        case isOwned
+        case routes
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            id: container.decode(String.self, forKey: .id),
+            title: container.decode(String.self, forKey: .title),
+            longDescription: container.decodeIfPresent(
+                String.self,
+                forKey: .longDescription
+            ),
+            genres: container.decode([String].self, forKey: .genres),
+            developer: container.decodeIfPresent(
+                String.self,
+                forKey: .developer
+            ),
+            publisher: container.decodeIfPresent(
+                String.self,
+                forKey: .publisher
+            ),
+            contentRating: container.decodeIfPresent(
+                String.self,
+                forKey: .contentRating
+            ),
+            artworkURL: container.decodeIfPresent(
+                URL.self,
+                forKey: .artworkURL
+            ),
+            heroArtworkURL: container.decodeIfPresent(
+                URL.self,
+                forKey: .heroArtworkURL
+            ),
+            screenshotURLs: container.decode(
+                [URL].self,
+                forKey: .screenshotURLs
+            ),
+            supportedInputTypes: container.decode(
+                Set<XboxCloudInputType>.self,
+                forKey: .supportedInputTypes
+            ),
+            isOwned: container.decode(Bool.self, forKey: .isOwned),
+            routes: container.decode(
+                [XboxCloudTitleRoute].self,
+                forKey: .routes
+            )
+        )
     }
 
     var accessKinds: Set<XboxCloudAccessKind> {
@@ -346,7 +408,7 @@ private extension XboxCloudTitleRoute {
     }
 }
 
-nonisolated struct XboxCatalogSnapshot: Equatable, Sendable {
+nonisolated struct XboxCatalogSnapshot: Codable, Equatable, Sendable {
     static let maximumRetainedItemCount = 1024
 
     let items: [XboxCatalogItem]
@@ -372,6 +434,35 @@ nonisolated struct XboxCatalogSnapshot: Equatable, Sendable {
         }
         self.items = retainedItems
         self.fetchedAt = fetchedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case fetchedAt
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedItems = try container.decode(
+            [XboxCatalogItem].self,
+            forKey: .items
+        )
+        let fetchedAt = try container.decode(Date.self, forKey: .fetchedAt)
+        guard fetchedAt.timeIntervalSinceReferenceDate.isFinite else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .fetchedAt,
+                in: container,
+                debugDescription: "Catalog timestamp must be finite."
+            )
+        }
+        self.init(items: decodedItems, fetchedAt: fetchedAt)
+        guard items.count == decodedItems.count else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .items,
+                in: container,
+                debugDescription: "Catalog cache contains invalid or duplicate items."
+            )
+        }
     }
 }
 

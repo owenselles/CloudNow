@@ -372,21 +372,24 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
             guard let nextToken = page.continuationToken else {
                 let contentAccess = await contentAccessLoad
                 try Task.checkCancellation()
-                let wireItems = try await hydrateStandardCandidates(
+                async let standardItemsLoad = hydrateStandardCandidates(
                     wireCandidates,
                     market: market,
                     localeIdentifier: request.localeIdentifier,
                     contentAccess: contentAccess
                 )
-                try Task.checkCancellation()
-                let fresnoItems = await fetchFresnoItems(
+                async let fresnoItemsLoad = fetchFresnoItems(
                     session: session,
                     market: market,
                     localeIdentifier: request.localeIdentifier,
                     contentAccess: contentAccess
                 )
+                let (standardItems, fresnoItems) = try await (
+                    standardItemsLoad,
+                    fresnoItemsLoad
+                )
                 try Task.checkCancellation()
-                return retainedSnapshot(from: wireItems + fresnoItems)
+                return retainedSnapshot(from: standardItems + fresnoItems)
             }
             guard pageIndex + 1 < policy.maximumPageCount else {
                 throw XboxCloudCatalogError.pageLimitExceeded(policy.maximumPageCount)

@@ -1027,6 +1027,125 @@ struct XboxAuthManagerTests {
     }
 
     @MainActor
+    @Test("A catalog disk failure preserves the signed-in Xbox account")
+    func catalogPurgeFailurePreventsLogout() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "XboxLogoutCatalogTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let session = try XboxAuthSession(
+            configuration: makeConfiguration(),
+            token: makeToken()
+        )
+        let account = makeAccount(
+            authorizationIdentifier: "logout-vault-handle",
+            activityScopeIdentifier: "logout-stable-scope"
+        )
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
+            localeIdentifier: "en-US",
+            market: "US"
+        )
+        let snapshot = XboxCatalogSnapshot(
+            items: [],
+            fetchedAt: fixedDate
+        )
+        let writer = XboxCatalogCache(directoryURL: directoryURL)
+        await writer.store(snapshot, for: key)
+        let failingCache = XboxCatalogCache(
+            directoryURL: directoryURL,
+            manifestWriter: { _, _, _ in
+                throw XboxAuthCatalogDiskProbeError.writeFailed
+            }
+        )
+        let persistence = XboxAuthPersistenceStub(session: session)
+        let manager = try XboxAuthManager(
+            environment: makeEnvironment(),
+            oauthClient: XboxOAuthClientStub(token: makeToken()),
+            persistence: persistence,
+            catalogCache: failingCache,
+            now: { fixedDate },
+            initialSession: session,
+            initialAuthorizedAccount: account
+        )
+
+        await #expect(throws: XboxAuthError.persistenceUnavailable) {
+            try await manager.logout()
+        }
+
+        #expect(manager.session == session)
+        #expect(manager.authorizedAccount == account)
+        #expect(manager.isMicrosoftSignedIn)
+        #expect(manager.isXboxCloudAuthorized)
+        #expect(await persistence.savedSession == session)
+        #expect(await persistence.deleteGenerations.isEmpty)
+        #expect(await failingCache.snapshot(for: key) == snapshot)
+        let recreated = XboxCatalogCache(directoryURL: directoryURL)
+        #expect(await recreated.snapshot(for: key) == snapshot)
+    }
+
+    @MainActor
+    @Test("A cold-restored catalog purge failure preserves the Microsoft account")
+    func coldRestoredCatalogPurgeFailurePreventsLogout() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "XboxColdRestoreCatalogTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let accountScope = "cold-restored-catalog-scope"
+        let session = try XboxAuthSession(
+            configuration: makeConfiguration(),
+            token: makeToken(),
+            activityScopeIdentifier: accountScope
+        )
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: accountScope,
+            localeIdentifier: "en-US",
+            market: "US"
+        )
+        let snapshot = XboxCatalogSnapshot(
+            items: [],
+            fetchedAt: fixedDate
+        )
+        let writer = XboxCatalogCache(directoryURL: directoryURL)
+        await writer.store(snapshot, for: key)
+        let failingCache = XboxCatalogCache(
+            directoryURL: directoryURL,
+            manifestWriter: { _, _, _ in
+                throw XboxAuthCatalogDiskProbeError.writeFailed
+            }
+        )
+        let persistence = XboxAuthPersistenceStub(session: session)
+        let manager = try XboxAuthManager(
+            environment: makeEnvironment(),
+            oauthClient: XboxOAuthClientStub(token: makeToken()),
+            persistence: persistence,
+            catalogCache: failingCache,
+            now: { fixedDate }
+        )
+
+        await manager.restorePersistedSession()
+        #expect(manager.session == session)
+        #expect(manager.authorizedAccount == nil)
+
+        await #expect(throws: XboxAuthError.persistenceUnavailable) {
+            try await manager.logout()
+        }
+
+        #expect(manager.session == session)
+        #expect(manager.authorizedAccount == nil)
+        #expect(manager.isMicrosoftSignedIn)
+        #expect(!manager.isXboxCloudAuthorized)
+        #expect(await persistence.deleteGenerations.isEmpty)
+        #expect(await failingCache.snapshot(for: key) == snapshot)
+        let recreated = XboxCatalogCache(directoryURL: directoryURL)
+        #expect(await recreated.snapshot(for: key) == snapshot)
+    }
+
+    @MainActor
     @Test("A cold data-reset rollback blocks producers, then restores normally")
     func coldDataResetRollbackRestoresAuthentication() async throws {
         let session = try XboxAuthSession(
@@ -1541,6 +1660,10 @@ private actor XboxAuthPersistenceStub: XboxAuthSessionPersistence {
 
 private enum XboxAuthPersistenceStubError: Error {
     case deleteFailed
+}
+
+private enum XboxAuthCatalogDiskProbeError: Error {
+    case writeFailed
 }
 
 private actor XboxAccountAuthorizationStub: XboxCloudAccountAuthorizationClient {

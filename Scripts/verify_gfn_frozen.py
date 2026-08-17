@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Fail when Xbox quality work changes the frozen GFN production baseline."""
+"""Reject GFN source drift outside the frozen baseline and reviewed optimizations."""
 
 from __future__ import annotations
 
@@ -18,6 +18,17 @@ LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
 ESTABLISHED_FILE_MANIFEST_SHA256 = (
     "302ebee16c5e61901ea0f5deac49fe3ab85f5a18c1cab67e96344ca4242d7af2"
 )
+ESTABLISHED_REVIEWED_OPTIMIZATIONS_SHA256 = (
+    "77fcbc2086a757df52f321f4e17c7c5f77d6de0d81068229743ac1e558673630"
+)
+ESTABLISHED_BASELINE_COMMIT = "c401cb8cc73bb7dab20232eab994b4958af8e3a2"
+ESTABLISHED_BASELINE_DESCRIPTION = "Established pre-Beta branch baseline"
+MANIFEST_KEYS = frozenset(
+    {"baselineCommit", "baselineDescription", "files", "reviewedOptimizations"}
+)
+REVIEWED_OPTIMIZATION_KEYS = frozenset(
+    {"baselineSHA256", "approvedSHA256", "reason"}
+)
 
 
 class ManifestError(ValueError):
@@ -32,7 +43,9 @@ def _is_lowercase_hex(value: object, length: int) -> bool:
     )
 
 
-def _load_manifest(path: pathlib.Path) -> tuple[str, Mapping[str, str]]:
+def _load_manifest(
+    path: pathlib.Path,
+) -> tuple[str, str, Mapping[str, str], Mapping[str, Mapping[str, str]]]:
     try:
         payload: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -40,12 +53,30 @@ def _load_manifest(path: pathlib.Path) -> tuple[str, Mapping[str, str]]:
 
     if not isinstance(payload, dict):
         raise ManifestError("manifest root must be an object")
+    if set(payload) != MANIFEST_KEYS:
+        missing = sorted(MANIFEST_KEYS - set(payload))
+        unexpected = sorted(set(payload) - MANIFEST_KEYS)
+        details = []
+        if missing:
+            details.append(f"missing keys: {', '.join(missing)}")
+        if unexpected:
+            details.append(f"unexpected keys: {', '.join(unexpected)}")
+        raise ManifestError(f"manifest keys are invalid ({'; '.join(details)})")
+
     baseline_commit = payload.get("baselineCommit")
+    baseline_description = payload.get("baselineDescription")
     files = payload.get("files")
+    reviewed_optimizations = payload.get("reviewedOptimizations")
     if not _is_lowercase_hex(baseline_commit, 40):
         raise ManifestError(
             "baselineCommit must be a full lowercase Git commit hash"
         )
+    if (
+        not isinstance(baseline_description, str)
+        or not baseline_description
+        or baseline_description != baseline_description.strip()
+    ):
+        raise ManifestError("baselineDescription must be a non-empty trimmed string")
     if not isinstance(files, dict) or not files:
         raise ManifestError("files must be a non-empty object")
     if not all(
@@ -56,7 +87,50 @@ def _load_manifest(path: pathlib.Path) -> tuple[str, Mapping[str, str]]:
         raise ManifestError(
             "each file entry must map a path to a lowercase SHA-256 hash"
         )
-    return baseline_commit, files
+    if not isinstance(reviewed_optimizations, dict):
+        raise ManifestError("reviewedOptimizations must be an object")
+
+    for relative_path, optimization in reviewed_optimizations.items():
+        if not isinstance(relative_path, str) or not relative_path:
+            raise ManifestError("each reviewed optimization must have a file path")
+        if not isinstance(optimization, dict):
+            raise ManifestError(
+                f"{relative_path}: reviewed optimization must be an object"
+            )
+        if set(optimization) != REVIEWED_OPTIMIZATION_KEYS:
+            raise ManifestError(
+                f"{relative_path}: reviewed optimization keys must be "
+                "baselineSHA256, approvedSHA256, and reason"
+            )
+        baseline_hash = optimization["baselineSHA256"]
+        approved_hash = optimization["approvedSHA256"]
+        reason = optimization["reason"]
+        if not _is_lowercase_hex(baseline_hash, 64):
+            raise ManifestError(
+                f"{relative_path}: baselineSHA256 must be a lowercase SHA-256 hash"
+            )
+        if not _is_lowercase_hex(approved_hash, 64):
+            raise ManifestError(
+                f"{relative_path}: approvedSHA256 must be a lowercase SHA-256 hash"
+            )
+        if baseline_hash == approved_hash:
+            raise ManifestError(
+                f"{relative_path}: approvedSHA256 must differ from baselineSHA256"
+            )
+        if not isinstance(reason, str) or not reason or reason != reason.strip():
+            raise ManifestError(
+                f"{relative_path}: reason must be a non-empty trimmed string"
+            )
+        if relative_path not in files:
+            raise ManifestError(
+                f"{relative_path}: reviewed optimization is not in frozen files"
+            )
+        if baseline_hash != files[relative_path]:
+            raise ManifestError(
+                f"{relative_path}: baselineSHA256 does not match frozen file hash"
+            )
+
+    return baseline_commit, baseline_description, files, reviewed_optimizations
 
 
 def _file_manifest_hash(files: Mapping[str, str]) -> str:
@@ -69,15 +143,47 @@ def _file_manifest_hash(files: Mapping[str, str]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _reviewed_optimization_manifest_hash(
+    reviewed_optimizations: Mapping[str, Mapping[str, str]],
+) -> str:
+    encoded = json.dumps(
+        reviewed_optimizations,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def verify(
     repository_root: pathlib.Path,
     manifest_path: pathlib.Path,
     expected_manifest_hash: str = ESTABLISHED_FILE_MANIFEST_SHA256,
+    expected_reviewed_optimizations_hash: str = (
+        ESTABLISHED_REVIEWED_OPTIMIZATIONS_SHA256
+    ),
+    expected_baseline_commit: str = ESTABLISHED_BASELINE_COMMIT,
+    expected_baseline_description: str = ESTABLISHED_BASELINE_DESCRIPTION,
 ) -> tuple[str, list[str]]:
-    baseline_commit, files = _load_manifest(manifest_path)
+    (
+        baseline_commit,
+        baseline_description,
+        files,
+        reviewed_optimizations,
+    ) = _load_manifest(manifest_path)
     resolved_root = repository_root.resolve()
     failures: list[str] = []
 
+    if baseline_commit != expected_baseline_commit:
+        failures.append(
+            f"baseline commit {baseline_commit} does not match established commit "
+            f"{expected_baseline_commit}"
+        )
+    if baseline_description != expected_baseline_description:
+        failures.append(
+            f"baseline description {baseline_description!r} does not match "
+            f"established description {expected_baseline_description!r}"
+        )
     actual_manifest_hash = _file_manifest_hash(files)
     if actual_manifest_hash != expected_manifest_hash:
         failures.append(
@@ -85,15 +191,25 @@ def verify(
             f"{actual_manifest_hash} does not match established hash "
             f"{expected_manifest_hash}"
         )
+    actual_optimization_hash = _reviewed_optimization_manifest_hash(
+        reviewed_optimizations
+    )
+    if actual_optimization_hash != expected_reviewed_optimizations_hash:
+        failures.append(
+            "reviewed optimization manifest hash "
+            f"{actual_optimization_hash} does not match established hash "
+            f"{expected_reviewed_optimizations_hash}"
+        )
+    if failures:
         return baseline_commit, failures
 
     for relative_path, expected_hash in sorted(files.items()):
-        manifest_path = pathlib.PurePosixPath(relative_path)
+        relative_path_object = pathlib.PurePosixPath(relative_path)
         if (
-            manifest_path.is_absolute()
-            or ".." in manifest_path.parts
+            relative_path_object.is_absolute()
+            or ".." in relative_path_object.parts
             or "\\" in relative_path
-            or not manifest_path.parts
+            or not relative_path_object.parts
         ):
             failures.append(f"{relative_path}: invalid repository-relative path")
             continue
@@ -108,7 +224,20 @@ def verify(
         except OSError as error:
             failures.append(f"{relative_path}: cannot read file ({error})")
             continue
-        if actual_hash != expected_hash:
+        reviewed_optimization = reviewed_optimizations.get(relative_path)
+        approved_hash = (
+            reviewed_optimization["approvedSHA256"]
+            if reviewed_optimization is not None
+            else expected_hash
+        )
+        if actual_hash != approved_hash:
+            if reviewed_optimization is not None:
+                failures.append(
+                    f"{relative_path}: reviewed optimization hash {approved_hash}, "
+                    f"worktree hash {actual_hash}; original frozen baseline hash "
+                    f"{expected_hash}"
+                )
+                continue
             failures.append(
                 f"{relative_path}: frozen baseline hash {expected_hash}, "
                 f"worktree hash {actual_hash}"
@@ -141,8 +270,8 @@ def main() -> int:
 
     if failures:
         print(
-            "GFN frozen-source guard failed. Xbox quality work must not change "
-            "the established GFN production baseline.",
+            "GFN frozen-source guard failed. GFN production files must match "
+            "the established baseline or an explicitly reviewed optimization.",
             file=sys.stderr,
         )
         for failure in failures:
@@ -153,10 +282,13 @@ def main() -> int:
         )
         return 1
 
+    _, _, files, reviewed_optimizations = _load_manifest(manifest_path)
+    frozen_count = len(files) - len(reviewed_optimizations)
     print(
-        f"GFN frozen-source guard passed: {len(_load_manifest(manifest_path)[1])} "
-        f"files match established pre-Beta branch baseline "
-        f"{baseline_commit}."
+        f"GFN frozen-source guard passed: {frozen_count} files match the "
+        f"established pre-Beta baseline and {len(reviewed_optimizations)} "
+        f"reviewed optimizations match approved hashes (origin "
+        f"{baseline_commit})."
     )
     return 0
 

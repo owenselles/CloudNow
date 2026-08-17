@@ -323,6 +323,67 @@ struct XboxCloudCatalogClientTests {
         #expect(await transport.requests().count == 2)
     }
 
+    @Test("Standard and Fresno hydration start concurrently")
+    func standardAndFresnoHydrationStartConcurrently() async throws {
+        let probe = XboxCatalogHydrationStartProbe()
+        let transport = RecordingHTTPTransport { request, _ in
+            switch request.url?.host {
+            case "wus.gssv-play-prod.xboxlive.com":
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "results": [
+                    {
+                      "titleId": "standard-route",
+                      "details": {
+                        "productId": "STANDARD-PRODUCT",
+                        "name": "Standard Game",
+                        "hasEntitlement": true
+                      }
+                    }
+                  ]
+                }
+                """#)
+            case "catalog.gamepass.com":
+                await probe.start(.standardMetadata)
+                return StubbedHTTPResponse(json: #"""
+                {
+                  "Products": {},
+                  "InvalidIds": []
+                }
+                """#)
+            default:
+                throw TestTransportError.unexpectedRequest(
+                    "Unexpected request \(request.url?.absoluteString ?? "nil")"
+                )
+            }
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(
+                session: makeSession()
+            ),
+            fresnoDiscovery: XboxConcurrentFresnoDiscoveryStub(probe: probe),
+            transport: transport,
+            now: { fixedDate }
+        )
+        let task = Task {
+            try await client.fetchCatalog(
+                XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+                account: makeAccount()
+            )
+        }
+
+        await probe.waitUntilBothStarted()
+        #expect(await probe.startedStages() == Set([
+            .standardMetadata,
+            .fresnoDiscovery,
+        ]))
+        await probe.release()
+
+        let snapshot = try await task.value
+        #expect(snapshot.items.map(\.id) == ["STANDARD-PRODUCT"])
+        #expect(await transport.requests().count == 2)
+    }
+
     @Test("Standard routes require explicit product eligibility evidence")
     func standardRoutesFailClosedWithoutEligibilityEvidence() async throws {
         let transport = RecordingHTTPTransport { request, _ in
@@ -2217,6 +2278,67 @@ private nonisolated struct XboxFresnoDiscoveryStub: XboxFresnoCatalogDiscovering
     ) async throws -> XboxFresnoCatalogDiscoverySnapshot {
         XboxFresnoCatalogDiscoverySnapshot(
             productIDs: productIDs,
+            fetchedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+    }
+}
+
+private enum XboxCatalogHydrationStage: Sendable, Hashable {
+    case standardMetadata
+    case fresnoDiscovery
+}
+
+private actor XboxCatalogHydrationStartProbe {
+    private var stages: Set<XboxCatalogHydrationStage> = []
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var isReleased = false
+
+    func start(_ stage: XboxCatalogHydrationStage) async {
+        stages.insert(stage)
+        if stages.count == 2 {
+            let waiters = startWaiters
+            startWaiters.removeAll(keepingCapacity: false)
+            waiters.forEach { $0.resume() }
+        }
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilBothStarted() async {
+        guard stages.count < 2 else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func startedStages() -> Set<XboxCatalogHydrationStage> {
+        stages
+    }
+
+    func release() {
+        isReleased = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private nonisolated struct XboxConcurrentFresnoDiscoveryStub:
+    XboxFresnoCatalogDiscovering
+{
+    let probe: XboxCatalogHydrationStartProbe
+
+    func fetchProductIDs(
+        market _: String,
+        localeIdentifier _: String,
+        activeSubscriptionProductIDs _: [String]
+    ) async throws -> XboxFresnoCatalogDiscoverySnapshot {
+        await probe.start(.fresnoDiscovery)
+        return XboxFresnoCatalogDiscoverySnapshot(
+            productIDs: [],
             fetchedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
     }

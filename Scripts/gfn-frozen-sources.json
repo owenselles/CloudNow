@@ -54,5 +54,27 @@
     "CloudNow/UI/StoreView.swift": "b3f8e64eba7619e86d29ff88e94ca6a4d4f1b98098b99e12539474b752637a2a",
     "CloudNow/UI/StreamView.swift": "84bd72d230f8b40cd486885e118dbf3d415d03678956a1f50c970c7a14a0668a",
     "CloudNow/Video/VideoSurfaceView.swift": "5d51cb7b18ef8e7970c7d0280d052b02ddc325c9b1c38a27f5f8e9c428445869"
+  },
+  "reviewedOptimizations": {
+    "CloudNow/AppDataManager.swift": {
+      "baselineSHA256": "5e7f97ef0c42c1f5408c8853b1f4977c949a6faccaf609b98896caac8054837d",
+      "approvedSHA256": "efc1a8086102c35f8180d8038f384c0fa34ae59200f92020b7246990bf474c75",
+      "reason": "Issue #66 Xbox catalog durability: clear the Xbox disk and memory tiers without changing GFN provider cleanup"
+    },
+    "CloudNow/MemoryLifecycleCoordinator.swift": {
+      "baselineSHA256": "57de7ab936f9dba61d2526b20c8f44b1c115fd6c81dbf2937d94360177e4b8a0",
+      "approvedSHA256": "5bad81a9fc7b425575c40f655751e599ac1fb2dabd3521ae83790c52f002c555",
+      "reason": "Issue #66 Xbox catalog durability: release only the Xbox RAM tier on memory warnings while preserving disk cache"
+    },
+    "CloudNow/Streaming/GFNVideoDecoderH265.swift": {
+      "baselineSHA256": "2e5009a4476a7cf811bc2df2dd835f326dcb1a225231710cc9dcb4ffa90f4234",
+      "approvedSHA256": "d95d6adf4c6cfaafb23d3c41fb3bbf682d9381303a77a852df336fbcdf4b1b62",
+      "reason": "Issue #66 task 7: one-copy Annex-B to AVCC conversion and parameter-set change detection"
+    },
+    "CloudNow/Video/VideoSurfaceView.swift": {
+      "baselineSHA256": "5d51cb7b18ef8e7970c7d0280d052b02ddc325c9b1c38a27f5f8e9c428445869",
+      "approvedSHA256": "7c7f98fb9a72ef1f597ab81b4b020251f2328412078bf9876bb883620dc73d85",
+      "reason": "Issue #66 tasks 5 and 6: latest-frame backpressure and cached decoded-format inspection"
+    }
   }
 }

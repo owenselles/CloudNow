@@ -31,12 +31,22 @@ actor AppDataManager {
 
     /// Removes disposable data while preserving authentication and user preferences.
     func clearCaches() async throws {
+        var failures: [String] = []
         await HeroArtPrefetcher.shared.cancelAll()
         await BoxArtPrefetcher.shared.cancelAll()
-        await XboxCatalogMemoryCache.shared.clear()
+        do {
+            try await XboxCatalogCache.shared.clear()
+        } catch {
+            failures.append("XboxCatalog")
+            log.error(
+                "Unable to clear Xbox catalog cache: \(error, privacy: .private)"
+            )
+        }
         await clearSharedArtworkAndURLResponses(for: .allProviders)
 
-        var failures = await AppPersistenceStore.shared.clearCachedData()
+        await failures.append(
+            contentsOf: AppPersistenceStore.shared.clearCachedData()
+        )
         if let cachesURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first {
             for artifact in Self.ownedCacheArtifacts {
                 let url = cachesURL.appendingPathComponent(artifact)
@@ -77,9 +87,18 @@ actor AppDataManager {
             )
             await ZoneClient.shared.clearCachedRoutingData()
         case .xboxCloudGaming:
-            await XboxCatalogMemoryCache.shared.clear()
-            failures = await AppPersistenceStore.shared.clearCachedData(
-                for: provider
+            do {
+                try await XboxCatalogCache.shared.clear()
+            } catch {
+                failures.append("XboxCatalog")
+                log.error(
+                    "Unable to clear Xbox catalog cache: \(error, privacy: .private)"
+                )
+            }
+            await failures.append(
+                contentsOf: AppPersistenceStore.shared.clearCachedData(
+                    for: provider
+                )
             )
             failures.append(
                 contentsOf: clearOwnedCacheArtifacts(

@@ -333,7 +333,7 @@ final class XboxAuthManager {
         environment: XboxCloudEnvironment = .unconfigured,
         oauthClient: (any XboxOAuthClient)? = nil,
         persistence: any XboxAuthSessionPersistence = UnavailableXboxAuthSessionPersistence(),
-        catalogCache: any XboxCatalogCaching = XboxCatalogMemoryCache.shared,
+        catalogCache: any XboxCatalogCaching = XboxCatalogCache.shared,
         now: @escaping @Sendable () -> Date = Date.init,
         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
             let boundedSeconds = min(
@@ -364,6 +364,9 @@ final class XboxAuthManager {
         authorizedAccount = restoredAuthorizedAccount
         catalogAccountScopeIdentifier = restoredAuthorizedAccount?
             .activityScopeIdentifier
+            ?? Self.validActivityScopeIdentifier(
+                initialSession?.activityScopeIdentifier
+            )
         startupPhase = startsReady || initialSession != nil ? .ready : .pending
         if let restoredAuthorizedAccount {
             scheduleAuthorizedAccountRefresh(for: restoredAuthorizedAccount)
@@ -406,6 +409,9 @@ final class XboxAuthManager {
                 return
             }
             session = restored
+            catalogAccountScopeIdentifier = Self.validActivityScopeIdentifier(
+                restored.activityScopeIdentifier
+            )
         } catch {
             guard credentialGeneration == generation else { return }
             try? await persistence.deleteXboxAuthSession(
@@ -595,6 +601,17 @@ final class XboxAuthManager {
         isDeletingCredentials = true
         defer { isDeletingCredentials = false }
         let accountScopeIdentifier = catalogAccountScopeIdentifier
+        let initialGeneration = credentialGeneration
+        if let accountScopeIdentifier {
+            do {
+                try await catalogCache.purge(
+                    accountAuthorizationIdentifier: accountScopeIdentifier
+                )
+            } catch {
+                throw XboxAuthError.persistenceUnavailable
+            }
+        }
+        guard credentialGeneration == initialGeneration else { return }
         invalidateAuthenticationWork()
         let generation = credentialGeneration
         let resetGeneration = persistence.xboxAuthSessionResetGeneration()
@@ -621,11 +638,6 @@ final class XboxAuthManager {
         publish(.idle)
         releaseRuntimeClients()
         await credentialLifecycle?.clearLocalCredentials()
-        if let accountScopeIdentifier {
-            await catalogCache.remove(
-                accountAuthorizationIdentifier: accountScopeIdentifier
-            )
-        }
     }
 
     /// Removes the current Microsoft credential before starting a fresh device
