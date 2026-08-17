@@ -293,6 +293,7 @@ struct XboxMainTabView: View {
             )
             .blocksGlobalControllerNavigation(mode: .streaming)
             .environment(controllerNavigation)
+            .environment(inputDeviceMonitor)
         }
     }
 
