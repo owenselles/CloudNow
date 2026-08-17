@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**CloudNow** is a native tvOS app — a reverse-engineered GeForce NOW client for Apple TV. It streams PC games over WebRTC using NVIDIA's GFN protocol over WebRTC, using [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) as the WebRTC transport.
+**CloudNow** is a native tvOS cloud gaming app for Apple TV. It provides
+separate GeForce NOW and Xbox Cloud Gaming provider modes behind a
+provider-neutral app shell. Each provider owns its account, catalog, session,
+signaling, quality, input, and lifecycle protocol. Both native transports use
+[livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework).
 
 ## Git
 
@@ -16,7 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Xcode 26.2+**, targeting tvOS 26.2+
 - Open `CloudNow.xcodeproj` in Xcode, or use `Scripts/test.sh` for command-line simulator testing
 - **Required SPM dependency**: [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework), resolved automatically from the shared project and tracked `Package.resolved`
-- Distribution is sideload-only (no App Store target)
+- Current distribution options are TestFlight, release IPA, and source builds;
+  no App Store availability is claimed
 - `CloudNowTests` uses Swift Testing for unit/integration coverage; `CloudNowUITests` uses XCTest for deterministic tvOS UI automation
 - SwiftLint, SwiftFormat, and the simulator test suite are required by CI
 
@@ -58,43 +63,82 @@ Run the complete deterministic tvOS simulator suite from any current directory:
 /path/to/CloudNow/Scripts/test.sh
 ```
 
-Use `--unit`, `--ui`, or `--full` to select a mode. The runner discovers and boots a compatible simulator, resolves packages, disables code signing, enables coverage, and writes ignored results under `TestArtifacts/`. Tests must use injected fakes and fixtures; they must never contact live NVIDIA, PrintedWaste, authentication, catalog, signaling, image, or media services. See the README **Testing** section for fixture conventions and hardware-only exclusions.
+Use `--unit`, `--ui`, or `--full` to select a mode. The runner discovers and
+boots a compatible simulator, resolves packages, disables code signing, enables
+coverage, and writes ignored results under `TestArtifacts/`. Tests must use
+injected fakes and fixtures; they must never contact live provider
+authentication, catalog, signaling, image, media, or community services. See
+the README **Testing** section for fixture conventions and hardware-only
+exclusions.
 
 ## Architecture
 
-All source lives in `CloudNow/`. Five functional areas:
+All source lives in one `CloudNow` app target. There is no separate shared-core
+framework. Boundaries are enforced by provider-neutral contracts, lazy provider
+graphs, dependency direction, deterministic tests, and the GFN frozen-source CI
+guard.
 
-### Auth
-- `AuthManager.swift` — `@Observable @MainActor` state holder. Checks Keychain on launch, drives device flow login, handles silent token refresh, and rebinds to a `client_token` grant so games.geforce.com GraphQL queries work.
-- `NVIDIAAuthAPI.swift` — Raw NVIDIA OAuth endpoints: device authorization, token exchange, refresh, client_token rebinding.
+### Shared/provider-neutral
 
-### Session
-- `GamesViewModel.swift` — Central `@Observable` shared across all tabs. Owns the games list, active sessions, favorites (UserDefaults), and stream settings.
-- `CloudMatchClient.swift` — REST client for session lifecycle: create → poll queue position → active session → stop. Also retrieves and reports queue-ad lifecycle events.
-- `GamesClient.swift` — GraphQL persisted queries for linked-library games and full store catalog.
-- `ZoneClient.swift` — Fetches regions from the PrintedWaste community API; ranks them by 40% ping + 60% queue depth score.
-- `SessionState.swift` — All data models: `StreamSettings`, `SessionInfo`, `GameInfo`, `QueueInfo`, etc.
+- `CloudNowApp.swift` retains both independent account managers and capability
+  adapters, restores the selected provider, and activates only that provider's
+  UI and transport/network work. The Xbox production context is lightweight;
+  its service graph remains lazy.
+- `Services/CloudGamingProvider.swift` owns provider identity, selection, and
+  provider configuration; `CloudGamingCapabilities.swift` defines narrow
+  account/catalog/stream/input/diagnostic contracts and global server-session
+  and local-peer leases.
+- `Streaming/CloudRTCRuntime.swift` owns the one process-level WebRTC factory.
+  The audio device, passive video surface, decoded-format inspection, controller
+  haptics, artwork pipeline, persistence boundaries, app lifecycle, pause
+  chrome, network-test UI, and HUD value models are reusable primitives—not a
+  shared provider protocol.
+- `CloudNowTabShell`, `CloudServiceSelectionView`, and neutral catalog/device-code
+  components provide shared presentation. Provider screens and wire state remain
+  separate.
 
-### Streaming
-- `GFNStreamController.swift` — `@Observable` WebRTC peer connection lifecycle. Opens the signaling WebSocket, negotiates SDP (server offer → munged answer), injects ICE candidates, attaches the video track, and collects live stats. Manages three data channels: `input_channel_v1` (reliable ordered), `input_channel_partially_reliable` (unordered, timed), and a server-opened `control_channel`. `InputSender` is started after receiving the server handshake on `input_channel_v1`.
-- `SignalingClient.swift` — Low-level WebSocket via `NWConnection` + `NWProtocolWebSocket`. Manages TLS options (cipher negotiation, cert bypass for GFN endpoints) and the JSON signaling message protocol.
-- `SDPMunger.swift` — Rewrites the client's SDP answer: filters to the preferred codec (H.264/H.265/AV1), front-loads H.265 Main10 for 10-bit/HDR requests, caps tier/level to hardware-safe values, injects max bitrate.
-- `GFNVideoDecoderFactory.swift` — Decoder factory advertising H.265 Main10 (profile-id=2) alongside the LiveKit defaults so GFN's 10-bit payload survives answer negotiation; routes H.265 to `GFNVideoDecoderH265`.
-- `GFNVideoDecoderH265.swift` — Custom VideoToolbox H.265 decoder preserving bit depth and VUI colorimetry (the bundled LiveKit decoder pins 8-bit NV12 and force-stamps BT.709/sRGB, breaking HDR10). Removable once the upstream webrtc-sdk fix ships.
-- `InputSender.swift` — Encodes GCController/keyboard/mouse/Siri Remote input into GFN binary protocol packets (XInput for gamepads; protocol v2 plain or v3 partially-reliable wrapping) and sends over the WebRTC data channel. Starts only after receiving the server handshake on `input_channel_v1`. Configurable analog stick deadzone via `deadzone: Float` property (set from `StreamSettings.controllerDeadzone`).
+### GeForce NOW
 
-### Video
-- `VideoSurfaceView.swift` — `UIView` backed by `AVSampleBufferDisplayLayer` that receives decoded WebRTC frames via a `WebRTCFrameRenderer` (CVPixelBuffer → CMSampleBuffer). Also acts as first responder for hardware keyboard and Bluetooth mouse input, forwarding events to `InputSender` as GFN protocol packets.
+- `Auth/` owns the established OAuth/refresh path; `Session/` owns GFN catalog,
+  cloud-library sync, account capabilities, game-server discovery, CloudMatch,
+  and `SessionOrchestrator`.
+- `Streaming/GFNStreamController.swift` remains the established WebRTC answerer.
+  It receives a server offer, applies the GFN-only `SDPMunger`, returns an
+  answer, exchanges ICE, attaches media, and owns reconnect, microphone, audio,
+  and data-channel state.
+- `SignalingClient`, `SignalingEndpointRace`, and `SignalingMessageCodec` own the
+  GFN WebSocket path. `InputSender` owns GFN controller/keyboard/mouse/Siri
+  Remote/text encoding. `GFNVideoDecoderFactory` and `GFNVideoDecoderH265`
+  preserve H.265 Main10 and decoded color metadata.
+- `UI/MainTabView`, `GamesViewModel`, `HomeView`, `LibraryView`, `StoreView`,
+  `SettingsView`, and `StreamView` are the established GFN experience. They are
+  not shared Xbox view models.
 
-### UI (SwiftUI)
-- `MainTabView.swift` — Root tab bar (Home / Library / Store / Settings).
-- `StreamView.swift` — Full-screen player. Menu button toggles pause menu with live stats (bitrate, resolution, FPS, RTT, packet loss %, remaining session time for Free/Priority tier).
-- `HomeView.swift` — Hero banner, "Continue Playing" row (active sessions), Favorites row.
-- `LibraryView.swift` — Library grid with search, A→Z/Z→A/Recently Played sort, and long-press context menus for Favorites.
-- `StoreView.swift` — Full catalog grid with search, store filter chips, and long-press context menus for owned games.
-- `SettingsView.swift` — Stream quality (resolution, FPS, codec, color, keyboard layout, game language, L4S), controller deadzone slider, zone picker, microphone toggle, account info.
-- `QueueAdPlayerView.swift` — AVPlayer-based queue ad playback; reports lifecycle events to CloudMatch.
-- `LoginView.swift` — Displays a QR code and PIN for NVIDIA device flow login; user scans the QR code or visits the URL on any device to complete OAuth.
+### Xbox Cloud Gaming
+
+- `Xbox/MicrosoftDeviceCodeOAuthClient`, `XboxAuthManager`, Xbox Live/XSTS
+  clients, and the local credential group own the Xbox account path.
+- `XboxCloudOfferingService` owns the validated endpoint/protocol/identity
+  compatibility profile. Content Access, Fresno discovery, catalog, detail, and
+  cache clients own account access, Max Stream Quality, routes, and Library data.
+- `XboxCloudSessionAPI` owns allocation, queue/configuration, keepalive, and
+  deletion. `XboxCloudSignalingAPI` owns bounded REST SDP/ICE exchange.
+- `XboxCloudWebRTCTransport` is the client-offer WebRTC path and owns service
+  overrides, data-channel versions, media readiness, microphone attachment, and
+  teardown. `XboxCloudInputDriver` plus legacy/modern codecs own Xbox control,
+  dimensions, controller/keyboard/mouse, feedback, and rumble wire behavior.
+- `XboxCloudStreamController`, lifecycle contracts, and
+  `XboxProductionRuntimeContext` own launch, reconnect, Leave/Continue/End, and
+  the lazy production graph. `XboxCloudRTCStatsSampler` reports delivered media.
+- `UI/XboxCloudViews`, `XboxCatalogDetailView`, `XboxCloudPlayerView`, and
+  `XboxVideoSurfaceView` own Xbox Home/Library/Settings, player, and Simulator
+  input bridge.
+
+GFN and Xbox share the factory and passive media primitives, but they do not
+import or translate one another's authentication, session, signaling, SDP,
+data-channel, input, reconnect, resume, or stream-setting behavior. See the
+README **Architecture** section for the detailed source tree and
+`Documentation/XboxCloudGaming.md` for the Xbox request path.
 
 ## Agent Rules
 
@@ -103,19 +147,53 @@ All source lives in `CloudNow/`. Five functional areas:
 
 ## Key Patterns
 
-- **State**: `@Observable + @MainActor` throughout (AuthManager, GFNStreamController, GamesViewModel). No Combine/Redux.
-- **Auth flow**: NVIDIA device flow (TV shows QR code + PIN; user completes on any device) → token stored in Keychain → silent refresh on launch → `client_token` rebind for GraphQL.
-- **Signaling**: Raw `NWConnection` WebSocket (not URLSessionWebSocketTask) to control TLS cipher suites and bypass cert pinning on GFN signaling endpoints.
-- **SDP munging**: Applied to the client's **answer** (not the offer) to avoid orphaned FEC-FR SSRC lines. `SDPMunger.preferCodec` filters to the chosen codec and `injectBandwidth` sets max bitrate hints.
-- **Input protocol**: XInput binary encoding over WebRTC data channel — see `InputSender` for byte layout.
-- **Queue flow**: Session creation → poll queue position indefinitely (2 consecutive ready polls required) → 180 s setup timeout after queue clears → optional queue ad → stream start.
+- **State ownership**: observable UI state is main-actor isolated; high-frequency
+  media/input work uses actors, locks, or serial queues. Connection generations
+  reject stale callbacks.
+- **Provider selection**: persist only the selected provider; keep credentials,
+  settings, cache, session leases, and runtime dependencies provider-scoped.
+- **GFN flow**: provider device authorization → secure token/refresh → cloud
+  library/session → server WebSocket offer → GFN-munged client answer → GFN
+  data-channel input.
+- **Xbox flow**: Microsoft device authorization → Xbox Live/XSTS → offering and
+  access discovery → v5 allocation → local WebRTC offer/REST answer → Xbox
+  control/message/input channels.
+- **SDP direction matters**: GFN munges its client **answer**; Xbox owns a
+  separate client **offer** policy. Never reuse one provider's SDP behavior in
+  the other.
+- **Session safety**: server-session and local-peer leases are unique, token
+  owned, and failure-aware. A failed End remains quarantined instead of allowing
+  a second session.
+- **Quality truth**: distinguish preference, request, negotiation, and delivered
+  media. GFN has advanced codec/color/audio controls; Xbox exposes only proven
+  controls and shows requested versus delivered resolution.
 
 ## Data Flow (game launch)
 
-1. `GamesViewModel` calls `CloudMatchClient.createSession()`
-2. Polls queue until `ACTIVE` (two consecutive) or timeout
-3. `StreamView` appears → `GFNStreamController.connect()` opens `SignalingClient` WebSocket
-4. SDP offer built → `SDPMunger` rewrites it → sent via signaling
-5. Answer received → ICE exchange → peer connection established
-6. Video track → `VideoSurfaceView` (Metal render)
-7. `InputSender` encodes controller frames → data channel → GFN server
+### GeForce NOW
+
+1. `GamesViewModel` and `SessionOrchestrator` reserve ownership and create the
+   CloudMatch session.
+2. Queue/provisioning polls require two consecutive ready results; the setup
+   timeout begins after queue exit.
+3. `GFNStreamController` opens the bounded signaling endpoint race and receives
+   the server SDP offer.
+4. `SDPMunger` rewrites the client answer for the chosen GFN codec/color/bitrate
+   policy; the answer and ICE return through signaling.
+5. The received track renders through `VideoSurfaceView`; `InputSender` starts
+   after the GFN input-channel handshake.
+
+### Xbox Cloud Gaming
+
+1. The Xbox player reserves one global server lease; the session API creates one
+   allocation and polls queue/provisioning within the absolute deadline.
+2. Configuration and signaling context create the Xbox native runtime and local
+   WebRTC offer; the service answer and ICE arrive over REST.
+3. The control path sends the resolution preference before authorization.
+   `messageV1` sends active display dimensions after its handshake; gameplay
+   input still waits for media readiness.
+4. The passive video surface renders the received track while RTC statistics
+   report delivered resolution/FPS/bitrate/codec/color/audio independently of
+   the requested ceiling.
+5. Leave parks the unexpired allocation, Continue reuses it, and End deletes it
+   before releasing the global lease.
