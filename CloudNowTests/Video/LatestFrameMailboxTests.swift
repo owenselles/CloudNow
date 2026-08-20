@@ -86,6 +86,23 @@ struct LatestFrameMailboxTests {
     }
 }
 
+@Suite("Real-time video renderer drain scheduling")
+struct VideoRendererDrainScheduleTests {
+    @Test("A later frame rearms the drain without an AVFoundation readiness callback")
+    func laterFrameRearmsCompletedDrain() {
+        var schedule = VideoRendererDrainSchedule()
+
+        let firstFrameStartsDrain = schedule.beginIfNeeded()
+        let concurrentFrameUsesActiveDrain = schedule.beginIfNeeded()
+        schedule.finish()
+        let laterFrameStartsAnotherDrain = schedule.beginIfNeeded()
+
+        #expect(firstFrameStartsDrain)
+        #expect(!concurrentFrameUsesActiveDrain)
+        #expect(laterFrameStartsAnotherDrain)
+    }
+}
+
 @Suite("Video renderer flush sequencing")
 struct VideoRendererFlushPlanTests {
     @Test("Teardown follows an in-flight recovery flush with a remove-image flush")

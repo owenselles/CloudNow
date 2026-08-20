@@ -49,6 +49,20 @@ nonisolated struct LatestFrameMailbox<Element> {
     }
 }
 
+nonisolated struct VideoRendererDrainSchedule: Sendable {
+    private(set) var isScheduled = false
+
+    mutating func beginIfNeeded() -> Bool {
+        guard !isScheduled else { return false }
+        isScheduled = true
+        return true
+    }
+
+    mutating func finish() {
+        isScheduled = false
+    }
+}
+
 nonisolated struct VideoRendererFlushRequest: Equatable, Sendable {
     let generation: UInt64
     let removeDisplayedImage: Bool
@@ -454,8 +468,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         var inspectionCache = DecodedVideoFormatInspectionCache()
         var decodedFormatSignature: VideoFormatSignature?
         var mailbox = LatestFrameMailbox<PendingFrame>()
-        var isDrainScheduled = false
-        var isWaitingForReadiness = false
+        var drainSchedule = VideoRendererDrainSchedule()
         var isFlushing = false
         var generation: UInt64 = 0
         var metricsRequestInFlight = false
@@ -477,10 +490,6 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         self.diagnostics = diagnostics
     }
 
-    deinit {
-        sampleBufferRenderer?.stopRequestingMediaData()
-    }
-
     func setSize(_: CGSize) {}
 
     func renderFrame(_ frame: LKRTCVideoFrame?) {
@@ -493,17 +502,12 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             return
         }
 
-        if !sampleBufferRenderer.isReadyForMoreMediaData {
-            diagnostics.recordBackpressure()
-        }
-
         let pendingFrame = PendingFrame(frame: frame, trace: trace)
         let submission = state.withLock { state -> (PendingFrame?, Bool) in
             guard !state.isFlushing else { return (pendingFrame, false) }
             switch state.mailbox.store(pendingFrame) {
             case let .stored(replacing: replaced):
-                let shouldSchedule = !state.isDrainScheduled
-                state.isDrainScheduled = true
+                let shouldSchedule = state.drainSchedule.beginIfNeeded()
                 return (replaced, shouldSchedule)
             case let .rejected(rejected):
                 return (rejected, false)
@@ -524,18 +528,13 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
                 recoverAfterFailure()
                 return
             }
-            guard sampleBufferRenderer.isReadyForMoreMediaData else {
-                waitUntilReady(sampleBufferRenderer)
-                return
-            }
-
             let pending = state.withLock { state -> (PendingFrame, UInt64)? in
                 guard !state.isFlushing else {
-                    state.isDrainScheduled = false
+                    state.drainSchedule.finish()
                     return nil
                 }
                 guard let frame = state.mailbox.take() else {
-                    state.isDrainScheduled = false
+                    state.drainSchedule.finish()
                     return nil
                 }
                 return (frame, state.generation)
@@ -544,40 +543,6 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             process(pending.0, generation: pending.1, renderer: sampleBufferRenderer)
         }
         dropPendingFrame()
-    }
-
-    private func waitUntilReady(_ sampleBufferRenderer: AVSampleBufferVideoRenderer) {
-        let shouldWait = state.withLock { state -> Bool in
-            guard state.isDrainScheduled,
-                  state.mailbox.hasPending,
-                  !state.isFlushing,
-                  !state.isWaitingForReadiness
-            else {
-                return false
-            }
-            state.isWaitingForReadiness = true
-            return true
-        }
-        guard shouldWait else { return }
-
-        sampleBufferRenderer.requestMediaDataWhenReady(on: renderQueue) { [weak self, weak sampleBufferRenderer] in
-            guard let self, let sampleBufferRenderer else { return }
-            guard sampleBufferRenderer.isReadyForMoreMediaData else { return }
-            sampleBufferRenderer.stopRequestingMediaData()
-            let shouldDrain = state.withLock { state -> Bool in
-                guard state.isWaitingForReadiness else { return false }
-                state.isWaitingForReadiness = false
-                return state.isDrainScheduled && state.mailbox.hasPending && !state.isFlushing
-            }
-            if shouldDrain {
-                drainPendingFrames()
-            }
-        }
-
-        let stillWaiting = state.withLock { $0.isWaitingForReadiness }
-        if !stillWaiting {
-            sampleBufferRenderer.stopRequestingMediaData()
-        }
     }
 
     private func process(
@@ -640,11 +605,6 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             onDecodedVideoFormatChanged?(inspection.format)
         }
 
-        guard sampleBufferRenderer.isReadyForMoreMediaData else {
-            deferForBackpressure(pendingFrame, generation: renderGeneration)
-            return
-        }
-
         let sampleCreationStart = diagnostics.beginSampleCreation(trace)
 
         // DisplayImmediately makes the timestamp irrelevant and replaces queued stale images.
@@ -671,9 +631,12 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         }
         markForImmediatePresentation(sampleBuffer)
         diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
-        guard sampleBufferRenderer.isReadyForMoreMediaData else {
-            deferForBackpressure(pendingFrame, generation: renderGeneration)
-            return
+
+        // This is a real-time producer. AVFoundation documents readiness as a
+        // backpressure hint; waiting for its callback can permanently stall a
+        // live stream on tvOS, while enqueueing remains safe.
+        if !sampleBufferRenderer.isReadyForMoreMediaData {
+            diagnostics.recordBackpressure()
         }
         let didBeginEnqueue = state.withLock { state -> Bool in
             guard !state.isFlushing, state.generation == renderGeneration else { return false }
@@ -702,15 +665,13 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
     }
 
     func teardown() {
-        sampleBufferRenderer?.stopRequestingMediaData()
         let result = state.withLock { state -> (VideoRendererFlushRequest?, PendingFrame?) in
             guard !state.mailbox.isTerminated else { return (nil, nil) }
             state.generation &+= 1
             state.isFlushing = true
             state.inspectionCache.reset()
             state.decodedFormatSignature = nil
-            state.isDrainScheduled = false
-            state.isWaitingForReadiness = false
+            state.drainSchedule.finish()
             let request = VideoRendererFlushRequest(
                 generation: state.generation,
                 removeDisplayedImage: true
@@ -770,8 +731,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
     }
 
     private func flush(preservingDisplayedImage: Bool, recordFailure: Bool) {
-        guard let sampleBufferRenderer else { return }
-        sampleBufferRenderer.stopRequestingMediaData()
+        guard sampleBufferRenderer != nil else { return }
         let result = state.withLock { state -> (Bool, VideoRendererFlushRequest?, PendingFrame?) in
             guard !state.isFlushing, !state.mailbox.isTerminated else {
                 return (false, nil, nil)
@@ -780,8 +740,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             state.generation &+= 1
             state.inspectionCache.reset()
             state.decodedFormatSignature = nil
-            state.isDrainScheduled = false
-            state.isWaitingForReadiness = false
+            state.drainSchedule.finish()
             let dropped = state.mailbox.flush()
             let request = VideoRendererFlushRequest(
                 generation: state.generation,
@@ -838,21 +797,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         }
     }
 
-    private func deferForBackpressure(_ frame: PendingFrame, generation: UInt64) {
-        diagnostics.recordBackpressure()
-        let didRestore = state.withLock { state -> Bool in
-            guard !state.isFlushing, state.generation == generation else { return false }
-            return state.mailbox.storeIfEmpty(frame)
-        }
-        if !didRestore {
-            diagnostics.recordDrop(frame.trace)
-        }
-    }
-
     private func dropPendingFrame() {
         let dropped = state.withLock { state -> PendingFrame? in
-            state.isDrainScheduled = false
-            state.isWaitingForReadiness = false
+            state.drainSchedule.finish()
             return state.mailbox.flush()
         }
         if let dropped {
