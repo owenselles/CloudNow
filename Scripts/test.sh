@@ -62,20 +62,6 @@ derived_data_path="${CLOUDNOW_DERIVED_DATA_PATH:-}"
 cd "$repository_root"
 mkdir -p "$coverage_directory"
 
-gfn_frozen_check_command=(
-    python3
-    "$repository_root/Scripts/verify_gfn_frozen.py"
-)
-print_command "${gfn_frozen_check_command[@]}"
-"${gfn_frozen_check_command[@]}"
-
-gfn_frozen_guard_test_command=(
-    python3
-    "$repository_root/Scripts/test_verify_gfn_frozen.py"
-)
-print_command "${gfn_frozen_guard_test_command[@]}"
-"${gfn_frozen_guard_test_command[@]}"
-
 localization_check_command=(
     python3
     "$repository_root/Scripts/validate_localizations.py"

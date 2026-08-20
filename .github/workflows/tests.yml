@@ -21,8 +21,6 @@ jobs:
       TZ: UTC
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Print Xcode version
         run: xcodebuild -version

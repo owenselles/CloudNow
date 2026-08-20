@@ -75,8 +75,7 @@ exclusions.
 
 All source lives in one `CloudNow` app target. There is no separate shared-core
 framework. Boundaries are enforced by provider-neutral contracts, lazy provider
-graphs, dependency direction, deterministic tests, and the GFN frozen-source CI
-guard.
+graphs, dependency direction, and deterministic provider regression tests.
 
 ### Shared/provider-neutral
 
