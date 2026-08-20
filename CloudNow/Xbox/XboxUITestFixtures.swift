@@ -23,6 +23,25 @@
             )
         )
 
+        private static let catalogScenario = XboxUITestCatalogScenario(
+            mode: libraryRefreshMode,
+            initialSnapshot: catalog,
+            refreshedSnapshot: refreshedCatalog
+        )
+
+        private static let libraryRefreshMode: XboxUITestCatalogRefreshMode = {
+            let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("--cloudnow-ui-xbox-library-refresh-running") {
+                return .running
+            }
+            if arguments.contains(
+                "--cloudnow-ui-xbox-library-refresh-access-failure-once"
+            ) {
+                return .accessFailureOnce
+            }
+            return .completes
+        }()
+
         static let environment = XboxCloudEnvironment(
             authentication: authentication,
             makeAccountAuthorizationClient: {
@@ -30,10 +49,10 @@
             },
             service: XboxCloudServiceConfiguration(
                 makeCatalogClient: {
-                    XboxUITestCatalogClient(snapshot: catalog)
+                    XboxUITestCatalogClient(scenario: catalogScenario)
                 },
                 makeContentAccessClient: {
-                    XboxUITestContentAccessClient()
+                    XboxUITestContentAccessClient(scenario: catalogScenario)
                 },
                 makeStreamController: { transferToken in
                     XboxCloudStreamController(
@@ -151,6 +170,78 @@
             ],
             fetchedAt: .distantFuture
         )
+
+        private static let refreshedCatalog = XboxCatalogSnapshot(
+            items: catalog.items + [
+                XboxCatalogItem(
+                    id: "fixture-refresh-new",
+                    title: "Fixture Refresh Addition",
+                    genres: ["Action"],
+                    artworkURL: nil,
+                    supportedInputTypes: [.controller],
+                    isOwned: true
+                ),
+            ],
+            fetchedAt: .distantFuture
+        )
+    }
+
+    private enum XboxUITestCatalogRefreshMode: Sendable {
+        case accessFailureOnce
+        case completes
+        case running
+    }
+
+    private enum XboxUITestLibraryRefreshError: Error {
+        case accessUnavailable
+    }
+
+    private actor XboxUITestCatalogScenario {
+        private let mode: XboxUITestCatalogRefreshMode
+        private let initialSnapshot: XboxCatalogSnapshot
+        private let refreshedSnapshot: XboxCatalogSnapshot
+        private var shouldFailNextContentAccessRequest = false
+        private var hasFailedContentAccessRequest = false
+
+        init(
+            mode: XboxUITestCatalogRefreshMode,
+            initialSnapshot: XboxCatalogSnapshot,
+            refreshedSnapshot: XboxCatalogSnapshot
+        ) {
+            self.mode = mode
+            self.initialSnapshot = initialSnapshot
+            self.refreshedSnapshot = refreshedSnapshot
+        }
+
+        func snapshot(forExplicitRefresh isExplicitRefresh: Bool) async throws
+            -> XboxCatalogSnapshot
+        {
+            guard isExplicitRefresh else { return initialSnapshot }
+            switch mode {
+            case .accessFailureOnce:
+                if !hasFailedContentAccessRequest {
+                    shouldFailNextContentAccessRequest = true
+                }
+                return refreshedSnapshot
+            case .completes:
+                return refreshedSnapshot
+            case .running:
+                try await Task.sleep(nanoseconds: UInt64.max)
+                throw CancellationError()
+            }
+        }
+
+        func contentAccessSnapshot() throws -> XboxContentAccessSnapshot {
+            if shouldFailNextContentAccessRequest {
+                shouldFailNextContentAccessRequest = false
+                hasFailedContentAccessRequest = true
+                throw XboxUITestLibraryRefreshError.accessUnavailable
+            }
+            return XboxContentAccessSnapshot(
+                membershipTier: .ultimate,
+                fetchedAt: .distantFuture
+            )
+        }
     }
 
     private actor XboxUITestDeviceCodeOAuthClient: XboxOAuthClient {
@@ -201,32 +292,44 @@
     }
 
     private actor XboxUITestCatalogClient: XboxCatalogClient {
-        let snapshot: XboxCatalogSnapshot
+        private let scenario: XboxUITestCatalogScenario
+        private var hasPendingExplicitRefresh = false
 
-        init(snapshot: XboxCatalogSnapshot) {
-            self.snapshot = snapshot
+        init(scenario: XboxUITestCatalogScenario) {
+            self.scenario = scenario
         }
 
         func fetchCatalog(
             _: XboxCatalogRequest,
             account _: XboxCloudAuthorizedAccount
-        ) -> XboxCatalogSnapshot {
-            snapshot
+        ) async throws -> XboxCatalogSnapshot {
+            let isExplicitRefresh = hasPendingExplicitRefresh
+            hasPendingExplicitRefresh = false
+            return try await scenario.snapshot(
+                forExplicitRefresh: isExplicitRefresh
+            )
+        }
+
+        func refreshAccountState(for _: XboxCloudAuthorizedAccount) async {
+            hasPendingExplicitRefresh = true
         }
 
         nonisolated func cancel() {}
     }
 
-    private struct XboxUITestContentAccessClient: XboxContentAccessProviding {
+    private actor XboxUITestContentAccessClient: XboxContentAccessProviding {
+        private let scenario: XboxUITestCatalogScenario
+
+        init(scenario: XboxUITestCatalogScenario) {
+            self.scenario = scenario
+        }
+
         func fetchContentAccess(
             for _: XboxCloudAuthorizedAccount,
             market _: String,
             offeringID _: String
-        ) -> XboxContentAccessSnapshot {
-            XboxContentAccessSnapshot(
-                membershipTier: .ultimate,
-                fetchedAt: .distantFuture
-            )
+        ) async throws -> XboxContentAccessSnapshot {
+            try await scenario.contentAccessSnapshot()
         }
     }
 

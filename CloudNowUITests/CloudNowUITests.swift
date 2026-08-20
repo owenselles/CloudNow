@@ -777,6 +777,152 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testXboxSettingsLibraryRefreshShowsProgressAndCompletion() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        app.launch()
+
+        openConfiguredXboxSettings(in: app)
+        let refreshRow = focusXboxLibraryRefreshRow(in: app)
+        XCTAssertTrue(refreshRow.isEnabled)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xboxLibraryRefreshProgress", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(
+            element("xboxLibraryRefreshCatalogStep", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element("xboxLibraryRefreshAccessStep", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element("xboxLibraryRefreshSummary", in: app)
+                .waitForExistence(timeout: 5)
+        )
+
+        let doneButton = app.buttons["xboxLibraryRefreshDoneButton"]
+        XCTAssertTrue(doneButton.waitForExistence(timeout: 3))
+        focusAndSelect(
+            doneButton,
+            directions: [.up, .left, .right, .down],
+            pressesPerDirection: 8
+        )
+
+        XCTAssertTrue(
+            element("xbox-settings-screen", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        _ = focusXboxLibraryRefreshRow(in: app)
+    }
+
+    @MainActor
+    func testXboxSettingsLibraryRefreshRetriesAccessFailure() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+            "--cloudnow-ui-xbox-library-refresh-access-failure-once",
+        ])
+        app.launch()
+
+        openConfiguredXboxSettings(in: app)
+        let refreshRow = focusXboxLibraryRefreshRow(in: app)
+        XCUIRemote.shared.press(.select)
+
+        let warning = element("xboxLibraryRefreshWarning", in: app)
+        XCTAssertTrue(warning.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            waitForAccessibilityText(
+                "Access not confirmed",
+                in: warning,
+                timeout: 3
+            )
+        )
+        XCTAssertTrue(element("xboxLibraryRefreshSummary", in: app).exists)
+
+        let retryButton = app.buttons["xboxLibraryRefreshRetryButton"]
+        XCTAssertTrue(retryButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(retryButton))
+        XCUIRemote.shared.press(.select)
+
+        let accessStep = element("xboxLibraryRefreshAccessStep", in: app)
+        XCTAssertTrue(
+            waitForAccessibilityText("Synced", in: accessStep, timeout: 5)
+        )
+        let warningDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: warning
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [warningDismissed], timeout: 3),
+            .completed
+        )
+        XCTAssertFalse(retryButton.exists)
+
+        let doneButton = app.buttons["xboxLibraryRefreshDoneButton"]
+        XCTAssertTrue(doneButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(doneButton))
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xbox-settings-screen", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        _ = focusXboxLibraryRefreshRow(in: app)
+        XCTAssertTrue(refreshRow.isEnabled)
+    }
+
+    @MainActor
+    func testXboxSettingsLibraryRefreshCanCloseAndReopenWhileRunning() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+            "--cloudnow-ui-xbox-library-refresh-running",
+        ])
+        app.launch()
+
+        openConfiguredXboxSettings(in: app)
+        let refreshRow = focusXboxLibraryRefreshRow(in: app)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xboxLibraryRefreshProgress", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertFalse(element("xboxLibraryRefreshSummary", in: app).exists)
+
+        let closeButton = app.buttons["xboxLibraryRefreshCloseButton"]
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 3))
+        focusAndSelect(
+            closeButton,
+            directions: [.up, .left, .right, .down],
+            pressesPerDirection: 8
+        )
+
+        XCTAssertTrue(
+            element("xbox-settings-screen", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        _ = focusXboxLibraryRefreshRow(in: app)
+        XCTAssertTrue(refreshRow.isEnabled)
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(
+            element("xboxLibraryRefreshProgress", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element("xboxLibraryRefreshCatalogStep", in: app).exists
+        )
+        XCTAssertFalse(element("xboxLibraryRefreshSummary", in: app).exists)
+    }
+
+    @MainActor
     func testLibraryRefreshShowsProviderOutcomesAndRetry() {
         let app = makeApp(extraArguments: ["--cloudnow-ui-library-refresh-partial"])
         app.launch()
@@ -950,6 +1096,50 @@ final class CloudNowUITests: XCTestCase {
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8))
         selectTab(settings, movingRight: 3)
+    }
+
+    @MainActor
+    private func openConfiguredXboxSettings(in app: XCUIApplication) {
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xbox.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xbox.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        selectTab(settings, movingRight: 3)
+        XCTAssertTrue(
+            element("xbox-settings-screen", in: app)
+                .waitForExistence(timeout: 3)
+        )
+    }
+
+    @MainActor
+    private func focusXboxLibraryRefreshRow(
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        let refreshRow = app.buttons["xbox-settings.refresh-library"]
+        XCTAssertTrue(refreshRow.waitForExistence(timeout: 5))
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: refreshRow
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [enabled], timeout: 5),
+            .completed
+        )
+        let focusedRefreshRow = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "hasFocus == true AND label CONTAINS %@",
+                "Refresh Library"
+            ))
+            .firstMatch
+        for _ in 0 ..< 80 where !focusedRefreshRow.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedRefreshRow.exists)
+        return refreshRow
     }
 
     @MainActor

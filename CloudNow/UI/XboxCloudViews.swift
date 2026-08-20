@@ -396,10 +396,7 @@ struct XboxMainTabView: View {
     }
 
     private func retryCatalog() {
-        Task {
-            await modeViewModel.catalogViewModel.reload()
-            await modeViewModel.reloadContentAccessAfterCatalogRefresh()
-        }
+        modeViewModel.startFreshLibraryRefresh()
     }
 }
 
@@ -416,6 +413,7 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
     let catalogViewModel: XboxCatalogViewModel
     private(set) var membershipTier: XboxMembershipTier?
     private(set) var contentAccessPhase: ContentAccessPhase = .idle
+    private(set) var libraryRefreshState: XboxLibraryRefreshState = .idle
     var streamSettings = XboxCloudStreamSettings() {
         didSet {
             scheduleSettingsSave(oldValue: oldValue)
@@ -451,6 +449,8 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
     @ObservationIgnored private var hasLoadedSettings = false
     @ObservationIgnored private var activationGeneration: UInt64 = 0
     @ObservationIgnored private var contentAccessGeneration: UInt64 = 0
+    @ObservationIgnored private var libraryRefreshGeneration: UInt64 = 0
+    @ObservationIgnored private var libraryRefreshTask: Task<Void, Never>?
 
     init(
         catalogViewModel: XboxCatalogViewModel,
@@ -570,6 +570,7 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
 
     func deactivateForInactiveProvider() async {
         activationGeneration &+= 1
+        cancelLibraryRefresh()
         cancelContentAccessRequest()
         await flushSettings()
         if let activeStreamController {
@@ -595,6 +596,7 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
 
     func prepareForPersistentDataClear() {
         activationGeneration &+= 1
+        cancelLibraryRefresh()
         cancelContentAccessRequest()
         settingsSaveTask?.cancel()
         settingsSaveTask = nil
@@ -620,6 +622,94 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         await loadContentAccess()
     }
 
+    var isLibraryRefreshRunning: Bool {
+        libraryRefreshState.isRunning
+    }
+
+    var canStartLibraryRefresh: Bool {
+        guard libraryRefreshState == .idle,
+              libraryRefreshTask == nil,
+              !catalogViewModel.isRefreshing
+        else {
+            return false
+        }
+        switch catalogViewModel.phase {
+        case .loaded, .failed:
+            return true
+        case .idle, .loading:
+            return false
+        }
+    }
+
+    var canPresentLibraryRefresh: Bool {
+        libraryRefreshState != .idle || canStartLibraryRefresh
+    }
+
+    var canStartFreshLibraryRefresh: Bool {
+        guard !libraryRefreshState.isRunning,
+              libraryRefreshTask == nil,
+              !catalogViewModel.isRefreshing
+        else {
+            return false
+        }
+        switch catalogViewModel.phase {
+        case .loaded, .failed:
+            return true
+        case .idle, .loading:
+            return false
+        }
+    }
+
+    func startLibraryRefresh() {
+        guard canStartLibraryRefresh else { return }
+        beginLibraryRefresh()
+    }
+
+    func startFreshLibraryRefresh() {
+        guard canStartFreshLibraryRefresh else { return }
+        if libraryRefreshState != .idle {
+            acknowledgeLibraryRefresh()
+        }
+        beginLibraryRefresh()
+    }
+
+    func retryLibraryRefresh() {
+        let canRetry = switch libraryRefreshState {
+        case .failed, .completed(_, accountAccessAvailable: false):
+            true
+        case .idle, .refreshingCatalog, .refreshingAccountAccess,
+             .completed(_, accountAccessAvailable: true):
+            false
+        }
+        guard canRetry, canStartFreshLibraryRefresh else {
+            return
+        }
+        beginLibraryRefresh()
+    }
+
+    func acknowledgeLibraryRefresh() {
+        guard !libraryRefreshState.isRunning else { return }
+        libraryRefreshGeneration &+= 1
+        libraryRefreshTask?.cancel()
+        libraryRefreshTask = nil
+        libraryRefreshState = .idle
+    }
+
+    func cancelLibraryRefresh() {
+        libraryRefreshGeneration &+= 1
+        libraryRefreshTask?.cancel()
+        libraryRefreshTask = nil
+        if libraryRefreshState.isRunning {
+            catalogViewModel.cancel()
+            cancelContentAccessRequest()
+        }
+        libraryRefreshState = .idle
+    }
+
+    func waitForLibraryRefresh() async {
+        await libraryRefreshTask?.value
+    }
+
     func networkTestTarget() async -> CloudNetworkTestTarget {
         do {
             return try await resolveNetworkTestTarget(account)
@@ -631,11 +721,51 @@ final class XboxCloudModeViewModel: CloudGamingProviderModeLifecycle {
         }
     }
 
-    func reloadContentAccessAfterCatalogRefresh() async {
+    @discardableResult
+    func reloadContentAccessAfterCatalogRefresh() async -> Bool {
         cancelContentAccessRequest()
         membershipTier = nil
         contentAccessPhase = .idle
         await loadContentAccess()
+        return contentAccessPhase == .loaded
+    }
+
+    private func beginLibraryRefresh() {
+        libraryRefreshGeneration &+= 1
+        let generation = libraryRefreshGeneration
+        libraryRefreshState = .refreshingCatalog
+        let catalogViewModel = catalogViewModel
+        libraryRefreshTask = Task { @MainActor [weak self] in
+            let outcome = await catalogViewModel.reload()
+            guard let self,
+                  libraryRefreshGeneration == generation,
+                  !Task.isCancelled
+            else {
+                return
+            }
+
+            switch outcome {
+            case let .refreshed(summary):
+                libraryRefreshState = .refreshingAccountAccess(summary)
+                let accountAccessAvailable = await reloadContentAccessAfterCatalogRefresh()
+                guard libraryRefreshGeneration == generation,
+                      !Task.isCancelled
+                else {
+                    return
+                }
+                libraryRefreshState = .completed(
+                    summary,
+                    accountAccessAvailable: accountAccessAvailable
+                )
+            case let .failed(retainedLastGoodCatalog):
+                libraryRefreshState = .failed(
+                    retainedLastGoodCatalog: retainedLastGoodCatalog
+                )
+            case .cancelled, .alreadyRunning:
+                libraryRefreshState = .idle
+            }
+            libraryRefreshTask = nil
+        }
     }
 
     private func scheduleSettingsSave(oldValue: XboxCloudStreamSettings) {
@@ -749,6 +879,74 @@ private struct XboxCloudResumableSessionPresentation {
 nonisolated enum XboxCatalogScope: Equatable, Sendable {
     case library
     case browse
+}
+
+nonisolated struct XboxLibraryRefreshSummary: Equatable, Sendable {
+    let addedGameCount: Int
+    let removedGameCount: Int
+    let playableGameCount: Int
+    let catalogGameCount: Int
+    let fetchedAt: Date
+}
+
+nonisolated enum XboxCatalogReloadOutcome: Equatable, Sendable {
+    case refreshed(XboxLibraryRefreshSummary)
+    case failed(retainedLastGoodCatalog: Bool)
+    case cancelled
+    case alreadyRunning
+}
+
+nonisolated enum XboxLibraryRefreshStage: Equatable, Sendable {
+    case idle
+    case refreshingCatalog
+    case refreshingAccountAccess
+    case completed
+    case failed
+}
+
+nonisolated enum XboxLibraryRefreshState: Equatable, Sendable {
+    case idle
+    case refreshingCatalog
+    case refreshingAccountAccess(XboxLibraryRefreshSummary)
+    case completed(
+        XboxLibraryRefreshSummary,
+        accountAccessAvailable: Bool
+    )
+    case failed(retainedLastGoodCatalog: Bool)
+
+    var stage: XboxLibraryRefreshStage {
+        switch self {
+        case .idle:
+            .idle
+        case .refreshingCatalog:
+            .refreshingCatalog
+        case .refreshingAccountAccess:
+            .refreshingAccountAccess
+        case .completed:
+            .completed
+        case .failed:
+            .failed
+        }
+    }
+
+    var summary: XboxLibraryRefreshSummary? {
+        switch self {
+        case let .refreshingAccountAccess(summary),
+             let .completed(summary, _):
+            summary
+        case .idle, .refreshingCatalog, .failed:
+            nil
+        }
+    }
+
+    var isRunning: Bool {
+        switch self {
+        case .refreshingCatalog, .refreshingAccountAccess:
+            true
+        case .idle, .completed, .failed:
+            false
+        }
+    }
 }
 
 nonisolated enum XboxCatalogCollectionFilter: CaseIterable, Hashable, Sendable {
@@ -1069,8 +1267,10 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         await load(forceRefresh: false)
     }
 
-    func reload() async {
-        guard !isRefreshing else { return }
+    @discardableResult
+    func reload() async -> XboxCatalogReloadOutcome {
+        guard !isRefreshing else { return .alreadyRunning }
+        let previousPlayableIDs = playableItemIDs
         refreshGeneration &+= 1
         let generation = refreshGeneration
         isRefreshing = true
@@ -1086,8 +1286,40 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         }
         showsRefreshWarning = false
         await loadActivityIfNeeded()
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return .cancelled }
         await load(forceRefresh: true)
+        guard refreshGeneration == generation,
+              !Task.isCancelled
+        else {
+            return .cancelled
+        }
+        guard phase == .loaded, !showsRefreshWarning else {
+            return .failed(retainedLastGoodCatalog: phase == .loaded)
+        }
+
+        let refreshedPlayableIDs = playableItemIDs
+        return .refreshed(
+            XboxLibraryRefreshSummary(
+                addedGameCount: refreshedPlayableIDs
+                    .subtracting(previousPlayableIDs).count,
+                removedGameCount: previousPlayableIDs
+                    .subtracting(refreshedPlayableIDs).count,
+                playableGameCount: refreshedPlayableIDs.count,
+                catalogGameCount: allItems.count,
+                fetchedAt: catalogLastUpdatedAt ?? now()
+            )
+        )
+    }
+
+    private var playableItemIDs: Set<String> {
+        Set(allItems.lazy.compactMap { item in
+            guard !item.isTouchOnlyOnTVOS,
+                  item.routes.contains(where: \.isPlayable)
+            else {
+                return nil
+            }
+            return item.id
+        })
     }
 
     private func load(forceRefresh: Bool) async {
@@ -2430,6 +2662,7 @@ nonisolated func nearestSurvivingCatalogItemID(
 private struct XboxCatalogFilterBar: View {
     let scope: XboxCatalogScope
 
+    @Environment(XboxCloudModeViewModel.self) private var modeViewModel
     @Environment(XboxCatalogViewModel.self) private var viewModel
     @State private var isShowingFilters = false
 
@@ -2545,7 +2778,7 @@ private struct XboxCatalogFilterBar: View {
             .accessibilityIdentifier("catalog-filter-button")
 
             Button {
-                Task { await viewModel.reload() }
+                modeViewModel.startFreshLibraryRefresh()
             } label: {
                 if compactRefresh {
                     Image(systemName: "arrow.clockwise")
@@ -2559,7 +2792,7 @@ private struct XboxCatalogFilterBar: View {
             }
             .buttonStyle(.bordered)
             .fixedSize(horizontal: true, vertical: false)
-            .disabled(viewModel.phase == .loading || viewModel.isRefreshing)
+            .disabled(!modeViewModel.canStartFreshLibraryRefresh)
             .accessibilityLabel(L10n.text("refresh_library"))
             .accessibilityIdentifier("reloadXboxCloudCatalogButton")
         }
@@ -3732,6 +3965,7 @@ private struct XboxSettingsView: View {
     @State private var dataDialog: CloudNowDataDialog?
     @State private var isPerformingDataAction = false
     @State private var showNetworkTest = false
+    @State private var showLibraryRefreshProgress = false
     let fallbackProvider: CloudGamingProvider?
 
     var body: some View {
@@ -3741,7 +3975,8 @@ private struct XboxSettingsView: View {
             Form {
                 CloudNowCloudServiceSection(
                     activeProvider: providerCoordinator.selectedProvider ?? .xboxCloudGaming,
-                    isInteractionDisabled: isBusy,
+                    isInteractionDisabled: isBusy
+                        || modeViewModel.isLibraryRefreshRunning,
                     onSelectProvider: switchProvider
                 )
 
@@ -3832,11 +4067,46 @@ private struct XboxSettingsView: View {
                     )
                 #endif
 
+                Section(L10n.text("library")) {
+                    Button {
+                        modeViewModel.startLibraryRefresh()
+                        showLibraryRefreshProgress = true
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label(
+                                    L10n.text("refresh_library"),
+                                    systemImage: "arrow.triangle.2.circlepath"
+                                )
+                                if let refreshStatusText {
+                                    Text(refreshStatusText)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .padding(.vertical, 8)
+                            Spacer()
+                            if modeViewModel.isLibraryRefreshRunning {
+                                ProgressView()
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                    }
+                    .disabled(
+                        isBusy || !modeViewModel.canPresentLibraryRefresh
+                    )
+                    .accessibilityIdentifier("xbox-settings.refresh-library")
+                    .accessibilityLabel(L10n.text("refresh_library"))
+                    .accessibilityValue(refreshStatusText ?? "")
+                }
+
                 CloudNowStorageAndDataSection(
                     isPerformingAction: isBusy,
                     clearCache: { dataDialog = .confirmClearCache },
                     resetAllData: { dataDialog = .confirmResetAllData }
                 )
+                .disabled(modeViewModel.isLibraryRefreshRunning)
 
                 Section(L10n.text("account")) {
                     LabeledContent(
@@ -3884,7 +4154,7 @@ private struct XboxSettingsView: View {
                             }
                         }
                     }
-                    .disabled(isBusy)
+                    .disabled(isBusy || modeViewModel.isLibraryRefreshRunning)
                     .accessibilityIdentifier("settings.sign-out")
                 }
             }
@@ -3896,6 +4166,10 @@ private struct XboxSettingsView: View {
                 CloudNetworkTestView {
                     await self.modeViewModel.networkTestTarget()
                 }
+            }
+            .fullScreenCover(isPresented: $showLibraryRefreshProgress) {
+                XboxLibraryRefreshProgressView()
+                    .environment(modeViewModel)
             }
             .alert(
                 dataDialog?.title ?? "",
@@ -3926,6 +4200,24 @@ private struct XboxSettingsView: View {
         isSigningOut
             || isPerformingDataAction
             || providerCoordinator.isProviderInteractionBlocked
+    }
+
+    private var refreshStatusText: String? {
+        switch modeViewModel.libraryRefreshState {
+        case .idle:
+            nil
+        case .refreshingCatalog, .refreshingAccountAccess:
+            L10n.text("provider_sync_syncing")
+        case let .completed(_, accountAccessAvailable):
+            switch accountAccessAvailable {
+            case true:
+                L10n.text("refresh_completed")
+            case false:
+                L10n.text("access_not_confirmed")
+            }
+        case .failed:
+            L10n.text("refresh_failed")
+        }
     }
 
     private var xboxCapabilities: CloudGamingProviderCapabilities {
@@ -4029,7 +4321,9 @@ private struct XboxSettingsView: View {
     }
 
     private func clearCache() {
+        guard !modeViewModel.isLibraryRefreshRunning else { return }
         isPerformingDataAction = true
+        modeViewModel.cancelLibraryRefresh()
         viewModel.prepareForCacheClear()
         Task {
             do {
@@ -4061,6 +4355,7 @@ private struct XboxSettingsView: View {
     private func switchProvider(to provider: CloudGamingProvider) {
         guard !isSigningOut,
               !isPerformingDataAction,
+              !modeViewModel.isLibraryRefreshRunning,
               let intent = providerCoordinator.beginProviderSwitch(to: provider)
         else {
             return
@@ -4076,7 +4371,9 @@ private struct XboxSettingsView: View {
     }
 
     private func resetAllData() {
-        guard let mutation = providerCoordinator.beginCredentialMutation() else {
+        guard !modeViewModel.isLibraryRefreshRunning,
+              let mutation = providerCoordinator.beginCredentialMutation()
+        else {
             return
         }
         isPerformingDataAction = true
@@ -4140,7 +4437,9 @@ private struct XboxSettingsView: View {
     }
 
     private func signOut() {
-        guard let mutation = providerCoordinator.beginCredentialMutation() else {
+        guard !modeViewModel.isLibraryRefreshRunning,
+              let mutation = providerCoordinator.beginCredentialMutation()
+        else {
             return
         }
         isSigningOut = true

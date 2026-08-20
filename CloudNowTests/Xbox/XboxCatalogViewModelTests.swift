@@ -1773,6 +1773,65 @@ struct XboxCatalogViewModelTests {
     }
 
     @MainActor
+    @Test("Explicit reload returns a typed playable-library summary")
+    func reloadReturnsTypedLibrarySummary() async {
+        let retained = makeAccessItem(
+            id: "retained",
+            accessKinds: [.standard]
+        )
+        let removed = makeAccessItem(
+            id: "removed",
+            accessKinds: [.standard]
+        )
+        let added = makeAccessItem(
+            id: "added",
+            accessKinds: [.freeWithAds]
+        )
+        let locked = makeAccessItem(
+            id: "locked",
+            accessKinds: [.standard],
+            availability: .requiresEligibility,
+            playabilityReason: .entitlementRequired
+        )
+        let cachedSnapshot = XboxCatalogSnapshot(
+            items: [retained, removed],
+            fetchedAt: fetchedAt
+        )
+        let refreshedAt = fetchedAt.addingTimeInterval(60)
+        let refreshedSnapshot = XboxCatalogSnapshot(
+            items: [retained, added, locked],
+            fetchedAt: refreshedAt
+        )
+        let cache = XboxCatalogMemoryCache()
+        let key = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        await cache.store(cachedSnapshot, for: key)
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(snapshot: refreshedSnapshot),
+            account: account,
+            cache: cache,
+            now: { fetchedAt }
+        )
+        await viewModel.load()
+
+        let outcome = await viewModel.reload()
+
+        guard case let .refreshed(summary) = outcome else {
+            Issue.record("Expected a refreshed catalog outcome, got \(outcome)")
+            return
+        }
+        #expect(summary.addedGameCount == 1)
+        #expect(summary.removedGameCount == 1)
+        #expect(summary.playableGameCount == 2)
+        #expect(summary.catalogGameCount == 3)
+        #expect(summary.fetchedAt == refreshedAt)
+        #expect(await cache.snapshot(for: key) == refreshedSnapshot)
+    }
+
+    @MainActor
     @Test("Explicit reload exposes progress, keeps content, and coalesces taps")
     func reloadProgressKeepsLastGoodCatalog() async {
         let cachedItems = makeItems(count: 2)
@@ -1814,12 +1873,13 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems == cachedItems)
         #expect(viewModel.phase == .loaded)
 
-        await viewModel.reload()
+        let duplicateOutcome = await viewModel.reload()
 
+        #expect(duplicateOutcome == .alreadyRunning)
         #expect(await client.recordedRequests().count == 1)
 
         await client.resolvePendingResponse()
-        await reloadTask.value
+        _ = await reloadTask.value
 
         #expect(!viewModel.isRefreshing)
         #expect(viewModel.visibleItems == refreshedItems)
@@ -1863,8 +1923,9 @@ struct XboxCatalogViewModelTests {
         #expect(viewModel.visibleItems.isEmpty)
 
         await client.resolvePendingResponse()
-        await reloadTask.value
+        let outcome = await reloadTask.value
 
+        #expect(outcome == .cancelled)
         #expect(!viewModel.isRefreshing)
         #expect(viewModel.phase == .idle)
         #expect(viewModel.visibleItems.isEmpty)
@@ -1931,8 +1992,9 @@ struct XboxCatalogViewModelTests {
         )
 
         await viewModel.load()
-        await viewModel.reload()
+        let outcome = await viewModel.reload()
 
+        #expect(outcome == .failed(retainedLastGoodCatalog: true))
         #expect(viewModel.visibleItems == items)
         #expect(viewModel.phase == .loaded)
         #expect(viewModel.showsRefreshWarning)
@@ -2216,6 +2278,372 @@ struct XboxCatalogViewModelTests {
         #expect(modeViewModel.contentAccessPhase == .loaded)
         #expect(modeViewModel.membershipTier == .pcGamePass)
         #expect(await contentAccess.recordedRequests().count == 2)
+    }
+
+    @MainActor
+    @Test("Library refresh reports catalog and account-access progress")
+    func libraryRefreshReportsProgressAndCompletion() async {
+        let fixture = makeLibraryRefreshFixture()
+        let catalogClient = XboxCatalogClientProbe(
+            snapshot: fixture.refreshedSnapshot,
+            suspendsResponse: true
+        )
+        let contentAccess = XboxResolvableContentAccessProbe(
+            snapshot: XboxContentAccessSnapshot(
+                membershipTier: .ultimate,
+                fetchedAt: fixture.summary.fetchedAt
+            )
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: catalogClient,
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        await catalogClient.waitForRequestCount(1)
+
+        #expect(modeViewModel.libraryRefreshState.stage == .refreshingCatalog)
+        #expect(modeViewModel.libraryRefreshState.summary == nil)
+        #expect(modeViewModel.libraryRefreshState.isRunning)
+
+        await catalogClient.resolvePendingResponse()
+        await contentAccess.waitUntilStarted()
+
+        #expect(
+            modeViewModel.libraryRefreshState.stage
+                == .refreshingAccountAccess
+        )
+        #expect(modeViewModel.libraryRefreshState.summary == fixture.summary)
+        #expect(modeViewModel.libraryRefreshState.isRunning)
+
+        await contentAccess.resolve()
+        await modeViewModel.waitForLibraryRefresh()
+
+        guard case let .completed(summary, accountAccessAvailable) =
+            modeViewModel.libraryRefreshState
+        else {
+            Issue.record(
+                "Expected a completed library refresh, got \(modeViewModel.libraryRefreshState)"
+            )
+            return
+        }
+        #expect(summary == fixture.summary)
+        #expect(accountAccessAvailable)
+        #expect(!modeViewModel.libraryRefreshState.isRunning)
+        #expect(await contentAccess.recordedRequestCount() == 1)
+    }
+
+    @MainActor
+    @Test("Repeated library refresh starts coalesce into one operation")
+    func repeatedLibraryRefreshStartsAreCoalesced() async {
+        let fixture = makeLibraryRefreshFixture()
+        let catalogClient = XboxCatalogClientProbe(
+            snapshot: fixture.refreshedSnapshot,
+            suspendsResponse: true
+        )
+        let contentAccess = XboxContentAccessClientProbe(
+            result: .success(
+                XboxContentAccessSnapshot(
+                    membershipTier: .ultimate,
+                    fetchedAt: fixture.summary.fetchedAt
+                )
+            )
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: catalogClient,
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        modeViewModel.startLibraryRefresh()
+        await catalogClient.waitForRequestCount(1)
+
+        #expect(modeViewModel.libraryRefreshState.isRunning)
+        #expect(await catalogClient.recordedRequests().count == 1)
+
+        await catalogClient.resolvePendingResponse()
+        await modeViewModel.waitForLibraryRefresh()
+
+        #expect(modeViewModel.libraryRefreshState.stage == .completed)
+        #expect(modeViewModel.libraryRefreshState.summary == fixture.summary)
+        #expect(await catalogClient.recordedRequests().count == 1)
+        #expect(await contentAccess.recordedRequests().count == 1)
+    }
+
+    @MainActor
+    @Test("Library refresh retains cached content and succeeds on retry")
+    func libraryRefreshRetainsCachedContentThenRetries() async {
+        let fixture = makeLibraryRefreshFixture()
+        let catalogClient = XboxCatalogClientProbe(
+            snapshot: fixture.refreshedSnapshot,
+            failsResponse: true
+        )
+        let contentAccess = XboxContentAccessClientProbe(
+            result: .success(
+                XboxContentAccessSnapshot(
+                    membershipTier: .ultimate,
+                    fetchedAt: fixture.summary.fetchedAt
+                )
+            )
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: catalogClient,
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        await modeViewModel.waitForLibraryRefresh()
+
+        #expect(
+            modeViewModel.libraryRefreshState
+                == .failed(retainedLastGoodCatalog: true)
+        )
+        #expect(modeViewModel.catalogViewModel.phase == .loaded)
+        #expect(modeViewModel.catalogViewModel.showsRefreshWarning)
+        #expect(
+            Set(modeViewModel.catalogViewModel.visibleItems.map(\.id))
+                == Set(fixture.cachedSnapshot.items.map(\.id))
+        )
+        #expect(await contentAccess.recordedRequests().isEmpty)
+
+        await catalogClient.setFailsResponse(false)
+        modeViewModel.retryLibraryRefresh()
+        await modeViewModel.waitForLibraryRefresh()
+
+        guard case let .completed(summary, accountAccessAvailable) =
+            modeViewModel.libraryRefreshState
+        else {
+            Issue.record(
+                "Expected a completed retry, got \(modeViewModel.libraryRefreshState)"
+            )
+            return
+        }
+        #expect(summary == fixture.summary)
+        #expect(accountAccessAvailable)
+        #expect(!modeViewModel.catalogViewModel.showsRefreshWarning)
+        #expect(await catalogClient.recordedRequests().count == 2)
+        #expect(await contentAccess.recordedRequests().count == 1)
+    }
+
+    @MainActor
+    @Test("Partial library refresh can retry account access")
+    func partialLibraryRefreshCanRetry() async {
+        let fixture = makeLibraryRefreshFixture()
+        let catalogClient = XboxCatalogClientProbe(
+            snapshot: fixture.refreshedSnapshot
+        )
+        let contentAccess = XboxContentAccessClientProbe(
+            result: .failure(.injected)
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: catalogClient,
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        await modeViewModel.waitForLibraryRefresh()
+
+        #expect(
+            modeViewModel.libraryRefreshState
+                == .completed(fixture.summary, accountAccessAvailable: false)
+        )
+
+        await contentAccess.setResult(
+            .success(
+                XboxContentAccessSnapshot(
+                    membershipTier: .ultimate,
+                    fetchedAt: fixture.summary.fetchedAt
+                )
+            )
+        )
+        modeViewModel.retryLibraryRefresh()
+        await modeViewModel.waitForLibraryRefresh()
+
+        guard case let .completed(summary, accountAccessAvailable) =
+            modeViewModel.libraryRefreshState
+        else {
+            Issue.record(
+                "Expected a completed retry, got \(modeViewModel.libraryRefreshState)"
+            )
+            return
+        }
+        #expect(summary.addedGameCount == 0)
+        #expect(summary.removedGameCount == 0)
+        #expect(summary.playableGameCount == fixture.summary.playableGameCount)
+        #expect(summary.catalogGameCount == fixture.summary.catalogGameCount)
+        #expect(summary.fetchedAt == fixture.summary.fetchedAt)
+        #expect(accountAccessAvailable)
+        #expect(await catalogClient.recordedRequests().count == 2)
+        #expect(await contentAccess.recordedRequests().count == 2)
+    }
+
+    @MainActor
+    @Test("Acknowledging a terminal library refresh restores idle state")
+    func libraryRefreshTerminalAcknowledgement() async {
+        let fixture = makeLibraryRefreshFixture()
+        let contentAccess = XboxContentAccessClientProbe(
+            result: .success(
+                XboxContentAccessSnapshot(
+                    membershipTier: .ultimate,
+                    fetchedAt: fixture.summary.fetchedAt
+                )
+            )
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: XboxCatalogClientProbe(
+                snapshot: fixture.refreshedSnapshot
+            ),
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        await modeViewModel.waitForLibraryRefresh()
+
+        #expect(modeViewModel.libraryRefreshState.stage == .completed)
+        #expect(modeViewModel.libraryRefreshState.summary == fixture.summary)
+
+        modeViewModel.acknowledgeLibraryRefresh()
+
+        #expect(modeViewModel.libraryRefreshState == .idle)
+        #expect(modeViewModel.libraryRefreshState.summary == nil)
+        #expect(!modeViewModel.libraryRefreshState.isRunning)
+        #expect(modeViewModel.canStartLibraryRefresh)
+    }
+
+    @MainActor
+    @Test("Cancelled library refresh cannot publish a late completion")
+    func cancelledLibraryRefreshRejectsLateCompletion() async {
+        let fixture = makeLibraryRefreshFixture()
+        let catalogClient = XboxCatalogClientProbe(
+            snapshot: fixture.refreshedSnapshot,
+            suspendsResponse: true
+        )
+        let contentAccess = XboxContentAccessClientProbe(
+            result: .success(
+                XboxContentAccessSnapshot(
+                    membershipTier: .ultimate,
+                    fetchedAt: fixture.summary.fetchedAt
+                )
+            )
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: catalogClient,
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        await catalogClient.waitForRequestCount(1)
+        let refreshWaiter = Task { @MainActor in
+            await modeViewModel.waitForLibraryRefresh()
+        }
+        await Task.yield()
+
+        modeViewModel.cancelLibraryRefresh()
+
+        #expect(modeViewModel.libraryRefreshState == .idle)
+        #expect(!modeViewModel.libraryRefreshState.isRunning)
+
+        await catalogClient.resolvePendingResponse()
+        await refreshWaiter.value
+
+        #expect(modeViewModel.libraryRefreshState == .idle)
+        #expect(modeViewModel.libraryRefreshState.summary == nil)
+        #expect(await contentAccess.recordedRequests().isEmpty)
+    }
+
+    @MainActor
+    @Test("Cancellation during account access rejects a late completion")
+    func accountAccessCancellationRejectsLateCompletion() async {
+        let fixture = makeLibraryRefreshFixture()
+        let contentAccess = XboxResolvableContentAccessProbe(
+            snapshot: XboxContentAccessSnapshot(
+                membershipTier: .ultimate,
+                fetchedAt: fixture.summary.fetchedAt
+            )
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: XboxCatalogClientProbe(
+                snapshot: fixture.refreshedSnapshot
+            ),
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        await contentAccess.waitUntilStarted()
+
+        #expect(
+            modeViewModel.libraryRefreshState
+                == .refreshingAccountAccess(fixture.summary)
+        )
+        let refreshWaiter = Task { @MainActor in
+            await modeViewModel.waitForLibraryRefresh()
+        }
+        await Task.yield()
+
+        modeViewModel.cancelLibraryRefresh()
+        await contentAccess.resolve()
+        await refreshWaiter.value
+
+        #expect(modeViewModel.libraryRefreshState == .idle)
+        #expect(modeViewModel.libraryRefreshState.summary == nil)
+        #expect(modeViewModel.membershipTier == nil)
+        #expect(modeViewModel.contentAccessPhase != .loaded)
+        #expect(await contentAccess.recordedRequestCount() == 1)
+    }
+
+    @MainActor
+    @Test("Provider deactivation cancels and fences a library refresh")
+    func providerDeactivationCancelsLibraryRefresh() async {
+        let fixture = makeLibraryRefreshFixture()
+        let catalogClient = XboxCatalogClientProbe(
+            snapshot: fixture.refreshedSnapshot,
+            suspendsResponse: true
+        )
+        let contentAccess = XboxContentAccessClientProbe(
+            result: .success(
+                XboxContentAccessSnapshot(
+                    membershipTier: .ultimate,
+                    fetchedAt: fixture.summary.fetchedAt
+                )
+            )
+        )
+        let modeViewModel = await makeLibraryRefreshMode(
+            cachedSnapshot: fixture.cachedSnapshot,
+            catalogClient: catalogClient,
+            contentAccessClient: contentAccess
+        )
+
+        modeViewModel.startLibraryRefresh()
+        await catalogClient.waitForRequestCount(1)
+        let refreshWaiter = Task { @MainActor in
+            await modeViewModel.waitForLibraryRefresh()
+        }
+        await Task.yield()
+
+        await modeViewModel.deactivateForInactiveProvider()
+
+        #expect(modeViewModel.libraryRefreshState == .idle)
+        #expect(modeViewModel.contentAccessPhase == .idle)
+        #expect(modeViewModel.membershipTier == nil)
+        #expect(modeViewModel.catalogViewModel.phase == .idle)
+        #expect(modeViewModel.catalogViewModel.visibleItems.isEmpty)
+        #expect(!modeViewModel.catalogViewModel.isRefreshing)
+
+        await catalogClient.resolvePendingResponse()
+        await refreshWaiter.value
+
+        #expect(modeViewModel.libraryRefreshState == .idle)
+        #expect(modeViewModel.catalogViewModel.phase == .idle)
+        #expect(modeViewModel.catalogViewModel.visibleItems.isEmpty)
+        #expect(await contentAccess.recordedRequests().isEmpty)
+        #expect(catalogClient.cancellationCount >= 1)
     }
 
     @MainActor
@@ -2521,6 +2949,77 @@ struct XboxCatalogViewModelTests {
         )
     }
 
+    private func makeLibraryRefreshFixture() -> (
+        cachedSnapshot: XboxCatalogSnapshot,
+        refreshedSnapshot: XboxCatalogSnapshot,
+        summary: XboxLibraryRefreshSummary
+    ) {
+        let retained = makeAccessItem(
+            id: "refresh-retained",
+            accessKinds: [.standard]
+        )
+        let removed = makeAccessItem(
+            id: "refresh-removed",
+            accessKinds: [.standard]
+        )
+        let added = makeAccessItem(
+            id: "refresh-added",
+            accessKinds: [.freeWithAds]
+        )
+        let locked = makeAccessItem(
+            id: "refresh-locked",
+            accessKinds: [.standard],
+            availability: .requiresEligibility,
+            playabilityReason: .entitlementRequired
+        )
+        let refreshedAt = fetchedAt.addingTimeInterval(60)
+        return (
+            cachedSnapshot: XboxCatalogSnapshot(
+                items: [retained, removed],
+                fetchedAt: fetchedAt
+            ),
+            refreshedSnapshot: XboxCatalogSnapshot(
+                items: [retained, added, locked],
+                fetchedAt: refreshedAt
+            ),
+            summary: XboxLibraryRefreshSummary(
+                addedGameCount: 1,
+                removedGameCount: 1,
+                playableGameCount: 2,
+                catalogGameCount: 3,
+                fetchedAt: refreshedAt
+            )
+        )
+    }
+
+    @MainActor
+    private func makeLibraryRefreshMode(
+        cachedSnapshot: XboxCatalogSnapshot,
+        catalogClient: any XboxCatalogClient,
+        contentAccessClient: any XboxContentAccessProviding
+    ) async -> XboxCloudModeViewModel {
+        let cache = XboxCatalogMemoryCache()
+        let cacheKey = XboxCatalogCacheKey(
+            accountAuthorizationIdentifier: account.activityScopeIdentifier,
+            localeIdentifier: L10n.localeCode,
+            market: Locale.current.region?.identifier
+        )
+        await cache.store(cachedSnapshot, for: cacheKey)
+        let catalogViewModel = XboxCatalogViewModel(
+            client: catalogClient,
+            account: account,
+            cache: cache,
+            now: { fetchedAt }
+        )
+        await catalogViewModel.load()
+        return XboxCloudModeViewModel(
+            catalogViewModel: catalogViewModel,
+            account: account,
+            makeContentAccessClient: { contentAccessClient },
+            makeStreamController: makeStreamController
+        )
+    }
+
     @MainActor
     private func makeStreamController(
         transferToken: @escaping @Sendable () async throws -> String
@@ -2784,6 +3283,51 @@ private actor XboxContentAccessClientProbe: XboxContentAccessProviding {
     }
 }
 
+private actor XboxResolvableContentAccessProbe: XboxContentAccessProviding {
+    private let snapshot: XboxContentAccessSnapshot
+    private var requestCount = 0
+    private var pendingResponse: CheckedContinuation<
+        XboxContentAccessSnapshot,
+        Never
+    >?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(snapshot: XboxContentAccessSnapshot) {
+        self.snapshot = snapshot
+    }
+
+    func fetchContentAccess(
+        for _: XboxCloudAuthorizedAccount,
+        market _: String,
+        offeringID _: String
+    ) async -> XboxContentAccessSnapshot {
+        requestCount += 1
+        let waiters = startWaiters
+        startWaiters.removeAll(keepingCapacity: false)
+        waiters.forEach { $0.resume() }
+        return await withCheckedContinuation { continuation in
+            pendingResponse = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard requestCount == 0 else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func resolve() {
+        let continuation = pendingResponse
+        pendingResponse = nil
+        continuation?.resume(returning: snapshot)
+    }
+
+    func recordedRequestCount() -> Int {
+        requestCount
+    }
+}
+
 private actor XboxCancellationIgnoringAccessProbe: XboxContentAccessProviding {
     private let snapshot: XboxContentAccessSnapshot
     private var cancellationCount = 0
@@ -2866,7 +3410,7 @@ private actor XboxCatalogClientProbe: XboxCatalogClient {
     private nonisolated let cancellationProbe = XboxCatalogCancellationProbe()
     private let snapshot: XboxCatalogSnapshot
     private let suspendsResponse: Bool
-    private let failsResponse: Bool
+    private var failsResponse: Bool
     private let failsDetailResponse: Bool
     private var requests: [XboxCatalogRequest] = []
     private var detailRequestCount = 0
@@ -2940,6 +3484,10 @@ private actor XboxCatalogClientProbe: XboxCatalogClient {
 
     func recordedRefreshAccounts() -> [XboxCloudAuthorizedAccount] {
         refreshAccounts
+    }
+
+    func setFailsResponse(_ failsResponse: Bool) {
+        self.failsResponse = failsResponse
     }
 
     func waitForRequestCount(_ count: Int) async {

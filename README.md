@@ -115,6 +115,11 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
   access, region, input, time-limit, or service reasons. Access and playability
   filters select the same route that a card opens; an ad-supported route is
   playable only when Microsoft confirms it.
+- **Observable library refresh** — Xbox refresh actions share one cancellable
+  catalog-and-account-access operation. Settings shows live step status,
+  playable and catalog totals, additions and removals, completion time, Retry,
+  and retained-cache warnings; closing the progress screen does not cancel the
+  refresh.
 - **Production 1440p path** — the validated Microsoft-web compatibility profile
   requests the account's Max Stream Quality. `Best` sends `1440` when that
   ceiling is available (and while optional access metadata is still unknown),
@@ -422,9 +427,9 @@ Some behavior remains hardware- or Apple-framework-bound. The nearest automated 
 
 CloudNow is one app target, not a `CloudGamingCore` framework. Its boundaries are
 enforced through narrow provider-neutral contracts, lazy provider graphs, tests,
-and a CI manifest that freezes the established GFN production sources. Shared
-real-time state has explicit actor, lock, or serial-queue ownership; callbacks
-from stale peer, signaling, and data-channel generations are rejected.
+and deterministic provider regression coverage. Shared real-time state has
+explicit actor, lock, or serial-queue ownership; callbacks from stale peer,
+signaling, and data-channel generations are rejected.
 
 ### Ownership boundaries
 
@@ -432,7 +437,7 @@ from stale peer, signaling, and data-channel generations are rejected.
 |---|---|---|---|
 | App shell | Provider selection, tabs, focus, dialogs, lifecycle | GFN Home/Library/Store/Settings and launch presentation | Xbox Home/Library/Browse/Settings and launch presentation |
 | Account and storage | Provider registry, Keychain abstraction, scoped reset/cache rules | OAuth state, cloud-library caches, GFN settings | Microsoft OAuth/Xbox Live/XSTS state, Xbox catalog and settings |
-| Catalog | Card primitives, artwork pipeline, Favorites presentation | Browse, Store, connected-library refresh, feature filters | Offering/access discovery, playable Library projection, full-catalog Browse projection, route-correlated filters |
+| Catalog | Card primitives, artwork pipeline, Favorites presentation | Browse, Store, connected-library refresh, feature filters | Offering/access discovery, playable Library projection, full-catalog Browse projection, route-correlated filters, catalog/account-access refresh status |
 | Session safety | One-server-session and one-local-peer coordinator | CloudMatch lease and `SessionOrchestrator` | Xbox allocation lease, Leave/Continue/End lifecycle |
 | RTC/media primitives | One process-level `CloudRTCRuntime` factory, audio device, passive renderer, decoded-format inspection | Server-offer answer, GFN SDP policy, H.265 decoder policy, NVST media behavior | Client offer/answer, service overrides, Xbox channel/readiness policy |
 | Input | Device observation, responder surface, and controller haptics | GFN v2/v3 mapping, input, and text protocol | Xbox mapping, legacy/modern input, channel handshake, feedback, rumble |
@@ -572,7 +577,9 @@ CloudNow/
 │   ├── SettingsView.swift             GFN account, stream, input, server, diagnostic, and reset controls
 │   ├── StreamView.swift               GFN session orchestration, player, pause, Leave, and End
 │   ├── XboxCloudViews.swift           Xbox Home/Library/Browse/Settings, catalog projections,
-│   │                                  route-correlated filters, and launch flow
+│   │                                  route-correlated filters, refresh coordination, and launch flow
+│   ├── XboxLibraryRefreshProgressView.swift
+│   │                                  Xbox catalog/access progress, summary, warning, and Retry UI
 │   ├── XboxCatalogDetailView.swift    Xbox detail/access/input presentation
 │   ├── XboxCloudPlayerView.swift      Xbox full-screen player, HUD, pause, lifecycle, and session lease
 │   └── XboxVideoSurfaceView.swift     Xbox surface adapter and Simulator keyboard/pointer bridge

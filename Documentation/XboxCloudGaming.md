@@ -119,13 +119,18 @@ localized compatibility explanation.
    route, and that same route is opened from the resulting card. An
    ad-supported route appears as playable in Library or Home only when Microsoft
    confirms that route; otherwise it remains an unavailable Browse result.
-7. A top-left provider dropdown switches between the two modes. There is no
+7. Refresh Library in Xbox Settings, Home, Library, and Browse uses one
+   Xbox-owned operation. Its full-screen status shows catalog and account-access
+   steps, playable and total catalog counts, additions and removals, completion
+   time, Retry, and retained-cache warnings. Closing that screen does not cancel
+   an active refresh, and opening it again resumes the same status.
+8. A top-left provider dropdown switches between the two modes. There is no
    merged home screen, catalog, settings form, or provider-branded borrowed UI.
-8. A global coordinator permits one cloud-server session and one local WebRTC
+9. A global coordinator permits one cloud-server session and one local WebRTC
    peer. Switching with an active session offers Leave or End; a parked session
    must be ended before the other provider can start. A failed server deletion
    keeps the lease quarantined instead of silently allowing a second session.
-9. Xbox Play allocates one session, shows shared queue/provisioning/connection
+10. Xbox Play allocates one session, shows shared queue/provisioning/connection
    states, then presents video in CloudNow's full-screen player. Leave retains a
    resumable allocation only until its service expiry. Continue reuses that
    allocation; explicit End deletes it and performs local teardown.
@@ -290,6 +295,10 @@ Xbox must preserve CloudNow's established performance invariants:
   snapshot while an expired entry is revalidated; refresh failure leaves that
   snapshot visibly stale rather than treating it as fresh. Artwork is HTTPS,
   credential-free, downsampled, and handled by the shared bounded pipeline.
+- Explicit refresh never evicts the last-good snapshot first. Its generation-
+  fenced task coordinates catalog and account-access requests, rejects late
+  completion after provider teardown, coalesces duplicate starts, and reports
+  failure without inventing a successful account-access result.
 - Session allocation, polling, keepalive, candidate lists, response bodies,
   controller slots, queued input, retries, and caches all have explicit bounds.
 - High-frequency controller/media work stays outside SwiftUI observation and the
@@ -357,23 +366,27 @@ delivered-media evidence before changing one Xbox-owned variable at a time.
    delivered H.264 SDR8 video and Opus stereo audio, cancellation, Leave,
    Continue without a second allocation, reconnect after a temporary network
    interruption, and explicit End.
-5. Test an Xbox controller, a PlayStation controller, keyboard and mouse,
+5. In Xbox Settings, start Refresh Library and verify both progress steps,
+   completion totals, additions/removals, and timestamp. Close it while running,
+   reopen the same operation, then test failure and Retry while confirming the
+   last-good Library remains available.
+6. Test an Xbox controller, a PlayStation controller, keyboard and mouse,
    Menu/View/Share, independent rumble, and Escape-to-pause. Record additional
    controller behavior as a compatibility observation rather than a confirmed
    service slot count.
-6. Enable the provider-specific microphone setting, grant permission, and verify
+7. Enable the provider-specific microphone setting, grant permission, and verify
    AirPods and Continuity Microphone hot-plug, loss, and automatic restoration.
-7. Switch to GeForce NOW with the dropdown, confirm its existing Library and
+8. Switch to GeForce NOW with the dropdown, confirm its existing Library and
    Store remain unchanged, then switch back and verify neither account requires
    another login.
-8. Background and foreground CloudNow once in each mode. Confirm the inactive
+9. Background and foreground CloudNow once in each mode. Confirm the inactive
    provider performs no refresh, Xbox leaves and can continue the same unexpired
    session, and End Session permits a later launch to create a fresh session.
-9. Run the established GeForce NOW login, catalog, Library, Store, game-detail,
+10. Run the established GeForce NOW login, catalog, Library, Store, game-detail,
    and Settings smoke tests. Confirm the same account, tier-neutral copy,
    filters, focus behavior, saved settings, and launch flow as the frozen
    pre-quality baseline.
-10. On a GeForce NOW title/account/server combination that exposes them, verify
+11. On a GeForce NOW title/account/server combination that exposes them, verify
     the existing H.265 Main10, 5.1 output, microphone permission, AirPods or
     Continuity Microphone hot-swap, controller input/rumble, and pause HUD paths.
     Confirm unavailable media modes continue to use the established GFN
