@@ -162,7 +162,9 @@ struct XboxMainTabView: View {
     @State private var modeViewModel: XboxCloudModeViewModel
     @State private var playbackRequest: XboxCloudPlaybackRequest?
     @State private var pendingPlaybackFocusRestoreID: String?
+    @State private var pendingPlaybackSourceTab: XboxAppTab?
     @State private var libraryPlaybackFocusRestoreID: String?
+    @State private var browsePlaybackFocusRestoreID: String?
     @State private var selectedTab: XboxAppTab = .home
     @State private var controllerNavigation = UIControllerNavigationCoordinator()
     @State private var inputDeviceMonitor: CloudInputDeviceMonitor
@@ -224,7 +226,7 @@ struct XboxMainTabView: View {
                     phase: modeViewModel.catalogViewModel.phase,
                     showsRefreshWarning: modeViewModel.catalogViewModel.showsRefreshWarning,
                     resumableSession: resumableSession,
-                    onBrowse: { selectedTab = .library },
+                    onBrowse: { selectedTab = .browse },
                     onRetry: retryCatalog,
                     onContinue: continuePlaying,
                     onPlay: play,
@@ -234,11 +236,21 @@ struct XboxMainTabView: View {
             }
             Tab(L10n.text("library"), systemImage: "rectangle.stack.fill", value: XboxAppTab.library) {
                 XboxCatalogGrid(
+                    scope: .library,
                     onRetry: retryCatalog,
                     onPlay: play,
                     playbackFocusRestoreID: $libraryPlaybackFocusRestoreID
                 )
                 .accessibilityIdentifier("xbox-library-screen")
+            }
+            Tab(L10n.text("browse"), systemImage: "square.grid.2x2.fill", value: XboxAppTab.browse) {
+                XboxCatalogGrid(
+                    scope: .browse,
+                    onRetry: retryCatalog,
+                    onPlay: play,
+                    playbackFocusRestoreID: $browsePlaybackFocusRestoreID
+                )
+                .accessibilityIdentifier("xbox-browse-screen")
             }
             Tab(L10n.text("settings"), systemImage: "gearshape.fill", value: XboxAppTab.settings) {
                 XboxSettingsView(fallbackProvider: fallbackProvider)
@@ -271,6 +283,10 @@ struct XboxMainTabView: View {
             } else {
                 MemoryLifecycleCoordinator.shared.streamWillOpen()
             }
+        }
+        .onChange(of: selectedTab) { _, tab in
+            guard let scope = tab.catalogScope else { return }
+            modeViewModel.catalogViewModel.setCatalogScope(scope)
         }
         .fullScreenCover(
             item: $playbackRequest,
@@ -310,6 +326,7 @@ struct XboxMainTabView: View {
         }
 
         pendingPlaybackFocusRestoreID = item.id
+        pendingPlaybackSourceTab = selectedTab
         let settings = modeViewModel.streamCapabilities.normalized(
             modeViewModel.streamSettings
         )
@@ -352,6 +369,7 @@ struct XboxMainTabView: View {
     ) {
         guard session.hasCompatibleInput else { return }
         pendingPlaybackFocusRestoreID = session.item.id
+        pendingPlaybackSourceTab = selectedTab
         playbackRequest = XboxCloudPlaybackRequest(
             item: session.item,
             route: session.route,
@@ -362,9 +380,19 @@ struct XboxMainTabView: View {
     }
 
     private func restorePlaybackFocus() {
-        defer { pendingPlaybackFocusRestoreID = nil }
-        guard selectedTab == .library else { return }
-        libraryPlaybackFocusRestoreID = pendingPlaybackFocusRestoreID
+        defer {
+            pendingPlaybackFocusRestoreID = nil
+            pendingPlaybackSourceTab = nil
+        }
+        guard selectedTab == pendingPlaybackSourceTab else { return }
+        switch pendingPlaybackSourceTab {
+        case .library:
+            libraryPlaybackFocusRestoreID = pendingPlaybackFocusRestoreID
+        case .browse:
+            browsePlaybackFocusRestoreID = pendingPlaybackFocusRestoreID
+        case .home, .settings, nil:
+            break
+        }
     }
 
     private func retryCatalog() {
@@ -718,6 +746,11 @@ private struct XboxCloudResumableSessionPresentation {
     let hasCompatibleInput: Bool
 }
 
+nonisolated enum XboxCatalogScope: Equatable, Sendable {
+    case library
+    case browse
+}
+
 nonisolated enum XboxCatalogCollectionFilter: CaseIterable, Hashable, Sendable {
     case favorites
 }
@@ -839,6 +872,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
 
     private(set) var visibleItems: [XboxCatalogItem] = []
     private(set) var carouselItems: [XboxCatalogItem] = []
+    private(set) var selectedRoutesByItemID: [String: XboxCloudTitleRoute] = [:]
     private(set) var favoriteItems: [XboxCatalogItem] = []
     private(set) var recentlyPlayedItems: [XboxCatalogItem] = []
     private(set) var favoriteIDs: Set<String> = []
@@ -853,33 +887,110 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     private(set) var totalItemCount = 0
     private(set) var browseFilterBaseCount = 0
     private(set) var filteredItemCount = 0
-    var searchText = "" {
-        didSet {
-            guard searchText != oldValue else { return }
-            resetBrowsePagination(debouncesSearch: true)
-        }
+    private(set) var catalogScope: XboxCatalogScope = .browse
+    private(set) var presentedCatalogScope: XboxCatalogScope?
+    private var librarySearchText = ""
+    private var browseSearchText = ""
+    private var librarySortOrder: XboxCatalogSortOrder = .default
+    private var browseSortOrder: XboxCatalogSortOrder = .default
+    private var libraryFilterState = XboxCatalogFilterState()
+    private var browseFilterState = XboxCatalogFilterState()
+
+    var searchText: String {
+        get { searchText(for: catalogScope) }
+        set { setSearchText(newValue, for: catalogScope) }
     }
 
-    var sortOrder: XboxCatalogSortOrder = .default {
-        didSet {
-            guard sortOrder != oldValue else { return }
-            resetBrowsePagination()
-        }
+    var sortOrder: XboxCatalogSortOrder {
+        get { sortOrder(for: catalogScope) }
+        set { setSortOrder(newValue, for: catalogScope) }
     }
 
-    var filterState = XboxCatalogFilterState() {
-        didSet {
-            guard filterState != oldValue else { return }
-            resetBrowsePagination()
-        }
+    var filterState: XboxCatalogFilterState {
+        get { filterState(for: catalogScope) }
+        set { setFilterState(newValue, for: catalogScope) }
     }
 
     var activeBrowseFilterCount: Int {
-        filterState.activeSelectionCount
+        activeFilterCount(for: catalogScope)
     }
 
     var hasActiveBrowseFilters: Bool {
         activeBrowseFilterCount > 0
+    }
+
+    func searchText(for scope: XboxCatalogScope) -> String {
+        switch scope {
+        case .library:
+            librarySearchText
+        case .browse:
+            browseSearchText
+        }
+    }
+
+    func setSearchText(_ value: String, for scope: XboxCatalogScope) {
+        guard value != searchText(for: scope) else { return }
+        switch scope {
+        case .library:
+            librarySearchText = value
+        case .browse:
+            browseSearchText = value
+        }
+        resetPagination(for: scope, debouncesSearch: true)
+    }
+
+    func sortOrder(for scope: XboxCatalogScope) -> XboxCatalogSortOrder {
+        switch scope {
+        case .library:
+            librarySortOrder
+        case .browse:
+            browseSortOrder
+        }
+    }
+
+    func setSortOrder(
+        _ value: XboxCatalogSortOrder,
+        for scope: XboxCatalogScope
+    ) {
+        guard value != sortOrder(for: scope) else { return }
+        switch scope {
+        case .library:
+            librarySortOrder = value
+        case .browse:
+            browseSortOrder = value
+        }
+        resetPagination(for: scope)
+    }
+
+    func filterState(for scope: XboxCatalogScope) -> XboxCatalogFilterState {
+        switch scope {
+        case .library:
+            libraryFilterState
+        case .browse:
+            browseFilterState
+        }
+    }
+
+    func setFilterState(
+        _ value: XboxCatalogFilterState,
+        for scope: XboxCatalogScope
+    ) {
+        guard value != filterState(for: scope) else { return }
+        switch scope {
+        case .library:
+            libraryFilterState = value
+        case .browse:
+            browseFilterState = value
+        }
+        resetPagination(for: scope)
+    }
+
+    func activeFilterCount(for scope: XboxCatalogScope) -> Int {
+        filterState(for: scope).activeSelectionCount
+    }
+
+    func hasActiveFilters(for scope: XboxCatalogScope) -> Bool {
+        activeFilterCount(for: scope) > 0
     }
 
     @ObservationIgnored private let makeClient: @Sendable () -> any XboxCatalogClient
@@ -892,7 +1003,8 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let freshnessInterval: TimeInterval
     @ObservationIgnored private var allItems: [XboxCatalogItem] = []
-    @ObservationIgnored private var visibleItemLimit = 96
+    @ObservationIgnored private var libraryVisibleItemLimit = 96
+    @ObservationIgnored private var browseVisibleItemLimit = 96
     @ObservationIgnored private var presentationGeneration: UInt64 = 0
     @ObservationIgnored private var presentationTask: Task<Void, Never>?
     @ObservationIgnored private var loadGeneration: UInt64 = 0
@@ -1064,14 +1176,56 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     }
 
     func loadNextPageIfNeeded(_ item: XboxCatalogItem) {
+        loadNextPageIfNeeded(item, in: catalogScope)
+    }
+
+    func loadNextPageIfNeeded(
+        _ item: XboxCatalogItem,
+        in scope: XboxCatalogScope
+    ) {
+        guard catalogScope == scope,
+              presentedCatalogScope == scope
+        else {
+            return
+        }
+        let itemLimit = visibleItemLimit(for: scope)
         guard item.id == visibleItems.last?.id,
-              visibleItemLimit <= visibleItems.count,
+              itemLimit <= visibleItems.count,
               visibleItems.count < carouselItems.count
         else {
             return
         }
-        visibleItemLimit = min(visibleItemLimit + 96, carouselItems.count)
+        setVisibleItemLimit(
+            min(itemLimit + 96, carouselItems.count),
+            for: scope
+        )
         schedulePresentationUpdate()
+    }
+
+    private var visibleItemLimit: Int {
+        get { visibleItemLimit(for: catalogScope) }
+        set { setVisibleItemLimit(newValue, for: catalogScope) }
+    }
+
+    private func visibleItemLimit(for scope: XboxCatalogScope) -> Int {
+        switch scope {
+        case .library:
+            libraryVisibleItemLimit
+        case .browse:
+            browseVisibleItemLimit
+        }
+    }
+
+    private func setVisibleItemLimit(
+        _ value: Int,
+        for scope: XboxCatalogScope
+    ) {
+        switch scope {
+        case .library:
+            libraryVisibleItemLimit = value
+        case .browse:
+            browseVisibleItemLimit = value
+        }
     }
 
     func isFavorite(_ item: XboxCatalogItem) -> Bool {
@@ -1178,6 +1332,8 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         allItems.removeAll(keepingCapacity: false)
         visibleItems.removeAll(keepingCapacity: false)
         carouselItems.removeAll(keepingCapacity: false)
+        selectedRoutesByItemID.removeAll(keepingCapacity: false)
+        presentedCatalogScope = nil
         favoriteItems.removeAll(keepingCapacity: false)
         recentlyPlayedItems.removeAll(keepingCapacity: false)
         availableAccessKinds.removeAll(keepingCapacity: false)
@@ -1189,7 +1345,8 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         totalItemCount = 0
         browseFilterBaseCount = 0
         filteredItemCount = 0
-        visibleItemLimit = 96
+        libraryVisibleItemLimit = 96
+        browseVisibleItemLimit = 96
         needsAutomaticRevalidation = false
     }
 
@@ -1217,16 +1374,36 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
         }
     }
 
+    func setCatalogScope(_ scope: XboxCatalogScope) {
+        guard catalogScope != scope else { return }
+        catalogScope = scope
+        schedulePresentationUpdate()
+    }
+
+    func selectedRoute(for item: XboxCatalogItem) -> XboxCloudTitleRoute? {
+        selectedRoutesByItemID[item.id]
+    }
+
     func clearBrowseFilters() {
-        filterState.clear()
+        clearFilters(for: catalogScope)
+    }
+
+    func clearFilters(for scope: XboxCatalogScope) {
+        var state = filterState(for: scope)
+        state.clear()
+        setFilterState(state, for: scope)
     }
 
     func waitForPendingPresentationUpdate() async {
         await presentationTask?.value
     }
 
-    private func resetBrowsePagination(debouncesSearch: Bool = false) {
-        visibleItemLimit = 96
+    private func resetPagination(
+        for scope: XboxCatalogScope,
+        debouncesSearch: Bool = false
+    ) {
+        setVisibleItemLimit(96, for: scope)
+        guard catalogScope == scope else { return }
         schedulePresentationUpdate(debouncesSearch: debouncesSearch)
     }
 
@@ -1289,6 +1466,7 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
             items: allItems,
             favoriteIDs: favoriteIDs,
             recentlyPlayedIDs: recentlyPlayedIDs,
+            scope: catalogScope,
             searchText: searchText,
             sortOrder: sortOrder,
             filterState: filterState,
@@ -1308,11 +1486,17 @@ final class XboxCatalogViewModel: CloudGamingProviderModeLifecycle {
     private func applyPresentation(
         _ snapshot: XboxCatalogPresentationSnapshot
     ) {
+        if snapshot.scope != presentedCatalogScope {
+            presentedCatalogScope = snapshot.scope
+        }
         if snapshot.visibleItems != visibleItems {
             visibleItems = snapshot.visibleItems
         }
         if snapshot.carouselItems != carouselItems {
             carouselItems = snapshot.carouselItems
+        }
+        if snapshot.selectedRoutesByItemID != selectedRoutesByItemID {
+            selectedRoutesByItemID = snapshot.selectedRoutesByItemID
         }
         if snapshot.favoriteItems != favoriteItems {
             favoriteItems = snapshot.favoriteItems
@@ -1566,7 +1750,7 @@ private struct XboxCatalogHome: View {
     private var emptyState: some View {
         CloudCatalogHomeEmptyState(
             message: emptyStateMessage,
-            actionTitle: L10n.text("library"),
+            actionTitle: L10n.text("browse"),
             action: onBrowse,
             actionFocus: $emptyActionFocused
         )
@@ -1925,6 +2109,7 @@ private struct XboxHomeGameFocus: Hashable {
 }
 
 private struct XboxCatalogGrid: View {
+    let scope: XboxCatalogScope
     let onRetry: () -> Void
     let onPlay: (XboxCatalogItem, XboxCloudTitleRoute) -> Void
     @Binding var playbackFocusRestoreID: String?
@@ -1941,10 +2126,9 @@ private struct XboxCatalogGrid: View {
     @State private var detailSourceItemIDs: [String] = []
     @FocusState private var focusedCardID: String?
     @FocusState private var emptyActionFocused: Bool
+    @FocusState private var searchFieldFocused: Bool
 
     var body: some View {
-        @Bindable var viewModel = viewModel
-
         ZStack {
             switch viewModel.phase {
             case .idle, .loading:
@@ -1952,6 +2136,8 @@ private struct XboxCatalogGrid: View {
             case .failed:
                 XboxCatalogFailureView(onRetry: onRetry)
                     .padding(60)
+            case .loaded where viewModel.presentedCatalogScope != scope:
+                CloudCatalogLoadingGrid()
             case .loaded where viewModel.totalItemCount == 0:
                 XboxCatalogEmptyView()
                     .padding(60)
@@ -1960,11 +2146,14 @@ private struct XboxCatalogGrid: View {
             }
         }
         .searchable(
-            text: $viewModel.searchText,
+            text: searchTextBinding,
             prompt: Text(
                 L10n.format("search_games_count", viewModel.totalItemCount)
             )
         )
+        .overlay(alignment: .topLeading) {
+            searchFocusFixture
+        }
         .fullScreenCover(
             item: $carouselRequest,
             onDismiss: restoreCarouselFocus
@@ -2012,6 +2201,17 @@ private struct XboxCatalogGrid: View {
             focusedCardID = itemID
             playbackFocusRestoreID = nil
         }
+        .task(id: scope) {
+            viewModel.setCatalogScope(scope)
+            await viewModel.waitForPendingPresentationUpdate()
+        }
+        .task(id: focusesSearchForUITesting) {
+            guard focusesSearchForUITesting else { return }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            searchFieldFocused = true
+        }
     }
 
     private var catalogGrid: some View {
@@ -2019,11 +2219,11 @@ private struct XboxCatalogGrid: View {
             items: viewModel.visibleItems,
             focusedId: $focusedCardID,
             emptyActionFocus: $emptyActionFocused,
-            hasActiveFilters: viewModel.hasActiveBrowseFilters,
-            onClearFilters: viewModel.clearBrowseFilters,
+            hasActiveFilters: viewModel.hasActiveFilters(for: scope),
+            onClearFilters: { viewModel.clearFilters(for: scope) },
             onSelect: showCarousel(startingAt:),
             onItemVisible: { item, _ in
-                viewModel.loadNextPageIfNeeded(item)
+                viewModel.loadNextPageIfNeeded(item, in: scope)
             },
             accessibilityIdentifier: { item in
                 selection(for: item)?.cardAccessibilityID ?? item.id
@@ -2058,6 +2258,36 @@ private struct XboxCatalogGrid: View {
         )
     }
 
+    private var searchTextBinding: Binding<String> {
+        Binding(
+            get: { viewModel.searchText(for: scope) },
+            set: { viewModel.setSearchText($0, for: scope) }
+        )
+    }
+
+    private var focusesSearchForUITesting: Bool {
+        #if DEBUG
+            ProcessInfo.processInfo.arguments.contains(
+                "--cloudnow-ui-xbox-search-focused"
+            )
+        #else
+            false
+        #endif
+    }
+
+    @ViewBuilder
+    private var searchFocusFixture: some View {
+        #if DEBUG
+            if focusesSearchForUITesting {
+                TextField("", text: searchTextBinding)
+                    .focused($searchFieldFocused)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .accessibilityHidden(true)
+            }
+        #endif
+    }
+
     private var filterHeader: some View {
         VStack(alignment: .leading, spacing: 0) {
             if viewModel.showsRefreshWarning {
@@ -2068,20 +2298,12 @@ private struct XboxCatalogGrid: View {
                 .padding(.horizontal, 60)
                 .padding(.top, 24)
             }
-            XboxCatalogFilterBar()
+            XboxCatalogFilterBar(scope: scope)
         }
     }
 
     private func selection(for item: XboxCatalogItem) -> XboxCatalogSelection? {
-        let selectedAccess = viewModel.filterState.access
-        let route: XboxCloudTitleRoute? = if selectedAccess == [.standard] {
-            item.route(for: .standard)
-        } else if selectedAccess == [.freeWithAds] {
-            item.route(for: .freeWithAds)
-        } else {
-            item.preferredRoute
-        }
-        return route.map {
+        viewModel.selectedRoute(for: item).map {
             XboxCatalogSelection(
                 item: item,
                 route: $0,
@@ -2206,50 +2428,176 @@ nonisolated func nearestSurvivingCatalogItemID(
 }
 
 private struct XboxCatalogFilterBar: View {
+    let scope: XboxCatalogScope
+
     @Environment(XboxCatalogViewModel.self) private var viewModel
+    @State private var isShowingFilters = false
 
     var body: some View {
-        @Bindable var viewModel = viewModel
+        ViewThatFits(in: .horizontal) {
+            wideToolbar
+            compactToolbar
+        }
+        .padding(.horizontal, 60)
+        .padding(.vertical, 22)
+        .focusSection()
+        .fullScreenCover(isPresented: $isShowingFilters) {
+            XboxCatalogFilterSheet(
+                scope: scope,
+                state: filterStateBinding,
+                options: viewModel.filterOptions,
+                totalCount: viewModel.browseFilterBaseCount,
+                previewCount: viewModel.filteredItemCount,
+                onClose: { isShowingFilters = false }
+            )
+        }
+    }
 
-        CloudCatalogFilterBar(
-            totalCount: viewModel.totalItemCount,
-            resultCount: viewModel.filteredItemCount,
-            sortOptions: XboxCatalogSortOrder.allCases.map {
-                CloudCatalogSortOption(value: $0, label: $0.label)
-            },
-            activeFilters: activeFilters,
-            activeSelectionCount: viewModel.activeBrowseFilterCount,
-            sortOrder: $viewModel.sortOrder,
-            refreshTitle: L10n.text("refresh_library"),
-            isRefreshDisabled: viewModel.phase == .loading
-                || viewModel.isRefreshing,
-            refreshAccessibilityIdentifier: "reloadXboxCloudCatalogButton",
-            onRefresh: {
-                Task { await viewModel.reload() }
-            },
-            filterSheet: { isPresented in
-                XboxCatalogFilterSheet(
-                    state: $viewModel.filterState,
-                    options: viewModel.filterOptions,
-                    totalCount: viewModel.browseFilterBaseCount,
-                    previewCount: viewModel.filteredItemCount,
-                    onClose: { isPresented.wrappedValue = false }
-                )
+    private var wideToolbar: some View {
+        HStack(spacing: 20) {
+            resultSummary
+            activeFilterScroll
+            Spacer(minLength: 12)
+            actionControls(compactRefresh: false)
+        }
+    }
+
+    private var compactToolbar: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 16) {
+                resultSummary
+                activeFilterScroll
             }
+            actionControls(compactRefresh: true)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private var resultSummary: some View {
+        Text(
+            L10n.format(
+                "games_result_count",
+                viewModel.filteredItemCount,
+                viewModel.totalItemCount
+            )
         )
+        .font(.headline.monospacedDigit())
+        .foregroundStyle(.primary)
+        .fixedSize()
+        .accessibilityIdentifier("catalog-result-count")
+    }
+
+    @ViewBuilder
+    private var activeFilterScroll: some View {
+        if !activeFilters.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(activeFilters) { filter in
+                        XboxCatalogActiveFilterChip(
+                            label: filter.label,
+                            onRemove: filter.onRemove
+                        )
+                    }
+                }
+            }
+            .scrollClipDisabled()
+        }
+    }
+
+    private func actionControls(compactRefresh: Bool) -> some View {
+        HStack(spacing: 20) {
+            Menu {
+                Picker(L10n.text("sort"), selection: sortOrderBinding) {
+                    ForEach(XboxCatalogSortOrder.allCases, id: \.self) { order in
+                        Text(order.label).tag(order)
+                    }
+                }
+            } label: {
+                Label(
+                    selectedSortLabel,
+                    systemImage: "line.3.horizontal.decrease"
+                )
+                .lineLimit(1)
+            }
+            .buttonStyle(.bordered)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityIdentifier("catalog-sort-menu")
+
+            Button {
+                isShowingFilters = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                    Text(L10n.text("filters"))
+                        .lineLimit(1)
+                    if viewModel.activeFilterCount(for: scope) > 0 {
+                        Text("\(viewModel.activeFilterCount(for: scope))")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(.green, in: Capsule())
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityIdentifier("catalog-filter-button")
+
+            Button {
+                Task { await viewModel.reload() }
+            } label: {
+                if compactRefresh {
+                    Image(systemName: "arrow.clockwise")
+                } else {
+                    Label(
+                        L10n.text("refresh_library"),
+                        systemImage: "arrow.clockwise"
+                    )
+                    .lineLimit(1)
+                }
+            }
+            .buttonStyle(.bordered)
+            .fixedSize(horizontal: true, vertical: false)
+            .disabled(viewModel.phase == .loading || viewModel.isRefreshing)
+            .accessibilityLabel(L10n.text("refresh_library"))
+            .accessibilityIdentifier("reloadXboxCloudCatalogButton")
+        }
+    }
+
+    private var selectedSortLabel: String {
+        viewModel.sortOrder(for: scope).label
+    }
+
+    private var sortOrderBinding: Binding<XboxCatalogSortOrder> {
+        Binding(
+            get: { viewModel.sortOrder(for: scope) },
+            set: { viewModel.setSortOrder($0, for: scope) }
+        )
+    }
+
+    private var filterStateBinding: Binding<XboxCatalogFilterState> {
+        Binding(
+            get: { viewModel.filterState(for: scope) },
+            set: { viewModel.setFilterState($0, for: scope) }
+        )
+    }
+
+    private var currentFilterState: XboxCatalogFilterState {
+        viewModel.filterState(for: scope)
     }
 
     private var activeFilters: [CloudCatalogActiveFilter] {
         var filters: [CloudCatalogActiveFilter] = []
 
-        for collection in viewModel.filterState.collections {
+        for collection in currentFilterState.collections {
             filters.append(CloudCatalogActiveFilter(
                 id: "xbox-collection-\(collection.id)",
                 label: collection.label,
                 onRemove: { remove(collection) }
             ))
         }
-        for access in viewModel.filterState.access.sorted(by: {
+        for access in currentFilterState.access.sorted(by: {
             $0.sortOrder < $1.sortOrder
         }) {
             filters.append(CloudCatalogActiveFilter(
@@ -2258,7 +2606,7 @@ private struct XboxCatalogFilterBar: View {
                 onRemove: { remove(access) }
             ))
         }
-        for playability in viewModel.filterState.playability.sorted(by: {
+        for playability in currentFilterState.playability.sorted(by: {
             $0.sortOrder < $1.sortOrder
         }) {
             filters.append(CloudCatalogActiveFilter(
@@ -2267,7 +2615,7 @@ private struct XboxCatalogFilterBar: View {
                 onRemove: { remove(playability) }
             ))
         }
-        for reason in viewModel.filterState.unavailableReasons.sorted(by: {
+        for reason in currentFilterState.unavailableReasons.sorted(by: {
             $0.sortOrder < $1.sortOrder
         }) {
             filters.append(CloudCatalogActiveFilter(
@@ -2276,7 +2624,7 @@ private struct XboxCatalogFilterBar: View {
                 onRemove: { remove(reason) }
             ))
         }
-        for inputType in viewModel.filterState.inputTypes.sorted(by: {
+        for inputType in currentFilterState.inputTypes.sorted(by: {
             $0.sortOrder < $1.sortOrder
         }) {
             filters.append(CloudCatalogActiveFilter(
@@ -2285,7 +2633,7 @@ private struct XboxCatalogFilterBar: View {
                 onRemove: { remove(inputType) }
             ))
         }
-        for genreID in viewModel.filterState.genres.sorted() {
+        for genreID in currentFilterState.genres.sorted() {
             let label = viewModel.filterOptions.genres.first {
                 $0.id == genreID
             }?.label ?? genreID
@@ -2299,43 +2647,77 @@ private struct XboxCatalogFilterBar: View {
     }
 
     private func remove(_ collection: XboxCatalogCollectionFilter) {
-        var state = viewModel.filterState
+        var state = currentFilterState
         state.collections.remove(collection)
-        viewModel.filterState = state
+        viewModel.setFilterState(state, for: scope)
     }
 
     private func remove(_ access: XboxCatalogAccessFilter) {
-        var state = viewModel.filterState
+        var state = currentFilterState
         state.access.remove(access)
-        viewModel.filterState = state
+        viewModel.setFilterState(state, for: scope)
     }
 
     private func remove(_ inputType: XboxCloudInputType) {
-        var state = viewModel.filterState
+        var state = currentFilterState
         state.inputTypes.remove(inputType)
-        viewModel.filterState = state
+        viewModel.setFilterState(state, for: scope)
     }
 
     private func remove(_ playability: XboxCatalogPlayabilityFilter) {
-        var state = viewModel.filterState
+        var state = currentFilterState
         state.playability.remove(playability)
-        viewModel.filterState = state
+        viewModel.setFilterState(state, for: scope)
     }
 
     private func remove(_ reason: XboxCloudRoutePlayabilityReason) {
-        var state = viewModel.filterState
+        var state = currentFilterState
         state.unavailableReasons.remove(reason)
-        viewModel.filterState = state
+        viewModel.setFilterState(state, for: scope)
     }
 
     private func removeGenre(_ genreID: String) {
-        var state = viewModel.filterState
+        var state = currentFilterState
         state.genres.remove(genreID)
-        viewModel.filterState = state
+        viewModel.setFilterState(state, for: scope)
+    }
+}
+
+private struct XboxCatalogActiveFilterChip: View {
+    let label: String
+    let onRemove: () -> Void
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button(action: onRemove) {
+            HStack(spacing: 7) {
+                Text(label)
+                    .lineLimit(1)
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.bold))
+            }
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(Color.black.opacity(0.84))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(Color.green, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(isFocused ? Color.white : Color.clear, lineWidth: 3)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.07 : 1)
+        .shadow(color: isFocused ? Color.white.opacity(0.25) : .clear, radius: 12)
+        .animation(.easeOut(duration: 0.16), value: isFocused)
     }
 }
 
 private struct XboxCatalogFilterSheet: View {
+    let scope: XboxCatalogScope
     @Binding var state: XboxCatalogFilterState
     let options: XboxCatalogFilterOptions
     let totalCount: Int
@@ -2368,12 +2750,12 @@ private struct XboxCatalogFilterSheet: View {
                         if options.showsCollectionsSection {
                             collectionsSection
                         }
-                        if options.playableCount > 0
-                            || options.unavailableCount > 0
-                        {
+                        if scope == .browse, showsPlayabilityFilters {
                             playabilitySection
                         }
-                        if !availableUnavailableReasons.isEmpty {
+                        if scope == .browse,
+                           !availableUnavailableReasons.isEmpty
+                        {
                             unavailableReasonsSection
                         }
                         if !options.availableAccessFilters.isEmpty {
@@ -2587,6 +2969,10 @@ private struct XboxCatalogFilterSheet: View {
         XboxCatalogPlayabilityFilter.allCases.filter {
             playabilityCount($0) > 0
         }
+    }
+
+    private var showsPlayabilityFilters: Bool {
+        options.playableCount > 0 || options.unavailableCount > 0
     }
 
     private var availableUnavailableReasons: [
@@ -3099,7 +3485,7 @@ private extension XboxCatalogAccessFilter {
     var label: String {
         switch self {
         case .standard:
-            L10n.text("subscription_access")
+            L10n.text("cloud_gaming_access")
         case .freeWithAds:
             L10n.text("free_with_ads")
         case .owned:
@@ -3182,7 +3568,7 @@ extension XboxCloudRoutePlayabilityReason {
              .contentAccessConfirmed:
             L10n.text("playable")
         case .entitlementRequired:
-            L10n.text("account_access_required")
+            L10n.text("not_in_cloud_library")
         case .unsupportedStreamingProgram:
             L10n.text("cloud_play_unavailable")
         case .gameplayTimeExhausted:
@@ -3315,19 +3701,6 @@ private struct XboxCatalogEmptyView: View {
             systemImage: "gamecontroller"
         )
         .frame(maxWidth: .infinity, minHeight: 360)
-    }
-}
-
-private extension XboxCatalogItem {
-    func route(for accessKind: XboxCloudAccessKind) -> XboxCloudTitleRoute? {
-        routes
-            .filter { $0.accessKind == accessKind }
-            .min { left, right in
-                if left.isPlayable != right.isPlayable {
-                    return left.isPlayable
-                }
-                return left.titleID < right.titleID
-            }
     }
 }
 
@@ -3840,6 +4213,7 @@ private struct XboxSettingsView: View {
 private nonisolated enum XboxAppTab: CloudNowTabSelection {
     case home
     case library
+    case browse
     case settings
 
     static let first = XboxAppTab.home
@@ -3850,6 +4224,8 @@ private nonisolated enum XboxAppTab: CloudNowTabSelection {
         case .home:
             .library
         case .library:
+            .browse
+        case .browse:
             .settings
         case .settings:
             .home
@@ -3862,8 +4238,21 @@ private nonisolated enum XboxAppTab: CloudNowTabSelection {
             .settings
         case .library:
             .home
-        case .settings:
+        case .browse:
             .library
+        case .settings:
+            .browse
+        }
+    }
+
+    var catalogScope: XboxCatalogScope? {
+        switch self {
+        case .library:
+            .library
+        case .browse:
+            .browse
+        case .home, .settings:
+            nil
         }
     }
 }

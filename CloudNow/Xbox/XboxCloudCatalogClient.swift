@@ -310,7 +310,8 @@ private nonisolated struct XboxCloudCatalogLoader: Sendable {
         .gamePassCatalogProductsURL
 
     private static let maximumContinuationTokenSize = 4096
-    private static let maximumWireResultCount = 4096
+    private static let maximumWireResultCount = XboxCatalogSnapshot
+        .maximumRetainedItemCount
     private static let maximumResultsPerPage = maximumWireResultCount
     private static let maximumImageCountPerTitle = 64
     private static let maximumUserProgramCount = 64

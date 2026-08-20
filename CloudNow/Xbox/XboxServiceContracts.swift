@@ -409,7 +409,7 @@ private extension XboxCloudTitleRoute {
 }
 
 nonisolated struct XboxCatalogSnapshot: Codable, Equatable, Sendable {
-    static let maximumRetainedItemCount = 1024
+    static let maximumRetainedItemCount = 4096
 
     let items: [XboxCatalogItem]
     let fetchedAt: Date

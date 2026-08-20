@@ -243,6 +243,289 @@ struct XboxCatalogViewModelTests {
     }
 
     @MainActor
+    @Test("Library and Home expose only confirmed playable routes")
+    func libraryAndHomeRequireConfirmedRoutes() async {
+        let playable = makeAccessItem(
+            id: "playable-standard",
+            accessKinds: [.standard]
+        )
+        let lockedStandard = makeAccessItem(
+            id: "locked-standard",
+            accessKinds: [.standard],
+            availability: .requiresEligibility,
+            playabilityReason: .entitlementRequired
+        )
+        let lockedAds = makeAccessItem(
+            id: "locked-ads",
+            accessKinds: [.freeWithAds],
+            availability: .requiresEligibility,
+            playabilityReason: .eligibilityUnconfirmed
+        )
+        let playableStandardRoute = XboxCloudTitleRoute(
+            titleID: "mixed-standard",
+            accessKind: .standard
+        )
+        let lockedAdsRoute = XboxCloudTitleRoute(
+            titleID: "mixed-ads",
+            accessKind: .freeWithAds,
+            availability: .requiresEligibility,
+            playabilityReason: .gameplayTimeExhausted
+        )
+        let mixed = XboxCatalogItem(
+            id: "mixed",
+            title: "mixed",
+            artworkURL: nil,
+            routes: [lockedAdsRoute, playableStandardRoute]
+        )
+        let touchOnly = makeAccessItem(
+            id: "touch-only",
+            accessKinds: [.standard],
+            supportedInputTypes: [.touch]
+        )
+        let items = [playable, lockedStandard, lockedAds, mixed, touchOnly]
+        let persistence = XboxCatalogActivityPersistenceProbe(
+            snapshots: [
+                account.authorizationIdentifier: CloudCatalogActivitySnapshot(
+                    favoriteIDs: Set(items.map(\.id)),
+                    recentlyPlayedIDs: items.map(\.id)
+                ),
+            ]
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: items,
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache(),
+            activityPersistence: persistence
+        )
+
+        await viewModel.load()
+
+        #expect(viewModel.catalogScope == .browse)
+        #expect(viewModel.visibleItems == items)
+        #expect(viewModel.favoriteIDs == Set(items.map(\.id)))
+        #expect(viewModel.recentlyPlayedIDs == items.map(\.id))
+        #expect(viewModel.favoriteItems == [playable, mixed])
+        #expect(viewModel.recentlyPlayedItems == [playable, mixed])
+        #expect(viewModel.filterOptions.playableCount == 2)
+        #expect(viewModel.filterOptions.unavailableCount == 4)
+        #expect(viewModel.selectedRoute(for: mixed) == playableStandardRoute)
+        #expect(viewModel.selectedRoute(for: touchOnly) == touchOnly.routes[0])
+
+        viewModel.filterState.playability = [.unavailable]
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.visibleItems.contains(touchOnly))
+        viewModel.clearBrowseFilters()
+        await viewModel.waitForPendingPresentationUpdate()
+
+        viewModel.setCatalogScope(.library)
+        #expect(viewModel.presentedCatalogScope == .browse)
+        await viewModel.waitForPendingPresentationUpdate()
+
+        #expect(viewModel.presentedCatalogScope == .library)
+        #expect(viewModel.visibleItems == [playable, mixed])
+        #expect(viewModel.totalItemCount == 2)
+        #expect(viewModel.filterOptions.standardCount == 2)
+        #expect(viewModel.filterOptions.freeWithAdsCount == 0)
+        #expect(viewModel.filterOptions.playableCount == 2)
+        #expect(viewModel.filterOptions.unavailableCount == 0)
+        #expect(viewModel.selectedRoute(for: mixed) == playableStandardRoute)
+    }
+
+    @MainActor
+    @Test("Access and playability filters select the same route")
+    func routeCorrelatedFilters() async throws {
+        let mixedPlayableStandard = XboxCloudTitleRoute(
+            titleID: "mixed-standard",
+            accessKind: .standard
+        )
+        let mixedLockedAds = XboxCloudTitleRoute(
+            titleID: "mixed-ads",
+            accessKind: .freeWithAds,
+            availability: .requiresEligibility,
+            playabilityReason: .eligibilityUnconfirmed
+        )
+        let mixed = XboxCatalogItem(
+            id: "mixed",
+            title: "mixed",
+            artworkURL: nil,
+            routes: [mixedPlayableStandard, mixedLockedAds]
+        )
+        let playableAds = makeAccessItem(
+            id: "playable-ads",
+            accessKinds: [.freeWithAds]
+        )
+        let lockedAds = makeAccessItem(
+            id: "locked-ads",
+            accessKinds: [.freeWithAds],
+            availability: .requiresEligibility,
+            playabilityReason: .eligibilityUnconfirmed
+        )
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: [mixed, playableAds, lockedAds],
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache()
+        )
+
+        await viewModel.load()
+        viewModel.filterState = XboxCatalogFilterState(
+            access: [.freeWithAds],
+            playability: [.playable]
+        )
+        await viewModel.waitForPendingPresentationUpdate()
+
+        #expect(viewModel.visibleItems == [playableAds])
+        let playableRoute = try #require(viewModel.selectedRoute(for: playableAds))
+        #expect(playableRoute.accessKind == .freeWithAds)
+        #expect(playableRoute.isPlayable)
+
+        viewModel.filterState = XboxCatalogFilterState(
+            access: [.freeWithAds],
+            playability: [.unavailable]
+        )
+        await viewModel.waitForPendingPresentationUpdate()
+
+        #expect(viewModel.visibleItems == [mixed, lockedAds])
+        #expect(viewModel.selectedRoute(for: mixed) == mixedLockedAds)
+        #expect(viewModel.selectedRoute(for: lockedAds)?.isPlayable == false)
+    }
+
+    @MainActor
+    @Test("Library and Browse retain independent query and pagination state")
+    func independentCatalogScopeState() async throws {
+        let playableItems = (0 ..< 250).map { index in
+            makeAccessItem(
+                id: "playable-\(index)",
+                accessKinds: [.standard]
+            )
+        }
+        let lockedItems = (0 ..< 250).map { index in
+            makeAccessItem(
+                id: "locked-\(index)",
+                accessKinds: [.standard],
+                availability: .requiresEligibility,
+                playabilityReason: .entitlementRequired
+            )
+        }
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: playableItems + lockedItems,
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache()
+        )
+
+        await viewModel.load()
+        let browseBoundary = try #require(viewModel.visibleItems.last)
+        viewModel.loadNextPageIfNeeded(browseBoundary)
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.visibleItems.count == 192)
+
+        viewModel.setCatalogScope(.library)
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.searchText.isEmpty)
+        #expect(viewModel.sortOrder == .default)
+        #expect(viewModel.filterState.isEmpty)
+        let libraryBoundary = try #require(viewModel.visibleItems.last)
+        viewModel.loadNextPageIfNeeded(libraryBoundary)
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.visibleItems.count == 192)
+
+        viewModel.setCatalogScope(.browse)
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.visibleItems.count == 192)
+        viewModel.searchText = "playable"
+        viewModel.sortOrder = .titleZA
+        await viewModel.waitForPendingPresentationUpdate()
+
+        viewModel.setCatalogScope(.library)
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.visibleItems.count == 192)
+        viewModel.filterState.access = [.standard]
+        await viewModel.waitForPendingPresentationUpdate()
+
+        viewModel.setCatalogScope(.browse)
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.searchText == "playable")
+        #expect(viewModel.sortOrder == .titleZA)
+        #expect(viewModel.filterState.isEmpty)
+        #expect(viewModel.visibleItems.count == 96)
+
+        viewModel.setCatalogScope(.library)
+        await viewModel.waitForPendingPresentationUpdate()
+        #expect(viewModel.searchText.isEmpty)
+        #expect(viewModel.sortOrder == .default)
+        #expect(viewModel.filterState.access == [.standard])
+        #expect(viewModel.visibleItems.count == 96)
+    }
+
+    @MainActor
+    @Test("Stale Library bindings cannot overwrite active Browse state")
+    func staleLibraryBindingsRemainScopeBound() async {
+        let items = (0 ..< 120).map { index in
+            makeAccessItem(
+                id: "playable-\(index)",
+                accessKinds: [.standard]
+            )
+        }
+        let viewModel = XboxCatalogViewModel(
+            client: XboxCatalogClientProbe(
+                snapshot: XboxCatalogSnapshot(
+                    items: items,
+                    fetchedAt: fetchedAt
+                )
+            ),
+            account: account,
+            cache: XboxCatalogMemoryCache()
+        )
+
+        await viewModel.load()
+        viewModel.setSearchText("playable", for: .browse)
+        viewModel.setSortOrder(.titleZA, for: .browse)
+        viewModel.setFilterState(
+            XboxCatalogFilterState(access: [.standard]),
+            for: .browse
+        )
+        await viewModel.waitForPendingPresentationUpdate()
+
+        viewModel.setCatalogScope(.library)
+        await viewModel.waitForPendingPresentationUpdate()
+        viewModel.setCatalogScope(.browse)
+        await viewModel.waitForPendingPresentationUpdate()
+        let browseItems = viewModel.visibleItems
+
+        viewModel.setSearchText("stale-library-search", for: .library)
+        viewModel.setSortOrder(.recentFirst, for: .library)
+        viewModel.setFilterState(
+            XboxCatalogFilterState(collections: [.favorites]),
+            for: .library
+        )
+        await viewModel.waitForPendingPresentationUpdate()
+
+        #expect(viewModel.catalogScope == .browse)
+        #expect(viewModel.presentedCatalogScope == .browse)
+        #expect(viewModel.searchText(for: .browse) == "playable")
+        #expect(viewModel.sortOrder(for: .browse) == .titleZA)
+        #expect(viewModel.filterState(for: .browse).access == [.standard])
+        #expect(viewModel.visibleItems == browseItems)
+        #expect(viewModel.searchText(for: .library) == "stale-library-search")
+        #expect(viewModel.sortOrder(for: .library) == .recentFirst)
+        #expect(viewModel.filterState(for: .library).collections == [.favorites])
+    }
+
+    @MainActor
     @Test("Favorite mutations update Home and persist to the active account")
     func favoriteMutationsPersist() async {
         let first = makeAccessItem(id: "first", accessKinds: [.standard])
@@ -2079,6 +2362,7 @@ struct XboxCatalogViewModelTests {
                 items: items,
                 favoriteIDs: [items[10].id],
                 recentlyPlayedIDs: [items[20].id],
+                scope: .browse,
                 searchText: "worker-game",
                 sortOrder: .recentFirst,
                 filterState: XboxCatalogFilterState(),
@@ -2086,15 +2370,15 @@ struct XboxCatalogViewModelTests {
             )
         )
 
-        #expect(snapshot.totalItemCount == 1024)
-        #expect(snapshot.browseFilterBaseCount == 1024)
-        #expect(snapshot.filteredItemCount == 1024)
+        #expect(snapshot.totalItemCount == items.count)
+        #expect(snapshot.browseFilterBaseCount == items.count)
+        #expect(snapshot.filteredItemCount == items.count)
         #expect(snapshot.visibleItems.count == 96)
         #expect(snapshot.carouselItems.first?.id == items[20].id)
         #expect(snapshot.favoriteItems == [items[10]])
         #expect(snapshot.recentlyPlayedItems == [items[20]])
-        #expect(snapshot.filterOptions.standardCount == 512)
-        #expect(snapshot.filterOptions.freeWithAdsCount == 512)
+        #expect(snapshot.filterOptions.standardCount == items.count / 2)
+        #expect(snapshot.filterOptions.freeWithAdsCount == items.count / 2)
     }
 
     @MainActor

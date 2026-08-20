@@ -36,6 +36,30 @@ struct XboxCatalogCacheTests {
         #expect(await afterRejectedStore.snapshot(for: foreignKey) == nil)
     }
 
+    @Test("Durable cache round-trips a bounded catalog beyond the legacy limit")
+    func durableFullCatalogRoundTrip() async throws {
+        let directoryURL = temporaryDirectoryURL()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let itemCount = 2531
+        let snapshot = makeSnapshot(itemCount: itemCount)
+        let key = makeKey()
+        let cache = XboxCatalogCache(directoryURL: directoryURL)
+
+        await cache.store(snapshot, for: key)
+        await cache.releaseMemory()
+
+        let restored = try #require(await cache.snapshot(for: key))
+        #expect(restored.items.count == itemCount)
+        let beyondLegacyLimit = try #require(
+            restored.items.dropFirst(1024).first
+        )
+        #expect(beyondLegacyLimit.id == "GAME-1024")
+        #expect(beyondLegacyLimit.preferredRoute?.isPlayable == true)
+
+        let recreated = XboxCatalogCache(directoryURL: directoryURL)
+        #expect(await recreated.snapshot(for: key) == snapshot)
+    }
+
     @Test("Durable cache validates schema before serving stale data")
     func invalidSchemaIsRejected() async throws {
         let directoryURL = temporaryDirectoryURL()
@@ -180,6 +204,25 @@ struct XboxCatalogCacheTests {
                     ]
                 ),
             ],
+            fetchedAt: fetchedAt
+        )
+    }
+
+    private func makeSnapshot(itemCount: Int) -> XboxCatalogSnapshot {
+        XboxCatalogSnapshot(
+            items: (0 ..< itemCount).map { index in
+                XboxCatalogItem(
+                    id: "game-\(index)",
+                    title: "Game \(index)",
+                    artworkURL: nil,
+                    routes: [
+                        XboxCloudTitleRoute(
+                            titleID: "route-\(index)",
+                            accessKind: .standard
+                        ),
+                    ]
+                )
+            },
             fetchedAt: fetchedAt
         )
     }

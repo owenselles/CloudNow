@@ -4,6 +4,7 @@ nonisolated struct XboxCatalogPresentationInput: Sendable {
     let items: [XboxCatalogItem]
     let favoriteIDs: Set<String>
     let recentlyPlayedIDs: [String]
+    let scope: XboxCatalogScope
     let searchText: String
     let sortOrder: XboxCatalogSortOrder
     let filterState: XboxCatalogFilterState
@@ -11,8 +12,10 @@ nonisolated struct XboxCatalogPresentationInput: Sendable {
 }
 
 nonisolated struct XboxCatalogPresentationSnapshot: Equatable, Sendable {
+    let scope: XboxCatalogScope
     let visibleItems: [XboxCatalogItem]
     let carouselItems: [XboxCatalogItem]
+    let selectedRoutesByItemID: [String: XboxCloudTitleRoute]
     let favoriteItems: [XboxCatalogItem]
     let recentlyPlayedItems: [XboxCatalogItem]
     let availableAccessKinds: Set<XboxCloudAccessKind>
@@ -38,55 +41,81 @@ actor XboxCatalogPresentationWorker: XboxCatalogPresentationBuilding {
     ) async throws -> XboxCatalogPresentationSnapshot {
         try Task.checkCancellation()
         let presentableItems = try presentableItems(input.items)
-        let availableAccessKinds = Set(presentableItems.flatMap(\.accessKinds))
-        let playableAccessKinds = Set(presentableItems.flatMap { item in
+        let scopedItems = try scopedItems(
+            presentableItems,
+            scope: input.scope
+        )
+        let availableAccessKinds = Set(scopedItems.flatMap { item in
+            scopedRoutes(for: item, scope: input.scope).map(\.accessKind)
+        })
+        let playableAccessKinds = Set(scopedItems.flatMap { item in
             item.routes.compactMap { route in
-                route.isPlayable ? route.accessKind : nil
+                route.isPlayable && !item.isTouchOnlyOnTVOS
+                    ? route.accessKind
+                    : nil
             }
         })
         let searchedItems = try search(
-            presentableItems,
+            scopedItems,
             query: input.searchText
         )
-        let filteredItems = try filter(
+        let filteredEntries = try filter(
             searchedItems,
+            scope: input.scope,
             state: input.filterState,
             favoriteIDs: input.favoriteIDs
         )
+        let filteredItems = filteredEntries.map(\.item)
         let carouselItems = try sort(
             filteredItems,
             order: input.sortOrder,
             recentlyPlayedIDs: input.recentlyPlayedIDs
         )
-        let itemsByID = Dictionary(
-            presentableItems.map { ($0.id, $0) },
+        let selectedRoutesByItemID = Dictionary(
+            filteredEntries.map { ($0.item.id, $0.route) },
             uniquingKeysWith: { retained, _ in retained }
         )
-        let favoriteItems = presentableItems.filter {
+        let playableItems = presentableItems.filter { item in
+            !item.isTouchOnlyOnTVOS
+                && item.routes.contains(where: \.isPlayable)
+        }
+        let playableItemsByID = Dictionary(
+            playableItems.map { ($0.id, $0) },
+            uniquingKeysWith: { retained, _ in retained }
+        )
+        let favoriteItems = playableItems.filter {
             input.favoriteIDs.contains($0.id)
         }
         let recentlyPlayedItems = input.recentlyPlayedIDs.compactMap {
-            itemsByID[$0]
+            playableItemsByID[$0]
         }
         let filterOptions = try makeFilterOptions(
-            presentableItems: presentableItems,
+            presentableItems: scopedItems,
+            scope: input.scope,
             favoriteIDs: input.favoriteIDs
         )
         try Task.checkCancellation()
         return XboxCatalogPresentationSnapshot(
+            scope: input.scope,
             visibleItems: Array(
                 carouselItems.prefix(max(0, input.visibleItemLimit))
             ),
             carouselItems: carouselItems,
+            selectedRoutesByItemID: selectedRoutesByItemID,
             favoriteItems: favoriteItems,
             recentlyPlayedItems: recentlyPlayedItems,
             availableAccessKinds: availableAccessKinds,
             playableAccessKinds: playableAccessKinds,
             filterOptions: filterOptions,
-            totalItemCount: presentableItems.count,
+            totalItemCount: scopedItems.count,
             browseFilterBaseCount: searchedItems.count,
             filteredItemCount: carouselItems.count
         )
+    }
+
+    private struct Entry {
+        let item: XboxCatalogItem
+        let route: XboxCloudTitleRoute
     }
 
     private func presentableItems(
@@ -98,9 +127,7 @@ actor XboxCatalogPresentationWorker: XboxCatalogPresentationBuilding {
             if index.isMultiple(of: 64) {
                 try Task.checkCancellation()
             }
-            if !item.isTouchOnlyOnTVOS {
-                result.append(item)
-            }
+            result.append(item)
         }
         return result
     }
@@ -124,81 +151,111 @@ actor XboxCatalogPresentationWorker: XboxCatalogPresentationBuilding {
         return result
     }
 
-    private func filter(
+    private func scopedItems(
         _ items: [XboxCatalogItem],
-        state: XboxCatalogFilterState,
-        favoriteIDs: Set<String>
+        scope: XboxCatalogScope
     ) throws -> [XboxCatalogItem] {
-        guard !state.isEmpty else { return items }
+        guard scope == .library else { return items }
         var result: [XboxCatalogItem] = []
         result.reserveCapacity(items.count)
         for (index, item) in items.enumerated() {
             if index.isMultiple(of: 64) {
                 try Task.checkCancellation()
             }
-            if matches(item, state: state, favoriteIDs: favoriteIDs) {
+            if !item.isTouchOnlyOnTVOS,
+               item.routes.contains(where: \.isPlayable)
+            {
                 result.append(item)
             }
         }
         return result
     }
 
-    private func matches(
-        _ item: XboxCatalogItem,
+    private func filter(
+        _ items: [XboxCatalogItem],
+        scope: XboxCatalogScope,
         state: XboxCatalogFilterState,
         favoriteIDs: Set<String>
-    ) -> Bool {
+    ) throws -> [Entry] {
+        var result: [Entry] = []
+        result.reserveCapacity(items.count)
+        for (index, item) in items.enumerated() {
+            if index.isMultiple(of: 64) {
+                try Task.checkCancellation()
+            }
+            if let route = matchingRoute(
+                for: item,
+                scope: scope,
+                state: state,
+                favoriteIDs: favoriteIDs
+            ) {
+                result.append(Entry(item: item, route: route))
+            }
+        }
+        return result
+    }
+
+    private func matchingRoute(
+        for item: XboxCatalogItem,
+        scope: XboxCatalogScope,
+        state: XboxCatalogFilterState,
+        favoriteIDs: Set<String>
+    ) -> XboxCloudTitleRoute? {
         if !state.collections.isEmpty {
             let matchesCollection = state.collections.contains(.favorites)
                 && favoriteIDs.contains(item.id)
-            guard matchesCollection else { return false }
+            guard matchesCollection else { return nil }
         }
 
+        var routes = scopedRoutes(for: item, scope: scope)
         if !state.access.isEmpty {
-            let matchesAccess = state.access.contains { access in
-                switch access {
-                case .standard:
-                    item.accessKinds.contains(.standard)
-                case .freeWithAds:
-                    item.supportsFreeWithAds
-                case .owned:
-                    item.isOwned
-                }
+            let matchesOwned = state.access.contains(.owned) && item.isOwned
+            if !matchesOwned {
+                let accessKinds = Set(state.access.compactMap { access in
+                    switch access {
+                    case .standard:
+                        XboxCloudAccessKind.standard
+                    case .freeWithAds:
+                        XboxCloudAccessKind.freeWithAds
+                    case .owned:
+                        nil
+                    }
+                })
+                routes.removeAll { !accessKinds.contains($0.accessKind) }
             }
-            guard matchesAccess else { return false }
         }
 
         if !state.playability.isEmpty {
-            let hasPlayableRoute = item.routes.contains(where: \.isPlayable)
-            let matchesPlayability =
-                state.playability.contains(.playable) && hasPlayableRoute
-                    || state.playability.contains(.unavailable)
-                    && !hasPlayableRoute
-            guard matchesPlayability else { return false }
+            routes.removeAll { route in
+                let isPlayable = route.isPlayable && !item.isTouchOnlyOnTVOS
+                return isPlayable
+                    ? !state.playability.contains(.playable)
+                    : !state.playability.contains(.unavailable)
+            }
         }
 
         if !state.unavailableReasons.isEmpty {
-            let itemReasons = Set(item.routes.compactMap { route in
-                route.isPlayable ? nil : route.playabilityReason
-            })
-            guard !state.unavailableReasons.isDisjoint(with: itemReasons) else {
-                return false
+            routes.removeAll { route in
+                route.isPlayable
+                    || !state.unavailableReasons.contains(
+                        route.playabilityReason
+                    )
             }
         }
 
         if !state.inputTypes.isEmpty,
            state.inputTypes.isDisjoint(with: item.supportedInputTypes)
         {
-            return false
+            return nil
         }
 
         if !state.genres.isEmpty {
             let itemGenres = Set(item.genres.compactMap(Self.genreID))
             guard !state.genres.isDisjoint(with: itemGenres) else {
-                return false
+                return nil
             }
         }
-        return true
+        return preferredRoute(in: routes)
     }
 
     private func sort(
@@ -238,6 +295,7 @@ actor XboxCatalogPresentationWorker: XboxCatalogPresentationBuilding {
 
     private func makeFilterOptions(
         presentableItems: [XboxCatalogItem],
+        scope: XboxCatalogScope,
         favoriteIDs: Set<String>
     ) throws -> XboxCatalogFilterOptions {
         var genreLabels: [String: String] = [:]
@@ -251,22 +309,32 @@ actor XboxCatalogPresentationWorker: XboxCatalogPresentationBuilding {
         var freeWithAdsCount = 0
         var ownedCount = 0
         var playableCount = 0
+        var unavailableCount = 0
 
         for (index, item) in presentableItems.enumerated() {
             if index.isMultiple(of: 64) {
                 try Task.checkCancellation()
             }
             favoriteCount += favoriteIDs.contains(item.id) ? 1 : 0
-            standardCount += item.accessKinds.contains(.standard) ? 1 : 0
-            freeWithAdsCount += item.supportsFreeWithAds ? 1 : 0
+            let routes = scopedRoutes(for: item, scope: scope)
+            standardCount += routes.contains {
+                $0.accessKind == .standard
+            } ? 1 : 0
+            freeWithAdsCount += routes.contains {
+                $0.accessKind == .freeWithAds
+            } ? 1 : 0
             ownedCount += item.isOwned ? 1 : 0
-            let isPlayable = item.routes.contains(where: \.isPlayable)
+            let isPlayable = !item.isTouchOnlyOnTVOS
+                && routes.contains(where: \.isPlayable)
             playableCount += isPlayable ? 1 : 0
+            let isUnavailable = item.isTouchOnlyOnTVOS
+                || routes.contains { !$0.isPlayable }
+            unavailableCount += isUnavailable ? 1 : 0
 
             for inputType in item.supportedInputTypes where inputType != .touch {
                 inputTypeCounts[inputType, default: 0] += 1
             }
-            let unavailableReasons = Set(item.routes.compactMap { route in
+            let unavailableReasons = Set(routes.compactMap { route in
                 route.isPlayable ? nil : route.playabilityReason
             })
             for reason in unavailableReasons {
@@ -300,9 +368,46 @@ actor XboxCatalogPresentationWorker: XboxCatalogPresentationBuilding {
             freeWithAdsCount: freeWithAdsCount,
             ownedCount: ownedCount,
             playableCount: playableCount,
-            unavailableCount: presentableItems.count - playableCount,
+            unavailableCount: unavailableCount,
             unavailableReasonCounts: unavailableReasonCounts
         )
+    }
+
+    private func scopedRoutes(
+        for item: XboxCatalogItem,
+        scope: XboxCatalogScope
+    ) -> [XboxCloudTitleRoute] {
+        switch scope {
+        case .library:
+            item.isTouchOnlyOnTVOS ? [] : item.routes.filter(\.isPlayable)
+        case .browse:
+            item.routes
+        }
+    }
+
+    private func preferredRoute(
+        in routes: [XboxCloudTitleRoute]
+    ) -> XboxCloudTitleRoute? {
+        routes.min { left, right in
+            if left.isPlayable != right.isPlayable {
+                return left.isPlayable
+            }
+            let leftPriority = accessPriority(left.accessKind)
+            let rightPriority = accessPriority(right.accessKind)
+            if leftPriority != rightPriority {
+                return leftPriority < rightPriority
+            }
+            return left.titleID < right.titleID
+        }
+    }
+
+    private func accessPriority(_ kind: XboxCloudAccessKind) -> Int {
+        switch kind {
+        case .standard:
+            0
+        case .freeWithAds:
+            1
+        }
     }
 
     private nonisolated static func genreID(_ genre: String) -> String? {

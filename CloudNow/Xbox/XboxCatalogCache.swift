@@ -91,6 +91,11 @@ private nonisolated enum XboxCatalogCacheCost {
     }
 }
 
+private nonisolated enum XboxCatalogCacheLimits {
+    static let maximumEstimatedCost = 8 * 1024 * 1024
+    static let maximumEncodedSize = 16 * 1024 * 1024
+}
+
 /// Bounded process-local implementation retained for isolated tests and
 /// explicitly ephemeral clients.
 actor XboxCatalogMemoryCache: XboxCatalogCaching {
@@ -110,7 +115,7 @@ actor XboxCatalogMemoryCache: XboxCatalogCaching {
     init(
         capacity: Int = 2,
         maximumItemCount: Int = XboxCatalogSnapshot.maximumRetainedItemCount,
-        maximumCost: Int = 2 * 1024 * 1024
+        maximumCost: Int = XboxCatalogCacheLimits.maximumEstimatedCost
     ) {
         self.capacity = max(1, capacity)
         self.maximumItemCount = max(1, maximumItemCount)
@@ -227,8 +232,8 @@ actor XboxCatalogCache: XboxCatalogCaching {
         directoryURL: URL? = nil,
         capacity: Int = 2,
         maximumItemCount: Int = XboxCatalogSnapshot.maximumRetainedItemCount,
-        maximumCost: Int = 2 * 1024 * 1024,
-        maximumEncodedSize: Int = 8 * 1024 * 1024,
+        maximumCost: Int = XboxCatalogCacheLimits.maximumEstimatedCost,
+        maximumEncodedSize: Int = XboxCatalogCacheLimits.maximumEncodedSize,
         manifestWriter: @escaping @Sendable (
             _ data: Data?,
             _ directoryURL: URL,

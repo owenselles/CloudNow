@@ -108,9 +108,13 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
   Live/XSTS, offering and access discovery, catalog, session allocation, REST
   SDP/ICE signaling, WebRTC media, Xbox data channels, controller input, and
   rumble; no browser, JavaScript runtime, backend, or copied client code.
-- **Access-aware Library** — standard, owned, and confirmed ad-supported routes
-  remain distinct through launch. Unavailable games stay visible with neutral
-  account, access, region, input, time-limit, or service reasons.
+- **Route-aware Library and Browse** — Home and Library contain only games for
+  which Microsoft confirms a playable route, excluding titles known to be
+  touch-only on tvOS. Browse keeps the full validated service catalog visible,
+  including touch-only titles and unavailable routes with neutral account,
+  access, region, input, time-limit, or service reasons. Access and playability
+  filters select the same route that a card opens; an ad-supported route is
+  playable only when Microsoft confirms it.
 - **Production 1440p path** — the validated Microsoft-web compatibility profile
   requests the account's Max Stream Quality. `Best` sends `1440` when that
   ceiling is available (and while optional access metadata is still unknown),
@@ -211,7 +215,8 @@ a specific game language when that provider exposes the control.
 
 In either provider mode, LB/RB on a connected controller moves through the
 top-level navigation, including the provider dropdown and that mode's tabs. GFN
-uses Home, Library, Store, and Settings; Xbox uses Home, Library, and Settings.
+uses Home, Library, Store, and Settings; Xbox uses Home, Library, Browse, and
+Settings.
 Once a stream is open, those shoulder buttons stay with the active streaming
 controller path instead of the app menu.
 
@@ -425,9 +430,9 @@ from stale peer, signaling, and data-channel generations are rejected.
 
 | Layer | Shared/provider-neutral | GeForce NOW-owned | Xbox-owned |
 |---|---|---|---|
-| App shell | Provider selection, tabs, focus, dialogs, lifecycle | GFN Home/Library/Store/Settings and launch presentation | Xbox Home/Library/Settings and launch presentation |
+| App shell | Provider selection, tabs, focus, dialogs, lifecycle | GFN Home/Library/Store/Settings and launch presentation | Xbox Home/Library/Browse/Settings and launch presentation |
 | Account and storage | Provider registry, Keychain abstraction, scoped reset/cache rules | OAuth state, cloud-library caches, GFN settings | Microsoft OAuth/Xbox Live/XSTS state, Xbox catalog and settings |
-| Catalog | Card primitives, artwork pipeline, Favorites presentation | Browse, Store, connected-library refresh, feature filters | Offering/access discovery, route-aware Library, input/access filters |
+| Catalog | Card primitives, artwork pipeline, Favorites presentation | Browse, Store, connected-library refresh, feature filters | Offering/access discovery, playable Library projection, full-catalog Browse projection, route-correlated filters |
 | Session safety | One-server-session and one-local-peer coordinator | CloudMatch lease and `SessionOrchestrator` | Xbox allocation lease, Leave/Continue/End lifecycle |
 | RTC/media primitives | One process-level `CloudRTCRuntime` factory, audio device, passive renderer, decoded-format inspection | Server-offer answer, GFN SDP policy, H.265 decoder policy, NVST media behavior | Client offer/answer, service overrides, Xbox channel/readiness policy |
 | Input | Device observation, responder surface, and controller haptics | GFN v2/v3 mapping, input, and text protocol | Xbox mapping, legacy/modern input, channel handshake, feedback, rumble |
@@ -513,10 +518,10 @@ CloudNow/
 │   ├── XboxContentAccessStore.swift   Bounded account-access cache and request coalescing
 │   ├── XboxFresnoCatalogDiscoveryClient.swift
 │   │                                  Credential-free ad-supported catalog discovery
-│   ├── XboxCloudCatalogClient.swift   Route-aware Library hydration and playability evidence
+│   ├── XboxCloudCatalogClient.swift   Route-aware catalog hydration and playability evidence
 │   ├── XboxCloudCatalogDetailLoader.swift
 │   │                                  Lazy localized description/artwork/detail enrichment
-│   ├── XboxCatalogCache.swift         Bounded process-local account/locale/market catalog snapshots
+│   ├── XboxCatalogCache.swift         Bounded account/locale/market stale-first catalog snapshots
 │   ├── XboxServiceContracts.swift     Catalog, access, route, playability, and UI-facing models
 │   ├── XboxCloudSessionAPI.swift      Web-compatible v5 allocation, queue/configuration/keepalive/delete
 │   ├── XboxCloudSignalingAPI.swift    Bounded REST local-offer upload and server-answer/ICE polling
@@ -566,7 +571,8 @@ CloudNow/
 │   ├── GameFilters.swift              GFN sorting and collection/genre/store/feature filters
 │   ├── SettingsView.swift             GFN account, stream, input, server, diagnostic, and reset controls
 │   ├── StreamView.swift               GFN session orchestration, player, pause, Leave, and End
-│   ├── XboxCloudViews.swift           Xbox Home/Library/Settings, catalog model, filters, and launch flow
+│   ├── XboxCloudViews.swift           Xbox Home/Library/Browse/Settings, catalog projections,
+│   │                                  route-correlated filters, and launch flow
 │   ├── XboxCatalogDetailView.swift    Xbox detail/access/input presentation
 │   ├── XboxCloudPlayerView.swift      Xbox full-screen player, HUD, pause, lifecycle, and session lease
 │   └── XboxVideoSurfaceView.swift     Xbox surface adapter and Simulator keyboard/pointer bridge
@@ -662,7 +668,7 @@ delivered stream, and the validated 1440p route delivered SDR8.
   H.264, SDR8, and Opus stereo. CloudNow does not expose Xbox HEVC, HDR/Main10,
   5.1, manual bitrate, L4S, or manual-region controls without service and
   delivered-media proof.
-- **Xbox title metadata has no authoritative cloud A/V capabilities.** Store
+- **Xbox title metadata has no authoritative cloud A/V capabilities.** Product
   badges are not treated as proof of 1440p, HDR, or surround delivery. The app
   shows observed session values rather than inventing Library filters.
 - **Simulator pointer input is limited.** The Xbox development bridge converts a

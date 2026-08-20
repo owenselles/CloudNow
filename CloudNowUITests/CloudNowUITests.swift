@@ -156,7 +156,7 @@ final class CloudNowUITests: XCTestCase {
 
         let xboxSettings = xboxApp.buttons["Settings"]
         XCTAssertTrue(xboxSettings.waitForExistence(timeout: 5))
-        selectTab(xboxSettings, movingRight: 2)
+        selectTab(xboxSettings, movingRight: 3)
         assertProviderSwitcherFollowsNativeNavigation(
             in: xboxApp,
             selectedTab: xboxSettings
@@ -178,9 +178,9 @@ final class CloudNowUITests: XCTestCase {
         XCUIRemote.shared.press(.select)
 
         assertEmptyXboxHome(in: app)
-        let browse = app.tabBars.buttons["Library"]
-        XCTAssertTrue(browse.waitForExistence(timeout: 3))
-        selectTab(browse, movingRight: 1)
+        let library = app.tabBars.buttons["Library"]
+        XCTAssertTrue(library.waitForExistence(timeout: 3))
+        selectTab(library, movingRight: 1)
         XCTAssertTrue(
             element("xbox-library-screen", in: app)
                 .waitForExistence(timeout: 3)
@@ -270,9 +270,9 @@ final class CloudNowUITests: XCTestCase {
 
         assertEmptyXboxHome(in: app)
 
-        let browse = app.tabBars.buttons["Library"]
-        XCTAssertTrue(browse.waitForExistence(timeout: 3))
-        selectTab(browse, movingRight: 1)
+        let library = app.tabBars.buttons["Library"]
+        XCTAssertTrue(library.waitForExistence(timeout: 3))
+        selectTab(library, movingRight: 1)
         XCTAssertTrue(
             element("xbox-library-screen", in: app)
                 .waitForExistence(timeout: 3)
@@ -282,6 +282,7 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(app.buttons["catalog-filter-button"].exists)
         XCTAssertTrue(app.buttons["reloadXboxCloudCatalogButton"].exists)
         XCTAssertFalse(app.buttons["Fixture Touch Only"].exists)
+        XCTAssertFalse(app.buttons["Fixture Preview Locked"].exists)
 
         let freeGame = element(
             "xbox-game-card.FIXTURE-ADVENTURE.freeWithAds.fixture-adventure",
@@ -317,6 +318,48 @@ final class CloudNowUITests: XCTestCase {
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(waitForFocus(freeGame))
 
+        let browse = app.tabBars.buttons["Browse"]
+        XCTAssertTrue(browse.waitForExistence(timeout: 3))
+        focusAndSelect(
+            browse,
+            directions: [.up, .right, .left],
+            pressesPerDirection: 12
+        )
+        XCTAssertTrue(
+            element("xbox-browse-screen", in: app)
+                .waitForExistence(timeout: 3)
+        )
+
+        let touchOnly = element(
+            "xbox-game-card.FIXTURE-TOUCH-ONLY.standard.fixture-touch-only",
+            in: app
+        )
+        XCTAssertTrue(touchOnly.waitForExistence(timeout: 3))
+        focusAndSelect(
+            touchOnly,
+            directions: [.down, .right, .left],
+            pressesPerDirection: 8
+        )
+        let touchOnlyCarouselCard = focusedButton(
+            labeled: "Fixture Touch Only",
+            in: app
+        )
+        XCTAssertTrue(touchOnlyCarouselCard.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(touchOnlyCarouselCard))
+        XCUIRemote.shared.press(.select)
+        let unavailableInputPlay = element(
+            "xbox-game.play.FIXTURE-TOUCH-ONLY",
+            in: app
+        )
+        XCTAssertTrue(unavailableInputPlay.waitForExistence(timeout: 3))
+        XCTAssertFalse(unavailableInputPlay.isEnabled)
+        XCTAssertTrue(
+            unavailableInputPlay.label.contains("compatible controller")
+        )
+        XCUIRemote.shared.press(.menu)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(waitForFocus(touchOnly))
+
         let lockedPreview = element(
             "xbox-game-card.FIXTURE-PREVIEW-LOCKED.freeWithAds.fixture-preview-locked",
             in: app
@@ -324,8 +367,8 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(lockedPreview.waitForExistence(timeout: 3))
         focusAndSelect(
             lockedPreview,
-            directions: [.right, .left],
-            pressesPerDirection: 3
+            directions: [.down, .right, .left],
+            pressesPerDirection: 8
         )
         let lockedCarouselCard = focusedButton(
             labeled: "Fixture Preview Locked",
@@ -379,9 +422,9 @@ final class CloudNowUITests: XCTestCase {
         XCUIRemote.shared.press(.select)
 
         assertEmptyXboxHome(in: app)
-        let browse = app.tabBars.buttons["Library"]
+        let browse = app.tabBars.buttons["Browse"]
         XCTAssertTrue(browse.waitForExistence(timeout: 3))
-        selectTab(browse, movingRight: 1)
+        selectTab(browse, movingRight: 2)
 
         let filters = app.buttons["catalog-filter-button"]
         XCTAssertTrue(filters.waitForExistence(timeout: 3))
@@ -405,7 +448,7 @@ final class CloudNowUITests: XCTestCase {
         )
         XCTAssertFalse(filterOptionButton(labeled: "Favorites", in: app).exists)
         XCTAssertTrue(
-            filterOptionButton(labeled: "Subscription Access", in: app).exists
+            filterOptionButton(labeled: "Cloud gaming access", in: app).exists
         )
         XCTAssertTrue(filterOptionButton(labeled: "Free with ads", in: app).exists)
         XCTAssertTrue(filterOptionButton(labeled: "Owned", in: app).exists)
@@ -417,6 +460,42 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(filterOptionButton(labeled: "Racing", in: app).exists)
         XCTAssertTrue(filterOptionButton(labeled: "Adventure", in: app).exists)
         XCTAssertTrue(filterOptionButton(labeled: "Puzzle", in: app).exists)
+    }
+
+    @MainActor
+    func testXboxLibraryToolbarAdaptsToSearchKeyboard() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+            "--cloudnow-ui-xbox-search-focused",
+        ])
+        app.launch()
+
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xbox.waitForExistence(timeout: 8))
+        XCUIRemote.shared.press(.right)
+        XCTAssertTrue(xbox.hasFocus)
+        XCUIRemote.shared.press(.select)
+
+        assertEmptyXboxHome(in: app)
+        let library = app.tabBars.buttons["Library"]
+        XCTAssertTrue(library.waitForExistence(timeout: 3))
+        selectTab(library, movingRight: 1)
+
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+
+        let filters = app.buttons["catalog-filter-button"]
+        let refresh = app.buttons["reloadXboxCloudCatalogButton"]
+        XCTAssertTrue(filters.waitForExistence(timeout: 3))
+        XCTAssertTrue(refresh.waitForExistence(timeout: 3))
+        XCTAssertTrue(refresh.isEnabled)
+        XCTAssertGreaterThan(
+            visibleFraction(of: refresh, inside: app.windows.firstMatch.frame),
+            0.95
+        )
+        XCTAssertLessThanOrEqual(refresh.frame.height, filters.frame.height * 1.25)
     }
 
     @MainActor
@@ -580,7 +659,7 @@ final class CloudNowUITests: XCTestCase {
 
         let xboxSettings = xboxApp.buttons["Settings"]
         XCTAssertTrue(xboxSettings.waitForExistence(timeout: 5))
-        selectTab(xboxSettings, movingRight: 2)
+        selectTab(xboxSettings, movingRight: 3)
         let xboxLanguage = element(
             "settings.stream-quality.game-language",
             in: xboxApp
@@ -680,7 +759,7 @@ final class CloudNowUITests: XCTestCase {
 
         let xboxSettings = xboxApp.buttons["Settings"]
         XCTAssertTrue(xboxSettings.waitForExistence(timeout: 5))
-        selectTab(xboxSettings, movingRight: 2)
+        selectTab(xboxSettings, movingRight: 3)
         XCTAssertTrue(
             element("xbox-settings-screen", in: xboxApp)
                 .waitForExistence(timeout: 3)

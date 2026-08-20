@@ -210,6 +210,13 @@ struct XboxCatalogDetailView: View {
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(isPlayable ? .green : .secondary)
 
+                    if let availabilityDescription {
+                        Text(availabilityDescription)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(maxWidth: 560, alignment: .leading)
+                    }
+
                     HStack(spacing: 16) {
                         Button(action: onPlay) {
                             Label(
@@ -454,16 +461,24 @@ struct XboxCatalogDetailView: View {
     }
 
     private var routeDescription: String {
-        switch route.accessKind {
+        guard route.isPlayable else {
+            return route.playabilityReason.label
+        }
+        return switch route.accessKind {
         case .standard:
             L10n.text("cloud_gaming_access")
         case .freeWithAds:
-            if route.isPlayable {
-                L10n.text("free_with_ads")
-            } else {
-                route.playabilityReason.label
-            }
+            L10n.text("free_with_ads")
         }
+    }
+
+    private var availabilityDescription: String? {
+        guard !route.isPlayable,
+              route.accessKind == .freeWithAds
+        else {
+            return nil
+        }
+        return L10n.text("xbox_free_with_ads_candidate_description")
     }
 
     private var accessSystemImage: String {

@@ -1370,6 +1370,49 @@ struct XboxCloudCatalogClientTests {
         #expect(await transport.requests().count == 2)
     }
 
+    @Test("Default policy retains playable catalog items beyond the legacy limit")
+    func defaultPolicyRetainsFullPlayableCatalog() async throws {
+        let itemCount = 2531
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "results": (0 ..< itemCount).map { index in
+                [
+                    "titleId": "route-\(index)",
+                    "details": [
+                        "productId": "PRODUCT-\(index)",
+                        "name": "Game \(index)",
+                        "hasEntitlement": true,
+                    ] as [String: Any],
+                ] as [String: Any]
+            },
+        ])
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == "GET" {
+                return StubbedHTTPResponse(data: payload)
+            }
+            return StubbedHTTPResponse(
+                json: #"{"Products":{},"InvalidIds":[]}"#
+            )
+        }
+        let client = XboxCloudCatalogClient(
+            sessionProvider: XboxCloudGSSessionProviderStub(session: makeSession()),
+            transport: transport,
+            now: { fixedDate }
+        )
+
+        let snapshot = try await client.fetchCatalog(
+            XboxCatalogRequest(localeIdentifier: "en-US", market: "US"),
+            account: makeAccount()
+        )
+
+        #expect(snapshot.items.count == itemCount)
+        let beyondLegacyLimit = try #require(
+            snapshot.items.dropFirst(1024).first
+        )
+        #expect(beyondLegacyLimit.id == "PRODUCT-1024")
+        #expect(beyondLegacyLimit.preferredRoute?.isPlayable == true)
+        #expect(snapshot.items.last?.id == "PRODUCT-2530")
+    }
+
     @Test("Product identity is case-insensitive before capping and route merging")
     func productIdentityCaseNormalization() async throws {
         let policy = try XboxCloudCatalogPolicy(

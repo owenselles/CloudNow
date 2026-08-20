@@ -101,21 +101,31 @@ localized compatibility explanation.
    Xbox Live and XSTS authorization.
 3. GeForce NOW and Xbox keep independent credential records. Signing into or
    switching away from one does not sign the other account out.
-4. After sign-in, Xbox presents Home, Library, and Settings while GeForce NOW
-   retains its existing Home, Library, Store, Settings, launch flow, and player.
-5. Xbox Home contains only Continue Playing, Recently Played, and Favorites when
-   those sections have content. Library contains the unified catalog and shows
-   only data-backed filters. Unavailable titles remain visible with a localized
-   account, access, region, input, time-limit, or service reason. Confirmed
-   ad-supported routes remain ordinary playable items with an Ads badge;
-   Microsoft owns any advertising experience.
-6. A top-left provider dropdown switches between the two modes. There is no
+4. After sign-in, Xbox presents Home, Library, Browse, and Settings while
+   GeForce NOW retains its existing Home, Library, Store, Settings, launch flow,
+   and player.
+5. Xbox Home and Library contain only games with at least one
+   Microsoft-confirmed playable route, excluding titles known to be touch-only
+   on tvOS. Continue Playing, Recently Played, and Favorites appear on Home only
+   when those playable sections have content. Browse contains the full
+   validated service catalog, including touch-only titles that cannot launch on
+   tvOS. It keeps
+   unavailable routes visible with localized account, access, region, input,
+   time-limit, or service reasons; it is not presented as a store and does not
+   promise a purchase, plan change, or other acquisition path that the service
+   has not supplied.
+6. Library and Browse keep independent search, sort, filter, and focus state.
+   Access, playability, and unavailable-reason filters are correlated to one
+   route, and that same route is opened from the resulting card. An
+   ad-supported route appears as playable in Library or Home only when Microsoft
+   confirms that route; otherwise it remains an unavailable Browse result.
+7. A top-left provider dropdown switches between the two modes. There is no
    merged home screen, catalog, settings form, or provider-branded borrowed UI.
-7. A global coordinator permits one cloud-server session and one local WebRTC
+8. A global coordinator permits one cloud-server session and one local WebRTC
    peer. Switching with an active session offers Leave or End; a parked session
    must be ended before the other provider can start. A failed server deletion
    keeps the lease quarantined instead of silently allowing a second session.
-8. Xbox Play allocates one session, shows shared queue/provisioning/connection
+9. Xbox Play allocates one session, shows shared queue/provisioning/connection
    states, then presents video in CloudNow's full-screen player. Leave retains a
    resumable allocation only until its service expiry. Continue reuses that
    allocation; explicit End deletes it and performs local teardown.
@@ -195,9 +205,12 @@ API or a separately reviewed, explicit transfer design.
    program, and remaining-time evidence for every route. Content Access uses the
    exact offering selected by the coalesced Game Streaming login. A
    credential-free request discovers the current ad-supported catalog; localized
-   metadata is resolved without sending a Microsoft credential. Standard and ad
-   routes for one product are merged without losing distinct title identifiers,
-   and only service-confirmed ad routes are marked playable.
+   metadata is resolved without sending a Microsoft credential. Cloud gaming
+   access and ad-supported routes for one product are merged without losing
+   distinct title identifiers. The UI derives a confirmed-playable Library and
+   Home from those routes and a full-catalog Browse. Filters and card selection
+   use the same route, and only a service-confirmed ad-supported route is marked
+   playable.
 6. Play creates one v5 cloud session, polls queue and provisioning states within
    an ETA-aware allocation deadline capped at 15 minutes, obtains the
    console-transfer URI, submits the short-lived Microsoft transfer token, and
@@ -272,7 +285,10 @@ Xbox must preserve CloudNow's established performance invariants:
   activation for the inactive mode.
 - Xbox catalog clients and the stream controller are factory-created only when
   needed; switching drops their in-flight work and transient rows.
-- Catalog snapshots retain at most 1,024 validated unique items. Artwork is HTTPS,
+- Catalog snapshots retain at most 4,096 validated unique items. The
+  account/locale/market-scoped disk cache may display its bounded last-known
+  snapshot while an expired entry is revalidated; refresh failure leaves that
+  snapshot visibly stale rather than treating it as fresh. Artwork is HTTPS,
   credential-free, downsampled, and handled by the shared bounded pipeline.
 - Session allocation, polling, keepalive, candidate lists, response bodies,
   controller slots, queued input, retries, and caches all have explicit bounds.
@@ -327,10 +343,17 @@ delivered-media evidence before changing one Xbox-owned variable at a time.
 2. Select Xbox and confirm its QR code and device code remain visible until the
    Microsoft flow succeeds or Cancel is selected; the screen must not return to
    the provider chooser on its own.
-3. Complete sign-in and confirm Xbox opens its own Home, Library, and Settings
-   tabs with the top-left provider dropdown visible.
-4. Validate the account's standard, free, and owned access routes. Launch a
-   title and verify queue/provisioning states, requested-versus-delivered resolution,
+3. Complete sign-in and confirm Xbox opens its own Home, Library, Browse, and
+   Settings tabs with the top-left provider dropdown visible. Confirm Home and
+   Library contain only games with a playable route and exclude titles known to
+   be touch-only. Confirm Browse retains the full catalog, including those titles
+   marked with a compatible-input requirement and route-specific unavailable
+   reasons.
+4. Validate the account's cloud gaming access, ad-supported, and owned evidence.
+   Combine access and playability filters and confirm the opened card uses the
+   route that satisfied both filters. Confirm an unconfirmed or unavailable
+   ad-supported route remains in Browse but not Library. Launch a title and
+   verify queue/provisioning states, requested-versus-delivered resolution,
    delivered H.264 SDR8 video and Opus stereo audio, cancellation, Leave,
    Continue without a second allocation, reconnect after a temporary network
    interruption, and explicit End.
@@ -371,12 +394,13 @@ Record the displayed CloudNow error and redacted diagnostics if a live request
 fails. Do not capture or share Microsoft, Xbox Live, XSTS, Game Streaming, or
 transfer tokens.
 
-For an account enrolled in the ad-supported preview but without standard cloud
-access, confirm Library offers the Ads filter only when it is non-empty, the
-selected confirmed route reaches the normal queue/provisioning flow, and
-unconfirmed routes stay disabled with a neutral reason. CloudNow does not
-simulate, suppress, or claim completion of advertising; Microsoft controls
-preview eligibility, ad presentation, and session limits.
+For an account enrolled in the ad-supported preview but without cloud gaming
+access, confirm Library offers the Ads filter only when a confirmed playable
+ad-supported route exists, the selected route reaches the normal
+queue/provisioning flow, and unconfirmed routes remain disabled in Browse with a
+neutral reason. CloudNow does not simulate, suppress, or claim completion of
+advertising; Microsoft controls preview eligibility, ad presentation, and
+session limits.
 
 ## First-party references
 

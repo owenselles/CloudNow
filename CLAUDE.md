@@ -120,7 +120,8 @@ guard.
   clients, and the local credential group own the Xbox account path.
 - `XboxCloudOfferingService` owns the validated endpoint/protocol/identity
   compatibility profile. Content Access, Fresno discovery, catalog, detail, and
-  cache clients own account access, Max Stream Quality, routes, and Library data.
+  cache clients own account access, Max Stream Quality, routes, and the
+  confirmed-route Library/full-catalog Browse projections.
 - `XboxCloudSessionAPI` owns allocation, queue/configuration, keepalive, and
   deletion. `XboxCloudSignalingAPI` owns bounded REST SDP/ICE exchange.
 - `XboxCloudWebRTCTransport` is the client-offer WebRTC path and owns service
@@ -131,8 +132,8 @@ guard.
   `XboxProductionRuntimeContext` own launch, reconnect, Leave/Continue/End, and
   the lazy production graph. `XboxCloudRTCStatsSampler` reports delivered media.
 - `UI/XboxCloudViews`, `XboxCatalogDetailView`, `XboxCloudPlayerView`, and
-  `XboxVideoSurfaceView` own Xbox Home/Library/Settings, player, and Simulator
-  input bridge.
+  `XboxVideoSurfaceView` own Xbox Home/Library/Browse/Settings, route-correlated
+  catalog presentation, player, and Simulator input bridge.
 
 GFN and Xbox share the factory and passive media primitives, but they do not
 import or translate one another's authentication, session, signaling, SDP,
