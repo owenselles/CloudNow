@@ -193,6 +193,94 @@ struct LocalizationIntegrityTests {
         #expect(L10n.translationTable(for: alias) == L10n.translationTable(for: expectedTable))
     }
 
+    @Test(
+        "Regional service locales resolve language-only translation tables",
+        arguments: [
+            MappingCase(input: "ar_SA", expected: "ar"),
+            MappingCase(input: "ca_ES", expected: "ca"),
+            MappingCase(input: "ja_JP", expected: "ja"),
+            MappingCase(input: "he_IL", expected: "he"),
+            MappingCase(input: "nb_NO", expected: "nb"),
+            MappingCase(input: "no_NO", expected: "nb"),
+            MappingCase(input: "nn_NO", expected: "nb"),
+            MappingCase(input: "uk_UA", expected: "uk"),
+        ]
+    )
+    func regionalTranslationTableResolution(testCase: MappingCase) {
+        #expect(
+            L10n.translationLocaleCode(for: testCase.input) == testCase.expected
+        )
+        #expect(
+            L10n.translationTable(for: testCase.input)
+                == L10n.translationTable(for: testCase.expected)
+        )
+    }
+
+    @Test("Arabic and Hebrew use right-to-left presentation")
+    func rightToLeftPresentation() {
+        #expect(L10n.isRightToLeft(localeIdentifier: "ar-SA"))
+        #expect(L10n.isRightToLeft(localeIdentifier: "he_IL"))
+        #expect(!L10n.isRightToLeft(localeIdentifier: "de-DE"))
+        #expect(!L10n.isRightToLeft(localeIdentifier: "en-US"))
+    }
+
+    @Test("Language names use the active UI locale")
+    func localizedLanguageNames() {
+        let english = L10n.localizedLanguageName(
+            for: "ja_JP",
+            locale: Locale(identifier: "en_US")
+        )
+        let german = L10n.localizedLanguageName(
+            for: "ja_JP",
+            locale: Locale(identifier: "de_DE")
+        )
+
+        #expect(!english.isEmpty)
+        #expect(!german.isEmpty)
+        #expect(german != english)
+    }
+
+    @Test("Lists and durations follow the presentation locale")
+    func localeAwareComposedValues() {
+        let values = ["Alpha", "Beta", "Gamma"]
+        let englishList = L10n.localizedList(
+            values,
+            locale: Locale(identifier: "en_US")
+        )
+        let germanList = L10n.localizedList(
+            values,
+            locale: Locale(identifier: "de_DE")
+        )
+        let arabicList = L10n.localizedList(
+            values,
+            locale: Locale(identifier: "ar_SA")
+        )
+
+        #expect(germanList != englishList)
+        #expect(arabicList != englishList)
+        for value in values {
+            #expect(germanList.contains(value))
+            #expect(arabicList.contains(value))
+        }
+
+        let englishDuration = L10n.localizedSeconds(
+            1.2,
+            locale: Locale(identifier: "en_US")
+        )
+        let germanDuration = L10n.localizedSeconds(
+            1.2,
+            locale: Locale(identifier: "de_DE")
+        )
+        let arabicDuration = L10n.localizedSeconds(
+            1.2,
+            locale: Locale(identifier: "ar_SA")
+        )
+
+        #expect(!englishDuration.isEmpty)
+        #expect(!germanDuration.isEmpty)
+        #expect(arabicDuration != englishDuration)
+    }
+
     @Test("Unsupported locales fall back to English")
     func unsupportedLocaleFallback() {
         let english = L10n.translationTable(for: "en-US")

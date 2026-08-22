@@ -367,7 +367,7 @@ private struct XboxLibraryRefreshOverallProgressCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(statusText)
                     .font(.headline)
-                    .foregroundStyle(color)
+                    .foregroundStyle(.primary)
 
                 ProgressView(
                     value: Double(completedStepCount),
@@ -439,7 +439,7 @@ private struct XboxLibraryRefreshStepRow: View {
             }
             Text(phase.statusText)
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(phase.color)
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -498,13 +498,13 @@ private struct XboxLibraryRefreshMessageCard: View {
     var body: some View {
         Label {
             Text(message)
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {
             Image(systemName: symbol)
                 .foregroundStyle(color)
                 .accessibilityHidden(true)
         }
-        .foregroundStyle(color)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .xboxLibraryRefreshFocusableCard(

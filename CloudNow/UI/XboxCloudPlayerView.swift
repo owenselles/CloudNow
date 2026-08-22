@@ -52,6 +52,7 @@ struct XboxCloudPlayerView: View {
         }
         .background(.black)
         .ignoresSafeArea()
+        .environment(\.colorScheme, .dark)
         .task(id: launchAttempt) {
             localFailureMessage = nil
             endConfirmationFailed = false
@@ -390,13 +391,16 @@ struct XboxCloudPlayerView: View {
     }
 
     private var statusDetail: String? {
-        if case let .reconnecting(attempt, maximumAttempts, nextDelay) = controller.state {
+        if case let .reconnecting(attempt, _, nextDelay) = controller.state {
             let attemptText = L10n.format(
                 "reconnecting_attempt_note",
                 attempt
             )
             guard let nextDelay else { return attemptText }
-            return "\(attemptText) · \(Int(nextDelay.rounded(.up)))s / \(maximumAttempts)"
+            return L10n.localizedList([
+                attemptText,
+                L10n.localizedSeconds(nextDelay),
+            ])
         }
         let estimatedSeconds: TimeInterval? = switch controller.state {
         case let .waiting(estimatedSeconds),

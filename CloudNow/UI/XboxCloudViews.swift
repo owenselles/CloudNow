@@ -4,6 +4,7 @@ import SwiftUI
 struct XboxLoginView: View {
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
     @Environment(XboxAuthManager.self) private var xboxAuthManager
+    @Environment(\.colorScheme) private var colorScheme
     let fallbackProvider: CloudGamingProvider?
 
     init(fallbackProvider: CloudGamingProvider? = nil) {
@@ -12,6 +13,8 @@ struct XboxLoginView: View {
 
     var body: some View {
         ZStack {
+            adaptiveBackgroundColor.ignoresSafeArea()
+
             switch xboxAuthManager.signInState {
             case .idle, .cancelled:
                 loginPrompt
@@ -26,6 +29,8 @@ struct XboxLoginView: View {
                         verificationURLComplete: authorization.qrVerificationURI.absoluteString,
                         accentColor: .blue,
                         accessibilityIdentifier: "xbox-device-code-login",
+                        primaryForegroundColor: .primary,
+                        secondaryForegroundColor: .secondary,
                         onCancel: cancel
                     )
                 } else {
@@ -55,7 +60,11 @@ struct XboxLoginView: View {
 
     private var loginPrompt: some View {
         VStack(spacing: 48) {
-            CloudNowBrandHeader(subtitle: L10n.text("xbox_cloud_gaming"))
+            CloudNowBrandHeader(
+                subtitle: L10n.text("xbox_cloud_gaming"),
+                primaryForegroundColor: .primary,
+                secondaryForegroundColor: .secondary
+            )
 
             VStack(spacing: 16) {
                 Button {
@@ -93,10 +102,10 @@ struct XboxLoginView: View {
         VStack(spacing: 24) {
             ProgressView()
                 .scaleEffect(2)
-                .tint(.white)
+                .tint(.primary)
             Text(message)
                 .font(.title2)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
     }
 
@@ -104,7 +113,7 @@ struct XboxLoginView: View {
         VStack(spacing: 32) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 60))
-                .foregroundStyle(.yellow)
+                .foregroundStyle(.red)
             Text(L10n.text("sign_in_failed"))
                 .font(.title.weight(.semibold))
             Text(message)
@@ -154,6 +163,10 @@ struct XboxLoginView: View {
 
     private func displayURL(_ url: URL) -> String {
         url.absoluteString.replacingOccurrences(of: "https://", with: "")
+    }
+
+    private var adaptiveBackgroundColor: Color {
+        colorScheme == .dark ? .black : .white
     }
 }
 
@@ -1932,7 +1945,7 @@ private struct XboxCatalogHome: View {
     }
 
     private var emptyStateMessage: String {
-        L10n.text("empty_home_message")
+        L10n.text("xbox_empty_home_message")
     }
 
     private var recentlyPlayedWithoutHero: [XboxCatalogItem] {
@@ -2278,7 +2291,7 @@ private struct XboxCatalogRail: View {
         VStack(alignment: .leading, spacing: 20) {
             Text(title)
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 60)
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -3640,18 +3653,18 @@ private struct XboxCatalogSelection: Identifiable {
     var badge: CloudCatalogCardBadge? {
         guard isInputAvailable else {
             return CloudCatalogCardBadge(
-                title: L10n.text("compatible_input_required"),
+                title: L10n.text("input"),
                 systemImage: "gamecontroller",
-                foregroundColor: .white,
-                backgroundColor: .gray
+                foregroundColor: .black,
+                backgroundColor: .white.opacity(0.9)
             )
         }
         guard route.isPlayable else {
             return CloudCatalogCardBadge(
                 title: route.playabilityReason.label,
                 systemImage: "lock.fill",
-                foregroundColor: .white,
-                backgroundColor: .gray
+                foregroundColor: .black,
+                backgroundColor: .white.opacity(0.9)
             )
         }
         guard route.accessKind == .freeWithAds else { return nil }
@@ -3881,10 +3894,13 @@ private struct XboxCatalogRefreshWarning: View {
     var body: some View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Label(
-                    L10n.text("catalog_may_be_out_of_date"),
-                    systemImage: "exclamationmark.triangle.fill"
-                )
+                Label {
+                    Text(L10n.text("catalog_may_be_out_of_date"))
+                        .foregroundStyle(.primary)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
                 if let lastUpdatedAt {
                     Text(
                         L10n.format(
@@ -3895,10 +3911,10 @@ private struct XboxCatalogRefreshWarning: View {
                             )
                         )
                     )
+                    .foregroundStyle(.secondary)
                 }
             }
             .font(.caption)
-            .foregroundStyle(.yellow)
 
             Button(L10n.text("refresh_library"), action: onRetry)
                 .buttonStyle(.bordered)
@@ -3993,7 +4009,7 @@ private struct XboxSettingsView: View {
                 }
 
                 Section(L10n.text("game")) {
-                    CloudNowGameLanguagePicker(
+                    XboxGameLanguagePicker(
                         selection: $modeViewModel.streamSettings.gameLanguage
                     )
                 }
@@ -4297,7 +4313,10 @@ private struct XboxSettingsView: View {
         let hasFreeWithAds = kinds.contains(.freeWithAds)
         switch (hasStandard, hasFreeWithAds) {
         case (true, true):
-            return "\(L10n.text("connected")) · \(L10n.text("free_with_ads"))"
+            return L10n.localizedList([
+                L10n.text("connected"),
+                L10n.text("free_with_ads"),
+            ])
         case (true, false):
             return L10n.text("connected")
         case (false, true):
@@ -4504,6 +4523,30 @@ private struct XboxSettingsView: View {
             return true
         }
         return await sessionCoordinator.endServerSessionUsingProvider(lease)
+    }
+}
+
+private struct XboxGameLanguagePicker: View {
+    @Binding var selection: String
+
+    private static let languageCodes = [
+        "en_US", "en_GB", "fr_FR", "de_DE", "es_ES", "it_IT", "pt_BR",
+        "hi_IN", "ja_JP", "ko_KR", "zh_CN", "zh_TW", "ru_RU", "ar_SA",
+        "nl_NL", "pl_PL", "sv_SE", "fi_FI", "tr_TR", "el_GR", "he_IL",
+        "cs_CZ", "da_DK", "hr_HR", "hu_HU", "id_ID", "ms_MY", "ro_RO",
+        "sk_SK", "vi_VN", "uk_UA",
+    ]
+
+    var body: some View {
+        Picker(L10n.text("game_language"), selection: $selection) {
+            Text(L10n.text("automatic"))
+                .tag(XboxCloudStreamSettings.automaticGameLanguage)
+            ForEach(Self.languageCodes, id: \.self) { code in
+                Text(L10n.localizedLanguageName(for: code))
+                    .tag(code)
+            }
+        }
+        .accessibilityIdentifier("settings.stream-quality.game-language")
     }
 }
 

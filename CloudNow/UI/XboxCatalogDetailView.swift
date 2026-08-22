@@ -59,7 +59,7 @@ struct XboxCatalogDetailView: View {
         let inputTypes = item.supportedInputTypes
             .sorted { $0.rawValue < $1.rawValue }
             .map(localizedInputName)
-            .joined(separator: ", ")
+        let localizedInputTypes = L10n.localizedList(inputTypes)
         return [
             item.contentRating.map { (L10n.text("rating"), $0) },
             item.developer.map { (L10n.text("developer"), $0) },
@@ -68,21 +68,26 @@ struct XboxCatalogDetailView: View {
             },
             item.genres.isEmpty
                 ? nil
-                : (L10n.text("genres"), item.genres.joined(separator: ", ")),
-            inputTypes.isEmpty ? nil : (L10n.text("input"), inputTypes),
+                : (L10n.text("genres"), L10n.localizedList(item.genres)),
+            localizedInputTypes.isEmpty
+                ? nil
+                : (L10n.text("input"), localizedInputTypes),
             (L10n.text("access"), accessDescription),
         ].compactMap { $0 }
     }
 
     var body: some View {
-        if isEmbeddedCarousel {
-            detailScrollContent
-                .scrollDisabled(true)
-                .allowsHitTesting(false)
-                .padding(.top, 36)
-        } else {
-            expandedBody
+        Group {
+            if isEmbeddedCarousel {
+                detailScrollContent
+                    .scrollDisabled(true)
+                    .allowsHitTesting(false)
+                    .padding(.top, 36)
+            } else {
+                expandedBody
+            }
         }
+        .environment(\.colorScheme, .dark)
     }
 
     private var expandedBody: some View {
@@ -314,7 +319,7 @@ struct XboxCatalogDetailView: View {
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
                     if !item.genres.isEmpty {
-                        Text(item.genres.joined(separator: " · "))
+                        Text(L10n.localizedList(item.genres))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -376,7 +381,7 @@ struct XboxCatalogDetailView: View {
 
     private func detailValue(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
+            Text(label.uppercased(with: L10n.localizationLocale))
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.55))
                 .kerning(1)
@@ -391,19 +396,9 @@ struct XboxCatalogDetailView: View {
     @ViewBuilder
     private var genreLine: some View {
         if !item.genres.isEmpty {
-            HStack(spacing: 0) {
-                ForEach(Array(item.genres.enumerated()), id: \.offset) {
-                    index,
-                    genre in
-                    if index > 0 {
-                        Text("  ·  ")
-                            .foregroundStyle(.white.opacity(0.45))
-                    }
-                    Text(genre)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-            }
-            .font(.callout)
+            Text(L10n.localizedList(item.genres))
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.75))
         }
     }
 
@@ -428,7 +423,7 @@ struct XboxCatalogDetailView: View {
 
     private func rightInfo(_ label: String, _ value: String) -> some View {
         VStack(alignment: .trailing, spacing: 2) {
-            Text(label.uppercased())
+            Text(label.uppercased(with: L10n.localizationLocale))
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.6))
                 .kerning(1)
@@ -444,7 +439,10 @@ struct XboxCatalogDetailView: View {
             return L10n.text("compatible_input_required")
         }
         if item.isOwned {
-            return "\(L10n.text("owned")) · \(routeDescription)"
+            return L10n.localizedList([
+                L10n.text("owned"),
+                routeDescription,
+            ])
         }
         return routeDescription
     }

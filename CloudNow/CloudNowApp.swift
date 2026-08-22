@@ -18,14 +18,17 @@ struct CloudNowApp: App {
     private let xboxEnvironment: XboxCloudEnvironment
     #if DEBUG
         private let usesUITestFixtures: Bool
+        private let uiTestColorScheme: ColorScheme?
     #endif
 
     init() {
         #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
             let usesUITestFixtures =
-                ProcessInfo.processInfo.arguments.contains("--cloudnow-ui-testing")
+                arguments.contains("--cloudnow-ui-testing")
                     || ProcessInfo.processInfo.environment["CLOUDNOW_UI_TESTING"] == "1"
             self.usesUITestFixtures = usesUITestFixtures
+            uiTestColorScheme = Self.requestedUITestColorScheme(arguments: arguments)
             let authManager = usesUITestFixtures
                 ? AuthManager(
                     backgroundScheduler: .disabled,
@@ -129,6 +132,8 @@ struct CloudNowApp: App {
                         .environment(authManager)
                         .environment(providerCoordinator)
                         .environment(xboxAuthManager)
+                        .environment(\.locale, L10n.localizationLocale)
+                        .environment(\.colorScheme, uiTestColorScheme ?? .dark)
                     } else {
                         productionRoot
                     }
@@ -137,6 +142,10 @@ struct CloudNowApp: App {
                 #endif
             }
             .environment(cloudSessionCoordinator)
+            .environment(
+                \.layoutDirection,
+                L10n.isRightToLeft ? .rightToLeft : .leftToRight
+            )
             .modifier(CloudAppLifecycleModifier())
             .alert(
                 L10n.text("reset_failed"),
@@ -293,6 +302,23 @@ struct CloudNowApp: App {
     }
 
     #if DEBUG
+        private static func requestedUITestColorScheme(
+            arguments: [String]
+        ) -> ColorScheme? {
+            guard let flagIndex = arguments.firstIndex(
+                of: "--cloudnow-ui-color-scheme"
+            ),
+                arguments.indices.contains(flagIndex + 1)
+            else {
+                return nil
+            }
+            return switch arguments[flagIndex + 1] {
+            case "light": .light
+            case "dark": .dark
+            default: nil
+            }
+        }
+
         private static let uiTestAuthSession = AuthSession(
             provider: LoginProvider(
                 idpId: "fixture",
@@ -341,6 +367,7 @@ private struct AuthRestorationView: View {
             ProgressView()
                 .tint(.secondary)
         }
+        .environment(\.colorScheme, .dark)
     }
 }
 

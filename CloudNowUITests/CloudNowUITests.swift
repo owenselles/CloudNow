@@ -56,6 +56,234 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testServiceChooserAndXboxDeviceCodeInLightAppearance() {
+        assertServiceChooserAndXboxDeviceCodeAppearance(.light)
+    }
+
+    @MainActor
+    func testServiceChooserAndXboxDeviceCodeInDarkAppearance() {
+        assertServiceChooserAndXboxDeviceCodeAppearance(.dark)
+    }
+
+    @MainActor
+    func testXboxLibraryRefreshProgressInLightAppearance() {
+        assertXboxLibraryRefreshProgressAppearance(.light)
+    }
+
+    @MainActor
+    func testXboxLibraryRefreshProgressInDarkAppearance() {
+        assertXboxLibraryRefreshProgressAppearance(.dark)
+    }
+
+    @MainActor
+    func testGermanLocalizationRendersServiceChooserAndXboxDeviceCode() {
+        let app = makeApp(
+            language: "de",
+            localeIdentifier: "de_DE",
+            extraArguments: ["--cloudnow-ui-service-chooser"]
+        )
+        app.launch()
+
+        XCTAssertTrue(
+            element("service-chooser", in: app)
+                .waitForExistence(timeout: 8)
+        )
+        let chooserTitle = app.staticTexts["Cloud-Gaming-Dienst auswählen"]
+        let chooserFooter = app.staticTexts[
+            "Konten bleiben getrennt und angemeldet, wenn du zwischen Diensten wechselst."
+        ]
+        XCTAssertTrue(chooserTitle.exists, app.debugDescription)
+        XCTAssertTrue(chooserFooter.exists, app.debugDescription)
+
+        let geForceNow = app.buttons["GeForce NOW"]
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(geForceNow.exists)
+        XCTAssertTrue(xbox.exists)
+        XCTAssertLessThan(geForceNow.frame.midX, xbox.frame.midX)
+
+        openXboxDeviceCodeLogin(in: app, xboxChoice: xbox)
+
+        XCTAssertTrue(app.staticTexts["Bei Xbox Cloud Gaming anmelden"].exists)
+        XCTAssertTrue(app.staticTexts["QR-Code scannen oder öffnen:"].exists)
+        XCTAssertTrue(app.staticTexts["und diese PIN eingeben:"].exists)
+        XCTAssertTrue(app.staticTexts["Warten auf Anmeldung..."].exists)
+        XCTAssertEqual(
+            app.buttons["xbox-device-code-login.cancel"].label,
+            "Abbrechen"
+        )
+    }
+
+    @MainActor
+    func testArabicLocalizationRendersRightToLeftServiceChooser() {
+        let app = makeApp(
+            language: "ar",
+            localeIdentifier: "ar_SA",
+            extraArguments: ["--cloudnow-ui-service-chooser"]
+        )
+        app.launch()
+
+        XCTAssertTrue(
+            element("service-chooser", in: app)
+                .waitForExistence(timeout: 8)
+        )
+        let chooserTitle = app.staticTexts["اختر خدمة الألعاب السحابية"]
+        let chooserFooter = app.staticTexts[
+            "تظل الحسابات منفصلة ومسجّلة الدخول عند التبديل بين الخدمات."
+        ]
+        XCTAssertTrue(chooserTitle.exists, app.debugDescription)
+        XCTAssertTrue(chooserFooter.exists, app.debugDescription)
+
+        let geForceNow = app.buttons["GeForce NOW"]
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(geForceNow.exists)
+        XCTAssertTrue(xbox.exists)
+        XCTAssertGreaterThan(
+            geForceNow.frame.midX,
+            xbox.frame.midX,
+            "The first service choice should lead from the right in Arabic."
+        )
+
+        let windowFrame = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(
+            visibleFraction(of: chooserTitle, inside: windowFrame),
+            0.9
+        )
+        XCTAssertGreaterThan(
+            visibleFraction(of: chooserFooter, inside: windowFrame),
+            0.9
+        )
+    }
+
+    @MainActor
+    func testGermanLocalizationRendersConfiguredXboxSettings() {
+        let app = makeApp(
+            language: "de",
+            localeIdentifier: "de_DE",
+            extraArguments: [
+                "--cloudnow-ui-service-chooser",
+                "--cloudnow-ui-xbox-configured",
+            ]
+        )
+        app.launch()
+
+        openConfiguredXbox(in: app)
+        let emptyHomeMessage = app.staticTexts[
+            "Starten Sie ein Spiel, damit es hier erscheint, oder fügen Sie unter „Durchsuchen“ Favoriten hinzu."
+        ]
+        XCTAssertTrue(emptyHomeMessage.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(
+            visibleFraction(
+                of: emptyHomeMessage,
+                inside: app.windows.firstMatch.frame
+            ),
+            0.9
+        )
+        openXboxSettings(in: app, settingsLabel: "Einstellungen")
+
+        let resolution = element(
+            "settings.stream-quality.resolution",
+            in: app
+        )
+        let gameLanguage = element(
+            "settings.stream-quality.game-language",
+            in: app
+        )
+        XCTAssertTrue(resolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(gameLanguage.waitForExistence(timeout: 3))
+        XCTAssertEqual(resolution.label, "Auflösung")
+        XCTAssertEqual(resolution.value as? String, "Automatisch")
+        XCTAssertEqual(gameLanguage.label, "Sprache des Spiels")
+        XCTAssertEqual(gameLanguage.value as? String, "Automatisch")
+
+        let focusedGameLanguage = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "hasFocus == true AND label CONTAINS %@",
+                "Sprache des Spiels"
+            ))
+            .firstMatch
+        for _ in 0 ..< 20 where !focusedGameLanguage.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedGameLanguage.exists)
+        XCUIRemote.shared.press(.select)
+        let japanese = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@",
+                "Japanisch (Japan)"
+            ))
+            .firstMatch
+        XCTAssertTrue(japanese.waitForExistence(timeout: 3), app.debugDescription)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(
+            element("xbox-settings-screen", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertEqual(gameLanguage.value as? String, "Automatisch")
+
+        let windowFrame = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(
+            visibleFraction(of: resolution, inside: windowFrame),
+            0.9
+        )
+        XCTAssertGreaterThan(
+            visibleFraction(of: gameLanguage, inside: windowFrame),
+            0.9
+        )
+    }
+
+    @MainActor
+    func testArabicLocalizationRendersConfiguredXboxSettingsRightToLeft() {
+        let app = makeApp(
+            language: "ar",
+            localeIdentifier: "ar_SA",
+            extraArguments: [
+                "--cloudnow-ui-service-chooser",
+                "--cloudnow-ui-xbox-configured",
+            ]
+        )
+        app.launch()
+
+        openConfiguredXboxSettings(in: app, settingsLabel: "الإعدادات")
+
+        let home = app.tabBars.buttons["الرئيسية"]
+        let library = app.tabBars.buttons["المكتبة"]
+        let browse = app.tabBars.buttons["تصفح"]
+        let settings = app.tabBars.buttons["الإعدادات"]
+        XCTAssertTrue(home.exists)
+        XCTAssertTrue(library.exists)
+        XCTAssertTrue(browse.exists)
+        XCTAssertTrue(settings.exists)
+        XCTAssertGreaterThan(home.frame.midX, library.frame.midX)
+        XCTAssertGreaterThan(library.frame.midX, browse.frame.midX)
+        XCTAssertGreaterThan(browse.frame.midX, settings.frame.midX)
+
+        let resolution = element(
+            "settings.stream-quality.resolution",
+            in: app
+        )
+        let gameLanguage = element(
+            "settings.stream-quality.game-language",
+            in: app
+        )
+        XCTAssertTrue(resolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(gameLanguage.waitForExistence(timeout: 3))
+        XCTAssertEqual(resolution.label, "الدقة")
+        XCTAssertEqual(resolution.value as? String, "تلقائي")
+        XCTAssertEqual(gameLanguage.label, "لغة اللعبة")
+        XCTAssertEqual(gameLanguage.value as? String, "تلقائي")
+
+        let windowFrame = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(
+            visibleFraction(of: resolution, inside: windowFrame),
+            0.9
+        )
+        XCTAssertGreaterThan(
+            visibleFraction(of: gameLanguage, inside: windowFrame),
+            0.9
+        )
+    }
+
+    @MainActor
     func testConfiguredXboxUsesCloudNowShellAndRoundTripsBetweenServices() {
         let app = makeApp(extraArguments: [
             "--cloudnow-ui-service-chooser",
@@ -1073,16 +1301,35 @@ final class CloudNowUITests: XCTestCase {
         )
     }
 
+    private enum UITestColorScheme: String {
+        case light
+        case dark
+    }
+
     @MainActor
-    private func makeApp(extraArguments: [String] = []) -> XCUIApplication {
+    private func makeApp(
+        language: String = "en",
+        localeIdentifier: String = "en_US",
+        colorScheme: UITestColorScheme? = nil,
+        extraArguments: [String] = []
+    ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [
+        var launchArguments = [
             "--cloudnow-ui-testing",
+            "--cloudnow-ui-language",
+            language,
             "-AppleLanguages",
-            "(en)",
+            "(\(language))",
             "-AppleLocale",
-            "en_US",
-        ] + extraArguments
+            localeIdentifier,
+        ]
+        if let colorScheme {
+            launchArguments += [
+                "--cloudnow-ui-color-scheme",
+                colorScheme.rawValue,
+            ]
+        }
+        app.launchArguments = launchArguments + extraArguments
         app.launchEnvironment = [
             "CLOUDNOW_DISABLE_LIVE_SERVICES": "1",
             "CLOUDNOW_TESTING": "1",
@@ -1093,6 +1340,130 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    private func assertServiceChooserAndXboxDeviceCodeAppearance(
+        _ colorScheme: UITestColorScheme
+    ) {
+        let app = makeApp(
+            colorScheme: colorScheme,
+            extraArguments: ["--cloudnow-ui-service-chooser"]
+        )
+        app.launch()
+
+        XCTAssertTrue(
+            element("service-chooser", in: app)
+                .waitForExistence(timeout: 8)
+        )
+        XCTAssertTrue(app.buttons["GeForce NOW"].exists)
+        let xbox = app.buttons["Xbox Cloud Gaming"]
+        XCTAssertTrue(xbox.exists)
+        attachScreenshot(
+            of: app,
+            named: "Service Chooser - \(colorScheme.rawValue.capitalized)"
+        )
+
+        openXboxDeviceCodeLogin(in: app, xboxChoice: xbox)
+        XCTAssertTrue(app.staticTexts["Sign in to Xbox Cloud Gaming"].exists)
+        XCTAssertTrue(app.buttons["xbox-device-code-login.cancel"].exists)
+        attachScreenshot(
+            of: app,
+            named: "Xbox Device Code - \(colorScheme.rawValue.capitalized)"
+        )
+    }
+
+    @MainActor
+    private func assertXboxLibraryRefreshProgressAppearance(
+        _ colorScheme: UITestColorScheme
+    ) {
+        let app = makeApp(
+            colorScheme: colorScheme,
+            extraArguments: [
+                "--cloudnow-ui-service-chooser",
+                "--cloudnow-ui-xbox-configured",
+                "--cloudnow-ui-xbox-library-refresh-running",
+            ]
+        )
+        app.launch()
+
+        openConfiguredXboxSettings(in: app)
+        let refreshRow = focusXboxLibraryRefreshRow(in: app)
+        XCTAssertTrue(refreshRow.isEnabled)
+        XCUIRemote.shared.press(.select)
+
+        let progress = element("xboxLibraryRefreshProgress", in: app)
+        let overallProgress = element(
+            "xboxLibraryRefreshOverallProgress",
+            in: app
+        )
+        let catalogStep = element("xboxLibraryRefreshCatalogStep", in: app)
+        let accessStep = element("xboxLibraryRefreshAccessStep", in: app)
+        let closeButton = app.buttons["xboxLibraryRefreshCloseButton"]
+        XCTAssertTrue(progress.waitForExistence(timeout: 5))
+        XCTAssertTrue(overallProgress.waitForExistence(timeout: 3))
+        XCTAssertTrue(catalogStep.waitForExistence(timeout: 3))
+        XCTAssertTrue(accessStep.waitForExistence(timeout: 3))
+        XCTAssertTrue(closeButton.waitForExistence(timeout: 3))
+        XCTAssertFalse(element("xboxLibraryRefreshSummary", in: app).exists)
+        XCTAssertTrue(
+            waitForAccessibilityText(
+                "Updating CloudNow library",
+                in: overallProgress,
+                timeout: 3
+            )
+        )
+        XCTAssertEqual(catalogStep.label, "Xbox Cloud Catalog")
+        XCTAssertTrue(accessibilityValue(of: catalogStep).contains("Syncing"))
+        XCTAssertEqual(accessStep.label, "Cloud gaming access")
+        XCTAssertEqual(accessibilityValue(of: accessStep), "Queued")
+
+        let windowFrame = app.windows.firstMatch.frame
+        for visibleElement in [
+            overallProgress,
+            catalogStep,
+            accessStep,
+            closeButton,
+        ] {
+            XCTAssertGreaterThan(
+                visibleFraction(of: visibleElement, inside: windowFrame),
+                0.9,
+                "Expected \(visibleElement.identifier) to be fully visible."
+            )
+        }
+        attachScreenshot(
+            of: app,
+            named: "Xbox Library Refresh - \(colorScheme.rawValue.capitalized)"
+        )
+    }
+
+    @MainActor
+    private func openXboxDeviceCodeLogin(
+        in app: XCUIApplication,
+        xboxChoice: XCUIElement
+    ) {
+        focusAndSelect(
+            xboxChoice,
+            directions: [.left, .right],
+            pressesPerDirection: 4
+        )
+        XCTAssertTrue(
+            element("xbox-device-code-login", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(element("xbox-device-code-login.qr", in: app).exists)
+        XCTAssertTrue(element("xbox-device-code-login.code", in: app).exists)
+    }
+
+    @MainActor
+    private func attachScreenshot(
+        of app: XCUIApplication,
+        named name: String
+    ) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     private func openSettings(in app: XCUIApplication) {
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8))
@@ -1100,16 +1471,37 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
-    private func openConfiguredXboxSettings(in app: XCUIApplication) {
+    private func openConfiguredXboxSettings(
+        in app: XCUIApplication,
+        settingsLabel: String = "Settings"
+    ) {
+        openConfiguredXbox(in: app)
+        openXboxSettings(in: app, settingsLabel: settingsLabel)
+    }
+
+    @MainActor
+    private func openConfiguredXbox(in app: XCUIApplication) {
         let xbox = app.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xbox.waitForExistence(timeout: 8))
-        XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xbox.hasFocus)
-        XCUIRemote.shared.press(.select)
+        focusAndSelect(
+            xbox,
+            directions: [.left, .right],
+            pressesPerDirection: 4
+        )
+    }
 
-        let settings = app.buttons["Settings"]
+    @MainActor
+    private func openXboxSettings(
+        in app: XCUIApplication,
+        settingsLabel: String
+    ) {
+        let settings = app.buttons[settingsLabel]
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        selectTab(settings, movingRight: 3)
+        focusAndSelect(
+            settings,
+            directions: [.left, .right],
+            pressesPerDirection: 5
+        )
         XCTAssertTrue(
             element("xbox-settings-screen", in: app)
                 .waitForExistence(timeout: 3)

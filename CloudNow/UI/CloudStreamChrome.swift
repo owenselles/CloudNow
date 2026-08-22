@@ -169,6 +169,7 @@ private extension View {
                 }
             }
             .accessibilityIdentifier(identifier)
+            .environment(\.colorScheme, .dark)
         }
 
         private var identifier: String {
@@ -231,13 +232,16 @@ private extension View {
                 return estimatedWait.map {
                     L10n.format("xbox_estimated_wait", Int($0.rounded(.up)))
                 }
-            case let .reconnecting(attempt, maximumAttempts, nextDelay):
+            case let .reconnecting(attempt, _, nextDelay):
                 let attemptText = L10n.format(
                     "reconnecting_attempt_note",
                     attempt
                 )
                 guard let nextDelay else { return attemptText }
-                return "\(attemptText) · \(Int(nextDelay.rounded(.up)))s / \(maximumAttempts)"
+                return L10n.localizedList([
+                    attemptText,
+                    L10n.localizedSeconds(nextDelay),
+                ])
             case .idle, .allocating, .connecting, .streaming, .resumable,
                  .failure, .stopping:
                 return nil
@@ -289,6 +293,7 @@ private extension View {
                     .padding(40)
             }
             .accessibilityIdentifier("xbox-quality-hud-fixture")
+            .environment(\.colorScheme, .dark)
         }
 
         private var snapshot: StatsHUDSnapshot {

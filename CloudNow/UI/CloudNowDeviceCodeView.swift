@@ -9,13 +9,15 @@ struct CloudNowDeviceCodeView: View {
     let verificationURLComplete: String
     var accentColor: Color = .green
     var accessibilityIdentifier = "device-code-login"
+    var primaryForegroundColor: Color = .white
+    var secondaryForegroundColor: Color = .secondary
     let onCancel: () -> Void
 
     var body: some View {
         VStack(spacing: 40) {
             Text(title)
                 .font(.title.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(primaryForegroundColor)
                 .accessibilityIdentifier(accessibilityIdentifier)
 
             QRCodeView(payload: verificationURLComplete)
@@ -28,14 +30,14 @@ struct CloudNowDeviceCodeView: View {
             VStack(spacing: 12) {
                 Text(L10n.text("scan_qr_or_go_to"))
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryForegroundColor)
                 Text(verificationURL)
                     .font(.system(size: 32, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(primaryForegroundColor)
                     .accessibilityIdentifier("\(accessibilityIdentifier).verification-url")
                 Text(L10n.text("and_enter_pin"))
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryForegroundColor)
             }
 
             Text(formattedCode)
@@ -46,10 +48,10 @@ struct CloudNowDeviceCodeView: View {
 
             HStack(spacing: 12) {
                 ProgressView()
-                    .tint(.secondary)
+                    .tint(secondaryForegroundColor)
                 Text(L10n.text("waiting_for_sign_in"))
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryForegroundColor)
             }
 
             Button(L10n.text("cancel"), action: onCancel)
@@ -71,20 +73,23 @@ private struct QRCodeView: View {
     @State private var renderState = QRCodeRenderState<Image>()
 
     var body: some View {
-        Group {
+        ZStack {
+            Color.white
+
             if let image = renderState.value {
                 image
+                    .renderingMode(.original)
                     .interpolation(.none)
                     .resizable()
                     .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Color.white
-                    .overlay {
-                        ProgressView()
-                            .tint(.black)
-                    }
+                ProgressView()
+                    .tint(.black)
             }
         }
+        .aspectRatio(1, contentMode: .fit)
+        .clipped()
         .task(id: payload) {
             renderState.begin(payload: payload)
             let rendered = await QRCodeRenderer.shared.render(payload: payload)
@@ -134,13 +139,17 @@ private actor QRCodeRenderer {
         if let cachedContext = self.context {
             context = cachedContext
         } else {
-            let newContext = CIContext()
+            let newContext = CIContext(options: [
+                .useSoftwareRenderer: true,
+            ])
             self.context = newContext
             context = newContext
         }
         guard let cgImage = context.createCGImage(
             scaled,
-            from: scaled.extent
+            from: scaled.extent,
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
         ) else {
             return nil
         }

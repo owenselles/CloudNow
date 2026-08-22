@@ -69,13 +69,31 @@ enum L10n {
     }()
 
     private static let fallbackLocaleCode = "en"
-    private static let activeTable = tableProvidersByLocale[localeCode]?() ?? L10nEN.strings
     private static let fallbackTable = L10nEN.strings
+    private static let activeTable = translationTable(for: preferredLocalizationIdentifier)
+
+    private static var preferredLocalizationIdentifier: String {
+        #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if let flagIndex = arguments.firstIndex(of: "--cloudnow-ui-language"),
+               arguments.indices.contains(flagIndex + 1)
+            {
+                return arguments[flagIndex + 1]
+            }
+        #endif
+        return Locale.preferredLanguages.first ?? fallbackLocaleCode
+    }
 
     static var localeCode: String {
-        guard let preferred = Locale.preferredLanguages.first else { return fallbackLocaleCode }
-        let canonical = canonicalTVOSLanguageIdentifier(for: preferred)
-        return tableProvidersByLocale[canonical] != nil ? canonical : fallbackLocaleCode
+        canonicalTVOSLanguageIdentifier(for: preferredLocalizationIdentifier)
+    }
+
+    static var localizationLocale: Locale {
+        Locale(identifier: localeCode)
+    }
+
+    static var isRightToLeft: Bool {
+        isRightToLeft(localeIdentifier: preferredLocalizationIdentifier)
     }
 
     static func text(_ key: String) -> String {
@@ -93,14 +111,30 @@ enum L10n {
     /// English fallback. Internal visibility intentionally limits this inspection seam to
     /// the app module and its test bundle.
     static func translationTable(for localeIdentifier: String) -> [String: String] {
+        tableProvidersByLocale[translationLocaleCode(for: localeIdentifier)]?()
+            ?? fallbackTable
+    }
+
+    /// Resolves a service-style regional identifier to the app translation table key.
+    /// Most newer translations are stored once per language even when service requests
+    /// retain a regional locale such as `ja-JP` or `ar-SA`.
+    static func translationLocaleCode(for localeIdentifier: String) -> String {
         let canonical = canonicalTVOSLanguageIdentifier(for: localeIdentifier)
-        if let provider = tableProvidersByLocale[canonical] {
-            return provider()
+        if tableProvidersByLocale[canonical] != nil {
+            return canonical
         }
 
-        let locale = Locale(identifier: localeIdentifier.replacingOccurrences(of: "_", with: "-"))
+        let locale = Locale(identifier: canonical)
         let language = locale.language.languageCode?.identifier.lowercased()
-        return language.flatMap { tableProvidersByLocale[$0]?() } ?? fallbackTable
+        return language.flatMap { tableProvidersByLocale[$0] == nil ? nil : $0 }
+            ?? fallbackLocaleCode
+    }
+
+    static func isRightToLeft(localeIdentifier: String) -> Bool {
+        let normalized = localeIdentifier.replacingOccurrences(of: "_", with: "-")
+        let language = Locale(identifier: normalized)
+            .language.languageCode?.identifier.lowercased()
+        return language == "ar" || language == "he"
     }
 
     /// Materializes every supported table for integrity checks. Production lookup remains
@@ -116,6 +150,33 @@ enum L10n {
 
     static func format(_ key: String, _ args: CVarArg...) -> String {
         String(format: text(key), locale: Locale.autoupdatingCurrent, arguments: args)
+    }
+
+    static func localizedList(
+        _ values: [String],
+        locale: Locale = localizationLocale
+    ) -> String {
+        guard !values.isEmpty else { return "" }
+        let formatter = ListFormatter()
+        formatter.locale = locale
+        return formatter.string(from: values) ?? values.joined(separator: ", ")
+    }
+
+    static func localizedSeconds(
+        _ seconds: TimeInterval,
+        locale: Locale = localizationLocale
+    ) -> String {
+        let formatter = MeasurementFormatter()
+        formatter.locale = locale
+        formatter.unitOptions = .providedUnit
+        formatter.unitStyle = .short
+        formatter.numberFormatter.maximumFractionDigits = 0
+        return formatter.string(
+            from: Measurement(
+                value: seconds.rounded(.up),
+                unit: UnitDuration.seconds
+            )
+        )
     }
 
     static func storeName(for appStore: String) -> String {
@@ -580,8 +641,10 @@ enum L10n {
         "vi",
     ]
 
-    static func localizedLanguageName(for code: String) -> String {
-        let locale = Locale.autoupdatingCurrent
+    static func localizedLanguageName(
+        for code: String,
+        locale: Locale = localizationLocale
+    ) -> String {
         let id = code.replacingOccurrences(of: "_", with: "-")
         if let name = locale.localizedString(forIdentifier: id) {
             return name

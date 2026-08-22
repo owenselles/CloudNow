@@ -2,14 +2,19 @@ import SwiftUI
 
 struct CloudServiceSelectionView: View {
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+    @Environment(\.colorScheme) private var colorScheme
     @FocusState private var focusedProvider: CloudGamingProvider?
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            adaptiveBackgroundColor.ignoresSafeArea()
 
             VStack(spacing: 48) {
-                CloudNowBrandHeader(subtitle: L10n.text("choose_cloud_gaming_service"))
+                CloudNowBrandHeader(
+                    subtitle: L10n.text("choose_cloud_gaming_service"),
+                    primaryForegroundColor: .primary,
+                    secondaryForegroundColor: .secondary
+                )
 
                 HStack(spacing: 28) {
                     ForEach(CloudGamingProvider.allCases) { provider in
@@ -42,20 +47,25 @@ struct CloudServiceSelectionView: View {
 
                 Text(L10n.text("accounts_stay_signed_in_when_switching_services"))
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
             .padding(80)
         }
         .accessibilityIdentifier("service-chooser")
     }
+
+    private var adaptiveBackgroundColor: Color {
+        colorScheme == .dark ? .black : .white
+    }
 }
 
 struct XboxCloudConfigurationRequiredView: View {
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            adaptiveBackgroundColor.ignoresSafeArea()
 
             VStack(spacing: 36) {
                 Image(systemName: CloudGamingProvider.xboxCloudGaming.systemImage)
@@ -105,22 +115,28 @@ struct XboxCloudConfigurationRequiredView: View {
             L10n.text($0.localizationKey)
         } ?? L10n.text("xbox_cloud_runtime_inactive_message")
     }
+
+    private var adaptiveBackgroundColor: Color {
+        colorScheme == .dark ? .black : .white
+    }
 }
 
 struct CloudNowBrandHeader: View {
     let subtitle: String
+    var primaryForegroundColor: Color = .white
+    var secondaryForegroundColor: Color = .secondary
 
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "play.tv.fill")
                 .font(.system(size: 80))
-                .foregroundStyle(.white)
+                .foregroundStyle(primaryForegroundColor)
             Text(L10n.text("app_name"))
                 .font(.system(size: 52, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+                .foregroundStyle(primaryForegroundColor)
             Text(subtitle)
                 .font(.title3)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(secondaryForegroundColor)
         }
     }
 }
@@ -147,7 +163,7 @@ private struct CloudServiceChoiceLabel: View {
                     .multilineTextAlignment(.center)
             }
         }
-        .foregroundStyle(isFocused ? .black : .white)
+        .foregroundStyle(isFocused ? .black : .primary)
         .frame(width: 410, height: 150)
         .contentShape(Rectangle())
     }
