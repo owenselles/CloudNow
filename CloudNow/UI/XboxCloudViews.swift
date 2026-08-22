@@ -4272,9 +4272,7 @@ private struct XboxSettingsView: View {
     ) -> CloudNowStreamQualityOption<XboxCloudDisplayResolution> {
         CloudNowStreamQualityOption(
             value: resolution,
-            title: resolution == .automatic
-                ? L10n.text("best")
-                : resolution.label,
+            title: resolution.label,
             badge: resolution == .qhd
                 ? L10n.text("maximum_abbreviation")
                 : resolution.badge,

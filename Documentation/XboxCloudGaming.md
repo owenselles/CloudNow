@@ -44,7 +44,7 @@ gated on media readiness. After the negotiated message-channel handshake,
 CloudNow sends the active output dimensions and updates them when display
 geometry changes.
 
-`Best` requests the account's Max Stream Quality: `1440` when high-resolution
+`Automatic` requests the account's Max Stream Quality: `1440` when high-resolution
 eligibility is confirmed, `1080` when known account metadata reports a lower
 ceiling, and a safe `1440` preference while optional access metadata is
 unavailable. The last case does not bypass access policy; the service can adapt
@@ -250,7 +250,7 @@ API or a separately reviewed, explicit transfer design.
    shared audio device retains intent across AirPods or Continuity Microphone
    loss and restores capture when the input route returns.
 10. Xbox stream quality is a preference ceiling, not a launch requirement.
-    `Best` sends Microsoft's `1440` request when the account's Max Stream Quality
+    `Automatic` sends Microsoft's `1440` request when the account's Max Stream Quality
     includes it and while optional access metadata is unavailable; known lower
     ceilings request `1080`. Manual resolution aliases remain available for
     troubleshooting, but there is no manual Xbox bandwidth control. The service

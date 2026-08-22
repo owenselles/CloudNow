@@ -143,7 +143,7 @@ nonisolated enum XboxCloudDiagnosticsPolicy {
 nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
     let standardResolutions: [XboxCloudDisplayResolution]
     let higherQualityResolutions: [XboxCloudDisplayResolution]
-    private let bestAvailableResolution: XboxCloudDisplayResolution
+    private let automaticRequestedResolution: XboxCloudDisplayResolution
 
     var resolutions: [XboxCloudDisplayResolution] {
         standardResolutions + higherQualityResolutions
@@ -159,7 +159,7 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
                 higherQualityResolutions: [],
                 // A maximum preference is safe while access metadata loads:
                 // Xbox may adapt it down without failing session allocation.
-                bestAvailableResolution: .qhd
+                automaticRequestedResolution: .qhd
             )
         }
 
@@ -169,7 +169,7 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
             higherQualityResolutions: isUltimate
                 ? [.qhd, .fullHDHighQuality, .hdHighQuality]
                 : [],
-            bestAvailableResolution: isUltimate ? .qhd : .fullHD
+            automaticRequestedResolution: isUltimate ? .qhd : .fullHD
         )
     }
 
@@ -183,7 +183,7 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
     }
 
     /// Converts the persisted picker selection into the service preference
-    /// sent before authorization. "Best" requests the account ceiling;
+    /// sent before authorization. "Automatic" requests the account ceiling;
     /// selections that became unavailable downgrade to that safe ceiling.
     func requestedResolution(
         for persistedResolution: XboxCloudDisplayResolution
@@ -191,7 +191,7 @@ nonisolated struct XboxCloudStreamCapabilities: Equatable, Sendable {
         guard persistedResolution != .automatic,
               resolutions.contains(persistedResolution)
         else {
-            return bestAvailableResolution
+            return automaticRequestedResolution
         }
         return persistedResolution
     }

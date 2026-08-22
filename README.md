@@ -121,7 +121,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
   and retained-cache warnings; closing the progress screen does not cancel the
   refresh.
 - **Production 1440p path** — the validated Microsoft-web compatibility profile
-  requests the account's Max Stream Quality. `Best` sends `1440` when that
+  requests the account's Max Stream Quality. `Automatic` sends `1440` when that
   ceiling is available (and while optional access metadata is still unknown),
   otherwise `1080`; the service may adapt lower.
 - **Honest delivered-media reporting** — Standard HUD shows requested and
@@ -140,7 +140,7 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 
 | Capability | GeForce NOW | Xbox Cloud Gaming |
 |---|---|---|
-| Maximum requested resolution | Up to 4K, account/service dependent | `Best` up to 1440p; service may adapt lower |
+| Maximum requested resolution | Up to 4K, account/service dependent | `Automatic` up to 1440p; service may adapt lower |
 | Video controls | Resolution, FPS, H.264/H.265/AV1, color mode | Resolution only; service currently selects H.264 |
 | Color/HDR | Automatic, HDR, SDR10/SDR8 fallback with decoded-format proof | Automatic only; validated delivery is SDR8 |
 | Game audio | Automatic, Stereo, 5.1 Surround | Automatic; current service route is Opus stereo/mono |
@@ -204,7 +204,7 @@ These commands require the exact tool versions pinned by CI: SwiftFormat 0.62.1 
 
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
-Use the shared `CloudNow` scheme for development and final archives. Xbox `Best`
+Use the shared `CloudNow` scheme for development and final archives. Xbox `Automatic`
 requests the account's Max Stream Quality through the validated Microsoft-web
 profile: `1440` when that ceiling is available (and while optional access
 metadata is unknown), otherwise `1080`. The service can adapt lower, so the
