@@ -1168,12 +1168,6 @@ private struct ServerLocationPickerView: View {
     @State private var serverError: String?
     @FocusState private var focusedChoice: Choice?
 
-    init() {
-        let cached = ServerInfoClient.shared.cached
-        _serverInfo = State(initialValue: cached)
-        _isLoadingRegions = State(initialValue: cached == nil)
-    }
-
     var body: some View {
         NavigationStack(path: $path) {
             ServerPickerScreen(title: L10n.text("server_location")) {
@@ -1345,12 +1339,12 @@ private struct ServerLocationPickerView: View {
     }
 
     private func loadRegions() async {
-        if let cached = ServerInfoClient.shared.cached {
+        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+        if let cached = ServerInfoClient.shared.cachedForBase(base) {
             serverInfo = cached
             isLoadingRegions = false
         }
 
-        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
         guard let token = try? await authManager.resolveToken() else {
             isLoadingRegions = false
             if serverInfo == nil {

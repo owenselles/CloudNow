@@ -247,6 +247,10 @@ final class AuthManager {
 
     // MARK: Login (Device Flow)
 
+    func discoverLoginProviders() async throws -> [LoginProvider] {
+        try await resolvedAPI().fetchProviders()
+    }
+
     @discardableResult
     func login(with provider: LoginProvider? = nil) -> Task<Void, Never> {
         guard !isCredentialMutationInProgress else { return Task {} }

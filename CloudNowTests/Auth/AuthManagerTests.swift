@@ -99,6 +99,20 @@ struct AuthManagerTests {
     }
 
     @MainActor
+    @Test("Provider discovery uses the injected authentication API")
+    func providerDiscoveryUsesInjectedAPI() async throws {
+        let api = FakeAuthAPI()
+        let manager = makeManager(
+            api: api,
+            persistence: FakeAuthPersistence(session: nil)
+        )
+
+        let providers = try await manager.discoverLoginProviders()
+
+        #expect(providers.map(\.idpId) == ["provider"])
+    }
+
+    @MainActor
     @Test("Concurrent session restoration waits for the active Keychain load")
     func concurrentSessionRestorationCoalesces() async {
         let saved = makeSession(expiresAt: Date().addingTimeInterval(3600))

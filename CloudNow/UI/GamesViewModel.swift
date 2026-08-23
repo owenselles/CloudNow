@@ -449,7 +449,8 @@ class GamesViewModel {
            saved.idpId != currentIdpId || saved.userId == nil || saved.userId != currentUserId
         {
             lastSession = nil
-            Task { [weak self] in await self?.persistence.saveLastSession(nil) }
+            await persistence.saveLastSession(nil)
+            guard isCurrent(identity) else { return }
         }
 
         // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
@@ -1037,7 +1038,9 @@ class GamesViewModel {
                 return try await authManager.resolveToken()
             },
             userIsCurrent: { [weak authManager] in
-                authManager?.session?.user.userId == userId
+                guard let session = authManager?.session else { return false }
+                return session.provider.idpId == idpId
+                    && session.user.userId == userId
             },
             importLibrary: { [weak self, weak authManager] in
                 guard let self, let authManager else {
@@ -1048,6 +1051,7 @@ class GamesViewModel {
                 }
                 return try await importAuthoritativeLibrary(
                     authManager: authManager,
+                    expectedIdpId: idpId,
                     expectedUserId: userId,
                     accountScope: accountScope
                 )
@@ -1057,10 +1061,15 @@ class GamesViewModel {
 
     private func importAuthoritativeLibrary(
         authManager: AuthManager,
+        expectedIdpId: String,
         expectedUserId: String,
         accountScope: String
     ) async throws -> LibraryImportResult {
-        guard authManager.session?.user.userId == expectedUserId else {
+        guard authSessionMatches(
+            authManager,
+            idpId: expectedIdpId,
+            userId: expectedUserId
+        ) else {
             throw CancellationError()
         }
         let startingCacheGeneration = cacheGeneration
@@ -1088,7 +1097,11 @@ class GamesViewModel {
             while true {
                 guard persistenceEnabled,
                       cacheGeneration == startingCacheGeneration,
-                      authManager.session?.user.userId == expectedUserId
+                      authSessionMatches(
+                          authManager,
+                          idpId: expectedIdpId,
+                          userId: expectedUserId
+                      )
                 else {
                     throw CancellationError()
                 }
@@ -1121,7 +1134,11 @@ class GamesViewModel {
             }
             guard persistenceEnabled,
                   cacheGeneration == startingCacheGeneration,
-                  authManager.session?.user.userId == expectedUserId
+                  authSessionMatches(
+                      authManager,
+                      idpId: expectedIdpId,
+                      userId: expectedUserId
+                  )
             else {
                 throw CancellationError()
             }
@@ -1147,7 +1164,11 @@ class GamesViewModel {
             )
             guard persistenceEnabled,
                   cacheGeneration == startingCacheGeneration,
-                  authManager.session?.user.userId == expectedUserId
+                  authSessionMatches(
+                      authManager,
+                      idpId: expectedIdpId,
+                      userId: expectedUserId
+                  )
             else {
                 throw CancellationError()
             }
@@ -1179,7 +1200,11 @@ class GamesViewModel {
         } catch {
             if persistenceEnabled,
                cacheGeneration == startingCacheGeneration,
-               authManager.session?.user.userId == expectedUserId
+               authSessionMatches(
+                   authManager,
+                   idpId: expectedIdpId,
+                   userId: expectedUserId
+               )
             {
                 libraryGames = previousLibrary
                 libraryLoadPhase = previousLibrary.isEmpty
@@ -1191,6 +1216,16 @@ class GamesViewModel {
             }
             throw error
         }
+    }
+
+    private func authSessionMatches(
+        _ authManager: AuthManager,
+        idpId: String,
+        userId: String
+    ) -> Bool {
+        guard let session = authManager.session else { return false }
+        return session.provider.idpId == idpId
+            && session.user.userId == userId
     }
 
     private func fetchAuthoritativeSnapshot(

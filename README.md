@@ -93,9 +93,10 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
   H.264/H.265/AV1, color mode, keyboard layout, game language, maximum bitrate,
   Low Latency Mode (L4S), and server location controls.
 - **Partner provider support** — GeForce NOW partners such as Jio and bro.game
-  are detected automatically. Login offers each available regional provider;
-  partner sessions use their own routing infrastructure without NVIDIA zone
-  overrides or endpoint fallback.
+  are detected automatically. Login ranks NVIDIA's default and regional
+  providers first while keeping other partners reachable for travel or region
+  misdetection. Partner sessions use their own routing infrastructure without
+  NVIDIA zone overrides or endpoint fallback.
 - **Verified media pipeline** — H.265 Main10 and decoded color metadata are
   preserved through VideoToolbox and the renderer; HDR, SDR10, or SDR8 is
   reported from actual decoded buffers instead of inferred from the display.

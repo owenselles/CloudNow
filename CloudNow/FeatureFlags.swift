@@ -10,8 +10,8 @@ nonisolated func nvidiaAccountScope(for userId: String) -> String {
 /// Local cache scope for a signed-in account, keyed by provider *and* user.
 ///
 /// Two users of the same provider — and the same user across two providers —
-/// hash differently, so cached library, catalog, VPC and subscription data can
-/// never be read back under a different identity.
+/// hash differently, so cached library, VPC and subscription data can never be
+/// read back under a different identity. Catalog data remains account-neutral.
 ///
 /// Deliberately separate from `nvidiaAccountScope`, which is the `huId` value
 /// sent to NVIDIA and must stay user-only.

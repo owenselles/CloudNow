@@ -26,11 +26,8 @@ struct LoginView: View {
             }
         }
         .task {
-            let fetched = await (try? NVIDIAAuthAPI().fetchProviders()) ?? []
+            let fetched = await (try? authManager.discoverLoginProviders()) ?? []
             providersState = .loaded(fetched)
-            if let first = fetched.first, focusedProvider == nil {
-                focusedProvider = first.idpId
-            }
         }
     }
 
@@ -73,6 +70,7 @@ struct LoginView: View {
                             withAnimation { proxy.scrollTo(id, anchor: .center) }
                         }
                     }
+                    .defaultFocus($focusedProvider, providers.first?.idpId)
                 case let .loaded(providers) where !providers.isEmpty:
                     let provider = providers[0]
                     Button {

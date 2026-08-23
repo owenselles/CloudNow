@@ -321,9 +321,9 @@ struct CloudNowApp: App {
 
         private static let uiTestAuthSession = AuthSession(
             provider: LoginProvider(
-                idpId: "fixture",
-                code: "FIXTURE",
-                displayName: "Fixture",
+                idpId: NVIDIAAuth.defaultIdpId,
+                code: "NVIDIA",
+                displayName: "NVIDIA",
                 streamingServiceUrl: NVIDIAAuth.defaultStreamingUrl,
                 priority: 0
             ),
