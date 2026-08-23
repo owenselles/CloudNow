@@ -487,7 +487,8 @@ private struct IntegrationPersistenceHarness {
         store = AppPersistenceStore(
             preferences: UserDefaultsPreferencesStore(defaults: defaults),
             cacheDirectory: cacheDirectory,
-            credentialStore: UnavailableIntegrationCredentialStore()
+            credentialStore: UnavailableIntegrationCredentialStore(),
+            xboxCredentialStore: UnavailableIntegrationCredentialStore()
         )
     }
 

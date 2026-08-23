@@ -239,7 +239,13 @@ struct VideoColorFormatTests {
         let metadataOnly = DecodedVideoFormatInspector.signature(
             for: DecodedVideoFormatInspector.inspect(
                 pixelBuffer: metadataBuffer,
-                decoderPath: .unknown
+                decoderPath: .hardware
+            )
+        )
+        let changedDecoderPath = DecodedVideoFormatInspector.signature(
+            for: DecodedVideoFormatInspector.inspect(
+                pixelBuffer: baseBuffer,
+                decoderPath: .softwareI420
             )
         )
         let changedTransfer = DecodedVideoFormatInspector.signature(
@@ -248,6 +254,122 @@ struct VideoColorFormatTests {
 
         #expect(base == metadataOnly)
         #expect(base != changedTransfer)
+        #expect(base != changedDecoderPath)
+    }
+
+    @Test("Inspection cache reuses unchanged format metadata and invalidates relevant changes")
+    func inspectionCacheInvalidation() throws {
+        var cache = DecodedVideoFormatInspectionCache()
+        let firstBuffer = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_ITU_R_709_2,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2
+        )
+        let equivalentBuffer = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_ITU_R_709_2,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2
+        )
+        let changedTransferBuffer = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2
+        )
+        let changedPixelFormatBuffer = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2
+        )
+        let changedResolutionBuffer = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2,
+            width: 16,
+            height: 16
+        )
+        let changedHDRMetadataBuffer = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2,
+            width: 16,
+            height: 16
+        )
+        setAttachment(
+            kCVImageBufferContentLightLevelInfoKey,
+            value: Data([1]) as CFData,
+            on: changedHDRMetadataBuffer
+        )
+
+        let initialResolution = cache.resolve(pixelBuffer: firstBuffer, decoderPath: .hardware)
+        let initial = try #require(initialResolution)
+        let unchangedResolution = cache.resolve(
+            pixelBuffer: equivalentBuffer,
+            decoderPath: .hardware
+        )
+        let unchanged = try #require(unchangedResolution)
+        let changedResolution = cache.resolve(
+            pixelBuffer: changedTransferBuffer,
+            decoderPath: .hardware
+        )
+        let changed = try #require(changedResolution)
+        let changedDecoderPathResolution = cache.resolve(
+            pixelBuffer: changedTransferBuffer,
+            decoderPath: .softwareI420
+        )
+        let changedDecoderPath = try #require(changedDecoderPathResolution)
+        let changedPixelFormatResolution = cache.resolve(
+            pixelBuffer: changedPixelFormatBuffer,
+            decoderPath: .softwareI420
+        )
+        let changedPixelFormat = try #require(changedPixelFormatResolution)
+        let changedDimensionsResolution = cache.resolve(
+            pixelBuffer: changedResolutionBuffer,
+            decoderPath: .softwareI420
+        )
+        let changedDimensions = try #require(changedDimensionsResolution)
+        let changedHDRMetadataResolution = cache.resolve(
+            pixelBuffer: changedHDRMetadataBuffer,
+            decoderPath: .softwareI420
+        )
+        let changedHDRMetadata = try #require(changedHDRMetadataResolution)
+
+        #expect(initial.didInspect)
+        #expect(!unchanged.didInspect)
+        #expect(unchanged.format == initial.format)
+        #expect(changed.didInspect)
+        #expect(changed.format.transferFunction != initial.format.transferFunction)
+        #expect(changedDecoderPath.didInspect)
+        #expect(changedDecoderPath.format.decoderPath == .softwareI420)
+        #expect(changedPixelFormat.didInspect)
+        #expect(changedPixelFormat.format.pixelFormat != initial.format.pixelFormat)
+        #expect(changedDimensions.didInspect)
+        #expect(changedDimensions.format.width == 16)
+        #expect(changedDimensions.format.height == 16)
+        #expect(changedHDRMetadata.didInspect)
+        #expect(changedHDRMetadata.format.hasContentLightLevelMetadata)
+    }
+
+    @Test("Inspection cache reset forces the next frame to be inspected")
+    func inspectionCacheReset() throws {
+        var cache = DecodedVideoFormatInspectionCache()
+        let buffer = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_ITU_R_709_2,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2
+        )
+
+        let initialResolution = cache.resolve(pixelBuffer: buffer, decoderPath: .hardware)
+        let initial = try #require(initialResolution)
+        let cachedResolution = cache.resolve(pixelBuffer: buffer, decoderPath: .hardware)
+        let cached = try #require(cachedResolution)
+        #expect(initial.didInspect)
+        #expect(!cached.didInspect)
+
+        cache.reset()
+
+        let resetResolution = cache.resolve(pixelBuffer: buffer, decoderPath: .hardware)
+        let afterReset = try #require(resetResolution)
+        #expect(afterReset.didInspect)
     }
 
     private func inspect(_ buffer: CVPixelBuffer) -> DecodedVideoFormat {
@@ -257,20 +379,30 @@ struct VideoColorFormatTests {
     private func colorBuffer(
         pixelFormat: OSType,
         transfer: CFTypeRef,
-        primaries: CFTypeRef
+        primaries: CFTypeRef,
+        width: Int = 8,
+        height: Int = 8
     ) throws -> CVPixelBuffer {
-        let buffer = try makeBuffer(pixelFormat: pixelFormat)
+        let buffer = try makeBuffer(
+            pixelFormat: pixelFormat,
+            width: width,
+            height: height
+        )
         setAttachment(kCVImageBufferTransferFunctionKey, value: transfer, on: buffer)
         setAttachment(kCVImageBufferColorPrimariesKey, value: primaries, on: buffer)
         return buffer
     }
 
-    private func makeBuffer(pixelFormat: OSType) throws -> CVPixelBuffer {
+    private func makeBuffer(
+        pixelFormat: OSType,
+        width: Int = 8,
+        height: Int = 8
+    ) throws -> CVPixelBuffer {
         var pixelBuffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault,
-            8,
-            8,
+            width,
+            height,
             pixelFormat,
             nil,
             &pixelBuffer

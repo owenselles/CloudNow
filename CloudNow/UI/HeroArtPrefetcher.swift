@@ -27,6 +27,11 @@ nonisolated struct ArtworkPipelineSnapshot: Equatable, Sendable {
     let waiterCount: Int
 }
 
+nonisolated enum ArtworkNetworkCachePolicy: String, Sendable {
+    case shared
+    case ephemeral
+}
+
 /// One decoded-image pipeline for cards, hero banners, and loading artwork.
 /// The actor coalesces identical in-flight work and enforces separate hard LRU budgets for
 /// card and hero artwork so cache-owned decoded memory cannot drift past configured targets.
@@ -71,6 +76,13 @@ actor ArtworkImagePipeline {
         totalCostLimit: 32 * megabyte,
         countLimit: 4
     )
+    private static let ephemeralArtworkSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
 
     private var cache: [String: CacheEntry] = [:]
     private var totalCost: [ArtworkKind: Int] = [.boxArt: 0, .heroArt: 0]
@@ -80,30 +92,42 @@ actor ArtworkImagePipeline {
     private var memoryEvent = ArtworkMemoryEvent.foreground
     private var waiterCounter: UInt64 = 0
     private let imageLoader: ImageLoader
+    private let ephemeralImageLoader: ImageLoader
     private let foregroundBoxArtBudget: CacheBudget
     private let backgroundBoxArtBudget: CacheBudget
     private let heroArtBudget: CacheBudget
 
     init(
         imageLoader: ImageLoader? = nil,
+        ephemeralImageLoader: ImageLoader? = nil,
         foregroundBoxArtBudget: CacheBudget? = nil,
         backgroundBoxArtBudget: CacheBudget? = nil,
         heroArtBudget: CacheBudget? = nil
     ) {
         self.imageLoader = imageLoader ?? Self.fetchAndDownsample
+        self.ephemeralImageLoader = ephemeralImageLoader
+            ?? Self.fetchAndDownsampleEphemerally
         self.foregroundBoxArtBudget = foregroundBoxArtBudget ?? Self.defaultForegroundBoxArtBudget
         self.backgroundBoxArtBudget = backgroundBoxArtBudget ?? Self.defaultBackgroundBoxArtBudget
         self.heroArtBudget = heroArtBudget ?? Self.defaultHeroArtBudget
     }
 
-    func image(for url: URL, maxPixelSize: Int) async throws -> CGImage {
+    func image(
+        for url: URL,
+        maxPixelSize: Int,
+        networkCachePolicy: ArtworkNetworkCachePolicy = .shared
+    ) async throws -> CGImage {
         try Task.checkCancellation()
         let kind = Self.artworkKind(maxPixelSize: maxPixelSize)
         guard permitsNewLoads(for: kind, maxPixelSize: maxPixelSize) else {
             throw CancellationError()
         }
 
-        let key = Self.cacheKey(url: url, maxPixelSize: maxPixelSize)
+        let key = Self.cacheKey(
+            url: url,
+            maxPixelSize: maxPixelSize,
+            networkCachePolicy: networkCachePolicy
+        )
         if let cached = cachedImage(for: key) {
             return cached
         }
@@ -122,7 +146,8 @@ actor ArtworkImagePipeline {
                     key: key,
                     url: url,
                     maxPixelSize: maxPixelSize,
-                    kind: kind
+                    kind: kind,
+                    networkCachePolicy: networkCachePolicy
                 )
             }
         } onCancel: {
@@ -149,7 +174,8 @@ actor ArtworkImagePipeline {
         key: String,
         url: URL,
         maxPixelSize: Int,
-        kind: ArtworkKind
+        kind: ArtworkKind,
+        networkCachePolicy: ArtworkNetworkCachePolicy
     ) {
         if var request = inFlight[key] {
             request.waiters[id] = continuation
@@ -158,7 +184,12 @@ actor ArtworkImagePipeline {
         }
 
         let requestGeneration = generation[kind, default: 0]
-        let loader = imageLoader
+        let loader = switch networkCachePolicy {
+        case .shared:
+            imageLoader
+        case .ephemeral:
+            ephemeralImageLoader
+        }
         let task = Task(priority: .userInitiated) { @concurrent in
             let image = try await loader(url, maxPixelSize)
             try Task.checkCancellation()
@@ -386,8 +417,12 @@ actor ArtworkImagePipeline {
         }
     }
 
-    private nonisolated static func cacheKey(url: URL, maxPixelSize: Int) -> String {
-        "\(url.absoluteString)#\(maxPixelSize)"
+    private nonisolated static func cacheKey(
+        url: URL,
+        maxPixelSize: Int,
+        networkCachePolicy: ArtworkNetworkCachePolicy
+    ) -> String {
+        "\(networkCachePolicy.rawValue)#\(url.absoluteString)#\(maxPixelSize)"
     }
 
     private nonisolated static func artworkKind(maxPixelSize: Int) -> ArtworkKind {
@@ -401,6 +436,32 @@ actor ArtworkImagePipeline {
         var request = URLRequest(url: url)
         request.cachePolicy = .returnCacheDataElseLoad
         let (data, response) = try await URLSession.shared.data(for: request)
+        return try downsample(
+            data: data,
+            response: response,
+            maxPixelSize: maxPixelSize
+        )
+    }
+
+    private nonisolated static func fetchAndDownsampleEphemerally(
+        url: URL,
+        maxPixelSize: Int
+    ) async throws -> CGImage {
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await ephemeralArtworkSession.data(for: request)
+        return try downsample(
+            data: data,
+            response: response,
+            maxPixelSize: maxPixelSize
+        )
+    }
+
+    private nonisolated static func downsample(
+        data: Data,
+        response: URLResponse,
+        maxPixelSize: Int
+    ) throws -> CGImage {
         if let response = response as? HTTPURLResponse,
            !(200 ..< 300).contains(response.statusCode)
         {
@@ -437,13 +498,14 @@ struct SharedArtworkImage: View {
     let urlString: String?
     let maxPixelSize: Int
     var contentMode: ContentMode = .fill
+    var networkCachePolicy: ArtworkNetworkCachePolicy = .shared
 
     @State private var image: CGImage?
     @State private var loadState: ArtworkLoadState = .loading
     @State private var reloadGeneration = 0
 
     private var requestID: String {
-        "\(urlString ?? "")#\(maxPixelSize)#\(reloadGeneration)"
+        "\(networkCachePolicy.rawValue)#\(urlString ?? "")#\(maxPixelSize)#\(reloadGeneration)"
     }
 
     var body: some View {
@@ -488,7 +550,8 @@ struct SharedArtworkImage: View {
             do {
                 let loaded = try await ArtworkImagePipeline.shared.image(
                     for: url,
-                    maxPixelSize: maxPixelSize
+                    maxPixelSize: maxPixelSize,
+                    networkCachePolicy: networkCachePolicy
                 )
                 try Task.checkCancellation()
                 image = loaded

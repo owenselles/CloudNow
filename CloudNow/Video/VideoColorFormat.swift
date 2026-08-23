@@ -89,6 +89,70 @@ nonisolated struct VideoFormatSignature: Hashable {
     let colorPrimaries: String?
     let yCbCrMatrix: String?
     let colorRange: String?
+    let decoderPath: VideoDecoderPath
+}
+
+/// Reuses the immutable Core Media format description and decoded color metadata while
+/// consecutive pixel buffers have the same image-buffer format. The Core Media match check
+/// compares the common image-buffer attachment keys without copying every attachment or
+/// allocating their diagnostic string representations on every decoded frame.
+nonisolated struct DecodedVideoFormatInspectionCache: @unchecked Sendable {
+    struct Resolution: @unchecked Sendable {
+        let format: DecodedVideoFormat
+        let formatDescription: CMVideoFormatDescription
+        let didInspect: Bool
+    }
+
+    private var cachedFormat: DecodedVideoFormat?
+    private var cachedFormatDescription: CMVideoFormatDescription?
+    private var cachedDecoderPath: VideoDecoderPath?
+
+    mutating func resolve(
+        pixelBuffer: CVPixelBuffer,
+        decoderPath: VideoDecoderPath
+    ) -> Resolution? {
+        if cachedDecoderPath == decoderPath,
+           let cachedFormat,
+           let cachedFormatDescription,
+           CMVideoFormatDescriptionMatchesImageBuffer(
+               cachedFormatDescription,
+               imageBuffer: pixelBuffer
+           )
+        {
+            return Resolution(
+                format: cachedFormat,
+                formatDescription: cachedFormatDescription,
+                didInspect: false
+            )
+        }
+
+        var formatDescription: CMVideoFormatDescription?
+        let status = CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: nil,
+            imageBuffer: pixelBuffer,
+            formatDescriptionOut: &formatDescription
+        )
+        guard status == noErr, let formatDescription else { return nil }
+
+        let format = DecodedVideoFormatInspector.inspect(
+            pixelBuffer: pixelBuffer,
+            decoderPath: decoderPath
+        )
+        cachedFormat = format
+        cachedFormatDescription = formatDescription
+        cachedDecoderPath = decoderPath
+        return Resolution(
+            format: format,
+            formatDescription: formatDescription,
+            didInspect: true
+        )
+    }
+
+    mutating func reset() {
+        cachedFormat = nil
+        cachedFormatDescription = nil
+        cachedDecoderPath = nil
+    }
 }
 
 nonisolated enum DecodedVideoFormatInspector {
@@ -154,7 +218,8 @@ nonisolated enum DecodedVideoFormatInspector {
             transferFunction: format.transferFunction,
             colorPrimaries: format.colorPrimaries,
             yCbCrMatrix: format.yCbCrMatrix,
-            colorRange: format.colorRange
+            colorRange: format.colorRange,
+            decoderPath: format.decoderPath
         )
     }
 

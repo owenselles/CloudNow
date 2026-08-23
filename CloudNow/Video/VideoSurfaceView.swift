@@ -1,12 +1,141 @@
 // NOTE: Requires WebRTC SPM package (https://github.com/livekit/webrtc-xcframework)
 
-import AVFoundation
+@preconcurrency import AVFoundation
 @preconcurrency import CoreVideo
 @preconcurrency import LiveKitWebRTC
 import os
 import UIKit
 
 private nonisolated let videoLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Video")
+
+nonisolated struct LatestFrameMailbox<Element> {
+    enum StoreResult {
+        case stored(replacing: Element?)
+        case rejected(Element)
+    }
+
+    private var pending: Element?
+    private(set) var isTerminated = false
+
+    var hasPending: Bool {
+        pending != nil
+    }
+
+    mutating func store(_ element: Element) -> StoreResult {
+        guard !isTerminated else { return .rejected(element) }
+        let replaced = pending
+        pending = element
+        return .stored(replacing: replaced)
+    }
+
+    mutating func storeIfEmpty(_ element: Element) -> Bool {
+        guard !isTerminated, pending == nil else { return false }
+        pending = element
+        return true
+    }
+
+    mutating func take() -> Element? {
+        defer { pending = nil }
+        return pending
+    }
+
+    mutating func flush() -> Element? {
+        take()
+    }
+
+    mutating func teardown() -> Element? {
+        isTerminated = true
+        return take()
+    }
+}
+
+nonisolated struct VideoRendererDrainSchedule: Sendable {
+    private(set) var isScheduled = false
+
+    mutating func beginIfNeeded() -> Bool {
+        guard !isScheduled else { return false }
+        isScheduled = true
+        return true
+    }
+
+    mutating func finish() {
+        isScheduled = false
+    }
+}
+
+nonisolated struct VideoRendererFlushRequest: Equatable, Sendable {
+    let generation: UInt64
+    let removeDisplayedImage: Bool
+}
+
+nonisolated struct VideoRendererFlushPlan: Sendable {
+    enum Completion: Equatable {
+        case ignored
+        case finished
+        case followUp(VideoRendererFlushRequest)
+    }
+
+    private(set) var activeRequest: VideoRendererFlushRequest?
+    private(set) var pendingRequest: VideoRendererFlushRequest?
+    private var terminalFollowUp: VideoRendererFlushRequest?
+
+    var hasScheduledWork: Bool {
+        activeRequest != nil || pendingRequest != nil || terminalFollowUp != nil
+    }
+
+    mutating func begin(
+        _ request: VideoRendererFlushRequest,
+        activeEnqueues: Int
+    ) -> VideoRendererFlushRequest? {
+        precondition(!hasScheduledWork)
+        if activeEnqueues == 0 {
+            activeRequest = request
+            return request
+        }
+        pendingRequest = request
+        return nil
+    }
+
+    mutating func upgradeToTerminal(
+        _ request: VideoRendererFlushRequest,
+        activeEnqueues: Int
+    ) -> VideoRendererFlushRequest? {
+        if pendingRequest != nil {
+            pendingRequest = request
+            return nil
+        }
+        if let activeRequest {
+            if !activeRequest.removeDisplayedImage {
+                terminalFollowUp = request
+            }
+            return nil
+        }
+        if activeEnqueues == 0 {
+            activeRequest = request
+            return request
+        }
+        pendingRequest = request
+        return nil
+    }
+
+    mutating func activatePendingAfterEnqueuesDrain() -> VideoRendererFlushRequest? {
+        guard activeRequest == nil, let pendingRequest else { return nil }
+        activeRequest = pendingRequest
+        self.pendingRequest = nil
+        return pendingRequest
+    }
+
+    mutating func complete(_ request: VideoRendererFlushRequest) -> Completion {
+        guard activeRequest == request else { return .ignored }
+        activeRequest = nil
+        if let terminalFollowUp {
+            self.terminalFollowUp = nil
+            activeRequest = terminalFollowUp
+            return .followUp(terminalFollowUp)
+        }
+        return .finished
+    }
+}
 
 // MARK: - VideoSurfaceView
 
@@ -105,6 +234,7 @@ final class VideoSurfaceView: UIView {
         resignFirstResponder()
         cancelRemoteMouseTracking()
         videoTrack = nil
+        renderer.teardown()
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
         notificationTokens.removeAll()
         inputHandler = nil
@@ -329,20 +459,21 @@ final class VideoSurfaceView: UIView {
 /// Implements LKRTCVideoRenderer to receive decoded WebRTC frames and feed them
 /// to the display layer's background-safe AVSampleBufferVideoRenderer.
 private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer, @unchecked Sendable {
-    private struct FlushRequest {
-        let generation: UInt64
-        let removeDisplayedImage: Bool
+    private struct PendingFrame: @unchecked Sendable {
+        let frame: LKRTCVideoFrame
+        let trace: VideoFrameTrace?
     }
 
-    private struct State {
-        var formatDescription: CMVideoFormatDescription?
-        var formatSignature: VideoFormatSignature?
+    private struct State: @unchecked Sendable {
+        var inspectionCache = DecodedVideoFormatInspectionCache()
         var decodedFormatSignature: VideoFormatSignature?
+        var mailbox = LatestFrameMailbox<PendingFrame>()
+        var drainSchedule = VideoRendererDrainSchedule()
         var isFlushing = false
         var generation: UInt64 = 0
         var metricsRequestInFlight = false
         var activeEnqueues = 0
-        var pendingFlush: FlushRequest?
+        var flushPlan = VideoRendererFlushPlan()
     }
 
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
@@ -350,6 +481,10 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
     private let diagnostics: VideoPipelineDiagnostics
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let i420Converter = I420FrameConverter()
+    private let renderQueue = DispatchQueue(
+        label: "com.owenselles.CloudNow2.video-frame-renderer",
+        qos: .userInteractive
+    )
 
     init(diagnostics: VideoPipelineDiagnostics) {
         self.diagnostics = diagnostics
@@ -366,13 +501,57 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             diagnostics.recordDrop(trace)
             return
         }
-        guard let renderGeneration = state.withLock({ state -> UInt64? in
-            guard !state.isFlushing else { return nil }
-            return state.generation
-        }) else {
-            diagnostics.recordDrop(trace)
-            return
+
+        let pendingFrame = PendingFrame(frame: frame, trace: trace)
+        let submission = state.withLock { state -> (PendingFrame?, Bool) in
+            guard !state.isFlushing else { return (pendingFrame, false) }
+            switch state.mailbox.store(pendingFrame) {
+            case let .stored(replacing: replaced):
+                let shouldSchedule = state.drainSchedule.beginIfNeeded()
+                return (replaced, shouldSchedule)
+            case let .rejected(rejected):
+                return (rejected, false)
+            }
         }
+        if let dropped = submission.0 {
+            diagnostics.recordDrop(dropped.trace)
+        }
+        guard submission.1 else { return }
+        renderQueue.async { [weak self] in
+            self?.drainPendingFrames()
+        }
+    }
+
+    private func drainPendingFrames() {
+        while let sampleBufferRenderer {
+            if sampleBufferRenderer.status == .failed || sampleBufferRenderer.requiresFlushToResumeDecoding {
+                recoverAfterFailure()
+                return
+            }
+            let pending = state.withLock { state -> (PendingFrame, UInt64)? in
+                guard !state.isFlushing else {
+                    state.drainSchedule.finish()
+                    return nil
+                }
+                guard let frame = state.mailbox.take() else {
+                    state.drainSchedule.finish()
+                    return nil
+                }
+                return (frame, state.generation)
+            }
+            guard let pending else { return }
+            process(pending.0, generation: pending.1, renderer: sampleBufferRenderer)
+        }
+        dropPendingFrame()
+    }
+
+    private func process(
+        _ pendingFrame: PendingFrame,
+        generation renderGeneration: UInt64,
+        renderer sampleBufferRenderer: AVSampleBufferVideoRenderer
+    ) {
+        let frame = pendingFrame.frame
+        let trace = pendingFrame.trace
 
         // Hardware-decoded H.264/H.265/AV1 frames arrive as CVPixelBuffer (NV12/420v).
         // H.265/HDR/AV1 can fall back to software decoding (LKRTCI420Buffer) on some
@@ -398,24 +577,35 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             return
         }
 
-        let decodedFormat = DecodedVideoFormatInspector.inspect(pixelBuffer: cvBuf, decoderPath: decoderPath)
-        let decodedSignature = DecodedVideoFormatInspector.signature(for: decodedFormat)
-        let shouldPublishFormat = state.withLock { state -> Bool in
-            guard state.decodedFormatSignature != decodedSignature else { return false }
-            state.decodedFormatSignature = decodedSignature
-            return true
-        }
-        if shouldPublishFormat {
-            diagnostics.updateDecodedVideoFormat(decodedFormat)
-            onDecodedVideoFormatChanged?(decodedFormat)
-        }
-
-        let sampleCreationStart = diagnostics.beginSampleCreation(trace)
-        guard let formatDescription = formatDescription(for: cvBuf, signature: decodedSignature) else {
-            diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
+        var inspectionCache = state.withLock { $0.inspectionCache }
+        guard let inspection = inspectionCache.resolve(
+            pixelBuffer: cvBuf,
+            decoderPath: decoderPath
+        ) else {
             diagnostics.recordDrop(trace)
             return
         }
+        let updatedInspectionCache = inspectionCache
+        let decodedSignature = DecodedVideoFormatInspector.signature(for: inspection.format)
+        let cacheCommit = state.withLock { state -> (Bool, Bool) in
+            guard !state.isFlushing, state.generation == renderGeneration else {
+                return (false, false)
+            }
+            state.inspectionCache = updatedInspectionCache
+            guard state.decodedFormatSignature != decodedSignature else { return (true, false) }
+            state.decodedFormatSignature = decodedSignature
+            return (true, true)
+        }
+        guard cacheCommit.0 else {
+            diagnostics.recordDrop(trace)
+            return
+        }
+        if cacheCommit.1 {
+            diagnostics.updateDecodedVideoFormat(inspection.format)
+            onDecodedVideoFormatChanged?(inspection.format)
+        }
+
+        let sampleCreationStart = diagnostics.beginSampleCreation(trace)
 
         // DisplayImmediately makes the timestamp irrelevant and replaces queued stale images.
         var timing = CMSampleTimingInfo(
@@ -430,7 +620,7 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             dataReady: true,
             makeDataReadyCallback: nil,
             refcon: nil,
-            formatDescription: formatDescription,
+            formatDescription: inspection.formatDescription,
             sampleTiming: &timing,
             sampleBufferOut: &sampleBuffer
         )
@@ -441,6 +631,13 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         }
         markForImmediatePresentation(sampleBuffer)
         diagnostics.endSampleCreation(trace, startedAt: sampleCreationStart)
+
+        // This is a real-time producer. AVFoundation documents readiness as a
+        // backpressure hint; waiting for its callback can permanently stall a
+        // live stream on tvOS, while enqueueing remains safe.
+        if !sampleBufferRenderer.isReadyForMoreMediaData {
+            diagnostics.recordBackpressure()
+        }
         let didBeginEnqueue = state.withLock { state -> Bool in
             guard !state.isFlushing, state.generation == renderGeneration else { return false }
             state.activeEnqueues += 1
@@ -451,16 +648,11 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             return
         }
 
-        let backpressured = !sampleBufferRenderer.isReadyForMoreMediaData
         sampleBufferRenderer.enqueue(sampleBuffer)
-        let pendingFlush = state.withLock { state -> FlushRequest? in
+        let pendingFlush = state.withLock { state -> VideoRendererFlushRequest? in
             state.activeEnqueues -= 1
-            guard state.activeEnqueues == 0, let request = state.pendingFlush else { return nil }
-            state.pendingFlush = nil
-            return request
-        }
-        if backpressured {
-            diagnostics.recordBackpressure()
+            guard state.activeEnqueues == 0 else { return nil }
+            return state.flushPlan.activatePendingAfterEnqueuesDrain()
         }
         diagnostics.recordEnqueue(trace)
         if let pendingFlush {
@@ -470,6 +662,32 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
 
     func reset(preservingDisplayedImage: Bool) {
         flush(preservingDisplayedImage: preservingDisplayedImage, recordFailure: false)
+    }
+
+    func teardown() {
+        let result = state.withLock { state -> (VideoRendererFlushRequest?, PendingFrame?) in
+            guard !state.mailbox.isTerminated else { return (nil, nil) }
+            state.generation &+= 1
+            state.isFlushing = true
+            state.inspectionCache.reset()
+            state.decodedFormatSignature = nil
+            state.drainSchedule.finish()
+            let request = VideoRendererFlushRequest(
+                generation: state.generation,
+                removeDisplayedImage: true
+            )
+            let requestToRun = state.flushPlan.upgradeToTerminal(
+                request,
+                activeEnqueues: state.activeEnqueues
+            )
+            return (requestToRun, state.mailbox.teardown())
+        }
+        if let dropped = result.1 {
+            diagnostics.recordDrop(dropped.trace)
+        }
+        if let requestToRun = result.0 {
+            performFlush(requestToRun)
+        }
     }
 
     func recoverAfterFailure() {
@@ -514,78 +732,78 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
 
     private func flush(preservingDisplayedImage: Bool, recordFailure: Bool) {
         guard sampleBufferRenderer != nil else { return }
-        let (didBeginFlush, requestToRun) = state.withLock { state -> (Bool, FlushRequest?) in
-            guard !state.isFlushing else { return (false, nil) }
+        let result = state.withLock { state -> (Bool, VideoRendererFlushRequest?, PendingFrame?) in
+            guard !state.isFlushing, !state.mailbox.isTerminated else {
+                return (false, nil, nil)
+            }
             state.isFlushing = true
             state.generation &+= 1
-            state.formatDescription = nil
-            state.formatSignature = nil
+            state.inspectionCache.reset()
             state.decodedFormatSignature = nil
-            let request = FlushRequest(
+            state.drainSchedule.finish()
+            let dropped = state.mailbox.flush()
+            let request = VideoRendererFlushRequest(
                 generation: state.generation,
                 removeDisplayedImage: !preservingDisplayedImage
             )
-            if state.activeEnqueues == 0 {
-                return (true, request)
-            } else {
-                state.pendingFlush = request
-                return (true, nil)
-            }
+            let requestToRun = state.flushPlan.begin(
+                request,
+                activeEnqueues: state.activeEnqueues
+            )
+            return (true, requestToRun, dropped)
         }
-        guard didBeginFlush else { return }
+        guard result.0 else { return }
+
+        if let dropped = result.2 {
+            diagnostics.recordDrop(dropped.trace)
+        }
 
         if recordFailure {
             diagnostics.recordRendererFailure()
         }
-        if let requestToRun {
+        if let requestToRun = result.1 {
             performFlush(requestToRun)
         }
     }
 
-    private func performFlush(_ request: FlushRequest) {
+    private func performFlush(_ request: VideoRendererFlushRequest) {
         guard let sampleBufferRenderer else {
-            state.withLock { state in
-                if state.generation == request.generation {
-                    state.isFlushing = false
-                }
+            if let followUp = completeFlush(request) {
+                performFlush(followUp)
             }
             return
         }
         sampleBufferRenderer.flush(removingDisplayedImage: request.removeDisplayedImage) { [weak self] in
-            self?.state.withLock { state in
-                if state.generation == request.generation {
-                    state.isFlushing = false
-                }
+            guard let self else { return }
+            let followUp = completeFlush(request)
+            diagnostics.recordRendererFlush()
+            if let followUp {
+                performFlush(followUp)
             }
-            self?.diagnostics.recordRendererFlush()
         }
     }
 
-    private func formatDescription(
-        for pixelBuffer: CVPixelBuffer,
-        signature: VideoFormatSignature
-    ) -> CMVideoFormatDescription? {
-        let (generation, cached) = state.withLock {
-            ($0.generation, $0.formatSignature == signature ? $0.formatDescription : nil)
+    private func completeFlush(_ request: VideoRendererFlushRequest) -> VideoRendererFlushRequest? {
+        state.withLock { state -> VideoRendererFlushRequest? in
+            switch state.flushPlan.complete(request) {
+            case .ignored:
+                return nil
+            case .finished:
+                state.isFlushing = false
+                return nil
+            case let .followUp(followUp):
+                return followUp
+            }
         }
-        if let cached,
-           CMVideoFormatDescriptionMatchesImageBuffer(cached, imageBuffer: pixelBuffer)
-        {
-            return cached
-        }
+    }
 
-        var created: CMVideoFormatDescription?
-        let status = CMVideoFormatDescriptionCreateForImageBuffer(
-            allocator: nil,
-            imageBuffer: pixelBuffer,
-            formatDescriptionOut: &created
-        )
-        guard status == noErr, let created else { return nil }
-        return state.withLock { state in
-            guard state.generation == generation, !state.isFlushing else { return nil }
-            state.formatDescription = created
-            state.formatSignature = signature
-            return created
+    private func dropPendingFrame() {
+        let dropped = state.withLock { state -> PendingFrame? in
+            state.drainSchedule.finish()
+            return state.mailbox.flush()
+        }
+        if let dropped {
+            diagnostics.recordDrop(dropped.trace)
         }
     }
 

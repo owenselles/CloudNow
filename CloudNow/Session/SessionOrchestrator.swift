@@ -51,6 +51,16 @@ nonisolated struct SessionConnectionToken: Equatable, Sendable {
     let connectionGeneration: UInt64
 }
 
+nonisolated struct SessionStopHandle: Sendable {
+    fileprivate let ownershipID: UUID
+    fileprivate let sessionID: String
+    fileprivate let token: String
+    fileprivate let base: String
+    fileprivate let serverIP: String?
+    fileprivate let clientID: String?
+    fileprivate let deviceID: String?
+}
+
 nonisolated enum SessionReconnectDecision: Equatable, Sendable {
     case reconnect
     case endSession
@@ -96,8 +106,12 @@ final class SessionOrchestrator {
     }
 
     private struct OwnedSession {
-        let info: SessionInfo
-        let token: String
+        let handle: SessionStopHandle
+    }
+
+    private struct StopOperation {
+        let id: UUID
+        let task: Task<Bool, Never>
     }
 
     private let client: any SessionOrchestrationClient
@@ -111,7 +125,7 @@ final class SessionOrchestrator {
     private var activeCreation: ActiveOperation?
     private var activePolling: ActiveOperation?
     private var ownedSession: OwnedSession?
-    private var stopTasks: [String: Task<Bool, Never>] = [:]
+    private var stopOperations: [String: StopOperation] = [:]
     private var stoppedSessionIds: Set<String> = []
 
     init(
@@ -179,7 +193,7 @@ final class SessionOrchestrator {
             }
 
             guard acceptsAttempt(attempt, taskIsCancelled: Task.isCancelled) else {
-                await stopOnce(session: session, token: request.token)
+                _ = await stopOnce(session: session, token: request.token)
                 throw CancellationError()
             }
 
@@ -307,8 +321,48 @@ final class SessionOrchestrator {
 
     /// Registers a session created or reclaimed outside the coordinator.
     func adopt(_ session: SessionInfo, token: String) {
-        stoppedSessionIds.remove(session.sessionId)
-        ownedSession = OwnedSession(info: session, token: token)
+        adoptStopTarget(
+            sessionID: session.sessionId,
+            token: token,
+            base: session.streamingBaseUrl,
+            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            clientID: session.clientId,
+            deviceID: session.deviceId
+        )
+    }
+
+    /// Registers immutable teardown inputs for a persisted session that could
+    /// not be reclaimed. This keeps its DELETE serialized with retry and exit.
+    func adoptStopTarget(
+        sessionID: String,
+        token: String,
+        base: String,
+        serverIP: String?,
+        clientID: String?,
+        deviceID: String?
+    ) {
+        stoppedSessionIds.remove(sessionID)
+        let ownershipID = ownedSession?.handle.sessionID == sessionID
+            ? ownedSession?.handle.ownershipID ?? UUID()
+            : UUID()
+        ownedSession = OwnedSession(
+            handle: SessionStopHandle(
+                ownershipID: ownershipID,
+                sessionID: sessionID,
+                token: token,
+                base: base,
+                serverIP: serverIP,
+                clientID: clientID,
+                deviceID: deviceID
+            )
+        )
+    }
+
+    /// Captures immutable stop inputs before playback ownership is detached for Leave.
+    /// The handle remains valid for a later explicit End of the parked server session.
+    func stopHandle(for sessionID: String) -> SessionStopHandle? {
+        guard ownedSession?.handle.sessionID == sessionID else { return nil }
+        return ownedSession?.handle
     }
 
     /// Relinquishes ownership when the user intentionally leaves a resumable session running.
@@ -317,19 +371,29 @@ final class SessionOrchestrator {
     }
 
     /// Stops the current owned session without invalidating the active generation.
-    func stopOwnedSession() async {
-        guard let ownedSession else { return }
-        self.ownedSession = nil
-        await stopOnce(
-            session: ownedSession.info,
-            token: ownedSession.token
-        )
+    @discardableResult
+    func stopOwnedSession() async -> Bool {
+        guard let handle = ownedSession?.handle else { return true }
+        return await stopSession(using: handle)
     }
 
-    /// Cancels all work and stops the owned session at most once.
-    func teardown() async {
+    /// Stops the exact session captured by a lease, even after local ownership is detached.
+    /// Failed server deletion keeps current ownership available for a later retry.
+    @discardableResult
+    func stopSession(using handle: SessionStopHandle) async -> Bool {
+        let stopped = await stopOnce(handle: handle)
+        if stopped, ownedSession?.handle.ownershipID == handle.ownershipID {
+            ownedSession = nil
+        }
+        return stopped
+    }
+
+    /// Cancels lifecycle work and coalesces a best-effort server stop.
+    /// A failed stop remains owned so a later teardown can retry it.
+    @discardableResult
+    func teardown() async -> Bool {
         cancelAttempt()
-        await stopOwnedSession()
+        return await stopOwnedSession()
     }
 
     /// Advances connection identity so callbacks from losing or replaced connections are stale.
@@ -416,36 +480,53 @@ final class SessionOrchestrator {
         activePolling = nil
     }
 
-    private func stopOnce(session: SessionInfo, token: String) async {
-        let sessionId = session.sessionId
-        guard !stoppedSessionIds.contains(sessionId) else { return }
+    private func stopOnce(session: SessionInfo, token: String) async -> Bool {
+        await stopOnce(handle: SessionStopHandle(
+            ownershipID: UUID(),
+            sessionID: session.sessionId,
+            token: token,
+            base: session.streamingBaseUrl,
+            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            clientID: session.clientId,
+            deviceID: session.deviceId
+        ))
+    }
 
-        if let task = stopTasks[sessionId] {
-            _ = await task.value
-            return
-        }
+    private func stopOnce(handle: SessionStopHandle) async -> Bool {
+        let sessionID = handle.sessionID
+        guard !stoppedSessionIds.contains(sessionID) else { return true }
 
-        let client = client
-        let task = Task {
-            do {
-                try await client.stopSession(
-                    sessionId: session.sessionId,
-                    token: token,
-                    base: session.streamingBaseUrl,
-                    serverIp: session.serverIp.isEmpty ? nil : session.serverIp,
-                    clientId: session.clientId,
-                    deviceId: session.deviceId
-                )
-                return true
-            } catch {
-                return false
+        let operation: StopOperation
+        if let current = stopOperations[sessionID] {
+            operation = current
+        } else {
+            let client = client
+            let task = Task {
+                do {
+                    try await client.stopSession(
+                        sessionId: handle.sessionID,
+                        token: handle.token,
+                        base: handle.base,
+                        serverIp: handle.serverIP,
+                        clientId: handle.clientID,
+                        deviceId: handle.deviceID
+                    )
+                    return true
+                } catch {
+                    return false
+                }
             }
+            operation = StopOperation(id: UUID(), task: task)
+            stopOperations[sessionID] = operation
         }
-        stopTasks[sessionId] = task
-        let stopped = await task.value
-        stopTasks[sessionId] = nil
+
+        let stopped = await operation.task.value
+        if stopOperations[sessionID]?.id == operation.id {
+            stopOperations[sessionID] = nil
+        }
         if stopped {
-            stoppedSessionIds.insert(sessionId)
+            stoppedSessionIds.insert(sessionID)
         }
+        return stopped
     }
 }

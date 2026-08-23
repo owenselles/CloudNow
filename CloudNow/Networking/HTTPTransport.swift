@@ -4,6 +4,32 @@ import Foundation
 /// implementation, while production keeps URLSession's cancellation behavior.
 nonisolated protocol HTTPTransport: Sendable {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
+
+    func data(
+        for request: URLRequest,
+        maximumResponseSize: Int
+    ) async throws -> (Data, URLResponse)
+}
+
+nonisolated enum HTTPTransportError: Error, Equatable, Sendable {
+    case invalidResponseSizeLimit
+    case responseTooLarge
+}
+
+extension HTTPTransport {
+    nonisolated func data(
+        for request: URLRequest,
+        maximumResponseSize: Int
+    ) async throws -> (Data, URLResponse) {
+        guard maximumResponseSize >= 0 else {
+            throw HTTPTransportError.invalidResponseSizeLimit
+        }
+        let result = try await data(for: request)
+        guard result.0.count <= maximumResponseSize else {
+            throw HTTPTransportError.responseTooLarge
+        }
+        return result
+    }
 }
 
 nonisolated struct URLSessionHTTPTransport: HTTPTransport {
@@ -19,6 +45,34 @@ nonisolated struct URLSessionHTTPTransport: HTTPTransport {
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         try await session.data(for: request)
+    }
+
+    func data(
+        for request: URLRequest,
+        maximumResponseSize: Int
+    ) async throws -> (Data, URLResponse) {
+        guard maximumResponseSize >= 0 else {
+            throw HTTPTransportError.invalidResponseSizeLimit
+        }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard response.expectedContentLength < 0
+            || response.expectedContentLength <= Int64(maximumResponseSize)
+        else {
+            throw HTTPTransportError.responseTooLarge
+        }
+
+        var data = Data()
+        if response.expectedContentLength > 0 {
+            data.reserveCapacity(Int(response.expectedContentLength))
+        }
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < maximumResponseSize else {
+                throw HTTPTransportError.responseTooLarge
+            }
+            data.append(byte)
+        }
+        return (data, response)
     }
 }
 

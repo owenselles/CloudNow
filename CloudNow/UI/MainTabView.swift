@@ -3,6 +3,7 @@ import UIKit
 
 struct MainTabView: View {
     @Environment(AuthManager.self) var authManager
+    @Environment(CloudSessionCoordinator.self) private var cloudSessionCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: GamesViewModel
     @State private var gameToPlay: GameInfo?
@@ -21,7 +22,12 @@ struct MainTabView: View {
     }
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        CloudNowTabShell(
+            selection: $selectedTab,
+            controllerNavigation: controllerNavigation,
+            accessibilityIdentifier: "main-navigation",
+            modeLifecycle: viewModel
+        ) {
             Tab(L10n.text("home"), systemImage: "house.fill", value: AppTab.home) {
                 HomeView(
                     onPlay: { game in
@@ -55,38 +61,20 @@ struct MainTabView: View {
                     .accessibilityIdentifier("settings-screen")
             }
         }
-        .accessibilityIdentifier("main-navigation")
         .environment(viewModel)
-        .environment(controllerNavigation)
-        .onAppear {
-            controllerNavigation.start(
-                onPreviousTab: { selectedTab = selectedTab.previous },
-                onNextTab: { selectedTab = selectedTab.next }
-            )
-        }
         .task {
             guard loadsRemoteData else { return }
             await viewModel.load(authManager: authManager)
+            viewModel.restoreResumableSession(
+                from: cloudSessionCoordinator.serverSession
+            )
         }
         .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
-                MemoryLifecycleCoordinator.shared.appDidBecomeActive()
-                if loadsRemoteData {
-                    Task { await viewModel.refreshLibrary(authManager: authManager) }
-                }
-            case .background:
-                MemoryLifecycleCoordinator.shared.appDidEnterBackground()
-            case .inactive:
-                break
-            @unknown default:
-                break
-            }
+            guard phase == .active, loadsRemoteData else { return }
+            viewModel.startForegroundLibraryRefresh(authManager: authManager)
         }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didReceiveMemoryWarningNotification
-        )) { _ in
-            MemoryLifecycleCoordinator.shared.didReceiveMemoryWarning()
+        .onDisappear {
+            viewModel.cancelForegroundLibraryRefresh()
         }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
@@ -124,11 +112,23 @@ struct MainTabView: View {
     }
 }
 
-private enum AppTab: Hashable {
+extension GamesViewModel: CloudGamingProviderModeLifecycle {
+    func deactivateForInactiveProvider() async {
+        // Provider switching only suspends GFN work. The coordinator still owns
+        // any parked server lease, so keep the metadata required to resume it
+        // when this mode is recreated. Logout and Reset retain their own clears.
+        prepareForLogout()
+    }
+}
+
+private nonisolated enum AppTab: CloudNowTabSelection {
     case home
     case library
     case store
     case settings
+
+    static let first = AppTab.home
+    static let last = AppTab.settings
 
     var next: AppTab {
         switch self {

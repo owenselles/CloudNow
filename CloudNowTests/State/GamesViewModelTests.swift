@@ -4,6 +4,20 @@ import Testing
 
 @Suite("Games view-model state")
 struct GamesViewModelTests {
+    @Test("Re-leaving the same session restarts its expiry task")
+    func resumableExpiryIdentityIncludesLeaveTime() {
+        let firstLeave = ResumableSessionExpiryIdentity(
+            sessionID: "same-session",
+            leftAt: Date(timeIntervalSince1970: 100)
+        )
+        let secondLeave = ResumableSessionExpiryIdentity(
+            sessionID: "same-session",
+            leftAt: Date(timeIntervalSince1970: 200)
+        )
+
+        #expect(firstLeave != secondLeave)
+    }
+
     @MainActor
     @Test("Cached catalog appears before its deterministic refresh completes")
     func cachedCatalogAppearsBeforeRefresh() async {
@@ -1078,6 +1092,172 @@ struct GamesViewModelTests {
     }
 
     @MainActor
+    @Test("Provider deactivation cancels requests but preserves parked resume metadata")
+    func providerDeactivationPreservesParkedSession() async {
+        let initial = makeGame(
+            id: "initial",
+            title: "Initial",
+            appId: "parked-app",
+            isInLibrary: true
+        )
+        let activeSession = ActiveSessionInfo(
+            sessionId: "parked-session",
+            status: 2,
+            appId: "parked-app",
+            serverIp: "192.0.2.10",
+            signalingUrl: nil
+        )
+        var snapshot = AppPersistenceStore.GamesSnapshot()
+        snapshot.vpcId = "TEST-VPC"
+        let gamesClient = ForegroundCancellationGamesClient(initial: initial)
+        let viewModel = GamesViewModel(
+            gamesClient: gamesClient,
+            cloudMatchClient: FakeActiveSessionsClient(sessions: [activeSession]),
+            membershipClient: FakeMembershipClient(),
+            persistence: FakeGamesPersistence(snapshot: snapshot)
+        )
+        let authManager = await makeAuthenticatedManager()
+        await viewModel.load(authManager: authManager)
+        let parkedSession = makeSession(id: "parked-session")
+        viewModel.resumableSession = ResumableSession(
+            game: initial,
+            session: parkedSession,
+            leftAt: Date()
+        )
+        viewModel.lastSession = LastSessionRecord(
+            sessionId: "parked-session",
+            serverIp: parkedSession.serverIp,
+            appId: "parked-app",
+            base: parkedSession.streamingBaseUrl,
+            routingZoneUrl: parkedSession.zone,
+            clientId: parkedSession.clientId,
+            deviceId: parkedSession.deviceId,
+            createdAt: Date()
+        )
+
+        viewModel.startForegroundLibraryRefresh(authManager: authManager)
+        await gamesClient.waitForForegroundRequest()
+        await viewModel.deactivateForInactiveProvider()
+        await gamesClient.waitForCancellation()
+
+        #expect(await gamesClient.libraryCallCount == 2)
+        #expect(await gamesClient.cancellationCount == 1)
+        #expect(viewModel.libraryGames == [initial])
+        #expect(viewModel.activeSessions.map(\.sessionId) == ["parked-session"])
+        #expect(viewModel.resumableSession?.session.sessionId == "parked-session")
+        #expect(viewModel.lastSession?.sessionId == "parked-session")
+    }
+
+    @MainActor
+    @Test("GFN mode recreation restores Continue only from its parked authoritative lease")
+    func providerSwitchRestoresParkedSession() async throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let expiry = now.addingTimeInterval(ResumableSession.gracePeriod)
+        let game = makeGame(
+            id: "parked-game",
+            title: "Parked Game",
+            appId: "parked-app",
+            isInLibrary: true
+        )
+        let record = LastSessionRecord(
+            sessionId: "parked-session",
+            serverIp: "192.0.2.20",
+            appId: "parked-app",
+            base: "https://stream.fixture.invalid",
+            routingZoneUrl: "https://zone.fixture.invalid",
+            clientId: "persisted-client",
+            deviceId: "persisted-device",
+            createdAt: now.addingTimeInterval(-30)
+        )
+        var snapshot = AppPersistenceStore.GamesSnapshot()
+        snapshot.libraryGames = [game]
+        snapshot.lastSession = record
+        snapshot.vpcId = "TEST-VPC"
+        let persistence = FakeGamesPersistence(
+            snapshot: snapshot,
+            cachedCatalog: [game]
+        )
+        let coordinator = CloudSessionCoordinator(now: { now })
+        let lease = try coordinator.reserveServerSession(
+            provider: .geForceNow,
+            serverSessionID: "parked-session",
+            actions: CloudServerSessionActions(end: { true })
+        )
+        coordinator.parkServerSession(lease, expiresAt: expiry)
+        let firstViewModel = GamesViewModel(
+            gamesClient: ScriptedGamesClient(
+                mainOutcomes: [.success([game])],
+                libraryOutcomes: [.success([game])]
+            ),
+            cloudMatchClient: FakeActiveSessionsClient(),
+            membershipClient: FakeMembershipClient(),
+            persistence: persistence
+        )
+        let authManager = await makeAuthenticatedManager()
+
+        await firstViewModel.load(authManager: authManager)
+        firstViewModel.restoreResumableSession(
+            from: coordinator.serverSession,
+            now: now
+        )
+        await firstViewModel.deactivateForInactiveProvider()
+
+        let recreatedViewModel = GamesViewModel(
+            gamesClient: ScriptedGamesClient(
+                mainOutcomes: [.success([game])],
+                libraryOutcomes: [.success([game])]
+            ),
+            cloudMatchClient: FakeActiveSessionsClient(),
+            membershipClient: FakeMembershipClient(),
+            persistence: persistence
+        )
+        await recreatedViewModel.load(authManager: authManager)
+        recreatedViewModel.restoreResumableSession(
+            from: coordinator.serverSession,
+            now: now
+        )
+
+        let restored = try #require(recreatedViewModel.resumableSession)
+        #expect(restored.game.id == "parked-game")
+        #expect(restored.session.sessionId == "parked-session")
+        #expect(restored.session.serverIp == "192.0.2.20")
+        #expect(restored.session.clientId == "persisted-client")
+        #expect(restored.session.deviceId == "persisted-device")
+        #expect(restored.leftAt == now)
+
+        let wrongSessionLease = CloudServerSessionLease(
+            id: lease.id,
+            provider: .geForceNow,
+            serverSessionID: "different-session",
+            phase: .parked(expiresAt: expiry)
+        )
+        recreatedViewModel.restoreResumableSession(
+            from: wrongSessionLease,
+            now: now
+        )
+        #expect(recreatedViewModel.resumableSession == nil)
+
+        let expiredLease = CloudServerSessionLease(
+            id: lease.id,
+            provider: .geForceNow,
+            serverSessionID: "parked-session",
+            phase: .parked(expiresAt: now)
+        )
+        recreatedViewModel.restoreResumableSession(
+            from: expiredLease,
+            now: now
+        )
+        #expect(recreatedViewModel.resumableSession == nil)
+
+        coordinator.endServerSession(lease)
+        recreatedViewModel.restoreResumableSession(
+            from: coordinator.serverSession,
+            now: now
+        )
+        #expect(recreatedViewModel.resumableSession == nil)
+    }
+
+    @MainActor
     private func waitForLibraryRefresh(
         _ viewModel: GamesViewModel
     ) async -> Bool {
@@ -1147,6 +1327,27 @@ struct GamesViewModelTests {
         game.variants[0].appId = appId
         return game
     }
+
+    private func makeSession(id: String) -> SessionInfo {
+        SessionInfo(
+            sessionId: id,
+            status: 2,
+            zone: "https://zone.fixture.invalid",
+            streamingBaseUrl: "https://stream.fixture.invalid",
+            serverIp: "192.0.2.10",
+            signalingServer: "192.0.2.10:443",
+            signalingUrl: "wss://192.0.2.10/nvst/",
+            gpuType: "fixture",
+            queuePosition: nil,
+            seatSetupStep: nil,
+            seatSetupEtaMs: nil,
+            iceServers: [],
+            mediaConnectionInfo: nil,
+            clientId: "fixture-client",
+            deviceId: "fixture-device",
+            adState: nil
+        )
+    }
 }
 
 private enum ScriptedGamesOutcome: Sendable {
@@ -1157,6 +1358,85 @@ private enum ScriptedGamesOutcome: Sendable {
 
 private enum GamesViewModelTestError: Error {
     case unavailable
+}
+
+private actor ForegroundCancellationGamesClient: GamesCatalogClient {
+    private let initial: GameInfo
+    private var foregroundContinuation: CheckedContinuation<Void, Error>?
+    private var cancellationRequested = false
+    private var foregroundRequestWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var libraryCallCount = 0
+    private(set) var cancellationCount = 0
+
+    init(initial: GameInfo) {
+        self.initial = initial
+    }
+
+    func fetchMainGames(
+        token _: String,
+        streamingBaseUrl _: String,
+        vpcId _: String?
+    ) -> [GameInfo] {
+        [initial]
+    }
+
+    func fetchLibrary(
+        token _: String,
+        streamingBaseUrl _: String,
+        vpcId _: String?
+    ) async throws -> [GameInfo] {
+        libraryCallCount += 1
+        guard libraryCallCount > 1 else { return [initial] }
+        let requestWaiters = foregroundRequestWaiters
+        foregroundRequestWaiters = []
+        requestWaiters.forEach { $0.resume() }
+
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (
+                    continuation: CheckedContinuation<Void, Error>
+                ) in
+                    if cancellationRequested {
+                        continuation.resume(throwing: CancellationError())
+                    } else {
+                        foregroundContinuation = continuation
+                    }
+                }
+            } onCancel: {
+                Task {
+                    await self.requestCancellation()
+                }
+            }
+        } catch is CancellationError {
+            cancellationCount += 1
+            let waiters = cancellationWaiters
+            cancellationWaiters = []
+            waiters.forEach { $0.resume() }
+            throw CancellationError()
+        }
+        return [initial]
+    }
+
+    func waitForForegroundRequest() async {
+        guard libraryCallCount < 2 else { return }
+        await withCheckedContinuation { continuation in
+            foregroundRequestWaiters.append(continuation)
+        }
+    }
+
+    func waitForCancellation() async {
+        guard cancellationCount == 0 else { return }
+        await withCheckedContinuation { continuation in
+            cancellationWaiters.append(continuation)
+        }
+    }
+
+    private func requestCancellation() {
+        cancellationRequested = true
+        foregroundContinuation?.resume(throwing: CancellationError())
+        foregroundContinuation = nil
+    }
 }
 
 @MainActor

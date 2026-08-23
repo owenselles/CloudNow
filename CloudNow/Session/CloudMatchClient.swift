@@ -627,6 +627,9 @@ actor CloudMatchClient {
         }
         let (data, response) = try await transport.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+        if statusCode == 404 || statusCode == 410 {
+            return
+        }
         guard (200 ..< 300).contains(statusCode) else {
             throw CloudMatchError.requestFailed(
                 context: "stopSession",

@@ -5,6 +5,11 @@ import UIKit
 
 private let gamesLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "Games")
 
+nonisolated struct ResumableSessionExpiryIdentity: Hashable, Sendable {
+    let sessionID: String
+    let leftAt: Date
+}
+
 struct ResumableSession {
     let game: GameInfo
     let session: SessionInfo
@@ -18,6 +23,13 @@ struct ResumableSession {
 
     var isExpired: Bool {
         secondsRemaining == 0
+    }
+
+    var expiryIdentity: ResumableSessionExpiryIdentity {
+        ResumableSessionExpiryIdentity(
+            sessionID: session.sessionId,
+            leftAt: leftAt
+        )
     }
 }
 
@@ -237,6 +249,8 @@ class GamesViewModel {
     private var cacheGeneration = 0
     private var ownershipCacheGeneration: UInt64 = 0
     private var loadGeneration = 0
+    @ObservationIgnored private var foregroundLibraryRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var foregroundLibraryRefreshGeneration: UInt64 = 0
 
     /// The scene-activation refresh in MainTabView also fires on cold launch,
     /// which would fetch the library a second time in parallel with load().
@@ -379,6 +393,7 @@ class GamesViewModel {
     }
 
     func load(authManager: AuthManager) async {
+        cancelForegroundLibraryRefresh()
         persistenceEnabled = true
         let identity = beginLoad()
         latestNetworkLibraryGames = nil
@@ -874,11 +889,13 @@ class GamesViewModel {
         libraryWarning = nil
 
         do {
+            try Task.checkCancellation()
             let token = try await authManager.resolveToken()
             guard isCurrent(identity) else { return }
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
             let refreshed = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base, vpcId: currentVpcId)
+            try Task.checkCancellation()
             guard isCurrent(identity) else { return }
             libraryGames = refreshed
             if !mainGames.isEmpty {
@@ -894,6 +911,8 @@ class GamesViewModel {
                 expectedGeneration: expectedOwnershipCacheGeneration
             )
             guard isCurrent(identity) else { return }
+        } catch is CancellationError {
+            return
         } catch {
             guard isCurrent(identity) else { return }
             if libraryGames.isEmpty {
@@ -903,6 +922,32 @@ class GamesViewModel {
                 libraryWarning = error.localizedDescription
             }
         }
+    }
+
+    /// Owns the scene-activation refresh so provider deactivation can cancel
+    /// the URLSession-backed request, not merely reject its eventual result.
+    func startForegroundLibraryRefresh(authManager: AuthManager) {
+        guard foregroundLibraryRefreshTask == nil,
+              libraryLoadPhase != .loading,
+              hasCompletedInitialLoad,
+              !isFullLibraryRefreshRunning
+        else {
+            return
+        }
+        foregroundLibraryRefreshGeneration &+= 1
+        let generation = foregroundLibraryRefreshGeneration
+        foregroundLibraryRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await refreshLibrary(authManager: authManager)
+            guard foregroundLibraryRefreshGeneration == generation else { return }
+            foregroundLibraryRefreshTask = nil
+        }
+    }
+
+    func cancelForegroundLibraryRefresh() {
+        foregroundLibraryRefreshGeneration &+= 1
+        foregroundLibraryRefreshTask?.cancel()
+        foregroundLibraryRefreshTask = nil
     }
 
     func startFullLibraryRefresh(authManager: AuthManager) {
@@ -1375,7 +1420,61 @@ class GamesViewModel {
         }
     }
 
+    /// Rebuilds the short-lived Continue banner after provider navigation
+    /// recreates this view model. The shared lease remains the server authority;
+    /// persisted metadata alone can never advertise a resumable session.
+    func restoreResumableSession(
+        from lease: CloudServerSessionLease?,
+        now: Date = Date()
+    ) {
+        resumableSession = nil
+        guard let lease,
+              lease.provider == .geForceNow,
+              case let .parked(expiresAt) = lease.phase,
+              expiresAt > now,
+              let lastSession,
+              lastSession.sessionId == lease.serverSessionID,
+              !lastSession.appId.isEmpty,
+              !lastSession.serverIp.isEmpty,
+              !lastSession.base.isEmpty,
+              let clientID = lastSession.clientId,
+              !clientID.isEmpty,
+              let deviceID = lastSession.deviceId,
+              !deviceID.isEmpty,
+              let game = mainGames.first(where: { game in
+                  game.variants.contains { $0.appId == lastSession.appId }
+              })
+        else {
+            return
+        }
+
+        let session = SessionInfo(
+            sessionId: lastSession.sessionId,
+            status: 2,
+            zone: lastSession.routingZoneUrl ?? "",
+            streamingBaseUrl: lastSession.base,
+            serverIp: lastSession.serverIp,
+            signalingServer: "",
+            signalingUrl: "",
+            gpuType: nil,
+            queuePosition: nil,
+            seatSetupStep: nil,
+            seatSetupEtaMs: nil,
+            iceServers: [],
+            mediaConnectionInfo: nil,
+            clientId: clientID,
+            deviceId: deviceID,
+            adState: nil
+        )
+        resumableSession = ResumableSession(
+            game: game,
+            session: session,
+            leftAt: expiresAt.addingTimeInterval(-ResumableSession.gracePeriod)
+        )
+    }
+
     func prepareForCacheClear() {
+        cancelForegroundLibraryRefresh()
         cacheGeneration &+= 1
         ownershipCacheGeneration &+= 1
         loadGeneration &+= 1
@@ -1384,6 +1483,7 @@ class GamesViewModel {
     }
 
     func prepareForLogout() {
+        cancelForegroundLibraryRefresh()
         loadGeneration &+= 1
         libraryRefreshCoordinator.cancel()
         cancelCoalescedRequests()
@@ -1391,6 +1491,7 @@ class GamesViewModel {
     }
 
     func prepareForDataReset() {
+        cancelForegroundLibraryRefresh()
         cacheGeneration &+= 1
         ownershipCacheGeneration &+= 1
         loadGeneration &+= 1
@@ -1400,6 +1501,7 @@ class GamesViewModel {
     }
 
     func resetAllData() async {
+        cancelForegroundLibraryRefresh()
         libraryRefreshCoordinator.cancel()
         mainGames = []
         libraryGames = []

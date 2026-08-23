@@ -1,0 +1,1845 @@
+@testable import CloudNow
+import Foundation
+@preconcurrency import LiveKitWebRTC
+import Synchronization
+import Testing
+
+@Suite("Xbox Cloud stream controller")
+@MainActor
+struct XboxCloudStreamControllerTests {
+    struct ResolutionAliasCase: Sendable {
+        let persistedValue: String
+        let expected: XboxCloudDisplayResolution
+        let encodedValue: String
+    }
+
+    @Test("Xbox settings stay separate, bounded, and resilient")
+    func xboxSettings() throws {
+        let defaults = try JSONDecoder().decode(
+            XboxCloudStreamSettings.self,
+            from: Data("{}".utf8)
+        )
+        #expect(defaults == XboxCloudStreamSettings())
+        #expect(defaults.statsMode == .off)
+        #expect(!defaults.diagnosticsEnabled)
+        #expect(!defaults.enableRtcEventLog)
+        #expect(!defaults.microphoneEnabled)
+        let settings = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            codecPreference: .h265,
+            gameLanguage: "fr_FR",
+            statsMode: .standard,
+            diagnosticsEnabled: true,
+            enableRtcEventLog: true,
+            controllerDeadzone: 4,
+            rumbleIntensity: -2,
+            enableTextToSpeech: true,
+            magnifier: true,
+            highContrast: true,
+            enableOptionalDataCollection: true,
+            microphoneEnabled: true
+        )
+        #expect(settings.controllerDeadzone == 0.95)
+        #expect(settings.rumbleIntensity == 0)
+        let roundTrip = try JSONDecoder().decode(
+            XboxCloudStreamSettings.self,
+            from: JSONEncoder().encode(settings)
+        )
+        #expect(roundTrip == settings)
+        #expect(roundTrip.displayResolution == .qhd)
+        #expect(roundTrip.codecPreference == .h265)
+        #expect(roundTrip.statsMode == .standard)
+        #expect(roundTrip.diagnosticsEnabled)
+        #expect(roundTrip.enableRtcEventLog)
+        #expect(roundTrip.microphoneEnabled)
+        #expect(roundTrip.effectiveGameLanguage(defaultLocale: "en-US") == "fr-FR")
+
+        let futureValues = try JSONDecoder().decode(
+            XboxCloudStreamSettings.self,
+            from: Data(
+                #"{"displayResolution":"future","bandwidthPreference":{"mode":"future","maximumBitrateKbps":100000},"codecPreference":"future"}"#.utf8
+            )
+        )
+        #expect(futureValues.displayResolution == .automatic)
+        #expect(futureValues.codecPreference == .automatic)
+        #expect(
+            futureValues.effectiveGameLanguage(defaultLocale: "de-DE") == "de-DE"
+        )
+
+        let malformedMicrophone = try JSONDecoder().decode(
+            XboxCloudStreamSettings.self,
+            from: Data(
+                #"{"bandwidthPreference":true,"microphoneEnabled":"future"}"#.utf8
+            )
+        )
+        #expect(!malformedMicrophone.microphoneEnabled)
+        let encoded = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(futureValues)
+            ) as? [String: Any]
+        )
+        #expect(encoded["bandwidthPreference"] == nil)
+        #expect(encoded["qualityProfile"] == nil)
+    }
+
+    @Test(
+        "Xbox diagnostics fail closed by build and parent setting",
+        arguments: [
+            (false, false, false, false, false),
+            (false, true, true, false, false),
+            (true, false, true, true, false),
+            (true, true, true, true, true),
+            (true, true, false, false, false),
+        ]
+    )
+    func diagnosticsPolicy(
+        diagnosticsEnabled: Bool,
+        rtcEventLogEnabled: Bool,
+        allowsDiagnostics: Bool,
+        expectedDiagnostics: Bool,
+        expectedEventLog: Bool
+    ) {
+        let configuration = XboxCloudDiagnosticsPolicy.resolve(
+            diagnosticsEnabled: diagnosticsEnabled,
+            rtcEventLogEnabled: rtcEventLogEnabled,
+            allowsDiagnostics: allowsDiagnostics
+        )
+
+        #expect(configuration.isEnabled == expectedDiagnostics)
+        #expect(configuration.isRTCEventLogEnabled == expectedEventLog)
+    }
+
+    @Test("Xbox client normalization strips orphaned and Release diagnostics")
+    func diagnosticsNormalization() {
+        let orphaned = XboxCloudStreamSettings(
+            diagnosticsEnabled: false,
+            enableRtcEventLog: true,
+            enableOptionalDataCollection: true
+        ).normalizedForClient
+        #expect(!orphaned.diagnosticsEnabled)
+        #expect(!orphaned.enableRtcEventLog)
+        #expect(!orphaned.enableOptionalDataCollection)
+
+        let enabled = XboxCloudStreamSettings(
+            diagnosticsEnabled: true,
+            enableRtcEventLog: true
+        ).normalizedForClient
+        #if DEBUG
+            #expect(enabled.diagnosticsEnabled)
+            #expect(enabled.enableRtcEventLog)
+        #else
+            #expect(!enabled.diagnosticsEnabled)
+            #expect(!enabled.enableRtcEventLog)
+        #endif
+    }
+
+    @Test(
+        "Xbox quality aliases decode current and legacy persisted values",
+        arguments: [
+            ResolutionAliasCase(
+                persistedValue: "Auto",
+                expected: .automatic,
+                encodedValue: "Auto"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "automatic",
+                expected: .automatic,
+                encodedValue: "Auto"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "720",
+                expected: .hd,
+                encodedValue: "720"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1280x720",
+                expected: .hd,
+                encodedValue: "720"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "720HQ",
+                expected: .hdHighQuality,
+                encodedValue: "720HQ"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1080",
+                expected: .fullHD,
+                encodedValue: "1080"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1920x1080",
+                expected: .fullHD,
+                encodedValue: "1080"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1080HQ",
+                expected: .fullHDHighQuality,
+                encodedValue: "1080HQ"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "1440",
+                expected: .qhd,
+                encodedValue: "1440"
+            ),
+            ResolutionAliasCase(
+                persistedValue: "2560x1440",
+                expected: .qhd,
+                encodedValue: "1440"
+            ),
+        ]
+    )
+    func xboxQualityAliasMigration(testCase: ResolutionAliasCase) throws {
+        let decoded = try JSONDecoder().decode(
+            XboxCloudDisplayResolution.self,
+            from: Data("\"\(testCase.persistedValue)\"".utf8)
+        )
+        #expect(decoded == testCase.expected)
+
+        let encoded = try JSONDecoder().decode(
+            String.self,
+            from: JSONEncoder().encode(decoded)
+        )
+        #expect(encoded == testCase.encodedValue)
+    }
+
+    @Test("Xbox quality capabilities request the account ceiling and downgrade safely")
+    func xboxQualityCapabilities() {
+        let unknown = XboxCloudStreamCapabilities.resolved(
+            for: nil,
+            isMembershipKnown: false
+        )
+        #expect(unknown.resolutions == [.automatic])
+        #expect(unknown.requestedResolution(for: .automatic) == .qhd)
+        #expect(unknown.requestedResolution(for: .fullHD) == .qhd)
+
+        let ultimate = XboxCloudStreamCapabilities.resolved(
+            for: .ultimate,
+            isMembershipKnown: true
+        )
+        #expect(ultimate.standardResolutions == [.automatic, .fullHD, .hd])
+        #expect(
+            ultimate.higherQualityResolutions
+                == [.qhd, .fullHDHighQuality, .hdHighQuality]
+        )
+        #expect(ultimate.requestedResolution(for: .automatic) == .qhd)
+        for resolution in ultimate.resolutions where resolution != .automatic {
+            #expect(ultimate.requestedResolution(for: resolution) == resolution)
+        }
+
+        let pcGamePass = XboxCloudStreamCapabilities.resolved(
+            for: .pcGamePass,
+            isMembershipKnown: true
+        )
+        #expect(pcGamePass.resolutions == [.automatic, .fullHD, .hd])
+        #expect(pcGamePass.requestedResolution(for: .automatic) == .fullHD)
+        for tier in [XboxMembershipTier.premium, .essential] {
+            let capabilities = XboxCloudStreamCapabilities.resolved(
+                for: tier,
+                isMembershipKnown: true
+            )
+            #expect(
+                capabilities.requestedResolution(for: .automatic) == .fullHD
+            )
+            #expect(
+                capabilities.normalized(XboxCloudStreamSettings())
+                    .displayResolution.rawValue == "1080"
+            )
+        }
+        #expect(
+            ultimate.normalized(XboxCloudStreamSettings())
+                .displayResolution.rawValue == "1440"
+        )
+
+        let persisted = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            codecPreference: .h265
+        )
+        let downgradedSelection = pcGamePass.normalized(persisted)
+        #expect(downgradedSelection.displayResolution == .fullHD)
+        #expect(downgradedSelection.codecPreference == .automatic)
+        #expect(persisted.displayResolution == .qhd)
+        #expect(pcGamePass.selectableResolution(for: .hdHighQuality) == .automatic)
+        #expect(pcGamePass.selectableResolution(for: .fullHDHighQuality) == .automatic)
+        #expect(pcGamePass.selectableResolution(for: .qhd) == .automatic)
+        #expect(pcGamePass.selectableResolution(for: .fullHD) == .fullHD)
+
+        let ultimateSelection = ultimate.normalized(
+            XboxCloudStreamSettings(
+                displayResolution: .automatic,
+                codecPreference: .h265
+            )
+        )
+        #expect(ultimateSelection.displayResolution == .qhd)
+        #expect(ultimateSelection.codecPreference == .automatic)
+
+        let unrecognizedTier = XboxCloudStreamCapabilities.resolved(
+            for: nil,
+            isMembershipKnown: true
+        )
+        #expect(unrecognizedTier.resolutions == [.automatic, .fullHD, .hd])
+        #expect(unrecognizedTier.requestedResolution(for: .automatic) == .fullHD)
+    }
+
+    @Test("Xbox quality labels use localized technical badges")
+    func xboxQualityLabels() {
+        #expect(XboxCloudDisplayResolution.automatic.label == L10n.text("automatic"))
+        #expect(XboxCloudDisplayResolution.hd.label == "720p")
+        #expect(XboxCloudDisplayResolution.fullHD.label == "1080p")
+        #expect(XboxCloudDisplayResolution.hdHighQuality.label == "720p")
+        #expect(XboxCloudDisplayResolution.fullHDHighQuality.label == "1080p")
+        #expect(XboxCloudDisplayResolution.qhd.label == "1440p")
+        #expect(XboxCloudDisplayResolution.automatic.badge == nil)
+        #expect(XboxCloudDisplayResolution.hd.badge == nil)
+        #expect(XboxCloudDisplayResolution.fullHD.badge == nil)
+        #expect(XboxCloudDisplayResolution.hdHighQuality.badge == "HQ")
+        #expect(XboxCloudDisplayResolution.fullHDHighQuality.badge == "HQ")
+        #expect(XboxCloudDisplayResolution.qhd.badge == nil)
+    }
+
+    @Test("Xbox display metadata prefers current output mode and safe fallbacks")
+    func xboxDisplayMetadata() {
+        let activeMode = XboxCloudDisplayMetadata.resolved(
+            currentModeSize: CGSize(width: 3840, height: 2160),
+            nativeBoundsSize: CGSize(width: 1920, height: 1080),
+            nativeScale: 2
+        )
+        #expect(activeMode.widthInPixels == 3840)
+        #expect(activeMode.heightInPixels == 2160)
+        #expect(activeMode.pixelDensity == 2)
+        #expect(activeMode.logicalWidthInPixels == 1920)
+        #expect(activeMode.logicalHeightInPixels == 1080)
+
+        let nativeBounds = XboxCloudDisplayMetadata.resolved(
+            currentModeSize: CGSize(width: 0, height: 0),
+            nativeBoundsSize: CGSize(width: 2560, height: 1440),
+            nativeScale: 1
+        )
+        #expect(nativeBounds.widthInPixels == 2560)
+        #expect(nativeBounds.heightInPixels == 1440)
+
+        let fallback = XboxCloudDisplayMetadata.resolved(
+            currentModeSize: nil,
+            nativeBoundsSize: nil,
+            nativeScale: .nan
+        )
+        #expect(fallback == .fallback)
+    }
+
+    @Test("Start composes access, allocation, media, settings, and teardown")
+    func successfulLifecycle() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub(
+            microphoneEnabledAfterConnect: true,
+            diagnosticsEnabledAfterConnect: true,
+            rtcEventLogActiveAfterConnect: true
+        )
+        let lifecycleFactory = XboxLifecycleFactoryStub([lifecycle])
+        let runtimeFactory = XboxRuntimeFactoryStub([runtime])
+        let controller = makeController(
+            lifecycleFactory: lifecycleFactory,
+            runtimeFactory: runtimeFactory
+        )
+        let settings = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            diagnosticsEnabled: true,
+            enableRtcEventLog: true,
+            controllerDeadzone: 0.24,
+            rumbleEnabled: false,
+            rumbleIntensity: 0.4,
+            enableTextToSpeech: true,
+            magnifier: true,
+            highContrast: true,
+            enableOptionalDataCollection: true,
+            microphoneEnabled: true
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: settings
+        )
+
+        #expect(controller.state == .streaming)
+        #expect(controller.activeGameID == "fixture-title")
+        #expect(controller.videoTrack === runtime.videoTrack)
+        #expect(controller.microphoneEnabledForConnection)
+        #expect(controller.diagnosticsEnabled)
+        #expect(controller.rtcEventLogActive)
+        #expect(runtimeFactory.receivedSettings == [settings.normalizedForClient])
+        #expect(controller.activeStreamSettings == settings.normalizedForClient)
+        let access = try #require(lifecycleFactory.receivedAccess.first)
+        #expect(access.deviceInformation.displayWidthInPixels == 1920)
+        #expect(access.deviceInformation.displayHeightInPixels == 1080)
+        let request = try #require(await lifecycle.requests().first)
+        #expect(request.titleID == "fixture-title")
+        #expect(request.settings.locale == "en-US")
+        #expect(request.settings.timezoneOffsetMinutes == 120)
+        #expect(request.settings.enableTextToSpeech)
+        #expect(request.settings.magnifier)
+        #expect(request.settings.highContrast == 1)
+        #expect(!request.settings.enableOptionalDataCollection)
+
+        let didStop = await controller.stop()
+
+        #expect(didStop)
+        #expect(controller.state == .idle)
+        #expect(controller.videoTrack == nil)
+        #expect(!controller.microphoneEnabledForConnection)
+        #expect(!controller.diagnosticsEnabled)
+        #expect(!controller.rtcEventLogActive)
+        #expect(controller.activeGameID == nil)
+        #expect(runtime.disconnectCount == 1)
+        #expect(await lifecycle.deleteCount() == 1)
+    }
+
+    @Test("Allocation always uses the production Microsoft web profile")
+    func allocationProfile() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let lifecycleFactory = XboxLifecycleFactoryStub([lifecycle])
+        let runtimeFactory = XboxRuntimeFactoryStub([
+            XboxStreamRuntimeStub(),
+        ])
+        let requestedSettings = XboxCloudStreamSettings()
+        let controller = makeController(
+            lifecycleFactory: lifecycleFactory,
+            runtimeFactory: runtimeFactory
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: requestedSettings
+        )
+
+        let access = try #require(lifecycleFactory.receivedAccess.first)
+        let runtimeSettings = try #require(runtimeFactory.receivedSettings.first)
+        #expect(controller.activeStreamSettings == runtimeSettings)
+        #expect(access.compatibilityProfile == .microsoftWeb)
+        #expect(await controller.stop())
+    }
+
+    @Test("Failed End remains retryable and blocks a replacement allocation")
+    func failedEndRetainsSessionOwnership() async throws {
+        let firstLifecycle = try XboxStreamLifecycleStub(
+            deletionResults: [false, false, true]
+        )
+        let secondLifecycle = try XboxStreamLifecycleStub()
+        let lifecycleFactory = XboxLifecycleFactoryStub([
+            firstLifecycle,
+            secondLifecycle,
+        ])
+        let runtime = XboxStreamRuntimeStub()
+        let controller = makeController(
+            lifecycleFactory: lifecycleFactory,
+            runtimeFactory: XboxRuntimeFactoryStub([
+                runtime,
+                XboxStreamRuntimeStub(),
+            ])
+        )
+
+        try await controller.start(
+            gameID: "first-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+
+        let firstEndConfirmed = await controller.endSession()
+
+        #expect(!firstEndConfirmed)
+        #expect(controller.state == .idle)
+        #expect(controller.videoTrack == nil)
+        #expect(runtime.disconnectCount == 1)
+        #expect(controller.hasUnconfirmedSessionDeletion)
+        #expect(await firstLifecycle.deleteCount() == 1)
+
+        await #expect(
+            throws: XboxCloudStreamControllerError.sessionDeletionUnconfirmed
+        ) {
+            try await controller.start(
+                gameID: "second-title",
+                account: Self.account,
+                locale: "en-US",
+                settings: XboxCloudStreamSettings()
+            )
+        }
+
+        #expect(controller.hasUnconfirmedSessionDeletion)
+        #expect(await firstLifecycle.deleteCount() == 2)
+        #expect(await secondLifecycle.requests().isEmpty)
+        #expect(lifecycleFactory.receivedAccess.count == 1)
+
+        let retryConfirmed = await controller.endSession()
+
+        #expect(retryConfirmed)
+        #expect(!controller.hasUnconfirmedSessionDeletion)
+        #expect(controller.state == .idle)
+        #expect(await firstLifecycle.deleteCount() == 3)
+    }
+
+    @Test("Device information is resolved for every Xbox stream start")
+    func deviceInformationRefreshesForEveryStart() async throws {
+        let firstLifecycle = try XboxStreamLifecycleStub()
+        let secondLifecycle = try XboxStreamLifecycleStub()
+        let lifecycleFactory = XboxLifecycleFactoryStub([
+            firstLifecycle,
+            secondLifecycle,
+        ])
+        let provider = XboxDeviceInformationProviderStub([
+            .cloudNowTV(
+                sdkInstallID: "00000000-0000-0000-0000-000000000001",
+                displayWidthInPixels: 3840,
+                displayHeightInPixels: 2160,
+                pixelDensity: 1
+            ),
+            .cloudNowTV(
+                sdkInstallID: "00000000-0000-0000-0000-000000000001",
+                displayWidthInPixels: 1920,
+                displayHeightInPixels: 1080,
+                pixelDensity: 1
+            ),
+        ])
+        let controller = makeController(
+            lifecycleFactory: lifecycleFactory,
+            runtimeFactory: XboxRuntimeFactoryStub([
+                XboxStreamRuntimeStub(),
+                XboxStreamRuntimeStub(),
+            ]),
+            deviceInformationProvider: { provider.next() }
+        )
+
+        try await controller.start(
+            gameID: "first-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        try await controller.start(
+            gameID: "second-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+
+        #expect(provider.callCount == 2)
+        #expect(lifecycleFactory.receivedAccess.count == 2)
+        #expect(
+            lifecycleFactory.receivedAccess[0].deviceInformation.displayWidthInPixels == 3840
+        )
+        #expect(
+            lifecycleFactory.receivedAccess[0].deviceInformation.displayHeightInPixels == 2160
+        )
+        #expect(
+            lifecycleFactory.receivedAccess[1].deviceInformation.displayWidthInPixels == 1920
+        )
+        #expect(
+            lifecycleFactory.receivedAccess[1].deviceInformation.displayHeightInPixels == 1080
+        )
+
+        await controller.stop()
+    }
+
+    @Test("Xbox runtime drives the shared HUD and input pause state")
+    func statisticsAndInputPause() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub()
+        var snapshot = XboxCloudRTCStatsSnapshot()
+        snapshot.stream.fps = 60
+        snapshot.stream.rttMs = 24
+        snapshot.audio.codecName = "opus"
+        snapshot.audio.codecChannels = 2
+        runtime.statistics = snapshot
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime])
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings(
+                statsMode: .compact,
+                microphoneEnabled: true
+            )
+        )
+
+        #expect(!controller.microphoneEnabledForConnection)
+        #expect(await waitUntil { controller.stats.fps == 60 })
+        #expect(controller.stats.rttMs == 24)
+        #expect(controller.stats.serverZone == "West US")
+        #expect(controller.audioStats.codecName == "opus")
+        #expect(controller.statsMode == .compact)
+        #expect(controller.menuPressCount == 0)
+        runtime.requestMenuToggle()
+        #expect(controller.menuPressCount == 1)
+        controller.recordDecodedVideoFormat(DecodedVideoFormat(
+            mode: .sdr8,
+            width: 1920,
+            height: 1080,
+            pixelFormat: 0,
+            pixelFormatName: "fixture",
+            bitDepth: 8,
+            transferFunction: nil,
+            colorPrimaries: nil,
+            yCbCrMatrix: nil,
+            colorRange: nil,
+            hasDisplayColorVolumeMetadata: false,
+            hasContentLightLevelMetadata: false,
+            decoderPath: .hardware
+        ))
+        #expect(runtime.decodedVideoFrameCount == 1)
+        controller.setInputPaused(true)
+        controller.setInputPaused(false)
+        #expect(runtime.inputPausedStates == [true, false])
+        let mouseReport = XboxMouseReport(
+            x: 24,
+            y: -12,
+            buttons: [.left]
+        )
+        controller.sendMouseReport(mouseReport)
+        #expect(runtime.receivedMouseReports == [mouseReport])
+        #expect(controller.sendTextEntry("Cloud Now"))
+        #expect(runtime.receivedTextEntries == ["Cloud Now"])
+
+        controller.setStatsMode(.off)
+        #expect(controller.statsMode == .off)
+        await controller.stop()
+        controller.sendMouseReport(XboxMouseReport(x: 1))
+        #expect(runtime.receivedMouseReports == [mouseReport])
+        #expect(!controller.sendTextEntry("after stop"))
+        runtime.requestMenuToggle()
+        #expect(controller.menuPressCount == 1)
+    }
+
+    @Test("A replacement launch releases the previous provider runtime first")
+    func replacementLaunch() async throws {
+        let firstLifecycle = try XboxStreamLifecycleStub()
+        let secondLifecycle = try XboxStreamLifecycleStub()
+        let firstRuntime = XboxStreamRuntimeStub()
+        let secondRuntime = XboxStreamRuntimeStub()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([
+                firstLifecycle,
+                secondLifecycle,
+            ]),
+            runtimeFactory: XboxRuntimeFactoryStub([
+                firstRuntime,
+                secondRuntime,
+            ])
+        )
+
+        try await controller.start(
+            gameID: "first-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        try await controller.start(
+            gameID: "second-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+
+        #expect(firstRuntime.disconnectCount == 1)
+        #expect(await firstLifecycle.deleteCount() == 1)
+        #expect(secondRuntime.connectCount == 1)
+        #expect(await secondLifecycle.deleteCount() == 0)
+        #expect(controller.activeGameID == "second-title")
+        #expect(controller.videoTrack === secondRuntime.videoTrack)
+
+        await controller.stop()
+    }
+
+    @Test("Cancellation during provisioning deletes outside the cancelled task")
+    func cancellationCleanup() async throws {
+        let entered = XboxStreamAsyncLatch()
+        let release = XboxStreamAsyncLatch()
+        let lifecycle = try XboxStreamLifecycleStub(
+            provisionBehavior: .suspended(entered: entered, release: release)
+        )
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([XboxStreamRuntimeStub()])
+        )
+        let startTask = Task { @MainActor in
+            try await controller.start(
+                gameID: "fixture-title",
+                account: Self.account,
+                locale: "en-US",
+                settings: XboxCloudStreamSettings()
+            )
+        }
+        await entered.wait()
+
+        startTask.cancel()
+        await release.signal()
+
+        await #expect(throws: CancellationError.self) {
+            try await startTask.value
+        }
+        #expect(controller.state == .idle)
+        #expect(await lifecycle.deleteCancellationStates() == [false])
+    }
+
+    @Test("Unknown failures are redacted and post-create sessions are deleted")
+    func redactedFailure() async throws {
+        let secret = "fixture-private-token"
+        let lifecycle = try XboxStreamLifecycleStub(
+            provisionBehavior: .failure(message: secret)
+        )
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([XboxStreamRuntimeStub()])
+        )
+
+        do {
+            try await controller.start(
+                gameID: "fixture-title",
+                account: Self.account,
+                locale: "en-US",
+                settings: XboxCloudStreamSettings()
+            )
+            Issue.record("Expected Xbox Cloud launch to fail")
+        } catch {
+            #expect(!error.localizedDescription.contains(secret))
+            #expect(error.localizedDescription == "Xbox Cloud streaming could not be started.")
+        }
+
+        guard case let .failed(message) = controller.state else {
+            Issue.record("Expected a failed controller state")
+            return
+        }
+        #expect(!message.contains(secret))
+        #expect(await lifecycle.deleteCount() == 1)
+        #expect(controller.activeGameID == nil)
+    }
+
+    @Test("Repeated keepalive failure tears down media and server state")
+    func keepAliveFailure() async throws {
+        let keepAliveThreshold = XboxStreamAsyncLatch()
+        let lifecycle = try XboxStreamLifecycleStub(
+            keepAliveFails: true,
+            keepAliveThreshold: 2,
+            keepAliveThresholdReached: keepAliveThreshold
+        )
+        let runtime = XboxStreamRuntimeStub()
+        let policy = try XboxCloudStreamControllerPolicy(
+            maximumConsecutiveKeepAliveFailures: 2,
+            minimumKeepAliveInterval: 0.01,
+            maximumKeepAliveInterval: 3600,
+            mediaMonitorInterval: 5
+        )
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            policy: policy,
+            keepAliveSleep: { _ in await Task.yield() }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        await keepAliveThreshold.wait()
+        let didFail = await waitUntil {
+            if case .failed = controller.state {
+                return true
+            }
+            return false
+        }
+
+        #expect(didFail)
+        #expect(runtime.disconnectCount == 1)
+        #expect(await lifecycle.deleteCount() == 1)
+        #expect(controller.videoTrack == nil)
+    }
+
+    @Test("Session heartbeat also keeps the idle input channel active")
+    func keepAlivePulsesInputChannel() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub()
+        let sleep = XboxStreamOneImmediateSleep()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            keepAliveSleep: { _ in try await sleep.call() }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+
+        let didPulseInput = await waitUntil {
+            runtime.inputKeepAliveCount == 1
+        }
+        #expect(didPulseInput)
+
+        await controller.stop()
+    }
+
+    @Test("Removed video triggers a bounded reconnect without replacing the session")
+    func removedVideoReconnects() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub()
+        let monitor = XboxStreamTriggeredSleep()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            monitorSleep: { _ in try await monitor.call() },
+            reconnectSleep: { _ in }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        runtime.removeVideoTrack()
+        await monitor.trigger()
+
+        #expect(await waitUntil {
+            controller.state == .streaming && runtime.connectCount == 2
+        })
+        #expect(controller.videoTrack === runtime.videoTrack)
+        #expect(await lifecycle.requests().count == 1)
+        #expect(await lifecycle.deleteCount() == 0)
+
+        await controller.endSession()
+    }
+
+    @Test("Stalled audio triggers a bounded reconnect without replacing the session")
+    func stalledAudioReconnects() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub()
+        let monitor = XboxStreamTriggeredSleep()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            monitorSleep: { _ in try await monitor.call() },
+            reconnectSleep: { _ in }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        runtime.stallAudio()
+        await monitor.trigger()
+
+        #expect(await waitUntil {
+            controller.state == .streaming && runtime.connectCount == 2
+        })
+        #expect(controller.videoTrack === runtime.videoTrack)
+        #expect(await lifecycle.requests().count == 1)
+        #expect(await lifecycle.deleteCount() == 0)
+
+        await controller.endSession()
+    }
+
+    @Test("Media recovery makes three exponential-backoff attempts inside thirty seconds")
+    func mediaReconnectAttemptsAreBounded() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub(reconnectFailures: 3)
+        let monitor = XboxStreamTriggeredSleep()
+        let delays = XboxStreamDelayRecorder()
+        let clock = XboxStreamTestClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            monitorSleep: { _ in try await monitor.call() },
+            reconnectSleep: { delay in
+                await delays.record(delay)
+                clock.advance(by: delay)
+            },
+            now: { clock.now() }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        runtime.failConnection()
+        await monitor.trigger()
+
+        #expect(await waitUntil {
+            if case .failed = controller.state {
+                return true
+            }
+            return false
+        })
+        #expect(runtime.connectCount == 4)
+        #expect(await delays.values() == [1, 2])
+        #expect(clock.now().timeIntervalSince1970 == 1_700_000_003)
+        #expect(await lifecycle.deleteCount() == 1)
+        #expect(controller.videoTrack == nil)
+    }
+
+    @Test("Ending during reconnect cancels the owned recovery task")
+    func endDuringReconnectCancelsRecovery() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub(reconnectFailures: 1)
+        let monitor = XboxStreamTriggeredSleep()
+        let reconnectDelayEntered = XboxStreamAsyncLatch()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            monitorSleep: { _ in try await monitor.call() },
+            reconnectSleep: { _ in
+                await reconnectDelayEntered.signal()
+                try await Task.sleep(for: .seconds(60))
+            }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        runtime.failConnection()
+        await monitor.trigger()
+        await reconnectDelayEntered.wait()
+
+        #expect(
+            controller.state == .reconnecting(
+                attempt: 2,
+                maximumAttempts: 3,
+                nextDelay: 1
+            )
+        )
+
+        await controller.endSession()
+        await Task.yield()
+
+        #expect(controller.state == .idle)
+        #expect(runtime.connectCount == 2)
+        #expect(await lifecycle.deleteCount() == 1)
+    }
+
+    @Test("Backgrounding during reconnect parks the same allocation")
+    func backgroundDuringReconnectLeavesResumably() async throws {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub(reconnectFailures: 1)
+        let monitor = XboxStreamTriggeredSleep()
+        let reconnectDelayEntered = XboxStreamAsyncLatch()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            session: Self.makeGSSession(
+                expiresAt: fixedDate.addingTimeInterval(120)
+            ),
+            monitorSleep: { _ in try await monitor.call() },
+            reconnectSleep: { _ in
+                await reconnectDelayEntered.signal()
+                try await Task.sleep(for: .seconds(60))
+            },
+            now: { fixedDate }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        runtime.failConnection()
+        await monitor.trigger()
+        await reconnectDelayEntered.wait()
+        #expect(controller.canLeaveSession)
+
+        controller.leaveForBackground()
+        await Task.yield()
+
+        #expect(controller.state == .idle)
+        #expect(controller.canContinueSession)
+        #expect(await lifecycle.deleteCount() == 0)
+        #expect(runtime.connectCount == 2)
+
+        try await controller.continueSession()
+        #expect(controller.state == .streaming)
+        #expect(runtime.connectCount == 3)
+        #expect(await lifecycle.requests().count == 1)
+
+        #expect(await controller.endSession())
+    }
+
+    @Test("Player background policy leaves only resumable live playback")
+    func playerBackgroundPolicy() {
+        #expect(
+            XboxCloudBackgroundSessionPolicy.action(canLeaveSession: true)
+                == .leave
+        )
+        #expect(
+            XboxCloudBackgroundSessionPolicy.action(canLeaveSession: false)
+                == .end
+        )
+    }
+
+    @Test("Reconnect deadline cancels in-flight connect work")
+    func reconnectDeadlineCancelsInFlightConnect() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let reconnectEntered = XboxStreamAsyncLatch()
+        let deadlineRelease = XboxStreamAsyncLatch()
+        let deadlineDurations = XboxStreamDelayRecorder()
+        let runtime = XboxStreamRuntimeStub(
+            reconnectConnect: {
+                await reconnectEntered.signal()
+                try await Task.sleep(for: .seconds(60))
+            }
+        )
+        let monitor = XboxStreamTriggeredSleep()
+        let clock = XboxStreamTestClock(
+            Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            monitorSleep: { _ in try await monitor.call() },
+            reconnectDeadlineSleep: { duration in
+                await deadlineDurations.record(duration)
+                await deadlineRelease.wait()
+                try Task.checkCancellation()
+            },
+            now: { clock.now() }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        runtime.failConnection()
+        await monitor.trigger()
+        await reconnectEntered.wait()
+        #expect(
+            controller.state == .reconnecting(
+                attempt: 1,
+                maximumAttempts: 3,
+                nextDelay: nil
+            )
+        )
+        clock.advance(by: 30)
+        await deadlineRelease.signal()
+
+        #expect(await waitUntil {
+            if case .failed = controller.state {
+                return true
+            }
+            return false
+        })
+        #expect(await deadlineDurations.values() == [30])
+        #expect(runtime.reconnectCancellationCount == 1)
+        #expect(runtime.connectCount == 2)
+        #expect(await lifecycle.deleteCount() == 1)
+    }
+
+    @Test("Leave and Continue reuse one allocation until explicit End")
+    func leaveContinueAndEnd() async throws {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let expiry = fixedDate.addingTimeInterval(120)
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub(microphoneEnabledAfterConnect: true)
+        let session = Self.makeGSSession(expiresAt: expiry)
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            session: session,
+            now: { fixedDate }
+        )
+
+        let launchSettings = XboxCloudStreamSettings(
+            displayResolution: .qhd,
+            microphoneEnabled: true
+        )
+        let activeSettings = launchSettings.normalizedForClient
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: launchSettings
+        )
+        #expect(controller.microphoneEnabledForConnection)
+        #expect(controller.activeStreamSettings == activeSettings)
+        controller.leaveForBackground()
+
+        #expect(controller.state == .idle)
+        #expect(controller.canContinueSession)
+        #expect(controller.resumableSessionExpiresAt == expiry)
+        #expect(
+            controller.cloudPresentationState == .resumable(expiresAt: expiry)
+        )
+        #expect(controller.activeGameID == "fixture-title")
+        #expect(controller.activeStreamSettings == activeSettings)
+        #expect(controller.videoTrack == nil)
+        #expect(!controller.microphoneEnabledForConnection)
+        #expect(runtime.disconnectCount == 1)
+        #expect(await lifecycle.deleteCount() == 0)
+
+        try await controller.continueSession()
+
+        #expect(controller.state == .streaming)
+        #expect(!controller.canContinueSession)
+        #expect(runtime.connectCount == 2)
+        #expect(controller.microphoneEnabledForConnection)
+        #expect(controller.activeStreamSettings == activeSettings)
+        #expect(runtime.inputPausedStates == [true, false])
+        #expect(await lifecycle.requests().count == 1)
+        #expect(await lifecycle.deleteCount() == 0)
+
+        await controller.endSession()
+
+        #expect(controller.state == .idle)
+        #expect(controller.cloudPresentationState == .idle)
+        #expect(!controller.microphoneEnabledForConnection)
+        #expect(controller.activeStreamSettings == nil)
+        #expect(await lifecycle.deleteCount() == 1)
+    }
+
+    @Test("Created service identity remains stable through Leave and Continue")
+    func serviceIdentityRemainsStable() async throws {
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime])
+        )
+        let recorder = XboxCreatedSessionIDRecorder()
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings(),
+            onSessionCreated: { recorder.record($0) }
+        )
+        let stableID = try #require(recorder.value)
+        #expect(stableID.hasPrefix("xbox-service-"))
+        #expect(controller.coordinatorServerSessionID == stableID)
+
+        controller.leave()
+        #expect(controller.coordinatorServerSessionID == stableID)
+        try await controller.continueSession()
+        #expect(controller.coordinatorServerSessionID == stableID)
+
+        #expect(await controller.endSession())
+        #expect(controller.coordinatorServerSessionID == nil)
+    }
+
+    @Test("Provider switching retains and re-adopts a resumable controller")
+    func providerSwitchRetainsResumableController() async throws {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let lifecycle = try XboxStreamLifecycleStub()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([XboxStreamRuntimeStub()]),
+            session: Self.makeGSSession(
+                expiresAt: fixedDate.addingTimeInterval(120)
+            ),
+            now: { fixedDate }
+        )
+        let unusedLifecycle = try XboxStreamLifecycleStub()
+        let unusedReplacement = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([
+                unusedLifecycle,
+            ]),
+            runtimeFactory: XboxRuntimeFactoryStub([XboxStreamRuntimeStub()])
+        )
+        let retention = XboxStreamControllerRetentionProbe()
+        let firstMode = XboxCloudModeViewModel(
+            catalogViewModel: XboxCatalogViewModel(
+                client: XboxStreamCatalogClientStub(),
+                account: Self.account,
+                cache: XboxCatalogMemoryCache()
+            ),
+            account: Self.account,
+            makeStreamController: { _ in controller },
+            streamControllerRetention: retention.value
+        )
+
+        let firstOwner = firstMode.streamController {
+            "fixture-transfer-token"
+        }
+        try await firstOwner.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        firstOwner.leaveForBackground()
+
+        await firstMode.deactivateForInactiveProvider()
+
+        #expect(firstOwner.canContinueSession)
+        #expect(await lifecycle.deleteCount() == 0)
+        #expect(retention.controller === firstOwner)
+
+        let returningMode = XboxCloudModeViewModel(
+            catalogViewModel: XboxCatalogViewModel(
+                client: XboxStreamCatalogClientStub(),
+                account: Self.account,
+                cache: XboxCatalogMemoryCache()
+            ),
+            account: Self.account,
+            makeStreamController: { _ in unusedReplacement },
+            streamControllerRetention: retention.value
+        )
+
+        #expect(returningMode.resumableStreamController === firstOwner)
+        #expect(returningMode.streamController {
+            "replacement-transfer-token"
+        } === firstOwner)
+
+        await returningMode.stopStream()
+
+        #expect(await lifecycle.deleteCount() == 1)
+        #expect(retention.controller == nil)
+        #expect(unusedReplacement.state == .idle)
+    }
+
+    @Test("Pending deletion retention cannot cross Xbox account scope")
+    func pendingDeletionRetentionIsAccountScoped() async throws {
+        let lifecycle = try XboxStreamLifecycleStub(
+            deletionResults: [false, true]
+        )
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([XboxStreamRuntimeStub()])
+        )
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        let firstEndConfirmed = await controller.endSession()
+        #expect(!firstEndConfirmed)
+        #expect(controller.hasUnconfirmedSessionDeletion)
+
+        let context = try XboxProductionRuntimeContext(
+            authorizationConfiguration: .microsoftProduction(),
+            offeringConfiguration: .microsoftProduction()
+        )
+        let retention = try #require(
+            context.environment.service?.streamControllerRetention
+        )
+        retention.retainController(controller, Self.account)
+        let otherAccount = XboxCloudAuthorizedAccount(
+            authorizationIdentifier: "other-account",
+            activityScopeIdentifier: "other-scope",
+            displayName: "Other Player",
+            expiresAt: .distantFuture
+        )
+
+        #expect(retention.retainedController(Self.account) === controller)
+        #expect(retention.retainedController(otherAccount) == nil)
+
+        #expect(await controller.endSession())
+        retention.releaseController(controller)
+    }
+
+    @Test("Continue deletes a retained session after service expiry")
+    func expiredContinueDeletesSession() async throws {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let clock = XboxStreamTestClock(fixedDate)
+        let lifecycle = try XboxStreamLifecycleStub()
+        let runtime = XboxStreamRuntimeStub()
+        let controller = makeController(
+            lifecycleFactory: XboxLifecycleFactoryStub([lifecycle]),
+            runtimeFactory: XboxRuntimeFactoryStub([runtime]),
+            session: Self.makeGSSession(
+                expiresAt: fixedDate.addingTimeInterval(10)
+            ),
+            now: { clock.now() }
+        )
+
+        try await controller.start(
+            gameID: "fixture-title",
+            account: Self.account,
+            locale: "en-US",
+            settings: XboxCloudStreamSettings()
+        )
+        controller.leave()
+        clock.advance(by: 11)
+
+        await #expect(throws: XboxCloudStreamControllerError.resumableSessionExpired) {
+            try await controller.continueSession()
+        }
+
+        #expect(controller.state == .idle)
+        #expect(!controller.canContinueSession)
+        #expect(await lifecycle.deleteCount() == 1)
+        #expect(runtime.connectCount == 1)
+    }
+
+    private func makeController(
+        lifecycleFactory: XboxLifecycleFactoryStub,
+        runtimeFactory: XboxRuntimeFactoryStub,
+        deviceInformationProvider: (@MainActor @Sendable () -> XboxCloudDeviceInformation)? = nil,
+        policy: XboxCloudStreamControllerPolicy = .standard,
+        session: XboxCloudGSSession = Self.gsSession,
+        keepAliveSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { _ in
+            try await Task.sleep(for: .seconds(60))
+        },
+        monitorSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { _ in
+            try await Task.sleep(for: .seconds(60))
+        },
+        reconnectSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
+            try await Task.sleep(for: .seconds(seconds))
+        },
+        reconnectDeadlineSleep: @escaping @Sendable (
+            TimeInterval
+        ) async throws -> Void = { seconds in
+            try await Task.sleep(for: .seconds(seconds))
+        },
+        now: @escaping @Sendable () -> Date = Date.init
+    ) -> XboxCloudStreamController {
+        XboxCloudStreamController(
+            sessionProvider: XboxStreamSessionProviderStub(session: session),
+            transferToken: { "fixture-transfer-token" },
+            deviceInformationProvider: deviceInformationProvider,
+            makeSessionLifecycle: { access in
+                lifecycleFactory.make(access: access)
+            },
+            makeRuntime: { settings in
+                runtimeFactory.make(settings: settings)
+            },
+            policy: policy,
+            timezoneOffsetMinutes: { 120 },
+            keepAliveSleep: keepAliveSleep,
+            monitorSleep: monitorSleep,
+            reconnectSleep: reconnectSleep,
+            reconnectDeadlineSleep: reconnectDeadlineSleep,
+            now: now
+        )
+    }
+
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0 ..< 1000 {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+        }
+        return condition()
+    }
+
+    private nonisolated static let account = XboxCloudAuthorizedAccount(
+        authorizationIdentifier: "fixture-account",
+        displayName: "Player",
+        expiresAt: .distantFuture
+    )
+
+    private nonisolated static let gsSession: XboxCloudGSSession = {
+        let region = XboxCloudGSRegion(
+            name: "West US",
+            baseURL: URL(string: "https://region.gssv-play-prod.xboxlive.com")!,
+            isDefault: true,
+            fallbackPriority: 0,
+            systemUpdateGroups: []
+        )
+        return XboxCloudGSSession(
+            gsToken: "fixture-gs-token",
+            offeringID: "xgpuweb",
+            market: "US",
+            regions: [region],
+            defaultRegion: region,
+            fallbackRegionNames: [],
+            expiresAt: .distantFuture
+        )
+    }()
+
+    private nonisolated static func makeGSSession(
+        expiresAt: Date
+    ) -> XboxCloudGSSession {
+        XboxCloudGSSession(
+            gsToken: gsSession.gsToken,
+            offeringID: gsSession.offeringID,
+            market: gsSession.market,
+            regions: gsSession.regions,
+            defaultRegion: gsSession.defaultRegion,
+            fallbackRegionNames: gsSession.fallbackRegionNames,
+            expiresAt: expiresAt
+        )
+    }
+}
+
+@MainActor
+private final class XboxDeviceInformationProviderStub {
+    private var values: [XboxCloudDeviceInformation]
+    private(set) var callCount = 0
+
+    init(_ values: [XboxCloudDeviceInformation]) {
+        self.values = values
+    }
+
+    func next() -> XboxCloudDeviceInformation {
+        callCount += 1
+        return values.removeFirst()
+    }
+}
+
+@MainActor
+private final class XboxCreatedSessionIDRecorder {
+    private(set) var value: String?
+
+    func record(_ value: String) {
+        self.value = value
+    }
+}
+
+private actor XboxStreamSessionProviderStub: XboxCloudGSSessionProviding {
+    let value: XboxCloudGSSession
+
+    init(session: XboxCloudGSSession) {
+        value = session
+    }
+
+    func session(
+        for _: XboxCloudAuthorizedAccount
+    ) async throws -> XboxCloudGSSession {
+        value
+    }
+
+    func removeSession(for _: XboxCloudAuthorizedAccount) async {}
+    func clearSessions() async {}
+}
+
+private actor XboxStreamAsyncLatch {
+    private var isSignaled = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isSignaled else { return }
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func signal() {
+        guard !isSignaled else { return }
+        isSignaled = true
+        let waiting = continuations
+        continuations.removeAll(keepingCapacity: false)
+        waiting.forEach { $0.resume() }
+    }
+}
+
+private actor XboxStreamOneImmediateSleep {
+    private var callCount = 0
+
+    func call() async throws {
+        callCount += 1
+        guard callCount > 1 else { return }
+        try await Task.sleep(for: .seconds(60))
+    }
+}
+
+private actor XboxStreamTriggeredSleep {
+    private let triggerLatch = XboxStreamAsyncLatch()
+    private var isFirstCall = true
+
+    func call() async throws {
+        if isFirstCall {
+            isFirstCall = false
+            await triggerLatch.wait()
+            try Task.checkCancellation()
+            return
+        }
+        try await Task.sleep(for: .seconds(60))
+    }
+
+    func trigger() async {
+        await triggerLatch.signal()
+    }
+}
+
+private actor XboxStreamDelayRecorder {
+    private var recordedValues: [TimeInterval] = []
+
+    func record(_ value: TimeInterval) {
+        recordedValues.append(value)
+    }
+
+    func values() -> [TimeInterval] {
+        recordedValues
+    }
+}
+
+private final class XboxStreamTestClock: Sendable {
+    private let value: Mutex<Date>
+
+    init(_ date: Date) {
+        value = Mutex(date)
+    }
+
+    func now() -> Date {
+        value.withLock { $0 }
+    }
+
+    func advance(by interval: TimeInterval) {
+        value.withLock { date in
+            date = date.addingTimeInterval(interval)
+        }
+    }
+}
+
+private enum XboxStreamProvisionBehavior: Sendable {
+    case immediate
+    case suspended(entered: XboxStreamAsyncLatch, release: XboxStreamAsyncLatch)
+    case failure(message: String)
+}
+
+private struct XboxStreamFixtureError: Error, LocalizedError, Sendable {
+    let message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
+private actor XboxStreamLifecycleStub: XboxCloudSessionLifecycleServing {
+    private let preparedStream: XboxCloudPreparedStream
+    private let provisionBehavior: XboxStreamProvisionBehavior
+    private let keepAliveFails: Bool
+    private let keepAliveThreshold: Int?
+    private let keepAliveThresholdReached: XboxStreamAsyncLatch?
+    private var deletionResults: [Bool]
+    private var launchRequests: [XboxCloudSessionLaunchRequest] = []
+    private var deletions = 0
+    private var deletionCancellationStates: [Bool] = []
+    private var keepAliveCalls = 0
+
+    init(
+        provisionBehavior: XboxStreamProvisionBehavior = .immediate,
+        keepAliveFails: Bool = false,
+        keepAliveThreshold: Int? = nil,
+        keepAliveThresholdReached: XboxStreamAsyncLatch? = nil,
+        deletionResults: [Bool] = []
+    ) throws {
+        preparedStream = try Self.makePreparedStream()
+        self.provisionBehavior = provisionBehavior
+        self.keepAliveFails = keepAliveFails
+        self.keepAliveThreshold = keepAliveThreshold
+        self.keepAliveThresholdReached = keepAliveThresholdReached
+        self.deletionResults = deletionResults
+    }
+
+    func createSession(
+        _ request: XboxCloudSessionLaunchRequest
+    ) async throws -> XboxCloudStreamSessionToken {
+        launchRequests.append(request)
+        return XboxCloudStreamSessionToken()
+    }
+
+    func provisionSession(
+        _: XboxCloudStreamSessionToken,
+        onState: @escaping @Sendable (XboxCloudSessionStateSnapshot) async -> Void
+    ) async throws -> XboxCloudPreparedStream {
+        await onState(XboxCloudSessionStateSnapshot(
+            state: .provisioning,
+            estimatedTotalWaitTime: 4,
+            retryAfter: nil,
+            serviceCode: nil
+        ))
+        switch provisionBehavior {
+        case .immediate:
+            break
+        case let .suspended(entered, release):
+            await entered.signal()
+            await release.wait()
+            try Task.checkCancellation()
+        case let .failure(message):
+            throw XboxStreamFixtureError(message: message)
+        }
+        return preparedStream
+    }
+
+    func keepAlive(_: XboxCloudStreamSessionToken) async throws {
+        keepAliveCalls += 1
+        if keepAliveCalls >= keepAliveThreshold ?? .max {
+            await keepAliveThresholdReached?.signal()
+        }
+        if keepAliveFails {
+            throw XboxStreamFixtureError(message: "fixture-keepalive-secret")
+        }
+    }
+
+    func delete(_: XboxCloudStreamSessionToken) async -> Bool {
+        deletions += 1
+        deletionCancellationStates.append(Task.isCancelled)
+        guard !deletionResults.isEmpty else { return true }
+        return deletionResults.removeFirst()
+    }
+
+    func requests() -> [XboxCloudSessionLaunchRequest] {
+        launchRequests
+    }
+
+    func deleteCount() -> Int {
+        deletions
+    }
+
+    func deleteCancellationStates() -> [Bool] {
+        deletionCancellationStates
+    }
+
+    private nonisolated static func makePreparedStream() throws -> XboxCloudPreparedStream {
+        let configuration = XboxCloudSessionConfiguration(
+            serverDetails: XboxCloudServerDetails(
+                ipV4Address: "203.0.113.10",
+                ipV4Port: 9002,
+                ipV6Address: nil,
+                ipV6Port: nil,
+                srtp: nil,
+                uriPathAndQuery: nil,
+                stunServerAddresses: ["stun.example.test:3478"]
+            ),
+            keepAlivePulse: 15,
+            clientStreamingConfigOverrides: nil
+        )
+        let signaling = try XboxCloudSignalingContext(
+            endpointBaseURL: URL(
+                string: "https://region.gssv-play-prod.xboxlive.com"
+            )!,
+            sessionPath: "v5/sessions/cloud/fixture-session",
+            gsToken: "fixture-gs-token",
+            correlationVector: "fixture-cv.1"
+        )
+        return XboxCloudPreparedStream(
+            configuration: configuration,
+            signalingContext: signaling
+        )
+    }
+}
+
+@MainActor
+private final class XboxStreamControllerRetentionProbe {
+    private(set) var controller: XboxCloudStreamController?
+    private var accountScopeIdentifier: String?
+
+    var value: XboxCloudStreamControllerRetention {
+        XboxCloudStreamControllerRetention(
+            retainedController: { [weak self] account in
+                guard let self,
+                      accountScopeIdentifier
+                      == account.activityScopeIdentifier,
+                      let controller,
+                      controller.hasUnconfirmedSessionDeletion
+                      || controller.canContinueSession
+                else {
+                    return nil
+                }
+                return controller
+            },
+            retainController: { [weak self] controller, account in
+                self?.controller = controller
+                self?.accountScopeIdentifier = account.activityScopeIdentifier
+            },
+            releaseController: { [weak self] controller in
+                guard self?.controller === controller else { return }
+                self?.controller = nil
+                self?.accountScopeIdentifier = nil
+            }
+        )
+    }
+}
+
+private actor XboxStreamCatalogClientStub: XboxCatalogClient {
+    func fetchCatalog(
+        _: XboxCatalogRequest,
+        account _: XboxCloudAuthorizedAccount
+    ) async throws -> XboxCatalogSnapshot {
+        XboxCatalogSnapshot(items: [], fetchedAt: .distantPast)
+    }
+
+    nonisolated func cancel() {}
+}
+
+@MainActor
+private final class XboxStreamRuntimeStub: XboxCloudStreamRuntime {
+    private(set) var connectCount = 0
+    private(set) var disconnectCount = 0
+    private(set) var inputKeepAliveCount = 0
+    private(set) var decodedVideoFrameCount = 0
+    private(set) var inputPausedStates: [Bool] = []
+    private(set) var receivedMouseReports: [XboxMouseReport] = []
+    private(set) var receivedTextEntries: [String] = []
+    private(set) var connectionState: XboxCloudWebRTCConnectionState = .connected
+    private(set) var isMediaReady = true
+    private(set) var microphoneEnabled = false
+    private(set) var diagnosticsEnabled = false
+    private(set) var rtcEventLogActive = false
+    private(set) var reconnectCancellationCount = 0
+    private var menuToggleHandler: (@MainActor @Sendable () -> Void)?
+    private var remainingReconnectFailures: Int
+    private let microphoneEnabledAfterConnect: Bool
+    private let diagnosticsEnabledAfterConnect: Bool
+    private let rtcEventLogActiveAfterConnect: Bool
+    private let reconnectConnect: (@Sendable () async throws -> Void)?
+    private var hasVideoTrack = true
+    var statistics = XboxCloudRTCStatsSnapshot()
+    private let fixtureVideoTrack: LKRTCVideoTrack
+
+    var videoTrack: LKRTCVideoTrack? {
+        hasVideoTrack ? fixtureVideoTrack : nil
+    }
+
+    init(
+        reconnectFailures: Int = 0,
+        microphoneEnabledAfterConnect: Bool = false,
+        diagnosticsEnabledAfterConnect: Bool = false,
+        rtcEventLogActiveAfterConnect: Bool = false,
+        reconnectConnect: (@Sendable () async throws -> Void)? = nil
+    ) {
+        remainingReconnectFailures = reconnectFailures
+        self.microphoneEnabledAfterConnect = microphoneEnabledAfterConnect
+        self.diagnosticsEnabledAfterConnect = diagnosticsEnabledAfterConnect
+        self.rtcEventLogActiveAfterConnect = rtcEventLogActiveAfterConnect
+        self.reconnectConnect = reconnectConnect
+        let factory = CloudRTCRuntime.peerConnectionFactory
+        fixtureVideoTrack = factory.videoTrack(
+            with: factory.videoSource(),
+            trackId: UUID().uuidString
+        )
+    }
+
+    func connect(
+        configuration _: XboxCloudSessionConfiguration,
+        signalingContext _: XboxCloudSignalingContext
+    ) async throws {
+        connectCount += 1
+        if connectCount > 1, let reconnectConnect {
+            do {
+                try await reconnectConnect()
+            } catch is CancellationError {
+                reconnectCancellationCount += 1
+                throw CancellationError()
+            }
+        }
+        if connectCount > 1, remainingReconnectFailures > 0 {
+            remainingReconnectFailures -= 1
+            hasVideoTrack = false
+            connectionState = .failed(message: "fixture reconnect failure")
+            throw XboxStreamFixtureError(message: "fixture reconnect failure")
+        }
+        hasVideoTrack = true
+        isMediaReady = true
+        connectionState = .connected
+        microphoneEnabled = microphoneEnabledAfterConnect
+        diagnosticsEnabled = diagnosticsEnabledAfterConnect
+        rtcEventLogActive = rtcEventLogActiveAfterConnect
+    }
+
+    func disconnect() {
+        disconnectCount += 1
+        hasVideoTrack = false
+        isMediaReady = false
+        connectionState = .idle
+        microphoneEnabled = false
+        diagnosticsEnabled = false
+        rtcEventLogActive = false
+    }
+
+    func removeVideoTrack() {
+        hasVideoTrack = false
+        isMediaReady = false
+        connectionState = .connected
+    }
+
+    func stallAudio() {
+        isMediaReady = false
+        connectionState = .connected
+    }
+
+    func failConnection() {
+        connectionState = .disconnected(
+            reason: "fixture media disconnected"
+        )
+    }
+
+    func sampleStatistics() async -> XboxCloudRTCStatsSnapshot {
+        statistics
+    }
+
+    func recordDecodedVideoFrame() {
+        decodedVideoFrameCount += 1
+    }
+
+    func setMenuToggleHandler(
+        _ handler: (@MainActor @Sendable () -> Void)?
+    ) {
+        menuToggleHandler = handler
+    }
+
+    func requestMenuToggle() {
+        menuToggleHandler?()
+    }
+
+    func setInputPaused(_ isPaused: Bool) {
+        inputPausedStates.append(isPaused)
+    }
+
+    func sendMouseReport(_ report: XboxMouseReport) {
+        receivedMouseReports.append(report)
+    }
+
+    func sendTextEntry(_ text: String) -> Bool {
+        receivedTextEntries.append(text)
+        return true
+    }
+
+    func sendInputKeepAlive() {
+        inputKeepAliveCount += 1
+    }
+}
+
+@MainActor
+private final class XboxLifecycleFactoryStub {
+    private var lifecycles: [any XboxCloudSessionLifecycleServing]
+    private(set) var receivedAccess: [XboxCloudSessionAccessContext] = []
+
+    init(_ lifecycles: [any XboxCloudSessionLifecycleServing]) {
+        self.lifecycles = lifecycles
+    }
+
+    func make(
+        access: XboxCloudSessionAccessContext
+    ) -> any XboxCloudSessionLifecycleServing {
+        receivedAccess.append(access)
+        return lifecycles.removeFirst()
+    }
+}
+
+@MainActor
+private final class XboxRuntimeFactoryStub {
+    private var runtimes: [XboxStreamRuntimeStub]
+    private(set) var receivedSettings: [XboxCloudStreamSettings] = []
+
+    init(_ runtimes: [XboxStreamRuntimeStub]) {
+        self.runtimes = runtimes
+    }
+
+    func make(settings: XboxCloudStreamSettings) -> any XboxCloudStreamRuntime {
+        receivedSettings.append(settings)
+        return runtimes.removeFirst()
+    }
+}

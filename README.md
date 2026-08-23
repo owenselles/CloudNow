@@ -1,10 +1,27 @@
 # CloudNow
 
-A native GeForce NOW client for Apple TV. Stream your entire PC game library directly on tvOS with full controller support, no browser, no workarounds.
+A native cloud gaming app for Apple TV. CloudNow keeps GeForce NOW and Xbox
+Cloud Gaming in separate provider modes behind one
+provider-neutral app shell; each provider retains its own account, catalog,
+session, signaling, quality, and input behavior.
 
 ![CloudNow Home screen on Apple TV](App%20Store%20Media/Screenshot%201.png)
 
-> **Personal use / sideload only.** This project is not affiliated with, endorsed by, or sponsored by NVIDIA. NVIDIA and GeForce NOW are trademarks of NVIDIA Corporation.
+> **Independent, unofficial client.** This project is not affiliated with,
+> endorsed by, or sponsored by NVIDIA or Microsoft. NVIDIA and GeForce NOW are
+> trademarks of NVIDIA Corporation. Microsoft, Xbox, and Xbox Cloud Gaming are
+> trademarks of the Microsoft group of companies. Current distribution options
+> are TestFlight, release IPA, and source builds; no App Store availability is
+> claimed.
+
+> **Xbox Cloud Gaming status:** CloudNow's native Xbox mode includes Microsoft QR/PIN sign-in, catalog, session, WebRTC media, controller input, and rumble. Microsoft does not currently list Apple TV as an officially supported Xbox Cloud Gaming client platform, so consumer service changes may break interoperability. No third-party Xbox client code, UI, assets, or dependency is included. See [Xbox Cloud Gaming integration](Documentation/XboxCloudGaming.md).
+
+Provider and service names remain in this documentation where they identify an
+integration, sign-in path, protocol, or compatibility requirement. For generic
+account, access, quality, library, server, and session concepts, this
+documentation follows the neutral terminology established on `main`: **cloud
+gaming account**, **cloud library**, **current plan**, **Max Stream Quality**,
+**game server**, and **streaming session**.
 
 ---
 
@@ -40,39 +57,104 @@ Follow the [Getting Started](#getting-started) steps below if you want to build 
 
 ## Features
 
-- **Tab bar navigation** — Home, Library, Store, and Settings; fully focus-engine compatible
-- **Home screen** — "Continue Playing" row powered by live active sessions, plus a Favorites row
-- **Library & Store** — browse your linked games separately from the full public catalog; search and sort by default order, recently played, A→Z, or Z→A; filter by collection, genre, game store, RTX, HDR, and Reflex with live result counts; long-press any card to add/remove from Favorites
-- **End-to-end library refresh** — available in Debug and Release builds from Settings → Library → Refresh Library. The workflow requests synchronization for every connected store that NVIDIA marks as sync-capable, reports categorical provider progress, waits for every provider to finish, fail, or time out, then atomically imports the latest GeForce NOW library into CloudNow. Unsupported connected stores remain visible but are skipped, failed or timed-out providers can be retried, relink-required providers are identified, and Reload from GeForce NOW remains the lightweight fallback
-- **Instant startup** — catalog, library, and subscription data are cached on device and shown immediately on launch while fresh data loads in the background
-- **Incremental Library metadata** — enriched game details are cached by locale and VPC; unchanged refreshes reuse fresh entries and request only missing or expired app IDs
-- **Bounded performance pipelines** — artwork requests are coalesced and downsampled through shared cost-bounded caches; input-latency sampling uses bounded storage and remains disabled unless statistics or diagnostics need it
-- **Stream quality settings** — resolution up to 4K (tier-dependent), frame rate, codec (H.264/H.265/AV1), color mode, keyboard layout, game language, and Low Latency Mode (L4S) from the Settings tab
-- **Color mode preferences** — Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR. CloudNow separates user preference, requested stream mode, negotiated server mode, and actual detected decoded format instead of assuming HDR from bit depth or Apple TV output mode
-- **Decoded video format detection** — inspects the actual decoded pixel buffer for bit depth, transfer function, color primaries, matrix, and range. HDR is only treated as active when the decoded stream metadata supports it
-- **Conservative HDR behavior** — requests HDR only when the local pipeline qualifies; accepts safe server-side fallback to SDR10 or SDR8 without treating every 10-bit stream as HDR
-- **Codec-aware SDP negotiation** — the SDP answer is filtered to your chosen codec; H.265 Main10 is front-loaded for 10-bit/HDR requests with tier/level capped to hardware-safe values; bandwidth hints sent to prevent server overshoot
-- **HDR-preserving H.265 decoder** — custom VideoToolbox decoder keeps 10-bit depth and VUI colorimetry intact (the bundled WebRTC decoder pins 8-bit NV12 and stamps BT.709), so HDR10 survives from the wire to the display
-- **Renderer metadata preservation** — decoded color metadata is tracked through the render path and the format description cache is refreshed when color characteristics change, not just when resolution changes
-- **Session diagnostics** — diagnostic HUD can show color preference, requested mode, detected mode, display HDR support, fallback reason, decoder path, pixel format, transfer function, and bit depth
-- **Session queue UI** — shows queue phase ("In queue · Position X" → "Preparing your game"); waits indefinitely in queue with position updates; 180-second setup timeout after queue clears; requires two consecutive ready polls before presenting the stream; plays mandatory queue ads via AVPlayer and reports lifecycle events back to CloudMatch
-- **Resilient session lifecycle** — session creation, Retry, polling, reconnect, and teardown are single-flight and cancellable; stale work cannot update a newer session, late-created server sessions are cleaned up, and signaling uses a bounded staggered endpoint race instead of serial timeout accumulation
-- **Server location** — Settings → Server Location offers Automatic (default), Region, and Servers. Automatic lets NVIDIA route each session, Region pins one of the regions returned by NVIDIA, and Servers drills down through country → city → dedicated server with live ping and queue information; cached ping results appear immediately while stale entries refresh with bounded concurrency; includes a Test Network tool measuring ping, jitter, and packet loss to the selected route
-- **Surround audio** — Audio Format setting with Automatic, Stereo, and 5.1 Surround; the selected source format is preserved when resuming a session. The diagnostics HUD reports the negotiated stream format separately from the active output route, so a 5.1 stream may correctly use stereo output while Bluetooth headphones are connected; removing them restores HDMI playback and surround where supported
-- **Microphone support** — voice chat via AirPods or compatible Bluetooth HFP headsets; toggle in Settings with permission requested on first use. When a stream starts on speakers, microphone intent remains negotiated while capture waits for an input route. Connecting a compatible headset midstream activates capture and HUD activity; removing it restores playback-only audio without restarting the stream
-- **Favorites** — long-press any game card in Library or Store to add/remove from Favorites; persisted locally
-- **Full GFN streaming** — WebRTC-based, up to 4K@60fps depending on your GFN plan (tvOS caps at 60 Hz; 120fps ready for when Apple raises the limit)
-- **Controller support** — up to 4 simultaneous MFi/Xbox/PlayStation controllers via the GameController framework; configurable analog stick deadzone (0–30%), rumble multiplier (`0.00×`–`2.00×` in `0.05×` steps), and overlay trigger button (Start/≡ or Options/Back ⊟, default: Start); LB/RB cycles the top-level app tabs in the pre-game menu
-- **NVIDIA OAuth login** — device flow; TV shows a QR code and PIN; complete sign-in on any phone, tablet, or computer
-- **Pause menu** — left-sidebar in-stream menu with Resume, input mode toggle, Statistics level, Leave Game, and End Session; open with Play/Pause or Menu on the Siri Remote, or hold the overlay trigger button (~2 s) on a controller (default: Start/≡, configurable in Settings)
-- **Statistics HUD** — in-stream statistics overlay styled after the official client, with Compact and Standard levels cycled from the pause menu; Compact shows game/stream FPS, RTT, bitrate, packet loss, server location, and microphone state/activity; Standard adds jitter, connection path, resolution, drops/freezes, decoder, jitter-buffer, negotiated audio format, active output route, measured input/output latency, and session detail with live history graphs
-- **Keychain persistence** — session tokens stored securely and auto-refreshed on launch
-- **tvOS localization** — UI text follows the device language automatically using `Bundle.main.preferredLocalizations` with English fallback; translations live in one file per locale under `CloudNow/Localization`, and every locale table must contain the complete English key set
+### Shared CloudNow experience
+
+- **Separate provider modes** — choose a provider on first launch, keep both
+  accounts signed in, and switch from the top-left menu. Home, cloud library,
+  settings, launch state, and player state stay provider-scoped.
+- **One native app shell** — navigation, focus, dialogs, bounded artwork caches,
+  persistence, passive video rendering, controller haptics, session arbitration,
+  pause chrome, network testing, and HUD presentation are reusable. Provider
+  wire protocols and stream settings are not translated or merged.
+- **Safe session ownership** — one global coordinator permits at most one cloud
+  server session and one local WebRTC peer. Leave, Continue, End, switching,
+  reconnect, and failed deletion paths retain explicit ownership.
+- **Fast, bounded catalog UI** — cached rows appear immediately; artwork is
+  coalesced, validated, and downsampled through cost-bounded caches; provider
+  filters appear only when backed by catalog data.
+- **Secure local state** — credentials use provider-separated Keychain records;
+  preferences, cache clearing, sign-out, and Reset All Data preserve provider
+  boundaries.
+- **Native tvOS experience** — focus-engine navigation, controller tab cycling,
+  localized UI, Favorites, Continue Playing, pause controls, microphone route
+  recovery, and Compact or Standard statistics HUD modes.
+
+### GeForce NOW
+
+- **Established GFN behavior is preserved** — its OAuth, catalog, cloud-library
+  refresh, CloudMatch lifecycle, signaling, SDP answer policy, NVST input,
+  reconnect, audio, microphone, and settings implementations remain the frozen
+  compatibility baseline while Xbox work stays provider-owned.
+- **Cloud library and public catalog** — Home, Library, Store, linked-store
+  refresh, search, sorting, Favorites, collection/genre/store filters, and
+  data-backed RTX, HDR, and Reflex filters.
+- **Account-aware stream controls** — up to 4K at 60 fps when the account,
+  title, game server, display, and network allow it; resolution, frame rate,
+  H.264/H.265/AV1, color mode, keyboard layout, game language, maximum bitrate,
+  Low Latency Mode (L4S), and server location controls.
+- **Verified media pipeline** — H.265 Main10 and decoded color metadata are
+  preserved through VideoToolbox and the renderer; HDR, SDR10, or SDR8 is
+  reported from actual decoded buffers instead of inferred from the display.
+- **Audio and input** — Automatic, Stereo, and 5.1 Surround stream formats;
+  controller, keyboard, mouse, Siri Remote, native text input, rumble, and
+  permission-gated microphone capture with route recovery.
+- **Queue and lifecycle handling** — live queue position, provisioning timeout,
+  required queue-ad playback, resumable Leave, explicit End, bounded endpoint
+  racing, single-flight Retry, and reconnect protection against stale work.
+
+### Xbox Cloud Gaming
+
+- **Clean-room native transport** — Microsoft device authorization, Xbox
+  Live/XSTS, offering and access discovery, catalog, session allocation, REST
+  SDP/ICE signaling, WebRTC media, Xbox data channels, controller input, and
+  rumble; no browser, JavaScript runtime, backend, or copied client code.
+- **Route-aware Library and Browse** — Home and Library contain only games for
+  which Microsoft confirms a playable route, excluding titles known to be
+  touch-only on tvOS. Browse keeps the full validated service catalog visible,
+  including touch-only titles and unavailable routes with neutral account,
+  access, region, input, time-limit, or service reasons. Access and playability
+  filters select the same route that a card opens; an ad-supported route is
+  playable only when Microsoft confirms it.
+- **Observable library refresh** — Xbox refresh actions share one cancellable
+  catalog-and-account-access operation. Settings shows live step status,
+  playable and catalog totals, additions and removals, completion time, Retry,
+  and retained-cache warnings; closing the progress screen does not cancel the
+  refresh.
+- **Production 1440p path** — the validated Microsoft-web compatibility profile
+  requests the account's Max Stream Quality. `Automatic` sends `1440` when that
+  ceiling is available (and while optional access metadata is still unknown),
+  otherwise `1080`; the service may adapt lower.
+- **Honest delivered-media reporting** — Standard HUD shows requested and
+  delivered resolution separately, plus delivered bitrate, FPS, codec, color
+  format, and audio channels. The validated 1440p route currently uses H.264,
+  SDR8, and Opus stereo; Xbox does not expose HEVC, HDR/Main10, or 5.1 controls.
+- **Xbox-owned input and resume** — controller, physical keyboard/mouse,
+  rumble, reconnect, background Leave, Continue, and End use the negotiated Xbox
+  protocol. Simulator keyboard input and Siri Remote click-drag pointer
+  emulation are development aids, not physical mouse emulation.
+- **Automatic bandwidth policy** — CloudNow sends no Xbox client bitrate cap or
+  periodic bitrate-control message. Delivered bitrate remains visible in the
+  HUD; unproven controls stay hidden.
+
+### Provider capability summary
+
+| Capability | GeForce NOW | Xbox Cloud Gaming |
+|---|---|---|
+| Maximum requested resolution | Up to 4K, account/service dependent | `Automatic` up to 1440p; service may adapt lower |
+| Video controls | Resolution, FPS, H.264/H.265/AV1, color mode | Resolution only; service currently selects H.264 |
+| Color/HDR | Automatic, HDR, SDR10/SDR8 fallback with decoded-format proof | Automatic only; validated delivery is SDR8 |
+| Game audio | Automatic, Stereo, 5.1 Surround | Automatic; current service route is Opus stereo/mono |
+| Client bitrate control | Configurable maximum bitrate | None; automatic/uncapped client policy |
+| Server selection | Automatic, region, or dedicated game server | Service-selected region |
+| Input | Up to four controllers, keyboard/mouse, Siri Remote, text entry | Controller and keyboard/mouse; live controller-slot count unconfirmed; no native text-entry claim |
+| Stream truth | Negotiated settings plus decoded delivery | Requested ceiling and delivered media shown separately |
 
 ## Requirements
 
 - Apple TV 4K (2nd generation or later) running tvOS 26.2+
-- Active GeForce NOW account (Free, Priority, or Ultimate)
+- A supported cloud gaming account for the selected provider
+- Account, current plan, title, region, and service eligibility for the requested
+  stream; Xbox ad-supported preview access is controlled by Microsoft
 - **Build from source only:** Xcode 26.2+ on a Mac, Apple Developer account (free tier works)
 
 ## Getting Started
@@ -122,13 +204,26 @@ These commands require the exact tool versions pinned by CI: SwiftFormat 0.62.1 
 
 Select your Apple TV as the run destination (USB-C or network) and hit **⌘R**.
 
-On first launch the app prompts you to sign in. A QR code and PIN are displayed — scan the QR code or visit the URL on any device and enter the PIN to complete sign-in, then return to the TV.
+Use the shared `CloudNow` scheme for development and final archives. Xbox `Automatic`
+requests the account's Max Stream Quality through the validated Microsoft-web
+profile: `1440` when that ceiling is available (and while optional access
+metadata is unknown), otherwise `1080`. The service can adapt lower, so the
+in-stream HUD distinguishes requested from delivered resolution.
+
+On first launch, choose **GeForce NOW** or **Xbox Cloud Gaming**. CloudNow then shows that provider's QR code and PIN; scan it or visit the displayed URL on another device to complete sign-in, then return to the TV. The two accounts are stored independently, so you can sign into both and use the top-left provider dropdown to move between their separate modes without signing in again.
 
 CloudNow automatically localizes the entire UI to the active tvOS language. No app-side language picker is required for the interface. If a supported locale is unavailable, the app falls back to English.
 
-The game language setting is separate from the app UI language. In Settings, choose `Automatic` if you want CloudNow to send the tvOS language to GeForce NOW, or pick a specific game language manually.
+The game language setting is separate from the app UI language. In Settings,
+choose `Automatic` to use the tvOS language for the selected provider, or choose
+a specific game language when that provider exposes the control.
 
-In the main app menu, LB/RB on a connected controller switches between Home, Library, Store, and Settings. Once a stream is open, those shoulder buttons stay with the streaming controller path instead of the menu.
+In either provider mode, LB/RB on a connected controller moves through the
+top-level navigation, including the provider dropdown and that mode's tabs. GFN
+uses Home, Library, Store, and Settings; Xbox uses Home, Library, Browse, and
+Settings.
+Once a stream is open, those shoulder buttons stay with the active streaming
+controller path instead of the app menu.
 
 ### Supported tvOS languages
 
@@ -259,7 +354,9 @@ The app and both test bundles use complete Swift concurrency checking (`SWIFT_ST
 
 ## Testing
 
-The automated suite runs without NVIDIA credentials, an account, external application services, or physical Apple TV hardware. It requires Xcode with a compatible tvOS simulator runtime and `python3` for deterministic simulator discovery.
+The automated suite runs without provider credentials, external application
+services, or physical Apple TV hardware. It requires Xcode with a compatible
+tvOS simulator runtime and `python3` for deterministic simulator discovery.
 
 Run the complete shared test plan from any directory:
 
@@ -290,85 +387,229 @@ Each run writes a timestamped result bundle and compact coverage summaries under
 TestArtifacts/<timestamp>-<mode>/CloudNow-<mode>.xcresult
 TestArtifacts/<timestamp>-<mode>/Coverage/targets.txt
 TestArtifacts/<timestamp>-<mode>/Coverage/targets.json
+TestArtifacts/<timestamp>-<mode>/Coverage/required-sources.txt
+TestArtifacts/<timestamp>-<mode>/Coverage/required-sources.json
 ```
+
+Successful full and unit runs require 100% xccov executable-line coverage for
+the shared deterministic capability model, its GFN adapter, and its Xbox
+adapter. UI-only runs skip this scoped gate. With the CI toolchain (Xcode 26.6,
+Apple Swift 6.3.3), LLVM reports a zero branch denominator for these Swift
+sources. The gate therefore measures executable lines only and does not claim
+an unavailable branch-coverage percentage; deterministic tests enumerate the
+behavioral paths separately.
 
 `TestArtifacts/` is gitignored. Unit and integration tests use Swift Testing (`import Testing`, `@Suite`, `@Test`, `#expect`, and `#require`). XCTest is reserved for `XCUIApplication` UI automation.
 
-Add anonymized JSON, SDP, and binary samples under `CloudNowTests/Fixtures/`, group them by subsystem, and include them in the `CloudNowTests` target. Fixtures must not contain credentials, tokens, personal data, or production endpoint dependencies. Tests must use injected transports and deterministic fakes; live NVIDIA, PrintedWaste, authentication, catalog, signaling, image, and media service calls are prohibited.
+Add anonymized JSON, SDP, and binary samples under `CloudNowTests/Fixtures/`,
+group them by subsystem, and include them in the `CloudNowTests` target.
+Fixtures must not contain credentials, tokens, personal data, or production
+endpoint dependencies. Tests must use injected transports and deterministic
+fakes; live provider authentication, catalog, signaling, image, media, and
+community-service calls are prohibited.
 
 Some behavior remains hardware- or Apple-framework-bound. The nearest automated protection is:
 
 | Excluded behavior | Automated seam |
 |---|---|
-| Real Apple TV HDR output switching | Synthetic pixel-buffer color inspection and video diagnostics tests |
-| Physical controller focus and controller-motor output | Input packet encoder, navigation-state, and haptics decoder tests |
-| Bluetooth microphone route transitions | SDP audio-format and session-request coverage; framework route transitions remain uncovered |
+| Real Apple TV GFN HDR output switching | Synthetic pixel-buffer color inspection and video diagnostics tests |
+| Physical controller, keyboard/mouse, focus, and controller-motor output | Provider input encoders, navigation state, responder bridge, and haptics decoder tests |
+| AirPods and Continuity Microphone route transitions | Audio-route policy, SDP/session request, and runtime lifecycle coverage; framework route transitions remain manual |
 | Actual VideoToolbox hardware decoding | SDP codec/profile tests and synthetic pixel-buffer format inspection |
 | Live WebRTC media transport | Session state-machine, signaling codec, endpoint-race, and cancellation tests using fakes |
+| Live Xbox Cloud Gaming consumer services | Device-code, Xbox Live/XSTS, offering, catalog, session, REST signaling, WebRTC, input, and teardown tests use injected transports; an entitled Microsoft account on Apple TV remains a manual smoke test |
 | Apple TLS and certificate-stack behavior | Transport-independent signaling parsing and endpoint-selection tests |
-| Live storefront → GeForce NOW synchronization | Injected library-sync contract, retry, timeout, orchestration, persistence, and UI tests; authenticated Apple TV verification remains manual |
+| Live connected-store → cloud-library synchronization | Injected library-sync contract, retry, timeout, orchestration, persistence, and UI tests; authenticated Apple TV verification remains manual |
 
 ---
 
 ## Architecture
 
-Shared real-time streaming state uses explicit lock or queue ownership, while stale peer, signaling, and data-channel callbacks are rejected by connection identity.
+CloudNow is one app target, not a `CloudGamingCore` framework. Its boundaries are
+enforced through narrow provider-neutral contracts, lazy provider graphs, tests,
+and deterministic provider regression coverage. Shared real-time state has
+explicit actor, lock, or serial-queue ownership; callbacks from stale peer,
+signaling, and data-channel generations are rejected.
 
-```
+### Ownership boundaries
+
+| Layer | Shared/provider-neutral | GeForce NOW-owned | Xbox-owned |
+|---|---|---|---|
+| App shell | Provider selection, tabs, focus, dialogs, lifecycle | GFN Home/Library/Store/Settings and launch presentation | Xbox Home/Library/Browse/Settings and launch presentation |
+| Account and storage | Provider registry, Keychain abstraction, scoped reset/cache rules | OAuth state, cloud-library caches, GFN settings | Microsoft OAuth/Xbox Live/XSTS state, Xbox catalog and settings |
+| Catalog | Card primitives, artwork pipeline, Favorites presentation | Browse, Store, connected-library refresh, feature filters | Offering/access discovery, playable Library projection, full-catalog Browse projection, route-correlated filters, catalog/account-access refresh status |
+| Session safety | One-server-session and one-local-peer coordinator | CloudMatch lease and `SessionOrchestrator` | Xbox allocation lease, Leave/Continue/End lifecycle |
+| RTC/media primitives | One process-level `CloudRTCRuntime` factory, audio device, passive renderer, decoded-format inspection | Server-offer answer, GFN SDP policy, H.265 decoder policy, NVST media behavior | Client offer/answer, service overrides, Xbox channel/readiness policy |
+| Input | Device observation, responder surface, and controller haptics | GFN v2/v3 mapping, input, and text protocol | Xbox mapping, legacy/modern input, channel handshake, feedback, rumble |
+| Diagnostics | Neutral HUD snapshots, bounded histories, redaction rules | GFN negotiated/requested media state | Xbox requested ceiling and delivered RTC statistics |
+
+The shared RTC factory is intentionally an implementation primitive, not a
+shared protocol layer. GFN remains the WebRTC answerer and keeps its existing
+SDP munger, decoder advertisement, audio negotiation, input, and reconnect
+behavior. Xbox is the WebRTC offerer and exclusively owns its allocation
+identity, REST signaling, data-channel versions, quality bootstrap, input
+encoding, reconnect, and resume behavior. Neither provider imports or translates
+the other's wire protocol.
+
+### Source layout
+
+```text
 CloudNow/
-├── PersistenceStore.swift          Actor-serialized credentials, preferences, and scoped file-cache I/O
-├── Auth/
-│   ├── AuthManager.swift           @Observable auth state, Keychain persistence
-│   └── NVIDIAAuthAPI.swift         OAuth 2.0 PKCE, token refresh, user info
-├── Session/
-│   ├── SessionState.swift          Models: GameInfo, SessionInfo, StreamSettings, color-mode state
-│   ├── CloudMatchClient.swift      Session create/poll/resume/stop, active sessions, audio/color request fields
-│   ├── GameMetadataCache.swift     Locale/VPC-scoped metadata cache values and persistence boundary
-│   ├── GamesClient.swift           Catalog browse and incremental metadata enrichment via GraphQL
-│   ├── LibrarySyncClient.swift     GFN provider discovery, connected-account snapshots, and sync requests
-│   ├── MESClient.swift             Subscription tier + entitled resolutions/FPS from the MES API
-│   └── ZoneClient.swift            Dedicated-server list, cancellation-safe ping cache, and queue data
-├── Streaming/
-│   ├── GFNStreamController.swift   Generation-bound WebRTC lifecycle, reconnect, input, microphone, and audio state
-│   ├── SignalingClient.swift        WebSocket signaling with bounded staggered endpoint racing
-│   ├── SDPMunger.swift             Codec filtering + bandwidth injection for WebRTC SDP
-│   ├── InputSender.swift           GCController/keyboard/mouse/Siri Remote → XInput + GFN protocol (v2/v3) → data channel
-│   ├── GFNAudioDevice.swift        Low-latency stereo/5.1 output, deferred Bluetooth capture, route recovery
-│   ├── GFNVideoDecoderFactory.swift Advertises H.265 Main10 so the 10-bit payload survives negotiation
-│   ├── GFNVideoDecoderH265.swift   VideoToolbox H.265 decoder preserving bit depth + VUI colorimetry
-│   ├── ControllerHaptics.swift     Controller rumble output via CoreHaptics
-│   └── GFNHapticsDecoder.swift     Decodes GFN rumble packets from the data channel
+├── CloudNowApp.swift                 Composition root; restores and activates only the selected
+│                                     provider while retaining independent account managers
+├── PersistenceStore.swift            Actor-backed preferences, activity, credentials,
+│                                     provider resets, and scoped file-cache policy
+├── AppDataManager.swift               Provider-scoped and app-wide cache maintenance
+├── MemoryLifecycleCoordinator.swift  Memory-pressure dispatch and bounded cache cleanup
+├── FeatureFlags.swift                 GFN account-scope hashing and compile-time library-sync gate
+├── Networking/
+│   └── HTTPTransport.swift            Injectable URLSession transport and redacted HTTP errors
+├── Services/
+│   ├── CloudGamingProvider.swift      Provider identity, persisted selection, switch/reset
+│   │                                  coordination, and GFN background-refresh ownership
+│   ├── CloudGamingCapabilities.swift  Neutral account/catalog/stream/input/diagnostic contracts;
+│   │                                  global server-session and local-peer lease coordinator
+│   └── CloudInputDeviceMonitor.swift  Controller and keyboard/mouse availability for presentation
+├── Auth/                              Established GFN account path and shared secure storage
+│   ├── AuthManager.swift              GFN observable sign-in, refresh, reset, and lifecycle fences
+│   ├── NVIDIAAuthAPI.swift            GFN OAuth 2.0 PKCE, token refresh, and user information
+│   └── KeychainCredentialStore.swift  Provider-namespaced Keychain persistence and access policy
+├── GFN/
+│   └── GFNCapabilityAdapter.swift     Maps established GFN behavior into neutral capabilities
+├── Session/                           GFN catalog, cloud library, account capability, and session path
+│   ├── SessionState.swift             Games, variants, stream settings, color, server, and session models
+│   ├── GamesClient.swift              GraphQL catalog and incremental metadata enrichment
+│   ├── GameMetadataCache.swift        Locale/VPC-scoped descriptive metadata persistence
+│   ├── LibrarySyncClient.swift        Connected-library discovery, sync requests, and progress states
+│   ├── MESClient.swift                Account-entitled resolution/FPS and capability discovery
+│   ├── ServerInfoClient.swift         GFN-confirmed regions, automatic route, and VPC metadata
+│   ├── ZoneClient.swift               Region/server list, queue metadata, and bounded ping cache
+│   ├── CloudMatchClient.swift         GFN session create/poll/resume/stop and request fields
+│   ├── SessionOrchestrator.swift      Single-flight ownership, Leave/End, cleanup, and retry fencing
+│   ├── SessionAttemptState.swift      Generation-safe launch attempt state
+│   └── SessionReadinessTracker.swift  Queue/provisioning readiness and setup timeout policy
+├── Streaming/                         Frozen GFN wire path plus reusable native media primitives
+│   ├── CloudRTCRuntime.swift          One process-level LiveKit WebRTC factory and SSL lifetime
+│   ├── GFNStreamController.swift      GFN peer lifecycle, reconnect, input, microphone, and audio state
+│   ├── SignalingClient.swift          GFN WebSocket signaling and bounded endpoint racing
+│   ├── SignalingEndpointRace.swift    Staggered signaling endpoint selection and cancellation
+│   ├── SignalingMessageCodec.swift    Bounded GFN signaling message parsing/encoding
+│   ├── SDPMunger.swift                GFN codec filtering, profile ordering, and bandwidth hints
+│   ├── InputSender.swift              GFN controller/keyboard/mouse/Siri Remote and text protocol
+│   ├── GFNAudioDevice.swift           Shared low-latency playout/capture with stereo/5.1 support
+│   ├── CloudAudioSessionCoordinator.swift
+│   │                                  Shared permission, route, and microphone-track coordination
+│   ├── CloudMicrophoneRoutePolicy.swift
+│   │                                  AirPods/Continuity input acquisition and recovery policy
+│   ├── BoundedSampleHistory.swift     Fixed-capacity latency/statistics history storage
+│   ├── GFNVideoDecoderFactory.swift   GFN decoder advertisement, including H.265 Main10
+│   ├── GFNVideoDecoderH265.swift      VideoToolbox H.265 decoder preserving depth/color metadata
+│   ├── ControllerHaptics.swift        Shared GameController/CoreHaptics rumble output
+│   └── GFNHapticsDecoder.swift        GFN rumble packet decoding
+├── Xbox/                              Xbox-owned clean-room account, catalog, and streaming stack
+│   ├── MicrosoftDeviceCodeOAuthClient.swift
+│   │                                  Microsoft consumer device authorization and refresh
+│   ├── XboxAuthManager.swift          Observable Xbox sign-in, reset fences, and credential lifecycle
+│   ├── XboxLiveTokenClient.swift      Xbox Live user-token exchange
+│   ├── XboxLiveAccountAuthorizationClient.swift
+│   │                                  XSTS and account authorization composition
+│   ├── XboxLiveAuthorizationModels.swift
+│   │                                  Bounded Xbox Live/XSTS request and response models
+│   ├── XboxLocalCredentialLifecycleGroup.swift
+│   │                                  Clears independent memory-only Xbox credentials as one boundary
+│   ├── XboxCloudOfferingService.swift Immutable endpoint/protocol/identity compatibility profile;
+│   │                                  offering discovery, validation, and service login
+│   ├── XboxContentAccessClient.swift  Optional account access, Max Stream Quality, and product evidence
+│   ├── XboxContentAccessStore.swift   Bounded account-access cache and request coalescing
+│   ├── XboxFresnoCatalogDiscoveryClient.swift
+│   │                                  Credential-free ad-supported catalog discovery
+│   ├── XboxCloudCatalogClient.swift   Route-aware catalog hydration and playability evidence
+│   ├── XboxCloudCatalogDetailLoader.swift
+│   │                                  Lazy localized description/artwork/detail enrichment
+│   ├── XboxCatalogCache.swift         Bounded account/locale/market stale-first catalog snapshots
+│   ├── XboxServiceContracts.swift     Catalog, access, route, playability, and UI-facing models
+│   ├── XboxCloudSessionAPI.swift      Web-compatible v5 allocation, queue/configuration/keepalive/delete
+│   ├── XboxCloudSignalingAPI.swift    Bounded REST local-offer upload and server-answer/ICE polling
+│   ├── XboxCloudWebRTCContracts.swift Peer/signaling/channel abstractions and testable transport seams
+│   ├── XboxCloudWebRTCTransport.swift Xbox offerer, transceivers, service codec overrides, channels,
+│   │                                  media readiness, microphone attachment, and teardown
+│   ├── XboxCloudInputDriver.swift     Serial control/message/input bootstrap, controller/keyboard/mouse,
+│   │                                  feedback, rumble, dimensions, and reconnect-safe state
+│   ├── XboxLegacyInputCodec.swift     Legacy Xbox input/feedback wire encoding
+│   ├── XboxModernInputCodec.swift     Modern reliable/unreliable input wire encoding
+│   ├── XboxCloudRTCStatsSampler.swift Delivered resolution/FPS/bitrate/codec/audio RTC statistics
+│   ├── XboxCloudStreamController.swift
+│   │                                  Allocation, launch, media state, reconnect, Leave/Continue/End
+│   ├── XboxCloudStreamLifecycle.swift Runtime/session interfaces and production native runtime
+│   ├── XboxProductionRuntimeContext.swift
+│   │                                  Lazy Xbox dependency graph and app lifecycle integration
+│   ├── XboxCloudStreamSettings.swift  Xbox-only resolution, language, controller, accessibility,
+│   │                                  microphone, HUD, and diagnostic preferences
+│   ├── XboxCapabilityAdapter.swift    Honest Xbox capability and presentation mapping
+│   ├── XboxCloudRTCEventLog.swift     Bounded, allowlisted, redacted local RTC lifecycle log
+│   └── XboxCloudInstallationIdentityStore.swift
+│                                      Resettable non-secret SDK installation identity
 ├── Video/
-│   ├── VideoSurfaceView.swift      AVSampleBufferDisplayLayer video surface + decoded-format-aware renderer
-│   ├── VideoColorFormat.swift      Local video capability detection + decoded pixel-buffer format inspection
-│   ├── VideoPipelineDiagnostics.swift Render/decode pipeline diagnostics
-│   └── I420FrameConverter.swift    Software I420 conversion fallback path
-├── Localization/
-│   ├── AppLocalization.swift       tvOS language selection, tvOS→GFN locale mapping, translation helpers
-│   ├── L10nEN.swift                English fallback strings
-│   └── L10nXX.swift                One file per supported locale, easy to edit independently
-└── UI/
-    ├── GamesViewModel.swift        Shared @Observable — games, sessions, favorites, settings, library imports
-    ├── LibraryRefreshCoordinator.swift Single-flight provider sync and final-import orchestration
-    ├── LibraryRefreshProgressView.swift Scrollable provider progress and completion UI
-    ├── MainTabView.swift           Root TabView (Home / Library / Store / Settings) with controller tab cycling
-    ├── GameFilters.swift           Shared catalog filtering, sorting, filter sheet, and result bar
-    ├── HeroArtPrefetcher.swift     Shared downsampling artwork pipeline with bounded LRU caches
-    ├── HomeView.swift              Hero banner + Continue Playing + Favorites rows
-    ├── LibraryView.swift           LIBRARY panel grid with favorite toggles
-    ├── StoreView.swift             MAIN catalog grid with "In Library" badges
-    ├── SettingsView.swift          Stream quality pickers + account info + sign out
-    ├── LoginView.swift             Sign-in screen with QR code + PIN display
-    ├── QueueAdPlayerView.swift     AVPlayer queue-ad playback with CloudMatch lifecycle reporting
-    ├── StatsHUDView.swift          Statistics, audio/microphone telemetry, and live history graphs
-    └── StreamView.swift            Single-flight session orchestration, full-screen player, and pause menu
+│   ├── VideoSurfaceView.swift         Passive AVSampleBufferDisplayLayer renderer and remote-touch input
+│   ├── VideoColorFormat.swift         Display capability and decoded pixel-buffer format inspection
+│   ├── VideoPipelineDiagnostics.swift Render/decode path diagnostics
+│   └── I420FrameConverter.swift       Software I420 conversion fallback
+├── UI/
+│   ├── CloudServiceSelectionView.swift Equal provider choice on fresh install/reset
+│   ├── CloudNowTabShell.swift         Provider menu, focus restoration, and safe switch workflow
+│   ├── CloudCatalogViews.swift        Reusable card/grid/filter presentation primitives
+│   ├── CloudNowDeviceCodeView.swift   Shared QR/PIN sign-in presentation
+│   ├── CloudStreamChrome.swift        Shared launch states and pause-menu presentation
+│   ├── CloudNetworkTestView.swift     Shared ping/jitter/loss presentation
+│   ├── CloudAppLifecycleModifier.swift
+│   │                                  Shared app lifecycle and memory-pressure policy
+│   ├── StatsHUDView.swift             Neutral requested/delivered media and history presentation
+│   ├── HeroArtPrefetcher.swift        Shared coalescing/downsampling artwork pipeline
+│   ├── GameCarouselView.swift         Shared carousel engine with provider-supplied cards
+│   ├── UIControllerNavigationCoordinator.swift
+│   │                                  Exclusive controller ownership for app navigation
+│   ├── MainTabView.swift              Established GFN Home/Library/Store/Settings root
+│   ├── GamesViewModel.swift           GFN games, sessions, Favorites, settings, and cloud-library import
+│   ├── HomeView.swift                 GFN hero, Continue Playing, and Favorites
+│   ├── LibraryView.swift              GFN cloud-library grid and favorite actions
+│   ├── StoreView.swift                GFN public catalog and cloud-library badges
+│   ├── GameFilters.swift              GFN sorting and collection/genre/store/feature filters
+│   ├── SettingsView.swift             GFN account, stream, input, server, diagnostic, and reset controls
+│   ├── StreamView.swift               GFN session orchestration, player, pause, Leave, and End
+│   ├── XboxCloudViews.swift           Xbox Home/Library/Browse/Settings, catalog projections,
+│   │                                  route-correlated filters, refresh coordination, and launch flow
+│   ├── XboxLibraryRefreshProgressView.swift
+│   │                                  Xbox catalog/access progress, summary, warning, and Retry UI
+│   ├── XboxCatalogDetailView.swift    Xbox detail/access/input presentation
+│   ├── XboxCloudPlayerView.swift      Xbox full-screen player, HUD, pause, lifecycle, and session lease
+│   └── XboxVideoSurfaceView.swift     Xbox surface adapter and Simulator keyboard/pointer bridge
+└── Localization/
+    ├── AppLocalization.swift          tvOS locale/lookup, shared labels, and GFN language mapping
+    ├── L10nEN.swift                   English source/fallback table
+    └── L10nXX.swift                   Complete provider-neutral values for every supported locale
 ```
 
-### Library metadata cache
+Xbox's catalog, session, and transport service graph is constructed lazily when
+Xbox is selected. Its lightweight account manager, capability adapter, and
+production context can remain resident without activating Xbox catalog/session
+network work during a GFN-only run. Switching providers preserves independent
+credentials and settings while the global coordinator prevents two cloud
+sessions or peers from becoming active.
+The detailed Xbox boundary and wire path are documented in
+[Xbox Cloud Gaming integration](Documentation/XboxCloudGaming.md).
+
+### GFN cloud-library metadata cache
 
 Library browse results remain the source of truth for dynamic fields such as ownership, variants, and supported features. Only enriched descriptive fields are persisted, then overlaid without replacing newer browse data. A second unchanged Library refresh therefore makes no metadata-enrichment request; missing or expired app IDs are fetched in bounded batches.
 
-Library ownership is keyed by a SHA-256 NVIDIA account identifier. The descriptive catalog remains ownership-neutral and shared by locale and VPC, with only the current account's authoritative library overlaid in memory. A full refresh atomically replaces that account's library and updates the independent catalog cache only when fresh catalog data is available, preserving the last-known-good Store cache after transient failures. Legacy unscoped ownership caches are treated as misses so signing into another account cannot expose the previous account's library.
+Library ownership is keyed by a SHA-256 account identifier. The descriptive
+catalog remains ownership-neutral and shared by locale and VPC, with only the
+current account's authoritative cloud library overlaid in memory. A full refresh
+atomically replaces that account's library and updates the independent catalog
+cache only when fresh catalog data is available, preserving the last-known-good
+Store cache after transient failures. Legacy unscoped ownership caches are
+treated as misses so signing into another account cannot expose the previous
+account's library.
 
 | Rule | Behavior |
 |------|----------|
@@ -379,23 +620,26 @@ Library ownership is keyed by a SHA-256 NVIDIA account identifier. The descripti
 | Storage bound | Keep the newest 2,000 records per locale/VPC scope |
 | Manual invalidation | Settings → Clear Cache removes catalog and metadata cache files |
 
-### Protocol
+### Provider protocol ownership
 
-The GFN streaming protocol was independently reverse-engineered from NVIDIA's network traffic. The WebRTC transport is provided by [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework).
+Both native transports use
+[livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework), but
+their account, session, signaling, SDP, input, and lifecycle protocols remain
+independent.
 
-| Layer | Implementation |
-|-------|---------------|
-| Auth | OAuth 2.0 PKCE → `login.nvidia.com` |
-| Session | REST → CloudMatch (`cloudmatchbeta.nvidiagrid.net`) |
-| Signaling | WebSocket (`/nvst/sign_in`) — SDP offer/answer + ICE |
-| Streaming | WebRTC via [livekit/webrtc-xcframework](https://github.com/livekit/webrtc-xcframework) |
-| Input | XInput binary protocol over WebRTC data channel |
-| Game catalog | GraphQL persisted query → `games.geforce.com` |
-| Provider library sync | GFN GraphQL provider/account discovery + ALS sync requests using the live web-client contract |
+| Layer | GeForce NOW | Xbox Cloud Gaming |
+|---|---|---|
+| Account | OAuth 2.0 PKCE and refresh-token lifecycle | Microsoft device authorization, Xbox Live, and XSTS |
+| Catalog/access | GFN GraphQL catalog, cloud library, connected-store sync, account capabilities | Xbox offering and access discovery, authenticated/ad-supported routes, public product metadata |
+| Session | CloudMatch create, poll, resume, and stop | Xbox v5 allocation, queue/provisioning, configuration, keepalive, and delete |
+| Signaling | WebSocket endpoint race; receives server offer and returns SDP answer/ICE | REST signaling; creates local offer and applies service answer/ICE |
+| Quality | GFN session request plus provider-owned SDP answer policy | Microsoft resolution alias, display-dimensions message, and validated service overrides |
+| Input | GFN v2/v3 XInput, keyboard/mouse, text, and haptics data channels | Xbox legacy/modern input, controller/keyboard/mouse reports, feedback, and rumble |
+| Resume/reconnect | GFN controller and `SessionOrchestrator` | Xbox controller retaining one unexpired allocation |
 
 ---
 
-## Color and HDR Notes
+## GFN Color and HDR Notes
 
 CloudNow does **not** treat a stream as HDR merely because:
 
@@ -404,25 +648,54 @@ CloudNow does **not** treat a stream as HDR merely because:
 - tvOS is currently outputting HDR or Dolby Vision
 - the user selected an HDR-related setting
 
-CloudNow uses three separate pieces of information:
+The GFN path uses three separate pieces of information:
 
 1. **What to request** — based on user preference and local capabilities
 2. **What the server negotiated** — based on session and signaling state
 3. **What is actually being rendered** — based on decoded video metadata from the real pixel buffer
 
-This means an HDR request can legitimately fall back to SDR10 or SDR8, and the app will report that instead of falsely claiming HDR is active.
+This means a GFN HDR request can legitimately fall back to SDR10 or SDR8, and
+the app reports that instead of falsely claiming HDR is active. Xbox currently
+has no HDR/Main10 control: its HUD reports the color format detected from the
+delivered stream, and the validated 1440p route delivered SDR8.
 
 ---
 
 ## Known Limitations
 
-- **No App Store.** NVIDIA has not published a public API for third-party GFN clients. Sideloading only.
-- **Provider library refresh uses undocumented NVIDIA services.** The live GFN web-client contract may change without notice. CloudNow fails closed to a GeForce NOW-only reload when discovery or schema validation fails, reports categorical rather than per-game progress, and only synchronizes accounts already linked through GeForce NOW.
-- **Queue ad playback.** During high demand GFN shows ads while in queue. The app plays them via AVPlayer and reports lifecycle events (start/pause/finish) back to CloudMatch.
+- **Unofficial provider integrations.** CloudNow is not an official client for
+  either service. Provider APIs and consumer-service behavior can change without
+  notice. TestFlight and sideloaded builds do not make Apple TV a supported Xbox
+  Cloud Gaming platform.
+- **Xbox 1440p remains adaptive.** A controlled tvOS Simulator A/B proved the
+  Microsoft-web profile can sustain 2560×1440, but account, current plan, title,
+  region, display, network, and service policy still decide delivery. Physical
+  Apple TV validation remains required for each release.
+- **Xbox media controls are intentionally narrow.** The validated route delivered
+  H.264, SDR8, and Opus stereo. CloudNow does not expose Xbox HEVC, HDR/Main10,
+  5.1, manual bitrate, L4S, or manual-region controls without service and
+  delivered-media proof.
+- **Xbox title metadata has no authoritative cloud A/V capabilities.** Product
+  badges are not treated as proof of 1440p, HDR, or surround delivery. The app
+  shows observed session values rather than inventing Library filters.
+- **Simulator pointer input is limited.** The Xbox development bridge converts a
+  Siri Remote-style indirect click-drag gesture into relative mouse movement and
+  a left-button report. tvOS Simulator does not provide normal captured hover or
+  wheel input; physical keyboard/mouse validation uses GameController devices.
+- **Provider library refresh uses undocumented services.** The live GFN web
+  contract may change. CloudNow fails closed to the neutral **Reload Library**
+  path when discovery or schema validation fails, reports categorical progress,
+  and synchronizes only accounts already linked through the provider.
+- **Queue ad playback.** During high demand the GFN service can require ads while
+  in queue. CloudNow plays them with AVPlayer and reports lifecycle events back
+  to CloudMatch.
 - **Server location.** Region names and addresses come from NVIDIA's serverInfo endpoint. The manual Servers browser gets queue-depth and location metadata from the PrintedWaste community API, which may lag behind actual queue conditions; ping values are measured locally after opening a city. Dedicated servers pinned by older builds remain selected after upgrading.
 - **HDR depends on the full pipeline.** A selected HDR-capable mode does not guarantee the server will deliver HDR, and a 10-bit stream is not automatically HDR.
 - **AV1 currently uses the software I420 path.** On the current implementation this falls back to SDR 8-bit BT.709 rather than preserving SDR10 or HDR metadata.
 - **Color diagnostics are only as good as decoded metadata.** If the decoder or software conversion path strips metadata, CloudNow will conservatively report fallback or unknown modes instead of guessing.
+- **Diagnostic export is unavailable on tvOS.** Supported local share, activity,
+  and document-export APIs are unavailable, so bounded local logs can be cleared
+  but are not advertised as exportable.
 
 ## Contributing
 

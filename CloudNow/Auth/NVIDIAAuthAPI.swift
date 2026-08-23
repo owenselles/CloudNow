@@ -72,63 +72,6 @@ nonisolated struct PKCE {
     }
 }
 
-// MARK: - Keychain
-
-nonisolated enum KeychainService {
-    private static let service = "com.owenselles.CloudNow"
-    private static let account = "gfn-auth-session"
-
-    static func save(_ data: Data) throws {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-        ]
-        SecItemDelete(query as CFDictionary)
-        let attrs: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-            kSecValueData: data,
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
-        ]
-        let status = SecItemAdd(attrs as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw KeychainError.saveFailed(status)
-        }
-    }
-
-    static func load() throws -> Data {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-            kSecReturnData: true,
-            kSecMatchLimit: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            throw KeychainError.loadFailed(status)
-        }
-        return data
-    }
-
-    static func delete() {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
-
-    enum KeychainError: Error {
-        case saveFailed(OSStatus)
-        case loadFailed(OSStatus)
-    }
-}
-
 // MARK: - Response Models
 
 nonisolated struct AuthTokens: Codable {
@@ -570,6 +513,7 @@ enum AuthError: Error, LocalizedError {
     case deviceFlowFailed(String)
     case deviceFlowExpired
     case deviceFlowDenied
+    case secureStorageUnavailable
     case requestFailed(context: String, statusCode: Int, message: String)
 
     var errorDescription: String? {
@@ -582,6 +526,7 @@ enum AuthError: Error, LocalizedError {
         case let .deviceFlowFailed(msg): "Device login failed: \(msg)"
         case .deviceFlowExpired: "Login code expired. Please try again."
         case .deviceFlowDenied: "Login was denied."
+        case .secureStorageUnavailable: "Secure account storage is unavailable."
         case let .requestFailed(context, statusCode, message):
             "\(context) failed: HTTP \(statusCode): \(message)"
         }

@@ -33,7 +33,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cloudnow-coverage-${{ github.run_id }}-${{ github.run_attempt }}
-          path: TestArtifacts/**/Coverage/targets.*
+          path: |
+            TestArtifacts/**/Coverage/targets.*
+            TestArtifacts/**/Coverage/required-sources.*
           if-no-files-found: ignore
           retention-days: 14
 

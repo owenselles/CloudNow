@@ -5,18 +5,158 @@ import Testing
 @Suite("Localization integrity and locale mapping")
 @MainActor
 struct LocalizationIntegrityTests {
+    /// Complete manifest of cloud UI keys added on this provider branch versus main.
+    private static let branchAddedCloudUIKeys: Set<String> = [
+        "about",
+        "access",
+        "access_not_confirmed",
+        "accessibility",
+        "account_access_required",
+        "accounts_stay_signed_in_when_switching_services",
+        "active_service",
+        "active_session_switch_message",
+        "awaiting_official_xbox_cloud_support",
+        "browse",
+        "catalog_last_updated",
+        "catalog_may_be_out_of_date",
+        "choose_another_service",
+        "choose_cloud_gaming_service",
+        "cloud_gaming_access",
+        "cloud_play_unavailable",
+        "cloud_service",
+        "cloud_service_unavailable",
+        "cloud_session_active",
+        "cloud_session_in_use",
+        "compatible_input_required",
+        "connected",
+        "controller_changes_next_session",
+        "details",
+        "developer",
+        "end_and_switch_to_service",
+        "end_session_before_sign_out",
+        "ending_session",
+        "free_with_ads",
+        "free_with_ads_session_description",
+        "game_pass",
+        "gameplay_time_exhausted",
+        "high_contrast",
+        "info",
+        "input",
+        "keyboard_and_mouse",
+        "magnifier",
+        "membership",
+        "microsoft_account",
+        "microsoft_sign_in_code_expired",
+        "microsoft_sign_in_declined",
+        "not_eligible",
+        "owned",
+        "parked_session_switch_message",
+        "playability",
+        "playable",
+        "publisher",
+        "rating",
+        "requesting_microsoft_sign_in_code",
+        "requires_xbox_cloud_subscription",
+        "reset_active_service_confirmation_message",
+        "reset_failed",
+        "screenshots",
+        "share_optional_diagnostic_data",
+        "sign_in_to_xbox_cloud_gaming",
+        "sign_in_with_microsoft",
+        "stream_free_with_ads",
+        "subscription_access",
+        "switch_to_service",
+        "text_to_speech",
+        "touch",
+        "unavailable",
+        "unavailable_reasons",
+        "use_geforce_now",
+        "verifying_xbox_cloud_access",
+        "waiting_for_microsoft_sign_in",
+        "xbox_accessibility",
+        "xbox_allocating_session",
+        "xbox_cloud_catalog",
+        "xbox_cloud_catalog_unavailable",
+        "xbox_cloud_gaming",
+        "xbox_cloud_runtime_inactive_message",
+        "xbox_cloud_unconfigured_message",
+        "xbox_compatibility_profile_invalid",
+        "xbox_connecting_stream",
+        "xbox_controller_changes_next_session",
+        "xbox_empty_home_message",
+        "xbox_ending_session",
+        "xbox_estimated_wait",
+        "xbox_free_with_ads_candidate_description",
+        "xbox_launch_unavailable",
+        "xbox_optional_data_description",
+        "xbox_privacy",
+        "xbox_provisioning_console",
+        "xbox_requesting_access",
+        "xbox_stream_settings",
+        "xbox_waiting_capacity",
+    ]
+
+    /// Product names intentionally remain unchanged in every locale.
+    private static let brandedEnglishValueAllowlist: Set<String> = [
+        "game_pass",
+        "xbox_cloud_gaming",
+    ]
+
+    /// These short UI nouns are valid identical cognates in the listed language.
+    private static let englishCognateAllowlistByLanguage: [String: Set<String>] = [
+        "da": ["input"],
+        "de": ["details", "info", "screenshots", "touch"],
+        "id": ["info", "input"],
+        "ms": ["input"],
+        "nl": ["details"],
+    ]
+
     struct MappingCase: Sendable {
         let input: String
         let expected: String
     }
 
-    @Test("Every supported translation contains the complete English key set")
-    func everyTableContainsEnglishKeys() {
+    @Test("Every supported translation exactly matches the English key set")
+    func everyTableMatchesEnglishKeys() {
         let english = L10n.translationTable(for: "en-US")
+        let expectedKeys = Set(english.keys)
 
         for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key }) {
-            let missing = Set(english.keys).subtracting(table.keys)
+            let actualKeys = Set(table.keys)
+            let missing = expectedKeys.subtracting(actualKeys)
+            let unexpected = actualKeys.subtracting(expectedKeys)
             #expect(missing.isEmpty, "\(locale) is missing keys: \(missing.sorted())")
+            #expect(unexpected.isEmpty, "\(locale) has unexpected keys: \(unexpected.sorted())")
+        }
+    }
+
+    @Test("Every locale directly provides every branch-added cloud UI translation")
+    func everyTableProvidesBranchAddedCloudUIKeys() {
+        #expect(Self.branchAddedCloudUIKeys.count == 87)
+        for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key }) {
+            let missing = Self.branchAddedCloudUIKeys.subtracting(table.keys)
+            #expect(missing.isEmpty, "\(locale) is missing cloud UI keys: \(missing.sorted())")
+        }
+    }
+
+    @Test("Branch-added cloud UI translations do not fall back to English")
+    func branchAddedCloudUIValuesAreLocalized() {
+        let english = L10n.translationTable(for: "en-US")
+
+        for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key })
+            where Locale(identifier: locale).language.languageCode?.identifier != "en"
+        {
+            let language = Locale(identifier: locale)
+                .language.languageCode?.identifier ?? locale
+            let allowedMatches = Self.brandedEnglishValueAllowlist.union(
+                Self.englishCognateAllowlistByLanguage[language] ?? []
+            )
+            for key in Self.branchAddedCloudUIKeys.sorted() {
+                #expect(
+                    table[key] != english[key] || allowedMatches.contains(key),
+                    "\(locale).\(key) repeats English without an allowlist entry"
+                )
+            }
         }
     }
 
@@ -51,6 +191,94 @@ struct LocalizationIntegrityTests {
     )
     func localeAliases(alias: String, expectedTable: String) {
         #expect(L10n.translationTable(for: alias) == L10n.translationTable(for: expectedTable))
+    }
+
+    @Test(
+        "Regional service locales resolve language-only translation tables",
+        arguments: [
+            MappingCase(input: "ar_SA", expected: "ar"),
+            MappingCase(input: "ca_ES", expected: "ca"),
+            MappingCase(input: "ja_JP", expected: "ja"),
+            MappingCase(input: "he_IL", expected: "he"),
+            MappingCase(input: "nb_NO", expected: "nb"),
+            MappingCase(input: "no_NO", expected: "nb"),
+            MappingCase(input: "nn_NO", expected: "nb"),
+            MappingCase(input: "uk_UA", expected: "uk"),
+        ]
+    )
+    func regionalTranslationTableResolution(testCase: MappingCase) {
+        #expect(
+            L10n.translationLocaleCode(for: testCase.input) == testCase.expected
+        )
+        #expect(
+            L10n.translationTable(for: testCase.input)
+                == L10n.translationTable(for: testCase.expected)
+        )
+    }
+
+    @Test("Arabic and Hebrew use right-to-left presentation")
+    func rightToLeftPresentation() {
+        #expect(L10n.isRightToLeft(localeIdentifier: "ar-SA"))
+        #expect(L10n.isRightToLeft(localeIdentifier: "he_IL"))
+        #expect(!L10n.isRightToLeft(localeIdentifier: "de-DE"))
+        #expect(!L10n.isRightToLeft(localeIdentifier: "en-US"))
+    }
+
+    @Test("Language names use the active UI locale")
+    func localizedLanguageNames() {
+        let english = L10n.localizedLanguageName(
+            for: "ja_JP",
+            locale: Locale(identifier: "en_US")
+        )
+        let german = L10n.localizedLanguageName(
+            for: "ja_JP",
+            locale: Locale(identifier: "de_DE")
+        )
+
+        #expect(!english.isEmpty)
+        #expect(!german.isEmpty)
+        #expect(german != english)
+    }
+
+    @Test("Lists and durations follow the presentation locale")
+    func localeAwareComposedValues() {
+        let values = ["Alpha", "Beta", "Gamma"]
+        let englishList = L10n.localizedList(
+            values,
+            locale: Locale(identifier: "en_US")
+        )
+        let germanList = L10n.localizedList(
+            values,
+            locale: Locale(identifier: "de_DE")
+        )
+        let arabicList = L10n.localizedList(
+            values,
+            locale: Locale(identifier: "ar_SA")
+        )
+
+        #expect(germanList != englishList)
+        #expect(arabicList != englishList)
+        for value in values {
+            #expect(germanList.contains(value))
+            #expect(arabicList.contains(value))
+        }
+
+        let englishDuration = L10n.localizedSeconds(
+            1.2,
+            locale: Locale(identifier: "en_US")
+        )
+        let germanDuration = L10n.localizedSeconds(
+            1.2,
+            locale: Locale(identifier: "de_DE")
+        )
+        let arabicDuration = L10n.localizedSeconds(
+            1.2,
+            locale: Locale(identifier: "ar_SA")
+        )
+
+        #expect(!englishDuration.isEmpty)
+        #expect(!germanDuration.isEmpty)
+        #expect(arabicDuration != englishDuration)
     }
 
     @Test("Unsupported locales fall back to English")

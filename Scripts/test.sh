@@ -57,6 +57,7 @@ timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 run_directory="$artifact_root/$timestamp-$mode"
 result_bundle="$run_directory/CloudNow-$mode.xcresult"
 coverage_directory="$run_directory/Coverage"
+derived_data_path="${CLOUDNOW_DERIVED_DATA_PATH:-}"
 
 cd "$repository_root"
 mkdir -p "$coverage_directory"
@@ -67,6 +68,13 @@ localization_check_command=(
 )
 print_command "${localization_check_command[@]}"
 "${localization_check_command[@]}"
+
+coverage_validator_test_command=(
+    python3
+    "$repository_root/Scripts/test_validate_coverage.py"
+)
+print_command "${coverage_validator_test_command[@]}"
+"${coverage_validator_test_command[@]}"
 
 if ! simulator_record="$(
     xcrun simctl list devices available --json |
@@ -156,6 +164,11 @@ resolve_command=(
     -project "$project_path"
     -scheme "$scheme_name"
 )
+if [[ -n "$derived_data_path" ]]; then
+    resolve_command+=(
+        -derivedDataPath "$derived_data_path"
+    )
+fi
 print_command "${resolve_command[@]}"
 "${resolve_command[@]}"
 
@@ -179,6 +192,11 @@ test_command=(
     CODE_SIGNING_ALLOWED=NO
     CODE_SIGNING_REQUIRED=NO
 )
+if [[ -n "$derived_data_path" ]]; then
+    test_command+=(
+        -derivedDataPath "$derived_data_path"
+    )
+fi
 
 case "$mode" in
     unit)
@@ -221,6 +239,24 @@ if [[ -d "$result_bundle" ]]; then
         :
     else
         coverage_status=$?
+    fi
+
+    if [[ "$mode" != "ui" && $test_status -eq 0 ]]; then
+        coverage_gate_command=(
+            python3
+            "$repository_root/Scripts/validate_coverage.py"
+            --result-bundle "$result_bundle"
+            --text-report "$coverage_directory/required-sources.txt"
+            --json-report "$coverage_directory/required-sources.json"
+        )
+        print_command "${coverage_gate_command[@]}"
+        if "${coverage_gate_command[@]}"; then
+            :
+        else
+            coverage_status=$?
+        fi
+    elif [[ "$mode" == "ui" ]]; then
+        echo "Required deterministic capability coverage: skipped for UI-only run."
     fi
 elif [[ $test_status -eq 0 ]]; then
     echo "error: xcodebuild succeeded without creating a result bundle." >&2

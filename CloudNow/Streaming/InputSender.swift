@@ -92,6 +92,139 @@ nonisolated protocol InputEventHandler: AnyObject {
     func sendMouseWheel(delta: Int16)
 }
 
+/// Provider-neutral translation used by responder-chain keyboard adapters.
+/// Both GFN and Xbox ultimately send Windows virtual keys; GFN additionally
+/// consumes the scan code retained in this shared mapping.
+nonisolated struct CloudKeyboardHIDMapping: Equatable, Sendable {
+    let virtualKey: UInt16
+    let scanCode: UInt16
+}
+
+nonisolated enum CloudKeyboardHIDMapper {
+    static func mapping(
+        for keyCode: UIKeyboardHIDUsage
+    ) -> CloudKeyboardHIDMapping? {
+        mappings[keyCode]
+    }
+
+    private static let mappings: [UIKeyboardHIDUsage: CloudKeyboardHIDMapping] = [
+        .keyboardA: .init(virtualKey: 0x41, scanCode: 0x1E),
+        .keyboardB: .init(virtualKey: 0x42, scanCode: 0x30),
+        .keyboardC: .init(virtualKey: 0x43, scanCode: 0x2E),
+        .keyboardD: .init(virtualKey: 0x44, scanCode: 0x20),
+        .keyboardE: .init(virtualKey: 0x45, scanCode: 0x12),
+        .keyboardF: .init(virtualKey: 0x46, scanCode: 0x21),
+        .keyboardG: .init(virtualKey: 0x47, scanCode: 0x22),
+        .keyboardH: .init(virtualKey: 0x48, scanCode: 0x23),
+        .keyboardI: .init(virtualKey: 0x49, scanCode: 0x17),
+        .keyboardJ: .init(virtualKey: 0x4A, scanCode: 0x24),
+        .keyboardK: .init(virtualKey: 0x4B, scanCode: 0x25),
+        .keyboardL: .init(virtualKey: 0x4C, scanCode: 0x26),
+        .keyboardM: .init(virtualKey: 0x4D, scanCode: 0x32),
+        .keyboardN: .init(virtualKey: 0x4E, scanCode: 0x31),
+        .keyboardO: .init(virtualKey: 0x4F, scanCode: 0x18),
+        .keyboardP: .init(virtualKey: 0x50, scanCode: 0x19),
+        .keyboardQ: .init(virtualKey: 0x51, scanCode: 0x10),
+        .keyboardR: .init(virtualKey: 0x52, scanCode: 0x13),
+        .keyboardS: .init(virtualKey: 0x53, scanCode: 0x1F),
+        .keyboardT: .init(virtualKey: 0x54, scanCode: 0x14),
+        .keyboardU: .init(virtualKey: 0x55, scanCode: 0x16),
+        .keyboardV: .init(virtualKey: 0x56, scanCode: 0x2F),
+        .keyboardW: .init(virtualKey: 0x57, scanCode: 0x11),
+        .keyboardX: .init(virtualKey: 0x58, scanCode: 0x2D),
+        .keyboardY: .init(virtualKey: 0x59, scanCode: 0x15),
+        .keyboardZ: .init(virtualKey: 0x5A, scanCode: 0x2C),
+
+        .keyboard1: .init(virtualKey: 0x31, scanCode: 0x02),
+        .keyboard2: .init(virtualKey: 0x32, scanCode: 0x03),
+        .keyboard3: .init(virtualKey: 0x33, scanCode: 0x04),
+        .keyboard4: .init(virtualKey: 0x34, scanCode: 0x05),
+        .keyboard5: .init(virtualKey: 0x35, scanCode: 0x06),
+        .keyboard6: .init(virtualKey: 0x36, scanCode: 0x07),
+        .keyboard7: .init(virtualKey: 0x37, scanCode: 0x08),
+        .keyboard8: .init(virtualKey: 0x38, scanCode: 0x09),
+        .keyboard9: .init(virtualKey: 0x39, scanCode: 0x0A),
+        .keyboard0: .init(virtualKey: 0x30, scanCode: 0x0B),
+
+        .keyboardReturnOrEnter: .init(virtualKey: 0x0D, scanCode: 0x1C),
+        .keyboardEscape: .init(virtualKey: 0x1B, scanCode: 0x01),
+        .keyboardDeleteOrBackspace: .init(virtualKey: 0x08, scanCode: 0x0E),
+        .keyboardTab: .init(virtualKey: 0x09, scanCode: 0x0F),
+        .keyboardSpacebar: .init(virtualKey: 0x20, scanCode: 0x39),
+        .keyboardCapsLock: .init(virtualKey: 0x14, scanCode: 0x3A),
+
+        .keyboardHyphen: .init(virtualKey: 0xBD, scanCode: 0x0C),
+        .keyboardEqualSign: .init(virtualKey: 0xBB, scanCode: 0x0D),
+        .keyboardOpenBracket: .init(virtualKey: 0xDB, scanCode: 0x1A),
+        .keyboardCloseBracket: .init(virtualKey: 0xDD, scanCode: 0x1B),
+        .keyboardBackslash: .init(virtualKey: 0xDC, scanCode: 0x2B),
+        .keyboardNonUSPound: .init(virtualKey: 0xE2, scanCode: 0x56),
+        .keyboardSemicolon: .init(virtualKey: 0xBA, scanCode: 0x27),
+        .keyboardQuote: .init(virtualKey: 0xDE, scanCode: 0x28),
+        .keyboardGraveAccentAndTilde: .init(virtualKey: 0xC0, scanCode: 0x29),
+        .keyboardComma: .init(virtualKey: 0xBC, scanCode: 0x33),
+        .keyboardPeriod: .init(virtualKey: 0xBE, scanCode: 0x34),
+        .keyboardSlash: .init(virtualKey: 0xBF, scanCode: 0x35),
+
+        .keyboardF1: .init(virtualKey: 0x70, scanCode: 0x3B),
+        .keyboardF2: .init(virtualKey: 0x71, scanCode: 0x3C),
+        .keyboardF3: .init(virtualKey: 0x72, scanCode: 0x3D),
+        .keyboardF4: .init(virtualKey: 0x73, scanCode: 0x3E),
+        .keyboardF5: .init(virtualKey: 0x74, scanCode: 0x3F),
+        .keyboardF6: .init(virtualKey: 0x75, scanCode: 0x40),
+        .keyboardF7: .init(virtualKey: 0x76, scanCode: 0x41),
+        .keyboardF8: .init(virtualKey: 0x77, scanCode: 0x42),
+        .keyboardF9: .init(virtualKey: 0x78, scanCode: 0x43),
+        .keyboardF10: .init(virtualKey: 0x79, scanCode: 0x44),
+        .keyboardF11: .init(virtualKey: 0x7A, scanCode: 0x57),
+        .keyboardF12: .init(virtualKey: 0x7B, scanCode: 0x58),
+        .keyboardF13: .init(virtualKey: 0x7C, scanCode: 0x64),
+
+        .keyboardInsert: .init(virtualKey: 0x2D, scanCode: 0xE052),
+        .keyboardHome: .init(virtualKey: 0x24, scanCode: 0xE047),
+        .keyboardPageUp: .init(virtualKey: 0x21, scanCode: 0xE049),
+        .keyboardDeleteForward: .init(virtualKey: 0x2E, scanCode: 0xE053),
+        .keyboardEnd: .init(virtualKey: 0x23, scanCode: 0xE04F),
+        .keyboardPageDown: .init(virtualKey: 0x22, scanCode: 0xE051),
+        .keyboardRightArrow: .init(virtualKey: 0x27, scanCode: 0xE04D),
+        .keyboardLeftArrow: .init(virtualKey: 0x25, scanCode: 0xE04B),
+        .keyboardDownArrow: .init(virtualKey: 0x28, scanCode: 0xE050),
+        .keyboardUpArrow: .init(virtualKey: 0x26, scanCode: 0xE048),
+
+        .keyboardPrintScreen: .init(virtualKey: 0x2C, scanCode: 0xE037),
+        .keyboardScrollLock: .init(virtualKey: 0x91, scanCode: 0x46),
+        .keyboardPause: .init(virtualKey: 0x13, scanCode: 0x45),
+        .keyboardApplication: .init(virtualKey: 0x5D, scanCode: 0xE05D),
+
+        .keypadNumLock: .init(virtualKey: 0x90, scanCode: 0xE045),
+        .keypadSlash: .init(virtualKey: 0x6F, scanCode: 0xE035),
+        .keypadAsterisk: .init(virtualKey: 0x6A, scanCode: 0x37),
+        .keypadHyphen: .init(virtualKey: 0x6D, scanCode: 0x4A),
+        .keypadPlus: .init(virtualKey: 0x6B, scanCode: 0x4E),
+        .keypadEnter: .init(virtualKey: 0x0D, scanCode: 0xE01C),
+        .keypad1: .init(virtualKey: 0x61, scanCode: 0x4F),
+        .keypad2: .init(virtualKey: 0x62, scanCode: 0x50),
+        .keypad3: .init(virtualKey: 0x63, scanCode: 0x51),
+        .keypad4: .init(virtualKey: 0x64, scanCode: 0x4B),
+        .keypad5: .init(virtualKey: 0x65, scanCode: 0x4C),
+        .keypad6: .init(virtualKey: 0x66, scanCode: 0x4D),
+        .keypad7: .init(virtualKey: 0x67, scanCode: 0x47),
+        .keypad8: .init(virtualKey: 0x68, scanCode: 0x48),
+        .keypad9: .init(virtualKey: 0x69, scanCode: 0x49),
+        .keypad0: .init(virtualKey: 0x60, scanCode: 0x52),
+        .keypadPeriod: .init(virtualKey: 0x6E, scanCode: 0x53),
+
+        .keyboardLeftControl: .init(virtualKey: 0xA2, scanCode: 0x1D),
+        .keyboardRightControl: .init(virtualKey: 0xA3, scanCode: 0xE01D),
+        .keyboardLeftShift: .init(virtualKey: 0xA0, scanCode: 0x2A),
+        .keyboardRightShift: .init(virtualKey: 0xA1, scanCode: 0x36),
+        .keyboardLeftAlt: .init(virtualKey: 0xA4, scanCode: 0x38),
+        .keyboardRightAlt: .init(virtualKey: 0xA5, scanCode: 0xE038),
+        .keyboardLeftGUI: .init(virtualKey: 0x5B, scanCode: 0xE05B),
+        .keyboardRightGUI: .init(virtualKey: 0x5C, scanCode: 0xE05C),
+    ]
+}
+
 // MARK: - Encoded Packet
 
 nonisolated enum InputPacketCategory: String, Sendable {
@@ -1432,15 +1565,19 @@ extension InputSender: InputEventHandler {
         inputQueue.async { [weak self] in
             guard let self,
                   !self.isPaused,
-                  let mapping = Self.hidToKeyMapping[keyCode] else { return }
-            let keyID = UInt32(mapping.vk) << 16 | UInt32(mapping.scancode)
+                  let mapping = CloudKeyboardHIDMapper.mapping(for: keyCode)
+            else {
+                return
+            }
+            let keyID = UInt32(mapping.virtualKey) << 16
+                | UInt32(mapping.scanCode)
             let currentModifiers = Self.gfnModifiers(from: modifiers)
             let encodedModifiers: UInt16
             if down {
                 encodedModifiers = currentModifiers
                 heldKeys[keyID] = (
-                    vk: mapping.vk,
-                    scancode: mapping.scancode,
+                    vk: mapping.virtualKey,
+                    scancode: mapping.scanCode,
                     modifiers: currentModifiers
                 )
             } else {
@@ -1448,8 +1585,8 @@ extension InputSender: InputEventHandler {
             }
             emitKeyboard(
                 down: down,
-                vk: mapping.vk,
-                scancode: mapping.scancode,
+                vk: mapping.virtualKey,
+                scancode: mapping.scanCode,
                 modifiers: encodedModifiers
             )
         }
@@ -1493,60 +1630,4 @@ extension InputSender: InputEventHandler {
         }
         return mods
     }
-
-    private nonisolated static let hidToKeyMapping: [UIKeyboardHIDUsage: (vk: UInt16, scancode: UInt16)] = [
-        .keyboardA: (0x41, 0x1E), .keyboardB: (0x42, 0x30), .keyboardC: (0x43, 0x2E),
-        .keyboardD: (0x44, 0x20), .keyboardE: (0x45, 0x12), .keyboardF: (0x46, 0x21),
-        .keyboardG: (0x47, 0x22), .keyboardH: (0x48, 0x23), .keyboardI: (0x49, 0x17),
-        .keyboardJ: (0x4A, 0x24), .keyboardK: (0x4B, 0x25), .keyboardL: (0x4C, 0x26),
-        .keyboardM: (0x4D, 0x32), .keyboardN: (0x4E, 0x31), .keyboardO: (0x4F, 0x18),
-        .keyboardP: (0x50, 0x19), .keyboardQ: (0x51, 0x10), .keyboardR: (0x52, 0x13),
-        .keyboardS: (0x53, 0x1F), .keyboardT: (0x54, 0x14), .keyboardU: (0x55, 0x16),
-        .keyboardV: (0x56, 0x2F), .keyboardW: (0x57, 0x11), .keyboardX: (0x58, 0x2D),
-        .keyboardY: (0x59, 0x15), .keyboardZ: (0x5A, 0x2C),
-
-        .keyboard1: (0x31, 0x02), .keyboard2: (0x32, 0x03), .keyboard3: (0x33, 0x04),
-        .keyboard4: (0x34, 0x05), .keyboard5: (0x35, 0x06), .keyboard6: (0x36, 0x07),
-        .keyboard7: (0x37, 0x08), .keyboard8: (0x38, 0x09), .keyboard9: (0x39, 0x0A),
-        .keyboard0: (0x30, 0x0B),
-
-        .keyboardReturnOrEnter: (0x0D, 0x1C), .keyboardEscape: (0x1B, 0x01),
-        .keyboardDeleteOrBackspace: (0x08, 0x0E), .keyboardTab: (0x09, 0x0F),
-        .keyboardSpacebar: (0x20, 0x39), .keyboardCapsLock: (0x14, 0x3A),
-
-        .keyboardHyphen: (0xBD, 0x0C), .keyboardEqualSign: (0xBB, 0x0D),
-        .keyboardOpenBracket: (0xDB, 0x1A), .keyboardCloseBracket: (0xDD, 0x1B),
-        .keyboardBackslash: (0xDC, 0x2B), .keyboardNonUSPound: (0xE2, 0x56),
-        .keyboardSemicolon: (0xBA, 0x27), .keyboardQuote: (0xDE, 0x28),
-        .keyboardGraveAccentAndTilde: (0xC0, 0x29), .keyboardComma: (0xBC, 0x33),
-        .keyboardPeriod: (0xBE, 0x34), .keyboardSlash: (0xBF, 0x35),
-
-        .keyboardF1: (0x70, 0x3B), .keyboardF2: (0x71, 0x3C), .keyboardF3: (0x72, 0x3D),
-        .keyboardF4: (0x73, 0x3E), .keyboardF5: (0x74, 0x3F), .keyboardF6: (0x75, 0x40),
-        .keyboardF7: (0x76, 0x41), .keyboardF8: (0x77, 0x42), .keyboardF9: (0x78, 0x43),
-        .keyboardF10: (0x79, 0x44), .keyboardF11: (0x7A, 0x57), .keyboardF12: (0x7B, 0x58),
-        .keyboardF13: (0x7C, 0x64),
-
-        .keyboardInsert: (0x2D, 0xE052), .keyboardHome: (0x24, 0xE047),
-        .keyboardPageUp: (0x21, 0xE049), .keyboardDeleteForward: (0x2E, 0xE053),
-        .keyboardEnd: (0x23, 0xE04F), .keyboardPageDown: (0x22, 0xE051),
-        .keyboardRightArrow: (0x27, 0xE04D), .keyboardLeftArrow: (0x25, 0xE04B),
-        .keyboardDownArrow: (0x28, 0xE050), .keyboardUpArrow: (0x26, 0xE048),
-
-        .keyboardPrintScreen: (0x2C, 0xE037), .keyboardScrollLock: (0x91, 0x46),
-        .keyboardPause: (0x13, 0x45), .keyboardApplication: (0x5D, 0xE05D),
-
-        .keypadNumLock: (0x90, 0xE045), .keypadSlash: (0x6F, 0xE035),
-        .keypadAsterisk: (0x6A, 0x37), .keypadHyphen: (0x6D, 0x4A),
-        .keypadPlus: (0x6B, 0x4E), .keypadEnter: (0x0D, 0xE01C),
-        .keypad1: (0x61, 0x4F), .keypad2: (0x62, 0x50), .keypad3: (0x63, 0x51),
-        .keypad4: (0x64, 0x4B), .keypad5: (0x65, 0x4C), .keypad6: (0x66, 0x4D),
-        .keypad7: (0x67, 0x47), .keypad8: (0x68, 0x48), .keypad9: (0x69, 0x49),
-        .keypad0: (0x60, 0x52), .keypadPeriod: (0x6E, 0x53),
-
-        .keyboardLeftControl: (0xA2, 0x1D), .keyboardRightControl: (0xA3, 0xE01D),
-        .keyboardLeftShift: (0xA0, 0x2A), .keyboardRightShift: (0xA1, 0x36),
-        .keyboardLeftAlt: (0xA4, 0x38), .keyboardRightAlt: (0xA5, 0xE038),
-        .keyboardLeftGUI: (0x5B, 0xE05B), .keyboardRightGUI: (0x5C, 0xE05C),
-    ]
 }

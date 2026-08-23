@@ -20,6 +20,12 @@ enum UIControllerNavigationMode: Equatable {
 final class UIControllerNavigationCoordinator {
     private(set) var activeMode: UIControllerNavigationMode = .tabs
 
+    var ownsGlobalControllerHandlers: Bool {
+        Self.handlerOwnerID == handlerOwnershipID
+    }
+
+    private static var handlerOwnerID: UUID?
+    @ObservationIgnored private let handlerOwnershipID = UUID()
     @ObservationIgnored private var rootActions = Actions()
     @ObservationIgnored private var contexts: [Context] = []
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -32,6 +38,7 @@ final class UIControllerNavigationCoordinator {
         onPreviousTab: @escaping () -> Void,
         onNextTab: @escaping () -> Void
     ) {
+        Self.handlerOwnerID = handlerOwnershipID
         rootActions = Actions(previous: onPreviousTab, next: onNextTab)
 
         if observers.isEmpty {
@@ -41,12 +48,16 @@ final class UIControllerNavigationCoordinator {
     }
 
     func stop() {
+        let ownsHandlers = ownsGlobalControllerHandlers
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         contexts.removeAll()
         rootActions = Actions()
         activeMode = .tabs
-        clearOwnedHandlers()
+        if ownsHandlers {
+            Self.handlerOwnerID = nil
+            clearOwnedHandlers()
+        }
     }
 
     func activateContext(
@@ -103,11 +114,16 @@ final class UIControllerNavigationCoordinator {
     }
 
     private func refreshControllerHandlers() {
+        guard ownsGlobalControllerHandlers else { return }
         GCController.controllers().forEach(installHandlers)
     }
 
     private func installHandlers(on controller: GCController) {
-        guard let gamepad = controller.extendedGamepad else { return }
+        guard ownsGlobalControllerHandlers,
+              let gamepad = controller.extendedGamepad
+        else {
+            return
+        }
         clearOwnedHandlers(on: gamepad)
 
         let activeContext = contexts.last

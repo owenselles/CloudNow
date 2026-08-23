@@ -218,8 +218,8 @@ private nonisolated struct AudioRouteFingerprint: Equatable, Sendable {
 /// ADM thread between `initializeWithDelegate` and `terminateDevice`. The render closures
 /// run on the audio I/O thread; they capture the delegate blocks and buffers at
 /// node-creation time so the realtime path never reads mutable state on `self`.
-final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
-    static let shared = GFNAudioDevice()
+final nonisolated class CloudAudioDevice: NSObject, @unchecked Sendable {
+    static let shared = CloudAudioDevice()
 
     let microphoneTelemetry = MicrophoneTelemetry()
 
@@ -637,11 +637,17 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         }
         let currentRoute = AudioRouteFingerprint(session: session)
         let inputRouteAvailable = hasUsableInputRoute(session)
+        let microphoneRoutePolicy = CloudMicrophoneRoutePolicy(
+            hasCaptureIntent: recordingFlag,
+            hasUsableInputRoute: inputRouteAvailable
+        )
         let engineRunning = engine?.isRunning == true
         let outputGraphMatches = !playoutInitializedFlag || sourceNode != nil && playoutFormat != nil
         let inputGraphMatches = !recordingInitializedFlag || sinkNode != nil && captureFormat != nil
-        let inputPathMatchesIntent = !recordingFlag || inputGraphMatches && inputRouteAvailable
-        let engineShouldRun = playingFlag || recordingFlag && inputPathMatchesIntent
+        let inputPathMatchesIntent = !microphoneRoutePolicy.hasCaptureIntent
+            || inputGraphMatches && microphoneRoutePolicy.shouldEnableCapture
+        let engineShouldRun = playingFlag
+            || microphoneRoutePolicy.hasCaptureIntent && inputPathMatchesIntent
         var routeMatches = currentRoute == activeRouteFingerprint
         let graphIdentityMatches = activeRouteFingerprint.map {
             currentRoute.hasSameGraphIdentity(as: $0)
@@ -673,7 +679,7 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
            outputGraphMatches,
            inputPathMatchesIntent
         {
-            if recordingFlag {
+            if microphoneRoutePolicy.shouldEnableCapture {
                 setCaptureEnabled(true)
             }
             audioDeviceLog.info(
@@ -685,15 +691,15 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         if routeMatches,
            engineRunning == engineShouldRun,
            outputGraphMatches,
-           recordingFlag,
+           microphoneRoutePolicy.hasCaptureIntent,
            !inputGraphMatches,
-           !inputRouteAvailable
+           !microphoneRoutePolicy.hasUsableInputRoute
         {
             setCaptureEnabled(false)
             audioDeviceLog.info(
                 "route settled without microphone; waiting for input (\(trigger, privacy: .public)) | \(currentRoute.logDescription, privacy: .public)"
             )
-            if canAttemptBluetoothMicrophoneAcquisition(session) {
+            if canAttemptMicrophoneRouteAcquisition(session) {
                 enqueueRouteRecovery(
                     trigger: trigger,
                     delegate: delegate,
@@ -710,7 +716,7 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         )
 
         let result = rebuildGraphsForCurrentRoute(delegate: delegate)
-        if result == .failed || result == .awaitingInput && canAttemptBluetoothMicrophoneAcquisition(session) {
+        if result == .failed || result == .awaitingInput && canAttemptMicrophoneRouteAcquisition(session) {
             enqueueRouteRecovery(
                 trigger: trigger,
                 delegate: delegate,
@@ -727,8 +733,9 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
             && session.inputNumberOfChannels > 0
     }
 
-    /// Release active A2DP playout before changing category, then allow both profiles while
-    /// play-and-record activates; selecting HFP input moves output to duplex HFP.
+    /// Release playback-only/A2DP routing before changing category, then select
+    /// the best discoverable input. This covers Continuity, wired/USB, and the
+    /// matching HFP input for a Bluetooth output.
     private func reassertMicrophoneRouteIfNeeded(_ session: AVAudioSession) -> Bool {
         guard recordingFlag else { return true }
         if hasUsableInputRoute(session) {
@@ -737,18 +744,33 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         }
         setCaptureEnabled(false)
 
-        if let bluetoothOutput = selectedBluetoothOutput(session) {
-            if microphoneRouteAcquisitionDeviceName != bluetoothOutput.portName {
-                microphoneRouteAcquisitionDeviceName = bluetoothOutput.portName
-                microphoneRouteAcquisitionAttempts = 0
-                microphoneRouteAcquisitionAttemptSnapshot.store(0, ordering: .relaxed)
-            }
-        } else if microphoneRouteAcquisitionDeviceName == nil {
+        let bluetoothOutput = selectedBluetoothOutput(session)
+        let matchingDeviceName = bluetoothOutput?.portName
+            ?? microphoneRouteAcquisitionDeviceName
+        let discoverableInput = preferredMicrophoneInput(
+            session,
+            matchingDeviceName: matchingDeviceName
+        )
+        let acquisitionDeviceName = discoverableInput?.portName
+            ?? bluetoothOutput?.portName
+        if let acquisitionDeviceName,
+           microphoneRouteAcquisitionDeviceName != acquisitionDeviceName
+        {
+            microphoneRouteAcquisitionDeviceName = acquisitionDeviceName
+            microphoneRouteAcquisitionAttempts = 0
+            microphoneRouteAcquisitionAttemptSnapshot.store(0, ordering: .relaxed)
+        }
+
+        guard microphoneRoutePolicy(for: session)
+            .shouldAttemptInputAcquisition
+        else {
             resetMicrophoneRouteAcquisition()
             return restorePlaybackAudioSessionIfNeeded(session)
         }
 
-        guard microphoneRouteAcquisitionAttempts < Self.maximumMicrophoneRouteAcquisitionAttempts else {
+        guard microphoneRouteAcquisitionAttempts
+            < Self.maximumMicrophoneRouteAcquisitionAttempts
+        else {
             return restorePlaybackAudioSessionIfNeeded(session)
         }
         microphoneRouteAcquisitionAttempts += 1
@@ -786,13 +808,18 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
             try session.setActive(true)
             playbackSessionActivationPending = false
 
-            if !hasUsableInputRoute(session),
-               let handsFreeInput = session.availableInputs?.first(where: {
-                   $0.portType == .bluetoothHFP
-               })
+            let preferredInput = preferredMicrophoneInput(
+                session,
+                matchingDeviceName: microphoneRouteAcquisitionDeviceName
+            )
+            if let preferredInput,
+               session.preferredInput?.uid != preferredInput.uid
             {
-                operation = "setPreferredInput(BluetoothHFP)"
-                try session.setPreferredInput(handsFreeInput)
+                if microphoneRouteAcquisitionDeviceName == nil {
+                    microphoneRouteAcquisitionDeviceName = preferredInput.portName
+                }
+                operation = "setPreferredInput(\(preferredInput.portType.rawValue))"
+                try session.setPreferredInput(preferredInput)
             }
 
             guard hasUsableInputRoute(session) else {
@@ -800,7 +827,7 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
                     audioDeviceLog.error("microphone route acquisition paused after \(attempt) attempts")
                     return restorePlaybackAudioSessionIfNeeded(session)
                 } else {
-                    audioDeviceLog.info("microphone route acquisition is waiting for HFP input")
+                    audioDeviceLog.info("microphone route acquisition is waiting for an input")
                 }
                 return true
             }
@@ -818,15 +845,54 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
         }
     }
 
+    private func microphoneRoutePolicy(
+        for session: AVAudioSession
+    ) -> CloudMicrophoneRoutePolicy {
+        CloudMicrophoneRoutePolicy(
+            hasCaptureIntent: recordingFlag,
+            hasUsableInputRoute: hasUsableInputRoute(session),
+            hasDiscoverableInput: !(session.availableInputs ?? []).isEmpty,
+            hasBluetoothOutput: selectedBluetoothOutput(session) != nil,
+            requiresInputDiscovery: session.category != .playAndRecord,
+            isAcquisitionInProgress: microphoneRouteAcquisitionAttempts > 0
+        )
+    }
+
+    private func preferredMicrophoneInput(
+        _ session: AVAudioSession,
+        matchingDeviceName: String?
+    ) -> AVAudioSessionPortDescription? {
+        let inputs = session.availableInputs ?? []
+        let candidates = inputs.map { input in
+            let kind: CloudMicrophoneRoutePolicy.InputKind = switch input.portType {
+            case .continuityMicrophone: .continuityMicrophone
+            case .bluetoothHFP: .bluetoothHandsFree
+            default: .other
+            }
+            return CloudMicrophoneRoutePolicy.InputCandidate(
+                kind: kind,
+                matchesSelectedOutput: matchingDeviceName.map {
+                    input.portName.caseInsensitiveCompare($0) == .orderedSame
+                } ?? false
+            )
+        }
+        guard let index = CloudMicrophoneRoutePolicy.preferredInputIndex(
+            among: candidates
+        ) else {
+            return nil
+        }
+        return inputs[index]
+    }
+
     private func selectedBluetoothOutput(_ session: AVAudioSession) -> AVAudioSessionPortDescription? {
         session.currentRoute.outputs.first {
             $0.portType == .bluetoothA2DP || $0.portType == .bluetoothHFP
         }
     }
 
-    private func canAttemptBluetoothMicrophoneAcquisition(_ session: AVAudioSession) -> Bool {
-        (selectedBluetoothOutput(session) != nil || microphoneRouteAcquisitionDeviceName != nil)
-            && microphoneRouteAcquisitionAttempts < Self.maximumMicrophoneRouteAcquisitionAttempts
+    private func canAttemptMicrophoneRouteAcquisition(_ session: AVAudioSession) -> Bool {
+        microphoneRouteAcquisitionAttempts < Self.maximumMicrophoneRouteAcquisitionAttempts
+            && microphoneRoutePolicy(for: session).shouldAttemptInputAcquisition
     }
 
     private func resetMicrophoneRouteAcquisition() {
@@ -903,6 +969,11 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
             }
         }
 
+        let microphoneRoutePolicy = CloudMicrophoneRoutePolicy(
+            hasCaptureIntent: shouldRecord,
+            hasUsableInputRoute: captureReady
+        )
+
         // Native ADM must re-read every changed parameter before either callback resumes.
         if playoutInitializedFlag {
             delegate.notifyAudioOutputParametersChange()
@@ -911,8 +982,8 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
             delegate.notifyAudioInputParametersChange()
         }
 
-        setCaptureEnabled(shouldRecord && captureReady)
-        let shouldRun = shouldPlay || shouldRecord && captureReady
+        setCaptureEnabled(microphoneRoutePolicy.shouldEnableCapture)
+        let shouldRun = shouldPlay || microphoneRoutePolicy.shouldEnableCapture
         if shouldRun, !startEngineIfNeeded() {
             setCaptureEnabled(false)
             if captureReady {
@@ -931,7 +1002,7 @@ final nonisolated class GFNAudioDevice: NSObject, @unchecked Sendable {
 
 // MARK: - LKRTCAudioDevice
 
-extension GFNAudioDevice: LKRTCAudioDevice {
+extension CloudAudioDevice: LKRTCAudioDevice {
     var deviceInputSampleRate: Double {
         captureFormat?.sampleRate ?? 48000
     }
@@ -991,17 +1062,13 @@ extension GFNAudioDevice: LKRTCAudioDevice {
             // Category changes below already run inside an active recovery generation.
             // Ignoring their echo preserves the bounded backoff instead of restarting it.
             guard reason != .categoryChange else { return }
-            let previousRoute = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey]
-                as? AVAudioSessionRouteDescription
-            let bluetoothOutputRemoved = reason == .oldDeviceUnavailable
-                && previousRoute?.outputs.contains(where: {
-                    $0.portType == .bluetoothA2DP || $0.portType == .bluetoothHFP
-                }) == true
+            let inputAvailabilityMayHaveChanged = reason == .newDeviceAvailable
+                || reason == .oldDeviceUnavailable
             self?.scheduleRouteRecovery(
                 trigger: "routeChange:\(reason.rawValue)",
                 delegate: delegate,
                 lifetime: lifetime,
-                resetMicrophoneAcquisition: bluetoothOutputRemoved
+                resetMicrophoneAcquisition: inputAvailabilityMayHaveChanged
             )
         }
         engineConfigurationObserver = NotificationCenter.default.addObserver(
@@ -1183,7 +1250,11 @@ extension GFNAudioDevice: LKRTCAudioDevice {
             return false
         }
         recordingFlag = true
-        if sinkNode == nil || !hasUsableInputRoute(.sharedInstance()) {
+        let microphoneRoutePolicy = CloudMicrophoneRoutePolicy(
+            hasCaptureIntent: recordingFlag,
+            hasUsableInputRoute: sinkNode != nil && hasUsableInputRoute(.sharedInstance())
+        )
+        if !microphoneRoutePolicy.shouldEnableCapture {
             setCaptureEnabled(false)
             if let delegate {
                 scheduleRouteRecovery(trigger: "recordingStart", delegate: delegate)
@@ -1216,3 +1287,7 @@ extension GFNAudioDevice: LKRTCAudioDevice {
         return true
     }
 }
+
+/// Source-compatible GFN name retained while all shared runtime construction
+/// and new providers depend on the provider-neutral audio device.
+typealias GFNAudioDevice = CloudAudioDevice

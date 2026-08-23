@@ -5,6 +5,84 @@ import Testing
 @Suite("Authentication state")
 struct AuthManagerTests {
     @MainActor
+    @Test("Cold background refresh restores the GFN selection and session first")
+    func coldBackgroundRefreshRestoresStateBeforeGating() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(-1))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(
+            refreshTokensResponse: makeTokens(
+                accessToken: "background-refreshed",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let schedulerProbe = BackgroundSchedulerProbe()
+        let manager = AuthManager(
+            api: api,
+            persistence: persistence,
+            backgroundScheduler: schedulerProbe.scheduler,
+            schedulesAutomaticRefresh: true
+        )
+        let providerPersistence = BackgroundProviderSelectionPersistence(
+            selectedProvider: .geForceNow
+        )
+        let coordinator = CloudGamingProviderCoordinator(
+            persistence: providerPersistence
+        )
+        let handler = GeForceNowBackgroundRefreshHandler(
+            providerCoordinator: coordinator,
+            authManager: manager
+        )
+
+        let outcome = await handler.perform()
+
+        #expect(outcome == .handled)
+        #expect(coordinator.selectedProvider == .geForceNow)
+        #expect(manager.session?.tokens.accessToken == "background-refreshed")
+        #expect(await persistence.loadRequestCount == 1)
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(schedulerProbe.submissionCount >= 1)
+    }
+
+    @MainActor
+    @Test("Cold background refresh stays offline for Xbox selection")
+    func coldBackgroundRefreshSkipsXbox() async {
+        let persistence = FakeAuthPersistence(
+            session: makeSession(expiresAt: Date().addingTimeInterval(-1))
+        )
+        let api = FakeAuthAPI(
+            refreshTokensResponse: makeTokens(
+                accessToken: "must-not-refresh",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let schedulerProbe = BackgroundSchedulerProbe()
+        let manager = AuthManager(
+            api: api,
+            persistence: persistence,
+            backgroundScheduler: schedulerProbe.scheduler,
+            schedulesAutomaticRefresh: true
+        )
+        let coordinator = CloudGamingProviderCoordinator(
+            persistence: BackgroundProviderSelectionPersistence(
+                selectedProvider: .xboxCloudGaming
+            )
+        )
+        let handler = GeForceNowBackgroundRefreshHandler(
+            providerCoordinator: coordinator,
+            authManager: manager
+        )
+
+        let outcome = await handler.perform()
+
+        #expect(outcome == .skipped)
+        #expect(coordinator.selectedProvider == .xboxCloudGaming)
+        #expect(manager.startupPhase == .pending)
+        #expect(await persistence.loadRequestCount == 0)
+        #expect(await api.refreshTokenCallCount == 0)
+        #expect(schedulerProbe.submissionCount == 0)
+    }
+
+    @MainActor
     @Test("A valid saved session is restored without refreshing")
     func restoresValidSession() async {
         let saved = makeSession(expiresAt: Date().addingTimeInterval(3600))
@@ -18,6 +96,112 @@ struct AuthManagerTests {
         #expect(manager.isAuthenticated)
         #expect(manager.session?.tokens.accessToken == "access")
         #expect(await api.refreshTokenCallCount == 0)
+    }
+
+    @MainActor
+    @Test("Concurrent session restoration waits for the active Keychain load")
+    func concurrentSessionRestorationCoalesces() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(3600))
+        let persistence = FakeAuthPersistence(
+            session: saved,
+            blocksFirstLoad: true
+        )
+        let manager = makeManager(
+            api: FakeAuthAPI(),
+            persistence: persistence
+        )
+        let first = Task { @MainActor in
+            await manager.restorePersistedSession()
+        }
+        await persistence.waitForLoadRequest()
+
+        let second = Task { @MainActor in
+            await manager.restorePersistedSession()
+            return manager.isAuthenticated
+        }
+        await Task.yield()
+        await persistence.releaseLoad()
+        await first.value
+
+        #expect(await second.value)
+        #expect(manager.startupPhase == .ready)
+    }
+
+    @MainActor
+    @Test("GeForce NOW networking is created only while its provider is used")
+    func geForceNowNetworkingIsProviderLazy() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(3600))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "new-login",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let factory = AuthAPIFactoryProbe(api: api)
+        let manager = AuthManager(
+            makeAPI: { factory.makeAPI() },
+            persistence: persistence,
+            backgroundScheduler: .disabled,
+            schedulesAutomaticRefresh: false
+        )
+
+        await manager.initialize()
+        #expect(factory.creationCount == 0)
+
+        await manager.login().value
+        #expect(factory.creationCount == 1)
+
+        manager.deactivateForInactiveProvider()
+        await manager.login().value
+        #expect(factory.creationCount == 2)
+    }
+
+    @MainActor
+    @Test("Restoring credentials stays offline until GeForce NOW is activated")
+    func restoredCredentialsWaitForProviderActivation() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(-1))
+        let refreshed = makeTokens(
+            accessToken: "activated-refresh",
+            expiresAt: Date().addingTimeInterval(7200)
+        )
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(refreshTokensResponse: refreshed)
+        let manager = makeManager(api: api, persistence: persistence)
+
+        await manager.restorePersistedSession()
+
+        #expect(manager.isAuthenticated)
+        #expect(await api.refreshTokenCallCount == 0)
+
+        await manager.activateForCurrentProvider()
+
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(manager.session?.tokens.accessToken == "activated-refresh")
+    }
+
+    @MainActor
+    @Test("Provider deactivation stops refresh fallback networking")
+    func deactivationStopsRefreshFallbacks() async {
+        var saved = makeSession(expiresAt: Date().addingTimeInterval(-1))
+        saved.tokens.clientToken = "client-token"
+        saved.tokens.clientTokenExpiresAt = Date().addingTimeInterval(3600)
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(blockClientTokenRefresh: true)
+        let manager = makeManager(api: api, persistence: persistence)
+        await manager.restorePersistedSession()
+
+        let activation = Task { @MainActor in
+            await manager.activateForCurrentProvider()
+        }
+        await api.waitForClientTokenRefreshRequest()
+
+        manager.deactivateForInactiveProvider()
+        await activation.value
+
+        #expect(await api.clientTokenRefreshCallCount == 1)
+        #expect(await api.refreshTokenCallCount == 0)
+        #expect(manager.isAuthenticated)
     }
 
     @MainActor
@@ -269,6 +453,44 @@ struct AuthManagerTests {
     }
 
     @MainActor
+    @Test("Reset generation fence rejects a delayed GFN login rollback")
+    func resetFenceRejectsDelayedLoginRollback() async throws {
+        let harness = CredentialResetTestHarness()
+        let priorSession = makeSession(
+            expiresAt: Date().addingTimeInterval(3600)
+        )
+        try await harness.persistence.saveAuthSession(
+            priorSession,
+            generation: 0
+        )
+        let persistence = DelayedGeForceNowRollbackPersistence(
+            upstream: harness.persistence
+        )
+        let api = FakeAuthAPI(blockDevicePoll: true)
+        let manager = AuthManager(
+            api: api,
+            persistence: persistence,
+            backgroundScheduler: .disabled,
+            schedulesAutomaticRefresh: false,
+            initialSession: priorSession
+        )
+
+        let login = manager.login()
+        await api.waitForDevicePollRequest()
+        manager.cancelLogin()
+        await persistence.waitUntilSaveIsBlocked()
+
+        _ = await harness.persistence.clearPersistentData(for: .geForceNow)
+        await persistence.releaseSave()
+        await persistence.waitUntilSaveIsForwarded()
+        await login.value
+
+        await #expect(throws: CredentialResetTestStoreError.notFound) {
+            _ = try await harness.persistence.loadAuthSession()
+        }
+    }
+
+    @MainActor
     @Test("Device-flow denial is reported instead of silently restarting")
     func deviceFlowDenialFails() async {
         let persistence = FakeAuthPersistence()
@@ -307,8 +529,11 @@ struct AuthManagerTests {
 
         let login = manager.login()
         await persistence.waitForSaveRequest()
-        manager.logout()
+        let logout = Task {
+            try await manager.logout()
+        }
         await persistence.waitForDeleteCompletion()
+        try? await logout.value
         await persistence.releaseSave()
         await login.value
 
@@ -317,6 +542,117 @@ struct AuthManagerTests {
         #expect(await persistence.saveGenerations == [1])
         #expect(await persistence.deleteGenerations == [2])
         #expect(await persistence.deleteCount == 1)
+    }
+
+    @MainActor
+    @Test("Reset preparation blocks every credential producer")
+    func dataResetPreparationBlocksCredentialProducers() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(-1))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(
+            refreshTokensResponse: makeTokens(
+                accessToken: "refreshed",
+                expiresAt: Date().addingTimeInterval(7200)
+            ),
+            devicePollResponse: makeTokens(
+                accessToken: "new-login",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let factory = AuthAPIFactoryProbe(api: api)
+        let manager = AuthManager(
+            makeAPI: { factory.makeAPI() },
+            persistence: persistence,
+            backgroundScheduler: .disabled,
+            schedulesAutomaticRefresh: false,
+            initialSession: saved
+        )
+
+        manager.prepareForDataReset()
+
+        await manager.login().value
+        await manager.refreshIfNeeded()
+        await manager.activateForCurrentProvider()
+        do {
+            _ = try await manager.resolveToken()
+            Issue.record("Expected token resolution to stop during reset")
+        } catch is CancellationError {
+            // Expected: reset owns credential mutation until it completes.
+        } catch {
+            Issue.record("Unexpected token resolution error: \(error)")
+        }
+
+        #expect(factory.creationCount == 0)
+        #expect(await api.refreshTokenCallCount == 0)
+        #expect(await api.deviceAuthorizationCallCount == 0)
+        #expect(await api.devicePollCallCount == 0)
+        #expect(await persistence.saveGenerations.isEmpty)
+        #expect(await persistence.savedSession?.tokens.accessToken == "access")
+    }
+
+    @MainActor
+    @Test("Inactive reset recovery defers networking until provider activation")
+    func inactiveResetRecoveryWaitsForProviderActivation() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(-1))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(
+            refreshTokensResponse: makeTokens(
+                accessToken: "activated-refresh",
+                expiresAt: Date().addingTimeInterval(7200)
+            )
+        )
+        let factory = AuthAPIFactoryProbe(api: api)
+        let manager = AuthManager(
+            makeAPI: { factory.makeAPI() },
+            persistence: persistence,
+            backgroundScheduler: .disabled,
+            schedulesAutomaticRefresh: false
+        )
+
+        manager.prepareForDataReset()
+        manager.abortDataResetWithoutActivation()
+
+        #expect(factory.creationCount == 0)
+        #expect(await api.refreshTokenCallCount == 0)
+
+        await manager.restorePersistedSession()
+
+        #expect(manager.isAuthenticated)
+        #expect(factory.creationCount == 0)
+        #expect(await api.refreshTokenCallCount == 0)
+
+        await manager.activateForCurrentProvider()
+
+        #expect(factory.creationCount == 1)
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(manager.session?.tokens.accessToken == "activated-refresh")
+    }
+
+    @MainActor
+    @Test("A secure-storage failure cannot look like a successful logout")
+    func logoutFailureKeepsTheAccountVisible() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(3600))
+        let persistence = FakeAuthPersistence(
+            session: saved,
+            failsDelete: true
+        )
+        let manager = makeManager(
+            api: FakeAuthAPI(),
+            persistence: persistence
+        )
+        await manager.restorePersistedSession()
+
+        do {
+            try await manager.logout()
+            Issue.record("Expected secure account deletion to fail")
+        } catch AuthError.secureStorageUnavailable {
+            // Expected: the UI must continue to show the retained account.
+        } catch {
+            Issue.record("Unexpected logout error: \(error)")
+        }
+
+        #expect(manager.isAuthenticated)
+        #expect(await persistence.savedSession?.tokens.accessToken == "access")
     }
 
     @MainActor
@@ -341,8 +677,11 @@ struct AuthManagerTests {
 
         let firstLogin = manager.login()
         await persistence.waitForSaveRequest()
-        manager.logout()
+        let logout = Task {
+            try await manager.logout()
+        }
         await persistence.waitForDeleteCompletion()
+        try? await logout.value
 
         let secondLogin = manager.login()
         await persistence.waitForSaveRequest(count: 2)
@@ -361,47 +700,69 @@ struct AuthManagerTests {
     }
 
     @MainActor
-    @Test("A newer login save wins over a delayed older delete")
-    func newerLoginWinsOverDelayedDelete() async {
+    @Test("Logout blocks credential producers until deletion completes")
+    func logoutBlocksCredentialProducersDuringDeletion() async {
+        let saved = makeSession(expiresAt: Date().addingTimeInterval(-1))
         let persistence = FakeAuthPersistence(
-            session: makeSession(
-                expiresAt: Date().addingTimeInterval(3600)
-            ),
+            session: saved,
             blocksFirstDelete: true
         )
         let api = FakeAuthAPI(
+            refreshTokensResponse: makeTokens(
+                accessToken: "refreshed",
+                expiresAt: Date().addingTimeInterval(7200)
+            ),
             devicePollResponse: makeTokens(
                 accessToken: "new-login",
                 expiresAt: Date().addingTimeInterval(7200)
             )
         )
-        let manager = makeManager(
-            api: api,
-            persistence: persistence
+        let factory = AuthAPIFactoryProbe(api: api)
+        let manager = AuthManager(
+            makeAPI: { factory.makeAPI() },
+            persistence: persistence,
+            backgroundScheduler: .disabled,
+            schedulesAutomaticRefresh: false,
+            initialSession: saved
         )
-        await manager.initialize()
 
-        manager.logout()
+        let logout = Task {
+            try await manager.logout()
+        }
         await persistence.waitForDeleteRequest()
-        let login = manager.login()
-        await login.value
-        #expect(manager.session?.tokens.accessToken == "new-login")
-        #expect(
-            await persistence.savedSession?.tokens.accessToken
-                == "new-login"
-        )
+
+        await manager.login().value
+        await manager.refreshIfNeeded()
+        await manager.activateForCurrentProvider()
+        do {
+            _ = try await manager.resolveToken()
+            Issue.record("Expected token resolution to stop during logout")
+        } catch is CancellationError {
+            // Expected: logout exclusively owns credential mutation.
+        } catch {
+            Issue.record("Unexpected token resolution error: \(error)")
+        }
+
+        #expect(factory.creationCount == 0)
+        #expect(await api.refreshTokenCallCount == 0)
+        #expect(await api.deviceAuthorizationCallCount == 0)
+        #expect(await api.devicePollCallCount == 0)
+        #expect(await persistence.saveGenerations.isEmpty)
+        #expect(await persistence.savedSession?.tokens.accessToken == "access")
 
         await persistence.releaseDelete()
         await persistence.waitForDeleteCompletion()
+        do {
+            try await logout.value
+        } catch {
+            Issue.record("Unexpected logout error: \(error)")
+        }
 
-        #expect(manager.session?.tokens.accessToken == "new-login")
-        #expect(
-            await persistence.savedSession?.tokens.accessToken
-                == "new-login"
-        )
-        #expect(await persistence.saveGenerations == [2])
+        #expect(!manager.isAuthenticated)
+        #expect(await persistence.savedSession == nil)
+        #expect(await persistence.saveGenerations.isEmpty)
         #expect(await persistence.deleteGenerations == [1])
-        #expect(await persistence.deleteCount == 0)
+        #expect(await persistence.deleteCount == 1)
     }
 
     @MainActor
@@ -495,6 +856,69 @@ struct AuthManagerTests {
     }
 }
 
+@MainActor
+private final class BackgroundSchedulerProbe {
+    private(set) var submissionCount = 0
+    private(set) var cancellationCount = 0
+
+    var scheduler: AuthBackgroundScheduler {
+        AuthBackgroundScheduler(
+            cancel: { [weak self] _ in
+                self?.cancellationCount += 1
+            },
+            submit: { [weak self] _, _ in
+                self?.submissionCount += 1
+            }
+        )
+    }
+}
+
+private actor BackgroundProviderSelectionPersistence:
+    CloudGamingProviderSelectionPersistence
+{
+    private let selectedProvider: CloudGamingProvider?
+
+    init(selectedProvider: CloudGamingProvider?) {
+        self.selectedProvider = selectedProvider
+    }
+
+    func loadSelectedCloudGamingProvider() -> CloudGamingProvider? {
+        selectedProvider
+    }
+
+    func hasStoredCloudGamingProviderSelection() -> Bool {
+        true
+    }
+
+    func saveSelectedCloudGamingProvider(
+        _: CloudGamingProvider?,
+        generation _: UInt64
+    ) {}
+}
+
+private final class AuthAPIFactoryProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let api: any NVIDIAAuthAPIClient
+    private var createdAPICount = 0
+
+    var creationCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return createdAPICount
+    }
+
+    init(api: any NVIDIAAuthAPIClient) {
+        self.api = api
+    }
+
+    func makeAPI() -> any NVIDIAAuthAPIClient {
+        lock.lock()
+        defer { lock.unlock() }
+        createdAPICount += 1
+        return api
+    }
+}
+
 private enum FakeAuthAPIError: Error {
     case unavailable
 }
@@ -504,16 +928,20 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
     private let clientTokenResponse: (String, Date)?
     private let devicePollResponse: AuthTokens?
     private let blockRefresh: Bool
+    private let blockClientTokenRefresh: Bool
     private let blockDevicePoll: Bool
     private let devicePollError: (any Error)?
     private var refreshReleased = false
     private var refreshContinuation: CheckedContinuation<Void, Error>?
     private var refreshRequestWaiters: [CheckedContinuation<Void, Never>] = []
+    private var clientTokenRefreshContinuation: CheckedContinuation<Void, Never>?
+    private var clientTokenRefreshRequestWaiters: [CheckedContinuation<Void, Never>] = []
     private var devicePollContinuation: CheckedContinuation<Void, Error>?
     private var devicePollCancellationRequested = false
     private var devicePollRequestWaiters: [CheckedContinuation<Void, Never>] = []
 
     private(set) var refreshTokenCallCount = 0
+    private(set) var clientTokenRefreshCallCount = 0
     private(set) var deviceAuthorizationCallCount = 0
     private(set) var devicePollCallCount = 0
     private(set) var cancelledDevicePollCount = 0
@@ -523,6 +951,7 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
         clientTokenResponse: (String, Date)? = nil,
         devicePollResponse: AuthTokens? = nil,
         blockRefresh: Bool = false,
+        blockClientTokenRefresh: Bool = false,
         blockDevicePoll: Bool = false,
         devicePollError: (any Error)? = nil
     ) {
@@ -530,6 +959,7 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
         self.clientTokenResponse = clientTokenResponse
         self.devicePollResponse = devicePollResponse
         self.blockRefresh = blockRefresh
+        self.blockClientTokenRefresh = blockClientTokenRefresh
         self.blockDevicePoll = blockDevicePoll
         self.devicePollError = devicePollError
     }
@@ -588,7 +1018,34 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
         _: String,
         userId _: String
     ) async throws -> AuthTokens {
+        clientTokenRefreshCallCount += 1
+        let waiters = clientTokenRefreshRequestWaiters
+        clientTokenRefreshRequestWaiters = []
+        waiters.forEach { $0.resume() }
+        if blockClientTokenRefresh {
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    clientTokenRefreshContinuation = continuation
+                }
+            } onCancel: {
+                Task {
+                    await self.releaseClientTokenRefresh()
+                }
+            }
+        }
         throw FakeAuthAPIError.unavailable
+    }
+
+    func waitForClientTokenRefreshRequest() async {
+        guard clientTokenRefreshCallCount == 0 else { return }
+        await withCheckedContinuation { continuation in
+            clientTokenRefreshRequestWaiters.append(continuation)
+        }
+    }
+
+    private func releaseClientTokenRefresh() {
+        clientTokenRefreshContinuation?.resume()
+        clientTokenRefreshContinuation = nil
     }
 
     func requestDeviceAuthorization(
@@ -698,6 +1155,7 @@ private actor FakeAuthPersistence: AuthSessionPersistence {
     private let blocksFirstSave: Bool
     private let blocksSecondSave: Bool
     private let blocksFirstDelete: Bool
+    private let failsDelete: Bool
     private var didBlockLoad = false
     private var didBlockDelete = false
     private var credentialGeneration: UInt64 = 0
@@ -721,13 +1179,15 @@ private actor FakeAuthPersistence: AuthSessionPersistence {
         blocksFirstLoad: Bool = false,
         blocksFirstSave: Bool = false,
         blocksSecondSave: Bool = false,
-        blocksFirstDelete: Bool = false
+        blocksFirstDelete: Bool = false,
+        failsDelete: Bool = false
     ) {
         savedSession = session
         self.blocksFirstLoad = blocksFirstLoad
         self.blocksFirstSave = blocksFirstSave
         self.blocksSecondSave = blocksSecondSave
         self.blocksFirstDelete = blocksFirstDelete
+        self.failsDelete = failsDelete
     }
 
     func loadAuthSession() async throws -> AuthSession {
@@ -784,6 +1244,9 @@ private actor FakeAuthPersistence: AuthSessionPersistence {
             await withCheckedContinuation { continuation in
                 deleteContinuation = continuation
             }
+        }
+        if failsDelete {
+            throw FakeAuthAPIError.unavailable
         }
         if generation >= credentialGeneration {
             credentialGeneration = generation
