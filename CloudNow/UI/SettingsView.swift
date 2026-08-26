@@ -1639,6 +1639,194 @@ struct SettingsView: View {
 
 // MARK: - Text Input Trigger Capture
 
+struct ControllerShortcutCaptureReading: Equatable {
+    let controllerID: ObjectIdentifier
+    let pressedButtons: Set<ControllerSequenceButton>
+}
+
+struct ControllerShortcutCaptureState: Equatable {
+    enum Phase: Equatable {
+        case idle
+        case arming
+        case waiting
+        case collecting
+    }
+
+    enum Event: Equatable {
+        case none
+        case noControllers
+        case controllerDisconnected
+        case timedOut
+        case completed(ControllerButtonSequence)
+    }
+
+    static let timeout: Duration = .seconds(15)
+
+    private(set) var phase: Phase = .idle
+    private(set) var pinnedControllerID: ObjectIdentifier?
+    private(set) var liveButtons = Set<ControllerSequenceButton>()
+
+    mutating func start(with readings: [ControllerShortcutCaptureReading]) -> Event {
+        reset()
+        guard !readings.isEmpty else { return .noControllers }
+        phase = .arming
+        return .none
+    }
+
+    mutating func update(with readings: [ControllerShortcutCaptureReading]) -> Event {
+        switch phase {
+        case .idle:
+            return .none
+
+        case .arming:
+            guard !readings.isEmpty else { return disconnect() }
+            guard readings.allSatisfy(\.pressedButtons.isEmpty) else { return .none }
+            phase = .waiting
+            return .none
+
+        case .waiting:
+            guard !readings.isEmpty else { return disconnect() }
+            let activeReading: ControllerShortcutCaptureReading?
+            if let pinnedControllerID {
+                guard let pinnedReading = readings.first(where: {
+                    $0.controllerID == pinnedControllerID
+                }) else {
+                    return disconnect()
+                }
+                activeReading = pinnedReading.pressedButtons.isEmpty ? nil : pinnedReading
+            } else {
+                activeReading = readings.first(where: { !$0.pressedButtons.isEmpty })
+            }
+            guard let activeReading else { return .none }
+            pinnedControllerID = activeReading.controllerID
+            liveButtons = activeReading.pressedButtons
+            phase = .collecting
+            return .none
+
+        case .collecting:
+            guard let pinnedControllerID,
+                  let pinnedReading = readings.first(where: {
+                      $0.controllerID == pinnedControllerID
+                  })
+            else {
+                return disconnect()
+            }
+            guard !pinnedReading.pressedButtons.isEmpty else {
+                let sequence = ControllerButtonSequence(buttons: Array(liveButtons))
+                liveButtons.removeAll()
+                phase = .waiting
+                return .completed(sequence)
+            }
+            liveButtons.formUnion(pinnedReading.pressedButtons)
+            return .none
+        }
+    }
+
+    mutating func cancel() {
+        reset()
+    }
+
+    mutating func expire() -> Event {
+        guard phase != .idle else { return .none }
+        reset()
+        return .timedOut
+    }
+
+    private mutating func disconnect() -> Event {
+        reset()
+        return .controllerDisconnected
+    }
+
+    private mutating func reset() {
+        phase = .idle
+        pinnedControllerID = nil
+        liveButtons.removeAll()
+    }
+}
+
+@MainActor
+private final class ControllerSystemGestureClaims {
+    private struct Claim {
+        let element: GCControllerElement
+        let previousState: GCControllerElement.SystemGestureState
+    }
+
+    private var claimsByController = [ObjectIdentifier: [Claim]]()
+
+    func synchronize(
+        with controllers: [GCController],
+        pinnedControllerID: ObjectIdentifier?
+    ) {
+        var retainedControllerIDs = Set<ObjectIdentifier>()
+        retainedControllerIDs.reserveCapacity(controllers.count)
+
+        for controller in controllers where controller.extendedGamepad != nil {
+            let controllerID = ObjectIdentifier(controller)
+            guard pinnedControllerID == nil || pinnedControllerID == controllerID else { continue }
+            retainedControllerIDs.insert(controllerID)
+            if claimsByController[controllerID] == nil {
+                claimsByController[controllerID] = claimSystemGestures(for: controller)
+            }
+        }
+
+        let controllerIDsToRestore = claimsByController.keys.filter {
+            !retainedControllerIDs.contains($0)
+        }
+        for controllerID in controllerIDsToRestore {
+            restore(controllerID: controllerID)
+        }
+    }
+
+    func restoreAll() {
+        for controllerID in Array(claimsByController.keys) {
+            restore(controllerID: controllerID)
+        }
+    }
+
+    private func claimSystemGestures(for controller: GCController) -> [Claim] {
+        guard let pad = controller.extendedGamepad else { return [] }
+
+        var elements: [GCControllerElement] = [
+            pad.dpad.up,
+            pad.dpad.down,
+            pad.dpad.left,
+            pad.dpad.right,
+            pad.buttonA,
+            pad.buttonB,
+            pad.buttonX,
+            pad.buttonY,
+            pad.buttonMenu,
+            pad.leftShoulder,
+            pad.rightShoulder,
+        ]
+        if let buttonOptions = pad.buttonOptions {
+            elements.append(buttonOptions)
+        }
+        if let leftThumbstickButton = pad.leftThumbstickButton {
+            elements.append(leftThumbstickButton)
+        }
+        if let rightThumbstickButton = pad.rightThumbstickButton {
+            elements.append(rightThumbstickButton)
+        }
+
+        return elements.map { element in
+            let claim = Claim(
+                element: element,
+                previousState: element.preferredSystemGestureState
+            )
+            element.preferredSystemGestureState = .disabled
+            return claim
+        }
+    }
+
+    private func restore(controllerID: ObjectIdentifier) {
+        guard let claims = claimsByController.removeValue(forKey: controllerID) else { return }
+        for claim in claims {
+            claim.element.preferredSystemGestureState = claim.previousState
+        }
+    }
+}
+
 private struct TextInputTriggerSequenceCaptureView: View {
     @Binding var sequence: ControllerButtonSequence
     let overlayTriggerButton: OverlayTriggerButton
@@ -1648,22 +1836,17 @@ private struct TextInputTriggerSequenceCaptureView: View {
 
     @FocusState private var focusedControl: FocusedControl?
 
-    @State private var capturePhase: CapturePhase = .idle
-    @State private var liveButtons = Set<ControllerSequenceButton>()
+    @State private var captureState = ControllerShortcutCaptureState()
     @State private var lastDetectedSequence: ControllerButtonSequence?
     @State private var validationMessage: String?
-
-    private enum CapturePhase {
-        case idle
-        case arming
-        case waiting
-        case collecting
-    }
 
     private enum FocusedControl: Hashable {
         case startListening
         case back
+        case cancel
     }
+
+    private static let controllerPollInterval: Duration = .milliseconds(33)
 
     var body: some View {
         Form {
@@ -1674,13 +1857,17 @@ private struct TextInputTriggerSequenceCaptureView: View {
                 )
             }
 
-            if capturePhase == .idle {
+            if captureState.phase == .idle {
                 Section {
                     Text(L10n.text("capture_text_input_buttons_idle_instructions"))
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.vertical, 8)
+
+                    if let validationMessage {
+                        validationMessageView(validationMessage)
+                    }
 
                     Button {
                         beginCapture()
@@ -1720,12 +1907,16 @@ private struct TextInputTriggerSequenceCaptureView: View {
                     }
 
                     if let validationMessage {
-                        Text(validationMessage)
-                            .font(.body)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.vertical, 8)
+                        validationMessageView(validationMessage)
                     }
+
+                    Button(role: .cancel) {
+                        cancelCapture()
+                    } label: {
+                        Label(L10n.text("cancel"), systemImage: "xmark")
+                    }
+                    .buttonStyle(.bordered)
+                    .focused($focusedControl, equals: .cancel)
                 }
                 .listRowBackground(Color.clear)
             }
@@ -1733,8 +1924,11 @@ private struct TextInputTriggerSequenceCaptureView: View {
         .navigationTitle(L10n.text("capture_text_input_buttons"))
         .defaultFocus($focusedControl, .startListening)
         .onExitCommand {
-            guard !isCapturing else { return }
-            dismiss()
+            if isCapturing {
+                cancelCapture()
+            } else {
+                dismiss()
+            }
         }
         .task(id: isCapturing) {
             guard isCapturing else { return }
@@ -1743,11 +1937,11 @@ private struct TextInputTriggerSequenceCaptureView: View {
     }
 
     private var isCapturing: Bool {
-        capturePhase != .idle
+        captureState.phase != .idle
     }
 
     private var statusText: String {
-        switch capturePhase {
+        switch captureState.phase {
         case .idle:
             ""
         case .arming:
@@ -1760,52 +1954,37 @@ private struct TextInputTriggerSequenceCaptureView: View {
     }
 
     private var detectedSequence: ControllerButtonSequence? {
-        if !liveButtons.isEmpty {
-            return ControllerButtonSequence(buttons: Array(liveButtons))
+        if !captureState.liveButtons.isEmpty {
+            return ControllerButtonSequence(buttons: Array(captureState.liveButtons))
         }
         return lastDetectedSequence
     }
 
     private func beginCapture() {
-        capturePhase = .arming
-        liveButtons.removeAll()
         lastDetectedSequence = nil
         validationMessage = nil
+        let event = captureState.start(
+            with: controllerReadings(from: GCController.controllers())
+        )
+        handleCaptureEvent(event)
     }
 
     @MainActor
-    private func updateCapture(with pressedButtons: Set<ControllerSequenceButton>) {
-        switch capturePhase {
-        case .idle:
-            return
-
-        case .arming:
-            guard pressedButtons.isEmpty else { return }
-            capturePhase = .waiting
-
-        case .waiting:
-            guard !pressedButtons.isEmpty else { return }
-            capturePhase = .collecting
-            validationMessage = nil
-            liveButtons = pressedButtons
-            lastDetectedSequence = ControllerButtonSequence(buttons: Array(pressedButtons))
-
-        case .collecting:
-            if !pressedButtons.isEmpty {
-                liveButtons.formUnion(pressedButtons)
-                lastDetectedSequence = ControllerButtonSequence(buttons: Array(liveButtons))
-                return
-            }
-            finalizeCapture()
+    private func updateCapture(with readings: [ControllerShortcutCaptureReading]) {
+        var nextState = captureState
+        let event = nextState.update(with: readings)
+        let startedCollecting = captureState.phase != .collecting && nextState.phase == .collecting
+        if nextState != captureState {
+            captureState = nextState
         }
+        if startedCollecting {
+            validationMessage = nil
+        }
+        handleCaptureEvent(event)
     }
 
     @MainActor
-    private func finalizeCapture() {
-        let capturedSequence = ControllerButtonSequence(buttons: Array(liveButtons))
-        liveButtons.removeAll()
-        capturePhase = .waiting
-
+    private func finalizeCapture(_ capturedSequence: ControllerButtonSequence) {
         if let validationMessage = validationMessage(for: capturedSequence) {
             self.validationMessage = validationMessage
             lastDetectedSequence = capturedSequence
@@ -1813,76 +1992,162 @@ private struct TextInputTriggerSequenceCaptureView: View {
         }
 
         sequence = capturedSequence
+        captureState.cancel()
         dismiss()
     }
 
+    @MainActor
+    private func handleCaptureEvent(_ event: ControllerShortcutCaptureState.Event) {
+        switch event {
+        case .none:
+            return
+        case .noControllers:
+            validationMessage = L10n.text("capture_text_input_buttons_no_controller")
+        case .controllerDisconnected:
+            lastDetectedSequence = nil
+            validationMessage = L10n.text("capture_text_input_buttons_controller_disconnected")
+        case .timedOut:
+            lastDetectedSequence = nil
+            validationMessage = L10n.text("capture_text_input_buttons_timed_out")
+        case let .completed(capturedSequence):
+            finalizeCapture(capturedSequence)
+        }
+    }
+
+    private func cancelCapture() {
+        captureState.cancel()
+        lastDetectedSequence = nil
+        validationMessage = nil
+    }
+
+    private func validationMessageView(_ message: String) -> some View {
+        Text(message)
+            .font(.body)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.vertical, 8)
+    }
+
     private func validationMessage(for capturedSequence: ControllerButtonSequence) -> String? {
-        guard !capturedSequence.isEmpty else {
-            return L10n.text("button_sequence_empty")
-        }
-        guard capturedSequence.count <= ControllerButtonSequence.maxButtons else {
-            return L10n.text("button_sequence_too_long")
-        }
-        if capturedSequence.count == 1, capturedSequence.contains(overlayConflictButton) {
-            return L10n.text("button_sequence_conflicts_overlay")
-        }
-        if steamOverlayGestureEnabled,
-           capturedSequence.count == 1,
-           capturedSequence.contains(steamConflictButton)
-        {
-            return L10n.text("button_sequence_conflicts_steam")
-        }
-        return nil
-    }
-
-    private var overlayConflictButton: ControllerSequenceButton {
-        switch overlayTriggerButton {
-        case .start:
-            .menu
-        case .options:
-            .options
-        }
-    }
-
-    private var steamConflictButton: ControllerSequenceButton {
-        switch overlayTriggerButton {
-        case .start:
-            .options
-        case .options:
-            .menu
+        switch capturedSequence.validation(
+            overlayTriggerButton: overlayTriggerButton,
+            steamOverlayGestureEnabled: steamOverlayGestureEnabled
+        ) {
+        case .valid:
+            nil
+        case .empty:
+            L10n.text("button_sequence_empty")
+        case .tooManyButtons:
+            L10n.text("button_sequence_too_long")
+        case .conflictsWithOverlay:
+            L10n.text("button_sequence_conflicts_overlay")
+        case .conflictsWithSteam:
+            L10n.text("button_sequence_conflicts_steam")
         }
     }
 
     private func monitorControllerButtons() async {
-        while !Task.isCancelled {
-            let pressedButtons = currentPressedButtons()
-            await MainActor.run {
-                updateCapture(with: pressedButtons)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: ControllerShortcutCaptureState.timeout)
+        let gestureClaims = ControllerSystemGestureClaims()
+        defer { gestureClaims.restoreAll() }
+
+        while !Task.isCancelled, isCapturing {
+            if clock.now >= deadline {
+                var nextState = captureState
+                let event = nextState.expire()
+                if nextState != captureState {
+                    captureState = nextState
+                }
+                handleCaptureEvent(event)
+                return
             }
-            try? await Task.sleep(for: .milliseconds(16))
+
+            let controllers = GCController.controllers()
+            let previousPinnedControllerID = captureState.pinnedControllerID
+            gestureClaims.synchronize(
+                with: controllers,
+                pinnedControllerID: previousPinnedControllerID
+            )
+            updateCapture(with: controllerReadings(from: controllers))
+
+            if captureState.pinnedControllerID != previousPinnedControllerID {
+                gestureClaims.synchronize(
+                    with: controllers,
+                    pinnedControllerID: captureState.pinnedControllerID
+                )
+            }
+            guard isCapturing else { return }
+
+            do {
+                try await Task.sleep(for: Self.controllerPollInterval)
+            } catch {
+                return
+            }
         }
     }
 
-    private func currentPressedButtons() -> Set<ControllerSequenceButton> {
-        guard let pad = GCController.controllers().compactMap(\.extendedGamepad).first else {
-            return []
+    private func controllerReadings(
+        from controllers: [GCController]
+    ) -> [ControllerShortcutCaptureReading] {
+        var readings = [ControllerShortcutCaptureReading]()
+        readings.reserveCapacity(controllers.count)
+        for controller in controllers {
+            guard let pad = controller.extendedGamepad else { continue }
+            readings.append(
+                ControllerShortcutCaptureReading(
+                    controllerID: ObjectIdentifier(controller),
+                    pressedButtons: currentPressedButtons(on: pad)
+                )
+            )
         }
+        return readings
+    }
 
+    private func currentPressedButtons(on pad: GCExtendedGamepad) -> Set<ControllerSequenceButton> {
         var pressedButtons = Set<ControllerSequenceButton>()
-        if pad.dpad.up.isPressed { pressedButtons.insert(.dpadUp) }
-        if pad.dpad.down.isPressed { pressedButtons.insert(.dpadDown) }
-        if pad.dpad.left.isPressed { pressedButtons.insert(.dpadLeft) }
-        if pad.dpad.right.isPressed { pressedButtons.insert(.dpadRight) }
-        if pad.buttonA.isPressed { pressedButtons.insert(.buttonA) }
-        if pad.buttonB.isPressed { pressedButtons.insert(.buttonB) }
-        if pad.buttonX.isPressed { pressedButtons.insert(.buttonX) }
-        if pad.buttonY.isPressed { pressedButtons.insert(.buttonY) }
-        if pad.buttonMenu.isPressed { pressedButtons.insert(.menu) }
-        if pad.buttonOptions?.isPressed == true { pressedButtons.insert(.options) }
-        if pad.leftShoulder.isPressed { pressedButtons.insert(.leftShoulder) }
-        if pad.rightShoulder.isPressed { pressedButtons.insert(.rightShoulder) }
-        if pad.leftThumbstickButton?.isPressed == true { pressedButtons.insert(.leftThumbstick) }
-        if pad.rightThumbstickButton?.isPressed == true { pressedButtons.insert(.rightThumbstick) }
+        if pad.dpad.up.isPressed {
+            pressedButtons.insert(.dpadUp)
+        }
+        if pad.dpad.down.isPressed {
+            pressedButtons.insert(.dpadDown)
+        }
+        if pad.dpad.left.isPressed {
+            pressedButtons.insert(.dpadLeft)
+        }
+        if pad.dpad.right.isPressed {
+            pressedButtons.insert(.dpadRight)
+        }
+        if pad.buttonA.isPressed {
+            pressedButtons.insert(.buttonA)
+        }
+        if pad.buttonB.isPressed {
+            pressedButtons.insert(.buttonB)
+        }
+        if pad.buttonX.isPressed {
+            pressedButtons.insert(.buttonX)
+        }
+        if pad.buttonY.isPressed {
+            pressedButtons.insert(.buttonY)
+        }
+        if pad.buttonMenu.isPressed {
+            pressedButtons.insert(.menu)
+        }
+        if pad.buttonOptions?.isPressed == true {
+            pressedButtons.insert(.options)
+        }
+        if pad.leftShoulder.isPressed {
+            pressedButtons.insert(.leftShoulder)
+        }
+        if pad.rightShoulder.isPressed {
+            pressedButtons.insert(.rightShoulder)
+        }
+        if pad.leftThumbstickButton?.isPressed == true {
+            pressedButtons.insert(.leftThumbstick)
+        }
+        if pad.rightThumbstickButton?.isPressed == true {
+            pressedButtons.insert(.rightThumbstick)
+        }
         return pressedButtons
     }
 }
