@@ -798,6 +798,7 @@ struct SettingsView: View {
                                 Image(systemName: "minus.circle")
                             }
                             .buttonStyle(.plain)
+                            .disabled(vm.streamSettings.maxBitrateKbps <= 15000)
                             Text("\(vm.streamSettings.maxBitrateKbps / 1000) Mbps")
                                 .monospacedDigit()
                                 .frame(minWidth: 72)
@@ -808,6 +809,10 @@ struct SettingsView: View {
                                 Image(systemName: "plus.circle")
                             }
                             .buttonStyle(.plain)
+                            .disabled(
+                                vm.streamSettings.maxBitrateKbps
+                                    >= StreamSettings.maxSelectableBitrateKbps
+                            )
                         }
                     }
 
