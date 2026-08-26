@@ -354,6 +354,147 @@ struct XboxCloudSessionAPITests {
         #expect(await transport.requests().count == 2)
     }
 
+    @Test("Lifecycle rejects operations owned by another token")
+    func lifecycleRejectsForeignToken() async throws {
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                StubbedHTTPResponse(statusCode: 204)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+        let lifecycle = XboxCloudSessionLifecycleClient(api: api)
+        let token = try await lifecycle.createSession(makeLaunchRequest())
+        let foreignToken = try XboxCloudStreamSessionToken(
+            identifier: #require(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        )
+        let states = XboxCloudStateRecorder()
+
+        await #expect(throws: XboxCloudStreamLifecycleError.unknownSession) {
+            _ = try await lifecycle.provisionSession(foreignToken) { state in
+                await states.record(state)
+            }
+        }
+        await #expect(throws: XboxCloudStreamLifecycleError.unknownSession) {
+            try await lifecycle.keepAlive(foreignToken)
+        }
+        #expect(await lifecycle.delete(foreignToken) == false)
+
+        #expect(await states.values().isEmpty)
+        #expect(await transport.requests().count == 1)
+        #expect(await lifecycle.delete(token))
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test("A transient delete failure retains lifecycle ownership for retry")
+    func lifecycleRetriesTransientDelete() async throws {
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                throw TestTransportError.unexpectedRequest("Transient fixture failure")
+            case 2:
+                StubbedHTTPResponse(statusCode: 204)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+        let lifecycle = XboxCloudSessionLifecycleClient(api: api)
+        let request = try makeLaunchRequest()
+        let token = try await lifecycle.createSession(request)
+
+        #expect(await lifecycle.delete(token) == false)
+        await #expect(throws: XboxCloudStreamLifecycleError.sessionAlreadyActive) {
+            _ = try await lifecycle.createSession(request)
+        }
+
+        #expect(await lifecycle.delete(token))
+        #expect(await transport.requests().count == 3)
+    }
+
+    @Test("A terminal missing-session response clears lifecycle ownership")
+    func lifecycleClearsTerminalDelete() async throws {
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0, 2:
+                StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                StubbedHTTPResponse(statusCode: 404)
+            case 3:
+                StubbedHTTPResponse(statusCode: 204)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+        let lifecycle = XboxCloudSessionLifecycleClient(api: api)
+        let request = try makeLaunchRequest()
+        let firstToken = try await lifecycle.createSession(request)
+
+        #expect(await lifecycle.delete(firstToken))
+        let secondToken = try await lifecycle.createSession(request)
+        #expect(secondToken != firstToken)
+        #expect(await lifecycle.delete(firstToken) == false)
+        #expect(await lifecycle.delete(secondToken))
+        #expect(await transport.requests().count == 4)
+    }
+
+    @Test("Lifecycle provisioning forwards state and returns prepared configuration")
+    func lifecycleProvisioningSuccess() async throws {
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0:
+                StubbedHTTPResponse(json: Self.createResponseJSON)
+            case 1:
+                StubbedHTTPResponse(json: #"{"state":"Provisioned"}"#)
+            case 2:
+                StubbedHTTPResponse(json: Self.configurationJSON)
+            case 3:
+                StubbedHTTPResponse(statusCode: 204)
+            default:
+                throw TestTransportError.unexpectedRequest("Unexpected request \(index)")
+            }
+        }
+        let api = try XboxCloudSessionAPI(
+            access: makeAccessContext(),
+            transport: transport
+        )
+        let lifecycle = XboxCloudSessionLifecycleClient(api: api)
+        let states = XboxCloudStateRecorder()
+        let token = try await lifecycle.createSession(makeLaunchRequest())
+
+        let prepared = try await lifecycle.provisionSession(token) { state in
+            await states.record(state)
+        }
+
+        #expect(await states.values().map(\.state) == [.provisioned])
+        #expect(prepared.configuration.keepAlivePulse == 15)
+        #expect(prepared.configuration.serverDetails.ipV4Address == "203.0.113.7")
+        #expect(prepared.configuration.serverDetails.ipV4Port == 9002)
+        #expect(
+            prepared.signalingContext.endpointBaseURL.absoluteString
+                == "https://region.gssv-play-prod.xboxlive.com"
+        )
+        #expect(prepared.signalingContext.sessionPath == "v5/sessions/cloud/fixture-session")
+        #expect(await lifecycle.delete(token))
+        #expect(await transport.requests().count == 4)
+    }
+
     @Test("Polling follows transfer URI, connects, and returns configuration")
     func provisionedLifecycle() async throws {
         let delays = XboxCloudDelayRecorder()
