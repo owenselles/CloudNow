@@ -123,9 +123,32 @@ device preserves the selected session audio mode through resume and restores
 permission-gated microphone capture after a compatible AirPods or Continuity
 Microphone route returns.
 
-GFN input supports up to four controllers, keyboard and mouse, Siri Remote pointer
-input, native text entry, and independent rumble. Controller and media work stays
-outside SwiftUI observation; the HUD receives bounded snapshots.
+## Input
+
+GFN input supports up to four controllers, keyboard and mouse, Siri Remote
+pointer input, controller-triggered Apple TV text entry, and independent rumble.
+Controller and media work stays outside SwiftUI observation; the HUD receives
+bounded snapshots.
+
+Controller text entry captures a complete local string before converting it to
+ordered Windows virtual-key, scan-code, and modifier events. Planning finishes
+before replay starts, and a successful submission appends Enter. The verified
+remote layouts are:
+
+- English (United States), `en-US`
+- English (United Kingdom), `en-GB`
+- German (Germany), `de-DE`
+- French (France), `fr-FR`
+
+Other selected layouts or characters without a verified key mapping are rejected
+before any event is sent. Submissions over 1,024 UTF-8 bytes or requiring more
+than 256 key events are also rejected. Replay is ordered, bounded, cancellable,
+generation-safe, and releases accepted key-down events on failure or teardown.
+
+The current client has no direct Unicode, clipboard, committed-text, or
+composition fallback. This limitation affects controller-triggered text entry;
+the existing physical keyboard path is unchanged. Xbox input remains a separate
+provider-owned protocol and does not claim native text entry.
 
 ## Servers and network behavior
 

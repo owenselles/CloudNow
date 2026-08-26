@@ -79,8 +79,8 @@ signing, dependency resolution, and local checks.
   sort, filter, favorite games, and resume recent sessions.
 - Configure account-aware resolution and frame rate, H.264/H.265/AV1, color mode,
   audio, language, maximum bitrate, Low Latency Mode (L4S), and server location.
-- Use controller, keyboard, mouse, Siri Remote, native text input, rumble, and an
-  optional permission-gated microphone.
+- Use controller, keyboard, mouse, Siri Remote, controller-triggered Apple TV
+  text entry, rumble, and an optional permission-gated microphone.
 - Connect through NVIDIA or supported regional partners. Provider routing,
   queues, reconnect, and session lifecycle remain owned by the GFN integration.
 
@@ -114,7 +114,7 @@ compatibility and protocol details.
 | Game audio | Automatic, Stereo, and 5.1 Surround | Automatic; current service route is Opus stereo or mono |
 | Client bitrate control | Configurable maximum bitrate | None; service-managed bandwidth |
 | Server selection | Automatic, region, or dedicated game server | Service-selected region |
-| Input | Up to four controllers, keyboard/mouse, Siri Remote, and text entry | Controller and keyboard/mouse; native text entry is not claimed |
+| Input | Up to four controllers, keyboard/mouse, Siri Remote, and controller text entry for four verified keyboard layouts | Controller and keyboard/mouse; native text entry is not claimed |
 | Stream reporting | Requested or negotiated settings plus decoded delivery | Requested ceiling and delivered media shown separately |
 
 ## Requirements
