@@ -297,7 +297,6 @@ enum L10nZHHant {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "統計已停用",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "位元率",

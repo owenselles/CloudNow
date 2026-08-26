@@ -302,7 +302,6 @@ enum L10nTH {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "ปิดใช้งานสถิติแล้ว",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "บิตเรต",

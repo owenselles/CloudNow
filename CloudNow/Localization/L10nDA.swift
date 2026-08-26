@@ -272,7 +272,6 @@ enum L10nDA {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "Statistik deaktiveret",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "Bitrate",

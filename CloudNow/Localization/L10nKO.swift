@@ -271,7 +271,6 @@ enum L10nKO {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "통계 비활성화됨",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "비트레이트",

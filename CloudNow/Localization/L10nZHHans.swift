@@ -297,7 +297,6 @@ enum L10nZHHans {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "统计已禁用",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "比特率",

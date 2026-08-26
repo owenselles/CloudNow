@@ -272,7 +272,6 @@ enum L10nAR {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "الإحصاءات معطلة",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "معدل البت",

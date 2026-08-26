@@ -302,7 +302,6 @@ enum L10nMS {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "Statistik dinyahdayakan",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "Bitrate",

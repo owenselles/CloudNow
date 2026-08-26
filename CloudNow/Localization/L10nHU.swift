@@ -276,7 +276,6 @@ enum L10nHU {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "Statisztika kikapcsolva",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "Bitráta",

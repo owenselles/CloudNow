@@ -267,7 +267,6 @@ enum L10nFR {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "Statistiques désactivées",
         "rtt": "RTT",
         "fps": "IPS",
         "bitrate": "Débit",

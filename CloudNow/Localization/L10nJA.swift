@@ -271,7 +271,6 @@ enum L10nJA {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "統計は無効です",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "ビットレート",

@@ -302,7 +302,6 @@ enum L10nPTPT {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "Estatísticas desativadas",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "Taxa de bits",

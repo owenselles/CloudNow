@@ -272,7 +272,6 @@ enum L10nHE {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "הסטטיסטיקה מושבתת",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "Bitrate",

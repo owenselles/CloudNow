@@ -272,7 +272,6 @@ enum L10nHI {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "आंकड़े बंद हैं",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "बिटरेट",

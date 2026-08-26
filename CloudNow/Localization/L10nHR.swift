@@ -276,7 +276,6 @@ enum L10nHR {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "Statistika isključena",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "Bitrate",

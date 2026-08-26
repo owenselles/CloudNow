@@ -267,7 +267,6 @@ enum L10nES {
         "r1": "R1",
         "l3": "L3",
         "r3": "R3",
-        "statistics_disabled": "Estadísticas desactivadas",
         "rtt": "RTT",
         "fps": "FPS",
         "bitrate": "Bitrate",
