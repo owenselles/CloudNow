@@ -41,9 +41,78 @@ enum StreamOverlayState: Equatable {
     case textEntry
 }
 
-enum ControllerTextEntrySubmissionResult {
+nonisolated enum ControllerTextEntrySubmissionResult: Equatable, Sendable {
     case accepted
     case unsupportedCharacters
+    case unsupportedKeyboardLayout
+    case tooLong
+    case sendFailed
+}
+
+nonisolated struct ControllerTextEntryReplayToken: Equatable, Sendable {
+    fileprivate let generation: UInt64
+}
+
+nonisolated struct ControllerTextEntryReplayLifecycle: Sendable {
+    private(set) var controllerTextEntryActive = false
+    private(set) var replayInputPaused = false
+    private(set) var pendingReplay: ControllerTextEntryReplayToken?
+    private var nextGeneration: UInt64 = 0
+
+    func inputPaused(overlayPaused: Bool) -> Bool {
+        overlayPaused || controllerTextEntryActive || replayInputPaused
+    }
+
+    mutating func beginTextEntry() {
+        controllerTextEntryActive = true
+        replayInputPaused = false
+    }
+
+    mutating func prepareReplay() -> ControllerTextEntryReplayToken {
+        nextGeneration &+= 1
+        let token = ControllerTextEntryReplayToken(generation: nextGeneration)
+        pendingReplay = token
+        return token
+    }
+
+    @discardableResult
+    mutating func acceptReplay(_ token: ControllerTextEntryReplayToken) -> Bool {
+        guard pendingReplay == token else { return false }
+        controllerTextEntryActive = false
+        replayInputPaused = true
+        return true
+    }
+
+    @discardableResult
+    mutating func rejectReplay(_ token: ControllerTextEntryReplayToken) -> Bool {
+        guard pendingReplay == token else { return false }
+        pendingReplay = nil
+        replayInputPaused = false
+        return true
+    }
+
+    @discardableResult
+    mutating func finishReplay(_ token: ControllerTextEntryReplayToken) -> Bool {
+        guard pendingReplay == token else { return false }
+        pendingReplay = nil
+        controllerTextEntryActive = false
+        replayInputPaused = false
+        return true
+    }
+
+    @discardableResult
+    mutating func invalidate() -> ControllerTextEntryReplayToken? {
+        let invalidatedReplay = pendingReplay
+        pendingReplay = nil
+        controllerTextEntryActive = false
+        replayInputPaused = false
+        return invalidatedReplay
+    }
+}
+
+private struct PendingControllerTextEntryReplay {
+    let token: ControllerTextEntryReplayToken
+    let completion: @MainActor @Sendable (ControllerTextEntrySubmissionResult) -> Void
 }
 
 // MARK: - Stream Statistics
@@ -331,8 +400,8 @@ final class GFNStreamController: NSObject {
     private var previousSelectedCandidatePairId = ""
     private var lastZoneRttFeedbackAt: Date?
     private var overlayInputPaused = false
-    private var controllerTextEntryActive = false
-    private var replayInputPaused = false
+    private var controllerTextEntryReplayLifecycle = ControllerTextEntryReplayLifecycle()
+    private var pendingControllerTextEntryReplay: PendingControllerTextEntryReplay?
 
     // MARK: Connect
 
@@ -545,56 +614,62 @@ final class GFNStreamController: NSObject {
         inputSender?.toggleRemoteMode()
     }
 
-    func setInputPaused(_ paused: Bool) {
-        inputSender?.setPaused(paused)
-    }
-
     func setOverlayInputPaused(_ paused: Bool) {
         overlayInputPaused = paused
         syncInputPauseState()
     }
 
     func beginControllerTextEntry() {
-        guard state == .streaming, !controllerTextEntryActive else { return }
-        controllerTextEntryActive = true
-        replayInputPaused = false
+        guard state == .streaming,
+              !controllerTextEntryReplayLifecycle.controllerTextEntryActive,
+              pendingControllerTextEntryReplay == nil
+        else { return }
+        controllerTextEntryReplayLifecycle.beginTextEntry()
         syncInputPauseState()
         textEntryRequestCount += 1
     }
 
     func cancelControllerTextEntry() {
-        controllerTextEntryActive = false
-        replayInputPaused = false
-        syncInputPauseState()
+        invalidateControllerTextEntryReplay()
     }
 
     func submitControllerTextEntry(
         _ text: String,
-        completion: @escaping (ControllerTextEntrySubmissionResult) -> Void
+        completion: @escaping @MainActor @Sendable (ControllerTextEntrySubmissionResult) -> Void
     ) {
         guard let inputSender else {
-            controllerTextEntryActive = false
-            replayInputPaused = false
-            syncInputPauseState()
-            completion(.accepted)
+            invalidateControllerTextEntryReplay()
+            completion(.sendFailed)
             return
         }
 
-        let result = inputSender.replaySubmittedText(text) { [weak self] in
+        let replayToken = controllerTextEntryReplayLifecycle.prepareReplay()
+        pendingControllerTextEntryReplay = PendingControllerTextEntryReplay(
+            token: replayToken,
+            completion: completion
+        )
+        let result = inputSender.replaySubmittedText(text) { [weak self] replayResult in
             Task { @MainActor [weak self] in
-                self?.replayInputPaused = false
-                self?.syncInputPauseState()
+                self?.finishControllerTextEntryReplay(
+                    replayToken,
+                    result: replayResult == .completed ? .accepted : .sendFailed
+                )
             }
         }
-        guard result == .supported else {
+        switch result {
+        case .supported:
+            controllerTextEntryReplayLifecycle.acceptReplay(replayToken)
+            syncInputPauseState()
+        case .unsupportedCharacters:
+            rejectControllerTextEntryReplay(replayToken)
             completion(.unsupportedCharacters)
-            return
+        case .unsupportedLayout:
+            rejectControllerTextEntryReplay(replayToken)
+            completion(.unsupportedKeyboardLayout)
+        case .tooLong:
+            rejectControllerTextEntryReplay(replayToken)
+            completion(.tooLong)
         }
-
-        controllerTextEntryActive = false
-        replayInputPaused = true
-        syncInputPauseState()
-        completion(.accepted)
     }
 
     // MARK: Fail (external error surfacing)
@@ -664,6 +739,7 @@ final class GFNStreamController: NSObject {
         wasStreaming = false
         reconnectAttempt = 0
         serverStopped = false
+        invalidateControllerTextEntryReplay()
         inputSender?.stop()
         signaling?.disconnect()
         signaling = nil
@@ -713,8 +789,8 @@ final class GFNStreamController: NSObject {
             fallbackReason: nil
         )
         overlayInputPaused = false
-        controllerTextEntryActive = false
-        replayInputPaused = false
+        controllerTextEntryReplayLifecycle.invalidate()
+        pendingControllerTextEntryReplay = nil
         state = .idle
     }
 
@@ -726,6 +802,7 @@ final class GFNStreamController: NSObject {
         reconnectAttempt += 1
         let attempt = reconnectAttempt
         gfnLog.info("attemptReconnect: attempt \(attempt)/\(Self.maxReconnectAttempts)")
+        invalidateControllerTextEntryReplay()
 
         guard attempt <= Self.maxReconnectAttempts, onReconnectNeeded != nil else {
             gfnLog.info("attemptReconnect: giving up, showing sessionEnded")
@@ -2275,6 +2352,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 overlayTriggerButton: settings.overlayTriggerButton,
                 textInputTriggerSequence: settings.textInputTriggerSequence,
                 textInputTriggerDelayMs: settings.textInputTriggerDelayMs,
+                keyboardLayout: settings.keyboardLayout,
                 steamOverlayGestureEnabled: settings.enableSteamOverlayGesture,
                 remoteMode: settings.defaultRemoteInputMode,
                 rumbleEnabled: settings.rumbleEnabled,
@@ -2291,10 +2369,15 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 remoteMode = mode
                 videoView?.gamepadModeActive = mode != .gamepadMouse
             }
-            sender.controllerKeyboardShortcutHandler = { [weak self] in
-                self?.beginControllerTextEntry()
+            sender.controllerKeyboardShortcutHandler = { [weak self, weak sender] in
+                guard let self, let sender, inputSender === sender else { return }
+                beginControllerTextEntry()
             }
             sender.start()
+            if let previousInputSender = inputSender, previousInputSender !== sender {
+                invalidateControllerTextEntryReplay()
+                previousInputSender.stop()
+            }
             inputSender = sender
             inputSendQueue.async { [weak self, sender] in
                 self?.inputSendState.withLock { state in
@@ -2312,8 +2395,39 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 }
 
 private extension GFNStreamController {
+    func rejectControllerTextEntryReplay(_ token: ControllerTextEntryReplayToken) {
+        guard controllerTextEntryReplayLifecycle.rejectReplay(token) else { return }
+        if pendingControllerTextEntryReplay?.token == token {
+            pendingControllerTextEntryReplay = nil
+        }
+    }
+
+    func finishControllerTextEntryReplay(
+        _ token: ControllerTextEntryReplayToken,
+        result: ControllerTextEntrySubmissionResult
+    ) {
+        guard controllerTextEntryReplayLifecycle.finishReplay(token),
+              let pendingReplay = pendingControllerTextEntryReplay,
+              pendingReplay.token == token
+        else { return }
+
+        pendingControllerTextEntryReplay = nil
+        syncInputPauseState()
+        pendingReplay.completion(result)
+    }
+
+    func invalidateControllerTextEntryReplay() {
+        controllerTextEntryReplayLifecycle.invalidate()
+        let pendingReplay = pendingControllerTextEntryReplay
+        pendingControllerTextEntryReplay = nil
+        syncInputPauseState()
+        pendingReplay?.completion(.sendFailed)
+    }
+
     func syncInputPauseState() {
-        inputSender?.setPaused(overlayInputPaused || controllerTextEntryActive || replayInputPaused)
+        inputSender?.setPaused(
+            controllerTextEntryReplayLifecycle.inputPaused(overlayPaused: overlayInputPaused)
+        )
     }
 }
 

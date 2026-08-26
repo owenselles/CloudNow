@@ -11,11 +11,6 @@ private enum LoadingPhase: Equatable {
 }
 
 struct StreamView: View {
-    private enum TextEntryFocusTarget: Hashable {
-        case field
-        case send
-    }
-
     let game: GameInfo
     var settings: StreamSettings = .init()
     var existingSession: ActiveSessionInfo?
@@ -41,9 +36,6 @@ struct StreamView: View {
     @State private var localPeerLease: CloudLocalPeerLease?
     @State private var isEndingSession = false
     @State private var endConfirmationFailed = false
-    @State private var textEntryText = ""
-    @State private var textEntryValidationMessage: String?
-    @FocusState private var textEntryFocus: TextEntryFocusTarget?
     /// Per-ad state tracking to avoid duplicate reports
     @State private var adReportedAction: [String: AdAction] = [:]
 
@@ -356,8 +348,12 @@ struct StreamView: View {
                     }
 
                     if overlayState == .textEntry {
-                        controllerTextEntryOverlay
-                            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        ControllerTextEntryOverlay(
+                            streamController: streamController,
+                            onCancel: cancelControllerTextEntry,
+                            onAccepted: { overlayState = .none }
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
 
                     // Stays visible while the pause menu is open (the menu is a left sidebar)
@@ -385,7 +381,6 @@ struct StreamView: View {
             .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
             .onChange(of: overlayState) { _, state in
                 streamController.setOverlayInputPaused(state != .none)
-                textEntryFocus = state == .textEntry ? .field : nil
             }
             .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
                 Button(L10n.text("end_session"), role: .destructive) { disconnect() }
@@ -446,75 +441,6 @@ struct StreamView: View {
                 }
             }
         )
-    }
-
-    private var controllerTextEntryOverlay: some View {
-        VStack(spacing: 24) {
-            Text(L10n.text("controller_text_entry_title"))
-                .font(.title.weight(.semibold))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-
-            Text(L10n.text("controller_text_entry_instructions"))
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            VStack(spacing: 12) {
-                TextField(L10n.text("controller_text_entry_placeholder"), text: $textEntryText)
-                    .multilineTextAlignment(.center)
-                    .focused($textEntryFocus, equals: .field)
-                    .onChange(of: textEntryText) { _, _ in
-                        textEntryValidationMessage = nil
-                    }
-                    .onSubmit {
-                        textEntryFocus = .send
-                    }
-
-                Text(L10n.text("controller_text_entry_done_hint"))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-
-                if let textEntryValidationMessage {
-                    Text(textEntryValidationMessage)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
-                }
-            }
-            .frame(maxWidth: .infinity)
-
-            HStack(spacing: 20) {
-                Button(L10n.text("cancel")) {
-                    cancelControllerTextEntry()
-                }
-                .buttonStyle(.bordered)
-
-                Button(L10n.text("controller_text_entry_send")) {
-                    submitControllerTextEntry()
-                }
-                .focused($textEntryFocus, equals: .send)
-                .buttonStyle(.borderedProminent)
-                .disabled(textEntryText.isEmpty)
-            }
-        }
-        .frame(maxWidth: 680)
-        .padding(.horizontal, 42)
-        .padding(.vertical, 36)
-        .background(
-            LinearGradient(
-                colors: [.black.opacity(0.90), Color(red: 0.10, green: 0.12, blue: 0.16).opacity(0.92)],
-                startPoint: .top,
-                endPoint: .bottom
-            ),
-            in: RoundedRectangle(cornerRadius: 30, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .stroke(.white.opacity(0.18), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.4), radius: 32, y: 14)
     }
 
     private var remoteModeLabel: String {
@@ -1060,7 +986,6 @@ struct StreamView: View {
     /// Leaves the stream locally without stopping the server session.
     /// GFN keeps the session alive for ~1–2 minutes so it can be resumed from home.
     private func leave() {
-        overlayState = .none
         if let session = createdSession {
             onLeave?(game, session)
         }
@@ -1080,7 +1005,6 @@ struct StreamView: View {
     }
 
     private func disconnect() {
-        overlayState = .none
         guard !isEndingSession else { return }
         isEndingSession = true
         endConfirmationFailed = false
@@ -1331,8 +1255,6 @@ struct StreamView: View {
     private func togglePauseMenu() {
         if overlayState == .textEntry {
             streamController.cancelControllerTextEntry()
-            textEntryText = ""
-            textEntryValidationMessage = nil
             overlayState = .pauseMenu
             return
         }
@@ -1342,8 +1264,6 @@ struct StreamView: View {
     private func closeOverlay() {
         if overlayState == .textEntry {
             streamController.cancelControllerTextEntry()
-            textEntryText = ""
-            textEntryValidationMessage = nil
         }
         overlayState = .none
     }
@@ -1355,31 +1275,130 @@ struct StreamView: View {
             streamController.cancelControllerTextEntry()
             return
         }
-        textEntryText = ""
-        textEntryValidationMessage = nil
         overlayState = .textEntry
-        textEntryFocus = .field
     }
 
     private func cancelControllerTextEntry() {
         overlayState = .none
-        textEntryText = ""
-        textEntryValidationMessage = nil
         streamController.cancelControllerTextEntry()
     }
+}
 
-    private func submitControllerTextEntry() {
-        let text = textEntryText
+/// Owns text editing state so each keystroke invalidates only this small overlay.
+private struct ControllerTextEntryOverlay: View {
+    private enum FocusTarget: Hashable {
+        case field
+        case send
+    }
+
+    let streamController: GFNStreamController
+    let onCancel: () -> Void
+    let onAccepted: () -> Void
+
+    @State private var text = ""
+    @State private var validationMessage: String?
+    @State private var isSending = false
+    @FocusState private var focus: FocusTarget?
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Text(L10n.text("controller_text_entry_title"))
+                .font(.title.weight(.semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+
+            Text(L10n.text("controller_text_entry_instructions"))
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            VStack(spacing: 12) {
+                TextField(L10n.text("controller_text_entry_placeholder"), text: $text)
+                    .multilineTextAlignment(.center)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .focused($focus, equals: .field)
+                    .disabled(isSending)
+                    .onChange(of: text) { _, _ in
+                        validationMessage = nil
+                    }
+                    .onSubmit {
+                        focus = .send
+                    }
+
+                Text(L10n.text("controller_text_entry_done_hint"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            HStack(spacing: 20) {
+                Button(L10n.text("cancel"), action: onCancel)
+                    .buttonStyle(.bordered)
+                    .disabled(isSending)
+
+                Button {
+                    submit()
+                } label: {
+                    if isSending {
+                        ProgressView()
+                    } else {
+                        Text(L10n.text("controller_text_entry_send"))
+                    }
+                }
+                .focused($focus, equals: .send)
+                .buttonStyle(.borderedProminent)
+                .disabled(text.isEmpty || isSending)
+            }
+        }
+        .frame(maxWidth: 680)
+        .padding(.horizontal, 42)
+        .padding(.vertical, 36)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.90), Color(red: 0.10, green: 0.12, blue: 0.16).opacity(0.92)],
+                startPoint: .top,
+                endPoint: .bottom
+            ),
+            in: RoundedRectangle(cornerRadius: 30, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .stroke(.white.opacity(0.18), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.4), radius: 32, y: 14)
+        .task { focus = .field }
+    }
+
+    private func submit() {
+        isSending = true
+        validationMessage = nil
+        focus = nil
         streamController.submitControllerTextEntry(text) { result in
+            isSending = false
             switch result {
             case .accepted:
-                overlayState = .none
-                textEntryText = ""
-                textEntryValidationMessage = nil
-                textEntryFocus = nil
+                onAccepted()
             case .unsupportedCharacters:
-                textEntryValidationMessage = L10n.text("controller_text_entry_unsupported_characters")
-                textEntryFocus = .field
+                validationMessage = L10n.text("controller_text_entry_unsupported_characters")
+                focus = .field
+            case .unsupportedKeyboardLayout:
+                validationMessage = L10n.text("controller_text_entry_unsupported_layout")
+                focus = .field
+            case .tooLong:
+                validationMessage = L10n.text("controller_text_entry_too_long")
+                focus = .field
+            case .sendFailed:
+                validationMessage = L10n.text("controller_text_entry_send_failed")
+                focus = .field
             }
         }
     }

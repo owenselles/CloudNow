@@ -10,7 +10,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
     static let minRumbleIntensity = 0.0
     static let maxRumbleIntensity = 2.0
     static let minTextInputTriggerDelayMs = 50
-    static let maxTextInputTriggerDelayMs = 1_500
+    static let maxTextInputTriggerDelayMs = 1500
     static let textInputTriggerDelayStepMs = 50
     static let defaultTextInputTriggerDelayMs = 150
     static let defaultKeyboardLayout = L10n.keyboardLayoutCode()
@@ -42,7 +42,10 @@ nonisolated struct StreamSettings: Codable, Equatable {
     }
 
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
-    var overlayTriggerButton: OverlayTriggerButton = .start
+    var overlayTriggerButton: OverlayTriggerButton = .start {
+        didSet { normalizeTextInputTriggerSequence() }
+    }
+
     /// Button chord that opens the local text-input overlay during streaming.
     var textInputTriggerSequence: ControllerButtonSequence = Self.defaultTextInputTriggerSequence
     /// How long the text-input trigger chord must be held before opening the local keyboard.
@@ -54,6 +57,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
             )
         }
     }
+
     /// Default remote/controller input mode when a stream session starts.
     var defaultRemoteInputMode: RemoteInputMode = .gamepad
     /// How the streaming server is chosen. Server automatic delegates routing to
@@ -67,7 +71,10 @@ nonisolated struct StreamSettings: Codable, Equatable {
     var preferredRegionAddress: String? = nil
     /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
     /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
-    var enableSteamOverlayGesture: Bool = true
+    var enableSteamOverlayGesture: Bool = true {
+        didSet { normalizeTextInputTriggerSequence() }
+    }
+
     /// Level of the in-game statistics HUD (cycled from the pause menu, like the
     /// official client's Statistics overlay).
     var statsMode: StreamStatsMode = .off
@@ -103,7 +110,19 @@ nonisolated struct StreamSettings: Codable, Equatable {
         if normalized.serverRoutingMode == .region, normalized.preferredRegionAddress == nil {
             normalized.serverRoutingMode = .serverAuto
         }
+        normalized.normalizeTextInputTriggerSequence()
         return normalized
+    }
+
+    mutating func normalizeTextInputTriggerSequence() {
+        textInputTriggerSequence = ControllerButtonSequence(
+            buttons: textInputTriggerSequence.buttons
+        )
+        guard textInputTriggerSequence.validation(
+            overlayTriggerButton: overlayTriggerButton,
+            steamOverlayGestureEnabled: enableSteamOverlayGesture
+        ) != .valid else { return }
+        textInputTriggerSequence = Self.defaultTextInputTriggerSequence
     }
 
     var effectiveGameLanguage: String {
@@ -172,8 +191,18 @@ extension StreamSettings {
             Self.maxControllerDeadzone
         )
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
-        textInputTriggerSequence = try c.decodeIfPresent(ControllerButtonSequence.self, forKey: .textInputTriggerSequence) ?? d.textInputTriggerSequence
-        textInputTriggerDelayMs = try c.decodeIfPresent(Int.self, forKey: .textInputTriggerDelayMs) ?? d.textInputTriggerDelayMs
+        textInputTriggerSequence = (try? c.decode(
+            ControllerButtonSequence.self,
+            forKey: .textInputTriggerSequence
+        )) ?? d.textInputTriggerSequence
+        let storedTextInputTriggerDelayMs = try c.decodeIfPresent(
+            Int.self,
+            forKey: .textInputTriggerDelayMs
+        ) ?? d.textInputTriggerDelayMs
+        textInputTriggerDelayMs = min(
+            max(storedTextInputTriggerDelayMs, Self.minTextInputTriggerDelayMs),
+            Self.maxTextInputTriggerDelayMs
+        )
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
         preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)
         serverRoutingMode = try c.decodeIfPresent(ServerRoutingMode.self, forKey: .serverRoutingMode)
@@ -187,6 +216,7 @@ extension StreamSettings {
             serverRoutingMode = d.serverRoutingMode
         }
         enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self, forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
+        normalizeTextInputTriggerSequence()
         // statsMode is decoded as a raw string: older builds persisted "hud" (pause-menu-only
         // stats, now unconditional → .off) and "diagnostic" (now the separate diagnosticsEnabled
         // flag, with the HUD at .standard so those users keep full visibility).
@@ -340,7 +370,7 @@ nonisolated enum AudioFormatPreference: String, Codable, CaseIterable {
     }
 }
 
-enum ControllerSequenceButton: String, Codable, CaseIterable, Hashable {
+nonisolated enum ControllerSequenceButton: String, Codable, CaseIterable, Hashable, Sendable {
     case dpadUp
     case dpadDown
     case dpadLeft
@@ -375,12 +405,20 @@ enum ControllerSequenceButton: String, Codable, CaseIterable, Hashable {
         }
     }
 
-    var label: String {
+    @MainActor var label: String {
         L10n.controllerSequenceButtonLabel(self)
     }
 }
 
-struct ControllerButtonSequence: Codable, Equatable {
+nonisolated enum ControllerButtonSequenceValidation: Equatable, Sendable {
+    case valid
+    case empty
+    case tooManyButtons
+    case conflictsWithOverlay
+    case conflictsWithSteam
+}
+
+nonisolated struct ControllerButtonSequence: Codable, Equatable, Sendable {
     static let maxButtons = 4
 
     var buttons: [ControllerSequenceButton]
@@ -401,11 +439,24 @@ struct ControllerButtonSequence: Codable, Equatable {
         buttons.contains(button)
     }
 
-    func asSet() -> Set<ControllerSequenceButton> {
-        Set(buttons)
+    func validation(
+        overlayTriggerButton: OverlayTriggerButton,
+        steamOverlayGestureEnabled: Bool
+    ) -> ControllerButtonSequenceValidation {
+        guard !isEmpty else { return .empty }
+        guard count <= Self.maxButtons else { return .tooManyButtons }
+        let overlayButton: ControllerSequenceButton = overlayTriggerButton == .start ? .menu : .options
+        if count == 1, contains(overlayButton) {
+            return .conflictsWithOverlay
+        }
+        let steamButton: ControllerSequenceButton = overlayTriggerButton == .start ? .options : .menu
+        if steamOverlayGestureEnabled, count == 1, contains(steamButton) {
+            return .conflictsWithSteam
+        }
+        return .valid
     }
 
-    var label: String {
+    @MainActor var label: String {
         L10n.controllerButtonSequenceLabel(self)
     }
 }
