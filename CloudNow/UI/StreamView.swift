@@ -351,7 +351,7 @@ struct StreamView: View {
                         ControllerTextEntryOverlay(
                             streamController: streamController,
                             onCancel: cancelControllerTextEntry,
-                            onAccepted: { overlayState = .none }
+                            onAccepted: { setOverlayState(.none) }
                         )
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
@@ -1255,17 +1255,17 @@ struct StreamView: View {
     private func togglePauseMenu() {
         if overlayState == .textEntry {
             streamController.cancelControllerTextEntry()
-            overlayState = .pauseMenu
+            setOverlayState(.pauseMenu)
             return
         }
-        overlayState = overlayState == .pauseMenu ? .none : .pauseMenu
+        setOverlayState(overlayState == .pauseMenu ? .none : .pauseMenu)
     }
 
     private func closeOverlay() {
         if overlayState == .textEntry {
             streamController.cancelControllerTextEntry()
         }
-        overlayState = .none
+        setOverlayState(.none)
     }
 
     private func presentControllerTextEntry() {
@@ -1275,12 +1275,17 @@ struct StreamView: View {
             streamController.cancelControllerTextEntry()
             return
         }
-        overlayState = .textEntry
+        setOverlayState(.textEntry)
     }
 
     private func cancelControllerTextEntry() {
-        overlayState = .none
         streamController.cancelControllerTextEntry()
+        setOverlayState(.none)
+    }
+
+    private func setOverlayState(_ state: StreamOverlayState) {
+        overlayState = state
+        streamController.setOverlayInputPaused(state != .none)
     }
 }
 
