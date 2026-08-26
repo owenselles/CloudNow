@@ -838,6 +838,47 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testSettingsSwitchesBetweenConfiguredServicesAndBack() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        app.launch()
+
+        let geForceNow = app.buttons["GeForce NOW"]
+        XCTAssertTrue(geForceNow.waitForExistence(timeout: 8))
+        XCTAssertTrue(waitForFocus(geForceNow))
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(element("home-screen", in: app).waitForExistence(timeout: 5))
+        openSettings(in: app)
+
+        let switchToXbox = app.buttons["service-switch.xbox-cloud-gaming"]
+        XCTAssertTrue(switchToXbox.waitForExistence(timeout: 3))
+        focusAndSelect(
+            labelContaining: "Switch to Xbox Cloud Gaming",
+            in: app,
+            directions: [.down, .up],
+            pressesPerDirection: 8
+        )
+
+        assertEmptyXboxHome(in: app)
+        openXboxSettings(in: app, settingsLabel: "Settings")
+
+        let switchToGeForceNow = app.buttons["service-switch.geforce-now"]
+        XCTAssertTrue(switchToGeForceNow.waitForExistence(timeout: 3))
+        focusAndSelect(
+            labelContaining: "Switch to GeForce NOW",
+            in: app,
+            directions: [.down, .up],
+            pressesPerDirection: 8
+        )
+
+        XCTAssertTrue(element("home-screen", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Fixture Racer"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testMainTabsSwitchBetweenLibraryAndStore() {
         let app = makeApp()
         app.launch()
@@ -1418,6 +1459,69 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertEqual(xboxRumble.label, rumbleLabel)
         XCTAssertTrue(xboxIntensity.label.hasSuffix("%"))
         XCTAssertTrue(xboxDeadzone.label.hasSuffix("%"))
+    }
+
+    @MainActor
+    func testTextInputShortcutSettingsCancelCaptureWithoutChanges() {
+        let app = makeApp()
+        app.launch()
+
+        openSettings(in: app)
+        XCTAssertTrue(element("settings-screen", in: app).waitForExistence(timeout: 3))
+
+        let shortcutRow = app.buttons
+            .matching(NSPredicate(
+                format: "label CONTAINS %@",
+                "Text Input Buttons"
+            ))
+            .firstMatch
+        focus(
+            labelContaining: "Text Input Buttons",
+            in: app,
+            directions: [.down],
+            pressesPerDirection: 80
+        )
+        XCTAssertTrue(shortcutRow.label.contains("Y"))
+        XCTAssertTrue(shortcutRow.label.contains("Options/View"))
+
+        let holdDelay = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label CONTAINS %@",
+                "Text Input Hold Delay"
+            ))
+            .firstMatch
+        XCTAssertTrue(holdDelay.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            "\(holdDelay.label) \(accessibilityValue(of: holdDelay))"
+                .contains("150 ms")
+        )
+
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.navigationBars["Set Text Input Buttons"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Current Sequence"].exists)
+
+        let startListening = app.buttons["Start Listening"]
+        XCTAssertTrue(startListening.waitForExistence(timeout: 3))
+        focusAndSelect(
+            startListening,
+            directions: [.down, .up],
+            pressesPerDirection: 4
+        )
+        XCTAssertTrue(
+            app.staticTexts["Press buttons now"]
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(app.buttons["Cancel"].exists)
+
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(startListening.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.navigationBars["Set Text Input Buttons"].exists)
+
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(element("settings-screen", in: app).waitForExistence(timeout: 3))
+        XCTAssertTrue(shortcutRow.waitForExistence(timeout: 3))
+        XCTAssertTrue(shortcutRow.label.contains("Y"))
+        XCTAssertTrue(shortcutRow.label.contains("Options/View"))
     }
 
     @MainActor
@@ -2021,6 +2125,52 @@ final class CloudNowUITests: XCTestCase {
             pressesPerDirection: pressesPerDirection
         )
         XCUIRemote.shared.press(.select)
+    }
+
+    @MainActor
+    private func focusAndSelect(
+        labelContaining label: String,
+        in app: XCUIApplication,
+        directions: [XCUIRemote.Button],
+        pressesPerDirection: Int
+    ) {
+        focus(
+            labelContaining: label,
+            in: app,
+            directions: directions,
+            pressesPerDirection: pressesPerDirection
+        )
+        XCUIRemote.shared.press(.select)
+    }
+
+    @MainActor
+    private func focus(
+        labelContaining label: String,
+        in app: XCUIApplication,
+        directions: [XCUIRemote.Button],
+        pressesPerDirection: Int
+    ) {
+        let focusedElement = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "hasFocus == true AND label CONTAINS %@",
+                label
+            ))
+            .firstMatch
+        for direction in directions {
+            for _ in 0 ..< pressesPerDirection where !focusedElement.exists {
+                XCUIRemote.shared.press(direction)
+            }
+            if focusedElement.exists {
+                break
+            }
+        }
+        let currentFocus = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasFocus == true"))
+            .firstMatch
+        XCTAssertTrue(
+            focusedElement.exists,
+            "Expected focus on a control containing \(label); current focus: \(currentFocus.debugDescription)"
+        )
     }
 
     /// SwiftUI's native tvOS `Menu` exposes its button to accessibility, but
