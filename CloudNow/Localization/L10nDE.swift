@@ -406,5 +406,6 @@ enum L10nDE {
         "accessibility": "Bedienungshilfen",
         "controller_changes_next_session": "Controlleränderungen gelten ab der nächsten Cloud-Sitzung.",
         "ending_session": "Cloud-Sitzung wird beendet…",
+        "managed_by_partner": "Vom Partneranbieter verwaltet",
     ]
 }

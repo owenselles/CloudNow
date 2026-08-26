@@ -406,5 +406,6 @@ enum L10nNL {
         "accessibility": "Toegankelijkheid",
         "controller_changes_next_session": "Wijzigingen aan de controller worden toegepast op de volgende cloudsessie.",
         "ending_session": "Cloudsessie wordt beëindigd…",
+        "managed_by_partner": "Beheerd door partnerprovider",
     ]
 }

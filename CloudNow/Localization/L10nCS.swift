@@ -406,5 +406,6 @@ enum L10nCS {
         "accessibility": "Usnadnění",
         "controller_changes_next_session": "Změny ovladače se projeví v příští cloudové relaci.",
         "ending_session": "Ukončování cloudové relace…",
+        "managed_by_partner": "Spravuje partnerský poskytovatel",
     ]
 }

@@ -48,8 +48,8 @@ nonisolated protocol GamesPersistence: Actor {
         accountScope: String?,
         expectedGeneration: UInt64
     )
-    func saveSubscription(_ subscription: SubscriptionInfo)
-    func saveVpcId(_ vpcId: String)
+    func saveSubscription(_ subscription: SubscriptionInfo, accountScope: String?)
+    func saveVpcId(_ vpcId: String, accountScope: String?)
     func loadCatalog(
         localeCode: String,
         vpcId: String?,

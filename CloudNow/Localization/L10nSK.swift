@@ -406,5 +406,6 @@ enum L10nSK {
         "accessibility": "Prístupnosť",
         "controller_changes_next_session": "Zmeny ovládača sa prejavia v nasledujúcej cloudovej relácii.",
         "ending_session": "Ukončuje sa cloudová relácia…",
+        "managed_by_partner": "Spravuje partnerský poskytovateľ",
     ]
 }

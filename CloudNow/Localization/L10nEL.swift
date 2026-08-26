@@ -406,5 +406,6 @@ enum L10nEL {
         "accessibility": "Προσβασιμότητα",
         "controller_changes_next_session": "Οι αλλαγές στο χειριστήριο θα ισχύσουν στην επόμενη συνεδρία cloud.",
         "ending_session": "Τερματισμός συνεδρίας cloud…",
+        "managed_by_partner": "Διαχειρίζεται από τον συνεργάτη πάροχο",
     ]
 }

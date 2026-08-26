@@ -406,5 +406,6 @@ enum L10nCA {
         "accessibility": "Accessibilitat",
         "controller_changes_next_session": "Els canvis del comandament s'apliquen a la propera sessió al núvol.",
         "ending_session": "S'està finalitzant la sessió al núvol…",
+        "managed_by_partner": "Gestionat pel proveïdor associat",
     ]
 }

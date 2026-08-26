@@ -490,8 +490,76 @@ struct GamesViewModelTests {
         )
         #expect(
             await persistence.savedLibraryAccountScopes.last
-                == nvidiaAccountScope(for: "fixture-user")
+                == accountCacheScope(idpId: "fixture", userId: "fixture-user")
         )
+    }
+
+    @MainActor
+    @Test("Full refresh rejects a same-user provider switch")
+    func fullRefreshRejectsSameUserProviderSwitch() async throws {
+        let previous = makeGame(
+            id: "previous",
+            title: "Previous",
+            isInLibrary: true
+        )
+        let fresh = makeGame(
+            id: "fresh",
+            title: "Fresh",
+            isInLibrary: true
+        )
+        var snapshot = AppPersistenceStore.GamesSnapshot()
+        snapshot.vpcId = "TEST-VPC"
+        let persistence = FakeGamesPersistence(snapshot: snapshot)
+        let gamesClient = ScriptedGamesClient(
+            mainOutcomes: [
+                .success([previous]),
+                .success([fresh]),
+            ],
+            libraryOutcomes: [
+                .success([previous]),
+                .success([fresh]),
+            ],
+            blockedLibraryRequestIndex: 1
+        )
+        let authManager = await makeAuthenticatedManager(
+            userId: "shared-user",
+            idpId: "provider-a",
+            api: ProviderSwitchAuthAPI(userId: "shared-user")
+        )
+        let viewModel = GamesViewModel(
+            gamesClient: gamesClient,
+            cloudMatchClient: FakeActiveSessionsClient(),
+            membershipClient: FakeMembershipClient(),
+            persistence: persistence,
+            librarySyncClient: EmptyLibrarySyncClient(),
+            providerLibrarySyncEnabled: true
+        )
+        await viewModel.load(authManager: authManager)
+
+        viewModel.startFullLibraryRefresh(authManager: authManager)
+        await gamesClient.waitForLibraryRequest(count: 2)
+
+        try await authManager.logout()
+        let providerB = LoginProvider(
+            idpId: "provider-b",
+            code: "PARTNER",
+            displayName: "Partner B",
+            streamingServiceUrl: "https://partner-b.invalid/",
+            priority: 0
+        )
+        await authManager.login(with: providerB).value
+        #expect(authManager.session?.provider.idpId == "provider-b")
+        #expect(authManager.session?.user.userId == "shared-user")
+
+        await gamesClient.releaseBlockedLibraryRequest()
+        for _ in 0 ..< 10000 where viewModel.isFullLibraryRefreshRunning {
+            await Task.yield()
+        }
+
+        #expect(!viewModel.isFullLibraryRefreshRunning)
+        #expect(viewModel.libraryRefreshState.stage == .idle)
+        #expect(await persistence.refreshedSnapshotGenerations.isEmpty)
+        #expect(await persistence.savedLibrary == [previous])
     }
 
     @MainActor
@@ -938,8 +1006,8 @@ struct GamesViewModelTests {
         #expect(
             await persistence.loadedAccountScopes
                 == [
-                    nvidiaAccountScope(for: "account-a"),
-                    nvidiaAccountScope(for: "account-b"),
+                    accountCacheScope(idpId: "fixture", userId: "account-a"),
+                    accountCacheScope(idpId: "fixture", userId: "account-b"),
                 ]
         )
     }
@@ -1092,6 +1160,53 @@ struct GamesViewModelTests {
     }
 
     @MainActor
+    @Test("Persisted sessions never cross provider or user identities")
+    func persistedSessionIdentityIsolation() async {
+        let cases: [(String, String?, String, String)] = [
+            ("partner-dig", "user-a", "partner-dig", "user-b"),
+            (NVIDIAAuth.defaultIdpId, "user-a", "partner-dig", "user-a"),
+            ("partner-dig", "user-a", "partner-jio", "user-a"),
+            ("partner-dig", nil, "partner-dig", "user-a"),
+        ]
+        for (savedIdpId, savedUserId, currentIdpId, currentUserId) in cases {
+            let savedRecord = LastSessionRecord(
+                sessionId: "saved-session",
+                serverIp: "192.0.2.20",
+                appId: "saved-app",
+                base: "https://partner.invalid",
+                routingZoneUrl: nil,
+                clientId: "saved-client",
+                deviceId: "saved-device",
+                createdAt: Date(),
+                idpId: savedIdpId,
+                userId: savedUserId
+            )
+            var snapshot = AppPersistenceStore.GamesSnapshot()
+            snapshot.lastSession = savedRecord
+            snapshot.vpcId = "TEST-VPC"
+            let persistence = FakeGamesPersistence(snapshot: snapshot)
+            let viewModel = GamesViewModel(
+                gamesClient: ScriptedGamesClient(
+                    mainOutcomes: [.success([])],
+                    libraryOutcomes: [.success([])]
+                ),
+                cloudMatchClient: FakeActiveSessionsClient(),
+                membershipClient: FakeMembershipClient(),
+                persistence: persistence
+            )
+            let authManager = await makeAuthenticatedManager(
+                userId: currentUserId,
+                idpId: currentIdpId
+            )
+
+            await viewModel.load(authManager: authManager)
+
+            #expect(viewModel.lastSession == nil)
+            #expect(await persistence.lastSessionClearCount == 1)
+        }
+    }
+
+    @MainActor
     @Test("Provider deactivation cancels requests but preserves parked resume metadata")
     func providerDeactivationPreservesParkedSession() async {
         let initial = makeGame(
@@ -1132,7 +1247,9 @@ struct GamesViewModelTests {
             routingZoneUrl: parkedSession.zone,
             clientId: parkedSession.clientId,
             deviceId: parkedSession.deviceId,
-            createdAt: Date()
+            createdAt: Date(),
+            idpId: "fixture",
+            userId: "fixture-user"
         )
 
         viewModel.startForegroundLibraryRefresh(authManager: authManager)
@@ -1167,7 +1284,9 @@ struct GamesViewModelTests {
             routingZoneUrl: "https://zone.fixture.invalid",
             clientId: "persisted-client",
             deviceId: "persisted-device",
-            createdAt: now.addingTimeInterval(-30)
+            createdAt: now.addingTimeInterval(-30),
+            idpId: "fixture",
+            userId: "fixture-user"
         )
         var snapshot = AppPersistenceStore.GamesSnapshot()
         snapshot.libraryGames = [game]
@@ -1276,11 +1395,12 @@ struct GamesViewModelTests {
     private func makeAuthenticatedManager(
         accessToken: String = "fixture-access-token",
         userId: String = "fixture-user",
+        idpId: String = "fixture",
         api: any NVIDIAAuthAPIClient = UnavailableAuthAPI()
     ) async -> AuthManager {
         let session = AuthSession(
             provider: LoginProvider(
-                idpId: "fixture",
+                idpId: idpId,
                 code: "NVIDIA",
                 displayName: "Fixture",
                 streamingServiceUrl: "https://stream.invalid/",
@@ -1814,6 +1934,7 @@ private actor FakeGamesPersistence: GamesPersistence {
     private(set) var refreshedSnapshotGenerations: [UInt64] = []
     private(set) var savedCatalogGenerations: [UInt64] = []
     private(set) var savedLibraryGenerations: [UInt64] = []
+    private(set) var lastSessionClearCount = 0
     private var mutationWaiters: [MutationWaiter] = []
 
     private struct MutationWaiter {
@@ -1855,7 +1976,11 @@ private actor FakeGamesPersistence: GamesPersistence {
         resumeMutationWaiters()
     }
 
-    func saveLastSession(_: LastSessionRecord?) {}
+    func saveLastSession(_ record: LastSessionRecord?) {
+        if record == nil {
+            lastSessionClearCount += 1
+        }
+    }
 
     func saveLibraryGames(
         _ games: [GameInfo],
@@ -1867,11 +1992,11 @@ private actor FakeGamesPersistence: GamesPersistence {
         savedLibraryGenerations.append(expectedGeneration)
     }
 
-    func saveSubscription(_ subscription: SubscriptionInfo) {
+    func saveSubscription(_ subscription: SubscriptionInfo, accountScope _: String?) {
         savedSubscription = subscription
     }
 
-    func saveVpcId(_: String) {}
+    func saveVpcId(_: String, accountScope _: String?) {}
 
     func loadCatalog(
         localeCode _: String,
@@ -1983,6 +2108,70 @@ private actor StaticAuthPersistence: AuthSessionPersistence {
 
     func deleteAuthSession(generation _: UInt64) {
         session = nil
+    }
+}
+
+private struct ProviderSwitchAuthAPI: NVIDIAAuthAPIClient {
+    let userId: String
+
+    func fetchProviders() async throws -> [LoginProvider] {
+        throw GamesViewModelTestError.unavailable
+    }
+
+    func refreshTokens(_: String) async throws -> AuthTokens {
+        throw GamesViewModelTestError.unavailable
+    }
+
+    func fetchClientToken(accessToken _: String) async throws -> (
+        token: String,
+        expiresAt: Date
+    ) {
+        throw GamesViewModelTestError.unavailable
+    }
+
+    func refreshWithClientToken(
+        _: String,
+        userId _: String
+    ) async throws -> AuthTokens {
+        throw GamesViewModelTestError.unavailable
+    }
+
+    func requestDeviceAuthorization(
+        idpId _: String?
+    ) async throws -> DeviceFlowResponse {
+        DeviceFlowResponse(
+            userCode: "ABCD-EFGH",
+            deviceCode: "device-code",
+            verificationUri: "https://login.invalid/device",
+            verificationUriComplete: "https://login.invalid/device?code=ABCD-EFGH",
+            expiresIn: 600,
+            interval: 0
+        )
+    }
+
+    func pollForDeviceToken(
+        deviceCode _: String,
+        interval _: Int,
+        expiresIn _: Int
+    ) async throws -> AuthTokens {
+        AuthTokens(
+            accessToken: "provider-b-access-token",
+            refreshToken: "provider-b-refresh-token",
+            idToken: nil,
+            expiresAt: Date(timeIntervalSince1970: 2_000_000_100),
+            clientToken: nil,
+            clientTokenExpiresAt: nil
+        )
+    }
+
+    func fetchUserInfo(tokens _: AuthTokens) async throws -> AuthUser {
+        AuthUser(
+            userId: userId,
+            displayName: "Shared User",
+            email: nil,
+            avatarUrl: nil,
+            membershipTier: "FREE"
+        )
     }
 }
 

@@ -42,9 +42,17 @@ nonisolated struct LastSessionRecord: Codable {
     let clientId: String?
     let deviceId: String?
     let createdAt: Date
+    /// Provider that created this session. Records written before this field was
+    /// added decode to NVIDIAAuth.defaultIdpId so they are treated as NVIDIA sessions.
+    let idpId: String
+    /// User who created this session. `nil` for records written before this field
+    /// existed — those cannot be attributed to anyone, so they are discarded rather
+    /// than resumed, since resuming would send the current user's token to a session
+    /// that may belong to someone else on the same provider.
+    let userId: String?
 
     enum CodingKeys: String, CodingKey {
-        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt
+        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, idpId, userId
     }
 
     init(
@@ -55,7 +63,9 @@ nonisolated struct LastSessionRecord: Codable {
         routingZoneUrl: String?,
         clientId: String?,
         deviceId: String?,
-        createdAt: Date
+        createdAt: Date,
+        idpId: String,
+        userId: String?
     ) {
         self.sessionId = sessionId
         self.serverIp = serverIp
@@ -65,6 +75,8 @@ nonisolated struct LastSessionRecord: Codable {
         self.clientId = clientId
         self.deviceId = deviceId
         self.createdAt = createdAt
+        self.idpId = idpId
+        self.userId = userId
     }
 
     init(from decoder: Decoder) throws {
@@ -77,6 +89,8 @@ nonisolated struct LastSessionRecord: Codable {
         clientId = try c.decodeIfPresent(String.self, forKey: .clientId)
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
+        idpId = try c.decodeIfPresent(String.self, forKey: .idpId) ?? NVIDIAAuth.defaultIdpId
+        userId = try c.decodeIfPresent(String.self, forKey: .userId)
     }
 }
 
@@ -398,7 +412,7 @@ class GamesViewModel {
         let identity = beginLoad()
         latestNetworkLibraryGames = nil
         let accountScope = authManager.session.map {
-            nvidiaAccountScope(for: $0.user.userId)
+            accountCacheScope(idpId: $0.provider.idpId, userId: $0.user.userId)
         }
         if currentAccountScope != accountScope {
             libraryRefreshCoordinator.cancel()
@@ -422,6 +436,22 @@ class GamesViewModel {
         streamSettings = (snapshot.streamSettings ?? StreamSettings()).normalizedForClient
         lastSession = snapshot.lastSession
         currentVpcId = snapshot.vpcId
+
+        // Discard a persisted session belonging to a different account. A different
+        // provider means an incompatible base URL; a different user on the *same*
+        // provider looks compatible but is not — claiming or stopping it would send
+        // this user's token against someone else's session. Records with no userId
+        // predate identity tracking and cannot be attributed, so they go too.
+        // Dropped locally only: the old endpoint is never contacted with the new token.
+        let currentIdpId = authManager.session?.provider.idpId ?? NVIDIAAuth.defaultIdpId
+        let currentUserId = authManager.session?.user.userId
+        if let saved = lastSession,
+           saved.idpId != currentIdpId || saved.userId == nil || saved.userId != currentUserId
+        {
+            lastSession = nil
+            await persistence.saveLastSession(nil)
+            guard isCurrent(identity) else { return }
+        }
 
         // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
         // If Apple raises the cap in a future tvOS release this will automatically unlock.
@@ -583,7 +613,7 @@ class GamesViewModel {
               request.generation == vpcIdRequestGeneration
         else { return nil }
         if let fetched, !fetched.isEmpty {
-            await persistence.saveVpcId(fetched)
+            await persistence.saveVpcId(fetched, accountScope: currentAccountScope)
             guard isCurrent(identity),
                   request.generation == vpcIdRequestGeneration
             else { return nil }
@@ -800,7 +830,7 @@ class GamesViewModel {
         gamesLog.info("[MES] tier=\(subscription.membershipTier, privacy: .public) resolutions=\(String(describing: subscription.entitledResolutions.map(\.resolutionLabel)), privacy: .public)")
         self.subscription = subscription
         normalizeStreamSettingsForCurrentEntitlements()
-        await persistence.saveSubscription(subscription)
+        await persistence.saveSubscription(subscription, accountScope: currentAccountScope)
         guard isCurrent(identity) else { return }
     }
 
@@ -983,13 +1013,16 @@ class GamesViewModel {
     ) {
         guard providerLibrarySyncEnabled,
               let userId = authManager.session?.user.userId,
+              let idpId = authManager.session?.provider.idpId,
               hasCompletedInitialLoad,
               libraryLoadPhase != .loading,
               catalogLoadPhase != .loading,
               !isFullLibraryRefreshRunning
         else { return }
         _ = beginLoad()
-        let accountScope = nvidiaAccountScope(for: userId)
+        // Must match the scope computed in load(), or a refresh would write the
+        // library cache under a key the next load cannot read.
+        let accountScope = accountCacheScope(idpId: idpId, userId: userId)
         currentAccountScope = accountScope
 
         _ = libraryRefreshCoordinator.start(
@@ -1005,7 +1038,9 @@ class GamesViewModel {
                 return try await authManager.resolveToken()
             },
             userIsCurrent: { [weak authManager] in
-                authManager?.session?.user.userId == userId
+                guard let session = authManager?.session else { return false }
+                return session.provider.idpId == idpId
+                    && session.user.userId == userId
             },
             importLibrary: { [weak self, weak authManager] in
                 guard let self, let authManager else {
@@ -1016,6 +1051,7 @@ class GamesViewModel {
                 }
                 return try await importAuthoritativeLibrary(
                     authManager: authManager,
+                    expectedIdpId: idpId,
                     expectedUserId: userId,
                     accountScope: accountScope
                 )
@@ -1025,10 +1061,15 @@ class GamesViewModel {
 
     private func importAuthoritativeLibrary(
         authManager: AuthManager,
+        expectedIdpId: String,
         expectedUserId: String,
         accountScope: String
     ) async throws -> LibraryImportResult {
-        guard authManager.session?.user.userId == expectedUserId else {
+        guard authSessionMatches(
+            authManager,
+            idpId: expectedIdpId,
+            userId: expectedUserId
+        ) else {
             throw CancellationError()
         }
         let startingCacheGeneration = cacheGeneration
@@ -1056,7 +1097,11 @@ class GamesViewModel {
             while true {
                 guard persistenceEnabled,
                       cacheGeneration == startingCacheGeneration,
-                      authManager.session?.user.userId == expectedUserId
+                      authSessionMatches(
+                          authManager,
+                          idpId: expectedIdpId,
+                          userId: expectedUserId
+                      )
                 else {
                     throw CancellationError()
                 }
@@ -1089,7 +1134,11 @@ class GamesViewModel {
             }
             guard persistenceEnabled,
                   cacheGeneration == startingCacheGeneration,
-                  authManager.session?.user.userId == expectedUserId
+                  authSessionMatches(
+                      authManager,
+                      idpId: expectedIdpId,
+                      userId: expectedUserId
+                  )
             else {
                 throw CancellationError()
             }
@@ -1115,7 +1164,11 @@ class GamesViewModel {
             )
             guard persistenceEnabled,
                   cacheGeneration == startingCacheGeneration,
-                  authManager.session?.user.userId == expectedUserId
+                  authSessionMatches(
+                      authManager,
+                      idpId: expectedIdpId,
+                      userId: expectedUserId
+                  )
             else {
                 throw CancellationError()
             }
@@ -1147,7 +1200,11 @@ class GamesViewModel {
         } catch {
             if persistenceEnabled,
                cacheGeneration == startingCacheGeneration,
-               authManager.session?.user.userId == expectedUserId
+               authSessionMatches(
+                   authManager,
+                   idpId: expectedIdpId,
+                   userId: expectedUserId
+               )
             {
                 libraryGames = previousLibrary
                 libraryLoadPhase = previousLibrary.isEmpty
@@ -1159,6 +1216,16 @@ class GamesViewModel {
             }
             throw error
         }
+    }
+
+    private func authSessionMatches(
+        _ authManager: AuthManager,
+        idpId: String,
+        userId: String
+    ) -> Bool {
+        guard let session = authManager.session else { return false }
+        return session.provider.idpId == idpId
+            && session.user.userId == userId
     }
 
     private func fetchAuthoritativeSnapshot(

@@ -406,5 +406,6 @@ enum L10nKO {
         "accessibility": "손쉬운 사용",
         "controller_changes_next_session": "컨트롤러 변경 사항은 다음 클라우드 세션부터 적용됩니다.",
         "ending_session": "클라우드 세션 종료 중…",
+        "managed_by_partner": "파트너 제공업체에서 관리",
     ]
 }

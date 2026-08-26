@@ -90,7 +90,8 @@ struct CloudMatchClientTests {
             settings: input.settings,
             localVideoCapabilities: input.localVideoCapabilities,
             accountLinked: input.accountLinked,
-            accountAllowsHDR: input.accountAllowsHDR
+            accountAllowsHDR: input.accountAllowsHDR,
+            skipNvidiaFallback: false
         )
 
         let session = try await client.createSession(input)
@@ -98,6 +99,41 @@ struct CloudMatchClientTests {
         #expect(session.streamingBaseUrl == "https://prod.cloudmatchbeta.nvidiagrid.net")
         #expect(session.zone.isEmpty)
         #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Partner session failure never falls back to the NVIDIA endpoint")
+    func partnerFailureSkipsNvidiaFallback() async {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(statusCode: 503, json: #"{"error":"partner-unavailable"}"#)
+        }
+        let client = CloudMatchClient(transport: transport, deviceId: { "device" })
+        let input = makeSessionRequest()
+        let partnerRequest = SessionCreateRequest(
+            appId: input.appId,
+            internalTitle: input.internalTitle,
+            token: input.token,
+            streamingBaseUrl: "https://prod.dig.geforcenow.nvidiagrid.net/",
+            routingZoneUrl: nil,
+            settings: input.settings,
+            localVideoCapabilities: input.localVideoCapabilities,
+            accountLinked: input.accountLinked,
+            accountAllowsHDR: input.accountAllowsHDR,
+            skipNvidiaFallback: true
+        )
+
+        do {
+            _ = try await client.createSession(partnerRequest)
+            Issue.record("Expected the partner endpoint failure to propagate")
+        } catch {
+            // The partner's own error surfaces, not one from a retry elsewhere.
+            #expect(error.localizedDescription.contains("partner-unavailable"))
+        }
+
+        // Exactly one attempt, and it stayed on the partner's streaming service.
+        let requests = await transport.requests()
+        #expect(requests.count == 1)
+        #expect(requests.first?.url?.host == "prod.dig.geforcenow.nvidiagrid.net")
+        #expect(!requests.contains { $0.url?.host == "prod.cloudmatchbeta.nvidiagrid.net" })
     }
 
     @Test("CloudMatch API status errors retain structured context")
@@ -329,7 +365,8 @@ struct CloudMatchClientTests {
             settings: settings,
             localVideoCapabilities: capabilities,
             accountLinked: true,
-            accountAllowsHDR: true
+            accountAllowsHDR: true,
+            skipNvidiaFallback: false
         )
     }
 }

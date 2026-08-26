@@ -406,5 +406,6 @@ enum L10nTH {
         "accessibility": "การช่วยการเข้าถึง",
         "controller_changes_next_session": "การเปลี่ยนแปลงคอนโทรลเลอร์จะมีผลในเซสชันคลาวด์ถัดไป",
         "ending_session": "กำลังสิ้นสุดเซสชันคลาวด์…",
+        "managed_by_partner": "จัดการโดยผู้ให้บริการพันธมิตร",
     ]
 }

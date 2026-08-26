@@ -55,11 +55,18 @@ final class ServerInfoClient {
         self.cacheTTL = cacheTTL
     }
 
+    /// Cached info, but only when fetched from `url`. Expired data remains a
+    /// valid conservative fallback when a provider-scoped refresh fails.
+    func cachedForBase(_ url: String) -> GFNServerInfo? {
+        guard let cachedBaseURL else { return nil }
+        return Self.normalizedBase(cachedBaseURL)
+            .caseInsensitiveCompare(Self.normalizedBase(url)) == .orderedSame
+            ? cached
+            : nil
+    }
+
     func fetch(baseUrl: String, token: String) async throws -> GFNServerInfo {
-        var base = baseUrl
-        while base.hasSuffix("/") {
-            base.removeLast()
-        }
+        let base = Self.normalizedBase(baseUrl)
 
         if let cached,
            cachedBaseURL == base,
@@ -94,6 +101,14 @@ final class ServerInfoClient {
         cachedAt = now()
         cachedBaseURL = base
         return info
+    }
+
+    private static func normalizedBase(_ raw: String) -> String {
+        var base = raw
+        while base.hasSuffix("/") {
+            base.removeLast()
+        }
+        return base
     }
 
     /// Mirrors the official client's buildZonesFromGfnRegions: `gfn-regions` lists the

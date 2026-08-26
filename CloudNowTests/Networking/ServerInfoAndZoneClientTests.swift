@@ -32,6 +32,8 @@ struct ServerInfoHTTPClientTests {
             GFNRegion(name: "US West", address: "https://us.example.invalid/base/"),
         ])
         #expect(client.cached == info)
+        #expect(client.cachedForBase("HTTPS://STREAM.EXAMPLE.INVALID/") == info)
+        #expect(client.cachedForBase("https://partner.example.invalid/") == nil)
 
         let cached = try await client.fetch(baseUrl: "https://stream.example.invalid", token: "new-token")
 

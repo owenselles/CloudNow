@@ -406,5 +406,6 @@ enum L10nHR {
         "accessibility": "Pristupačnost",
         "controller_changes_next_session": "Promjene kontrolera primjenjuju se na sljedeću sesiju u oblaku.",
         "ending_session": "Završavanje sesije u oblaku…",
+        "managed_by_partner": "Upravlja partnerski pružatelj usluga",
     ]
 }

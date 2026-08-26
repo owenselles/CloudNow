@@ -406,5 +406,6 @@ enum L10nSV {
         "accessibility": "Tillgänglighet",
         "controller_changes_next_session": "Ändringar av handkontrollen gäller från och med nästa molnsession.",
         "ending_session": "Avslutar molnsessionen…",
+        "managed_by_partner": "Hanteras av partnerleverantör",
     ]
 }

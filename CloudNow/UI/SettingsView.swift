@@ -691,23 +691,35 @@ struct SettingsView: View {
                 }
 
                 Section(L10n.text("server_location")) {
-                    Button {
-                        showServerLocationPicker = true
-                    } label: {
+                    if isNvidiaDirectSession {
+                        Button {
+                            showServerLocationPicker = true
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(L10n.text("server_location"))
+                                    Text(serverLocationDescription)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 8)
+                                Spacer()
+                                Text(serverLocationValue)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                    } else {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(L10n.text("server_location"))
-                                Text(serverLocationDescription)
+                                Text(L10n.text("managed_by_partner"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 8)
-                            Spacer()
-                            Text(serverLocationValue)
-                                .foregroundStyle(.secondary)
                         }
                     }
-                    .foregroundStyle(.primary)
 
                     Button {
                         showNetworkTest = true
@@ -1057,6 +1069,10 @@ struct SettingsView: View {
         return await sessionCoordinator.endServerSessionUsingProvider(lease)
     }
 
+    private var isNvidiaDirectSession: Bool {
+        authManager.session?.provider.isNvidiaDirect ?? true
+    }
+
     private var serverLocationValue: String {
         let settings = viewModel.streamSettings
         return switch settings.serverRoutingMode {
@@ -1151,12 +1167,6 @@ private struct ServerLocationPickerView: View {
     @State private var isLoadingServers = true
     @State private var serverError: String?
     @FocusState private var focusedChoice: Choice?
-
-    init() {
-        let cached = ServerInfoClient.shared.cached
-        _serverInfo = State(initialValue: cached)
-        _isLoadingRegions = State(initialValue: cached == nil)
-    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -1329,12 +1339,12 @@ private struct ServerLocationPickerView: View {
     }
 
     private func loadRegions() async {
-        if let cached = ServerInfoClient.shared.cached {
+        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+        if let cached = ServerInfoClient.shared.cachedForBase(base) {
             serverInfo = cached
             isLoadingRegions = false
         }
 
-        let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
         guard let token = try? await authManager.resolveToken() else {
             isLoadingRegions = false
             if serverInfo == nil {
@@ -1819,21 +1829,26 @@ private struct NetworkTestView: View {
 
     private func resolveTarget() async -> (address: String, name: String?) {
         let settings = viewModel.streamSettings
-        switch settings.serverRoutingMode {
-        case .client:
-            if let address = settings.preferredZoneUrl {
-                return (address, displayZone(address))
+        // Routing-mode pins only apply to NVIDIA-direct sessions; partner providers
+        // manage their own routing and do not expose zone/region selection.
+        let isNvidiaSession = authManager.session?.provider.isNvidiaDirect ?? true
+        if isNvidiaSession {
+            switch settings.serverRoutingMode {
+            case .client:
+                if let address = settings.preferredZoneUrl {
+                    return (address, displayZone(address))
+                }
+            case .region:
+                if let address = settings.preferredRegionAddress {
+                    return (address, settings.preferredRegionName)
+                }
+            case .serverAuto:
+                break
             }
-        case .region:
-            if let address = settings.preferredRegionAddress {
-                return (address, settings.preferredRegionName)
-            }
-        case .serverAuto:
-            break
         }
 
         let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
-        let cached = ServerInfoClient.shared.cached
+        let cached = ServerInfoClient.shared.cachedForBase(base)
         let info: GFNServerInfo? = if let token = try? await authManager.resolveToken() {
             await (try? ServerInfoClient.shared.fetch(baseUrl: base, token: token)) ?? cached
         } else {

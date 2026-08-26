@@ -635,6 +635,46 @@ struct PersistenceStoreTests {
         #expect(snapshot.libraryGames == games)
     }
 
+    @Test("VPC and subscription caches never cross account identities")
+    func accountScopedCachesAreIsolated() async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        let userA = accountCacheScope(idpId: "partner-dig", userId: "user-a")
+        // Same provider, different user — the case a provider-only key cannot catch.
+        let userB = accountCacheScope(idpId: "partner-dig", userId: "user-b")
+        // Same user, different provider.
+        let userAOnNvidia = accountCacheScope(idpId: "nvidia", userId: "user-a")
+        let subscription = SubscriptionInfo(
+            membershipTier: "ULTIMATE",
+            isUnlimited: true,
+            remainingMinutes: nil,
+            totalMinutes: nil,
+            entitledResolutions: []
+        )
+
+        await harness.store.saveVpcId("vpc-a", accountScope: userA)
+        await harness.store.saveSubscription(subscription, accountScope: userA)
+
+        let ownerSnapshot = await harness.store.loadGamesSnapshot(accountScope: userA)
+        #expect(ownerSnapshot.vpcId == "vpc-a")
+        #expect(ownerSnapshot.subscription?.membershipTier == "ULTIMATE")
+
+        // A different user on the same provider must not inherit either value.
+        let otherUserSnapshot = await harness.store.loadGamesSnapshot(accountScope: userB)
+        #expect(otherUserSnapshot.vpcId == nil)
+        #expect(otherUserSnapshot.subscription == nil)
+
+        // Nor the same user arriving through a different provider.
+        let otherProviderSnapshot = await harness.store.loadGamesSnapshot(accountScope: userAOnNvidia)
+        #expect(otherProviderSnapshot.vpcId == nil)
+        #expect(otherProviderSnapshot.subscription == nil)
+
+        // A signed-out load has no identity to match, so it sees nothing.
+        let signedOutSnapshot = await harness.store.loadGamesSnapshot(accountScope: nil)
+        #expect(signedOutSnapshot.vpcId == nil)
+        #expect(signedOutSnapshot.subscription == nil)
+    }
+
     @Test("Legacy settings JSON is migrated while loading a snapshot")
     func legacySettingsMigration() async throws {
         let harness = try PersistenceHarness()

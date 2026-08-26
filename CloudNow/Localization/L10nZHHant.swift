@@ -406,5 +406,6 @@ enum L10nZHHant {
         "accessibility": "輔助使用",
         "controller_changes_next_session": "控制器變更將於下一個雲端工作階段生效。",
         "ending_session": "正在結束雲端工作階段…",
+        "managed_by_partner": "由合作提供商管理",
     ]
 }

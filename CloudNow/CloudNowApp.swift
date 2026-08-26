@@ -321,9 +321,9 @@ struct CloudNowApp: App {
 
         private static let uiTestAuthSession = AuthSession(
             provider: LoginProvider(
-                idpId: "fixture",
-                code: "FIXTURE",
-                displayName: "Fixture",
+                idpId: NVIDIAAuth.defaultIdpId,
+                code: "NVIDIA",
+                displayName: "NVIDIA",
                 streamingServiceUrl: NVIDIAAuth.defaultStreamingUrl,
                 priority: 0
             ),
@@ -378,6 +378,7 @@ private struct AuthRestorationView: View {
         @Environment(XboxAuthManager.self) private var xboxAuthManager
         @State private var viewModel: GamesViewModel
         private let showsServiceChooser: Bool
+        private let showsLoginProviderPicker: Bool
         private let showsXboxQualityHUD: Bool
         private let xboxServiceConfiguration: XboxCloudServiceConfiguration?
         private let xboxStreamFixtureState: CloudStreamPresentationState?
@@ -388,6 +389,9 @@ private struct AuthRestorationView: View {
             let arguments = ProcessInfo.processInfo.arguments
             self.xboxServiceConfiguration = xboxServiceConfiguration
             showsServiceChooser = arguments.contains("--cloudnow-ui-service-chooser")
+            showsLoginProviderPicker = arguments.contains(
+                "--cloudnow-ui-login-provider-picker"
+            )
             showsXboxQualityHUD = arguments.contains(
                 "--cloudnow-ui-xbox-quality-hud"
             )
@@ -435,7 +439,9 @@ private struct AuthRestorationView: View {
 
         var body: some View {
             Group {
-                if showsXboxQualityHUD {
+                if showsLoginProviderPicker {
+                    LoginProviderPickerFixtureView()
+                } else if showsXboxQualityHUD {
                     CloudStreamQualityHUDFixtureView()
                 } else if let xboxStreamFixtureState {
                     CloudStreamPresentationFixtureView(
@@ -714,6 +720,73 @@ private struct AuthRestorationView: View {
                 removedGameIDs: []
             )
         )
+    }
+
+    private struct LoginProviderPickerFixtureView: View {
+        var body: some View {
+            LoginProviderPrompt(
+                onChooseAnotherService: {},
+                providerContent: {
+                    LoginProviderPicker(
+                        providers: Self.providers,
+                        onSelect: { _ in }
+                    )
+                }
+            )
+        }
+
+        private static let providers: [LoginProvider] = [
+            .nvidiaDirect,
+            LoginProvider(
+                idpId: "fixture-digevo",
+                code: "DIG",
+                displayName: "Digevo",
+                streamingServiceUrl: "https://fixture.invalid/",
+                priority: 1
+            ),
+            LoginProvider(
+                idpId: "fixture-jio",
+                code: "JIO",
+                displayName: "JioGamesCloud",
+                streamingServiceUrl: "https://fixture.invalid/",
+                priority: 2
+            ),
+            LoginProvider(
+                idpId: "fixture-bro-game",
+                code: "BPC",
+                displayName: "bro.game",
+                streamingServiceUrl: "https://fixture.invalid/",
+                priority: 3
+            ),
+            LoginProvider(
+                idpId: "fixture-cloudgg",
+                code: "CGG",
+                displayName: "CloudGG",
+                streamingServiceUrl: "https://fixture.invalid/",
+                priority: 4
+            ),
+            LoginProvider(
+                idpId: "fixture-softbank",
+                code: "SBG",
+                displayName: "SoftBank",
+                streamingServiceUrl: "https://fixture.invalid/",
+                priority: 5
+            ),
+            LoginProvider(
+                idpId: "fixture-taiwan-mobile",
+                code: "TWM",
+                displayName: "Taiwan Mobile",
+                streamingServiceUrl: "https://fixture.invalid/",
+                priority: 6
+            ),
+            LoginProvider(
+                idpId: "fixture-long-name",
+                code: "LONG",
+                displayName: "Long Regional Partner Network International",
+                streamingServiceUrl: "https://fixture.invalid/",
+                priority: 7
+            ),
+        ]
     }
 
     private actor UITestLibrarySyncClient: LibrarySyncClient {

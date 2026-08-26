@@ -29,6 +29,82 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testLoginProviderPickerUsesHorizontalFocusRailInLightAppearance() {
+        assertLoginProviderPickerAppearance(.light)
+    }
+
+    @MainActor
+    func testLoginProviderPickerUsesHorizontalFocusRailInDarkAppearance() {
+        assertLoginProviderPickerAppearance(.dark)
+    }
+
+    @MainActor
+    private func assertLoginProviderPickerAppearance(
+        _ colorScheme: UITestColorScheme
+    ) {
+        let app = makeApp(
+            colorScheme: colorScheme,
+            extraArguments: ["--cloudnow-ui-login-provider-picker"]
+        )
+        app.launch()
+
+        XCTAssertTrue(
+            element("login-provider-picker", in: app)
+                .waitForExistence(timeout: 8)
+        )
+
+        let providerNames = [
+            "NVIDIA",
+            "Digevo",
+            "JioGamesCloud",
+            "bro.game",
+            "CloudGG",
+            "SoftBank",
+            "Taiwan Mobile",
+            "Long Regional Partner Network International",
+        ]
+        let firstProvider = app.buttons[providerNames[0]]
+        let secondProvider = app.buttons[providerNames[1]]
+        XCTAssertTrue(firstProvider.waitForExistence(timeout: 3))
+        XCTAssertTrue(secondProvider.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(firstProvider))
+        XCTAssertEqual(
+            firstProvider.frame.midY,
+            secondProvider.frame.midY,
+            accuracy: 2
+        )
+        XCTAssertGreaterThan(secondProvider.frame.midX, firstProvider.frame.midX)
+
+        for providerName in providerNames.dropFirst() {
+            XCUIRemote.shared.press(.right)
+            let provider = app.buttons[providerName]
+            XCTAssertTrue(provider.waitForExistence(timeout: 3))
+            XCTAssertTrue(
+                waitForFocus(provider),
+                "Expected focus on \(providerName)"
+            )
+        }
+
+        let finalProvider = app.buttons[
+            "Long Regional Partner Network International"
+        ]
+        XCTAssertGreaterThan(
+            visibleFraction(
+                of: finalProvider,
+                inside: app.windows.firstMatch.frame
+            ),
+            0.9
+        )
+        attachScreenshot(
+            of: app,
+            named: "Login Provider Picker - \(colorScheme.rawValue.capitalized)"
+        )
+
+        XCUIRemote.shared.press(.down)
+        XCTAssertTrue(waitForFocus(app.buttons["login.choose-service"]))
+    }
+
+    @MainActor
     func testXboxChoiceDisplaysMicrosoftDeviceCodeLogin() {
         let app = makeApp(extraArguments: ["--cloudnow-ui-service-chooser"])
         app.launch()

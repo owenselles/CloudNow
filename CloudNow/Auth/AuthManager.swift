@@ -247,6 +247,10 @@ final class AuthManager {
 
     // MARK: Login (Device Flow)
 
+    func discoverLoginProviders() async throws -> [LoginProvider] {
+        try await resolvedAPI().fetchProviders()
+    }
+
     @discardableResult
     func login(with provider: LoginProvider? = nil) -> Task<Void, Never> {
         guard !isCredentialMutationInProgress else { return Task {} }
@@ -274,13 +278,7 @@ final class AuthManager {
                 } else {
                     await (try? api.fetchProviders()) ?? []
                 }
-                let selectedProvider = providers.first ?? LoginProvider(
-                    idpId: NVIDIAAuth.defaultIdpId,
-                    code: "NVIDIA",
-                    displayName: "NVIDIA",
-                    streamingServiceUrl: NVIDIAAuth.defaultStreamingUrl,
-                    priority: 0
-                )
+                let selectedProvider = providers.first ?? .nvidiaDirect
 
                 // Device flow loop: restart automatically when the code expires.
                 // access_denied and other hard errors escape to the outer catch.

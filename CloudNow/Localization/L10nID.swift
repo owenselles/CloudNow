@@ -406,5 +406,6 @@ enum L10nID {
         "accessibility": "Aksesibilitas",
         "controller_changes_next_session": "Perubahan pengontrol diterapkan pada sesi cloud berikutnya.",
         "ending_session": "Mengakhiri sesi cloud…",
+        "managed_by_partner": "Dikelola oleh penyedia mitra",
     ]
 }
