@@ -68,7 +68,8 @@ nonisolated struct ControllerTextEntryReplayLifecycle: Sendable {
         replayInputPaused = false
     }
 
-    mutating func prepareReplay() -> ControllerTextEntryReplayToken {
+    mutating func prepareReplay() -> ControllerTextEntryReplayToken? {
+        guard pendingReplay == nil else { return nil }
         nextGeneration &+= 1
         let token = ControllerTextEntryReplayToken(generation: nextGeneration)
         pendingReplay = token
@@ -643,7 +644,9 @@ final class GFNStreamController: NSObject {
             return
         }
 
-        let replayToken = controllerTextEntryReplayLifecycle.prepareReplay()
+        guard pendingControllerTextEntryReplay == nil,
+              let replayToken = controllerTextEntryReplayLifecycle.prepareReplay()
+        else { return }
         pendingControllerTextEntryReplay = PendingControllerTextEntryReplay(
             token: replayToken,
             completion: completion

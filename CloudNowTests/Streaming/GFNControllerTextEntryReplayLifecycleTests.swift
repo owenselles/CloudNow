@@ -4,11 +4,12 @@ import Testing
 @Suite("GFN controller text-entry replay lifecycle")
 struct GFNTextReplayLifecycleTests {
     @Test("Rejected replay keeps text entry active")
-    func rejectedReplayKeepsTextEntryActive() {
+    func rejectedReplayKeepsTextEntryActive() throws {
         var lifecycle = ControllerTextEntryReplayLifecycle()
 
         lifecycle.beginTextEntry()
-        let replay = lifecycle.prepareReplay()
+        let preparedReplay = lifecycle.prepareReplay()
+        let replay = try #require(preparedReplay)
         let rejected = lifecycle.rejectReplay(replay)
 
         #expect(rejected)
@@ -19,11 +20,12 @@ struct GFNTextReplayLifecycleTests {
     }
 
     @Test("Reconnect invalidation isolates a replacement replay from stale completion")
-    func reconnectInvalidationIsolatesReplacementReplay() {
+    func reconnectInvalidationIsolatesReplacementReplay() throws {
         var lifecycle = ControllerTextEntryReplayLifecycle()
 
         lifecycle.beginTextEntry()
-        let disconnectedReplay = lifecycle.prepareReplay()
+        let preparedDisconnectedReplay = lifecycle.prepareReplay()
+        let disconnectedReplay = try #require(preparedDisconnectedReplay)
         let disconnectedReplayAccepted = lifecycle.acceptReplay(disconnectedReplay)
         #expect(disconnectedReplayAccepted)
         #expect(!lifecycle.controllerTextEntryActive)
@@ -37,8 +39,8 @@ struct GFNTextReplayLifecycleTests {
         #expect(!lifecycle.inputPaused(overlayPaused: false))
         #expect(lifecycle.inputPaused(overlayPaused: true))
 
-        lifecycle.beginTextEntry()
-        let replacementReplay = lifecycle.prepareReplay()
+        let preparedReplacementReplay = lifecycle.prepareReplay()
+        let replacementReplay = try #require(preparedReplacementReplay)
         let replacementReplayAccepted = lifecycle.acceptReplay(replacementReplay)
         #expect(replacementReplayAccepted)
 
@@ -51,5 +53,22 @@ struct GFNTextReplayLifecycleTests {
         #expect(replacementReplayFinished)
         #expect(lifecycle.pendingReplay == nil)
         #expect(!lifecycle.replayInputPaused)
+    }
+
+    @Test("A pending replay remains authoritative when submit fires twice")
+    func duplicateReplayPreparationIsRejected() throws {
+        var lifecycle = ControllerTextEntryReplayLifecycle()
+
+        lifecycle.beginTextEntry()
+        let preparedFirstReplay = lifecycle.prepareReplay()
+        let firstReplay = try #require(preparedFirstReplay)
+        let duplicateReplay = lifecycle.prepareReplay()
+
+        #expect(duplicateReplay == nil)
+        #expect(lifecycle.pendingReplay == firstReplay)
+
+        let firstReplayAccepted = lifecycle.acceptReplay(firstReplay)
+        #expect(firstReplayAccepted)
+        #expect(lifecycle.replayInputPaused)
     }
 }
