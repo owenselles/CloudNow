@@ -1288,15 +1288,17 @@ final nonisolated class InputSender: @unchecked Sendable {
         now: UInt64,
         excludedButtons: UInt16
     ) {
-        let baseButtons = currentState.buttons & ~textInputTriggerMask
-        var previousProjectedButtons: UInt16 = 0
-        for index in 0 ..< transitions.count {
-            let projectedButtons = transitions[index] & ~excludedButtons
-            guard projectedButtons != previousProjectedButtons else { continue }
-            previousProjectedButtons = projectedButtons
+        // Replay against the last state the remote actually received. Using the
+        // current physical state here would collapse a newly pressed unrelated
+        // button into the older buffered target edge.
+        let replayButtons = transitions.projected(
+            onto: (lastSnapshots[slot]?.buttons ?? 0) & ~textInputTriggerMask,
+            excluding: excludedButtons
+        )
+        for index in 0 ..< replayButtons.count {
             sendGamepadSnapshot(
                 GamepadSnapshot(
-                    buttons: baseButtons | projectedButtons,
+                    buttons: replayButtons[index],
                     leftTrigger: currentState.leftTrigger,
                     rightTrigger: currentState.rightTrigger,
                     leftStickX: currentState.lx,

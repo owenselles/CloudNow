@@ -146,6 +146,36 @@ struct ControllerKeyboardShortcutResolverTests {
         #expect(failed.replayTransitions.values == [firstButton])
         #expect(!failed.suppressesOverlayGestures)
         #expect(!failed.suppressesSteamGestures)
+
+        let replay = failed.replayTransitions.projected(
+            onto: 0,
+            excluding: 0
+        )
+        #expect(replay.values == [firstButton])
+        #expect(replay.values + [failed.forwardedButtons] == [
+            firstButton,
+            firstButton | unrelatedButton,
+        ])
+    }
+
+    @Test("Replay projection preserves an existing remote base and removes local overlay edges")
+    func replayProjectionPreservesRemoteBase() {
+        let existingRemoteButton: UInt16 = 1 << 3
+        var transitions = ShortcutTransitionBuffer()
+        _ = transitions.append(firstButton)
+        _ = transitions.append(firstButton | secondButton)
+        _ = transitions.append(secondButton)
+        _ = transitions.append(0)
+
+        let replay = transitions.projected(
+            onto: existingRemoteButton,
+            excluding: firstButton
+        )
+
+        #expect(replay.values == [
+            existingRemoteButton | secondButton,
+            existingRemoteButton,
+        ])
     }
 
     @Test("Transition history is fixed-capacity under button bounce")

@@ -52,6 +52,21 @@ nonisolated struct ShortcutTransitionBuffer: Equatable, Sendable {
         return false
     }
 
+    func projected(
+        onto baseButtons: UInt16,
+        excluding excludedButtons: UInt16
+    ) -> ShortcutTransitionBuffer {
+        var result = ShortcutTransitionBuffer()
+        var previousButtons = baseButtons
+        for index in 0 ..< count {
+            let buttons = baseButtons | (self[index] & ~excludedButtons)
+            guard buttons != previousButtons else { continue }
+            _ = result.append(buttons)
+            previousButtons = buttons
+        }
+        return result
+    }
+
     var values: [UInt16] {
         (0 ..< count).map { self[$0] }
     }
