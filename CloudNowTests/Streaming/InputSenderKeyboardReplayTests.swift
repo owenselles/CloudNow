@@ -103,8 +103,36 @@ struct InputSenderKeyboardReplayTests {
         #expect(channel.recordedSends().count == 3)
     }
 
-    @Test("Stopping an in-flight replay completes as cancelled")
-    func stopCancelsInFlightReplay() async throws {
+    @Test("A failed key-up retries then releases the accepted ordinary key")
+    func failedKeyUpReleasesAcceptedKey() async throws {
+        let channel = ManualReplayChannel()
+        let sender = makeSender(channel: channel)
+        let completion = ReplayCompletionProbe()
+        var sendIterator = channel.sends.makeAsyncIterator()
+        var completionIterator = completion.values.makeAsyncIterator()
+
+        #expect(sender.replaySubmittedText("a") { completion.record($0) } == .supported)
+
+        let keyDown = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: keyDown) == event(true, 0x41, 0x1E, 0))
+        #expect(channel.resolve(keyDown, with: .accepted))
+
+        for _ in 0 ..< 3 {
+            let failedKeyUp = try #require(await sendIterator.next())
+            #expect(try keyboardEvent(from: failedKeyUp) == event(false, 0x41, 0x1E, 0))
+            #expect(channel.resolve(failedKeyUp, with: .rejected))
+        }
+
+        let cleanupKeyUp = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: cleanupKeyUp) == event(false, 0x41, 0x1E, 0))
+        #expect(channel.resolve(cleanupKeyUp, with: .rejected))
+
+        #expect(try #require(await completionIterator.next()) == .transportFailure)
+        #expect(channel.recordedSends().count == 5)
+    }
+
+    @Test("Stopping an in-flight accepted key-down releases it before cancellation")
+    func stopCleansUpInFlightAcceptedKeyDown() async throws {
         let channel = ManualReplayChannel()
         let sender = makeSender(channel: channel)
         let completion = ReplayCompletionProbe()
@@ -117,12 +145,79 @@ struct InputSenderKeyboardReplayTests {
         sender.stop()
         #expect(channel.resolve(observed, with: .accepted))
 
+        let cleanupKeyUp = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: cleanupKeyUp) == event(false, 0x41, 0x1E, 0))
+        #expect(channel.resolve(cleanupKeyUp, with: .accepted))
+
         #expect(try #require(await completionIterator.next()) == .cancelled)
-        #expect(channel.recordedSends().count == 1)
+        #expect(channel.recordedSends().count == 2)
         #expect(completion.recordedResults() == [.cancelled])
     }
 
-    private func makeSender(channel: DataChannelSender) -> InputSender {
+    @Test("Stopping after accepted Shift and key downs releases key before modifier")
+    func stopCleansUpAcceptedShiftChord() async throws {
+        let channel = ManualReplayChannel()
+        let sender = makeSender(channel: channel)
+        let completion = ReplayCompletionProbe()
+        var sendIterator = channel.sends.makeAsyncIterator()
+        var completionIterator = completion.values.makeAsyncIterator()
+
+        #expect(sender.replaySubmittedText("A") { completion.record($0) } == .supported)
+
+        let shiftDown = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: shiftDown) == event(true, 0xA0, 0x2A, 0x0001))
+        #expect(channel.resolve(shiftDown, with: .accepted))
+
+        let keyDown = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: keyDown) == event(true, 0x41, 0x1E, 0x0001))
+        #expect(channel.resolve(keyDown, with: .accepted))
+        sender.stop()
+
+        let keyUp = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: keyUp) == event(false, 0x41, 0x1E, 0x0001))
+        #expect(channel.resolve(keyUp, with: .accepted))
+
+        let shiftUp = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: shiftUp) == event(false, 0xA0, 0x2A, 0))
+        #expect(channel.resolve(shiftUp, with: .accepted))
+
+        #expect(try #require(await completionIterator.next()) == .cancelled)
+    }
+
+    @Test("Stopping after accepted AltGr and key downs releases key before modifier")
+    func stopCleansUpAcceptedAltGrChord() async throws {
+        let channel = ManualReplayChannel()
+        let sender = makeSender(channel: channel, keyboardLayout: "de-DE")
+        let completion = ReplayCompletionProbe()
+        var sendIterator = channel.sends.makeAsyncIterator()
+        var completionIterator = completion.values.makeAsyncIterator()
+
+        #expect(sender.replaySubmittedText("@") { completion.record($0) } == .supported)
+
+        let altGrDown = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: altGrDown) == event(true, 0xA5, 0xE038, 0x0004))
+        #expect(channel.resolve(altGrDown, with: .accepted))
+
+        let keyDown = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: keyDown) == event(true, 0x51, 0x10, 0x0004))
+        #expect(channel.resolve(keyDown, with: .accepted))
+        sender.stop()
+
+        let keyUp = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: keyUp) == event(false, 0x51, 0x10, 0x0004))
+        #expect(channel.resolve(keyUp, with: .accepted))
+
+        let altGrUp = try #require(await sendIterator.next())
+        #expect(try keyboardEvent(from: altGrUp) == event(false, 0xA5, 0xE038, 0))
+        #expect(channel.resolve(altGrUp, with: .accepted))
+
+        #expect(try #require(await completionIterator.next()) == .cancelled)
+    }
+
+    private func makeSender(
+        channel: DataChannelSender,
+        keyboardLayout: String = "en-US"
+    ) -> InputSender {
         let sender = InputSender(channel: channel)
         sender.configure(
             protocolVersion: 2,
@@ -130,7 +225,7 @@ struct InputSenderKeyboardReplayTests {
             overlayTriggerButton: .start,
             textInputTriggerSequence: StreamSettings.defaultTextInputTriggerSequence,
             textInputTriggerDelayMs: StreamSettings.defaultTextInputTriggerDelayMs,
-            keyboardLayout: "en-US",
+            keyboardLayout: keyboardLayout,
             steamOverlayGestureEnabled: true,
             remoteMode: .gamepad
         )

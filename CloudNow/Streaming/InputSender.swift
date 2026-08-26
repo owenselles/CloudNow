@@ -701,6 +701,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var steamHoldTicks: [Int: Int] = [:]
     private var steamTriggeredSlots = Set<Int>()
     private var keyboardReplayGeneration: UInt64 = 0
+    private var acceptedReplayDownEvents: [KeyboardReplayEvent] = []
     private static let sampleInterval = 8_333_333
     private static let gamepadKeepAlive = UInt64(33_333_333)
     private static let heartbeatInterval = UInt64(2_000_000_000)
@@ -709,6 +710,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     private static let microGamepadSuppressionWindow = UInt64(100_000_000)
     private static let replayEventIntervalMs: Int = 18
     private static let replayMaxSendAttempts = 3
+    private static let maxSimultaneousReplayDownEvents = 4
 
     init(channel: DataChannelSender) {
         self.channel = channel
@@ -740,7 +742,7 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     func stop() {
         inputQueue.sync {
-            keyboardReplayGeneration &+= 1
+            cancelKeyboardReplay()
             sampler?.setEventHandler {}
             sampler?.cancel()
             sampler = nil
@@ -797,7 +799,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         inputQueue.async { [weak self] in
             guard let self, isPaused != paused else { return }
             isPaused = paused
-            keyboardReplayGeneration &+= 1
+            cancelKeyboardReplay()
             pointerDelta = (0, 0)
             microPointerDelta = (0, 0)
             controllerTouchpadPointerDelta = (0, 0)
@@ -856,7 +858,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         overlayPresses.removeAll()
         overlayReplaySlots.removeAll()
         keyboardShortcutResolvers.removeAll()
-        keyboardReplayGeneration &+= 1
+        cancelKeyboardReplay()
         steamHoldTicks.removeAll()
         steamTriggeredSlots.removeAll()
         lastSnapshots.removeAll()
@@ -1542,7 +1544,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                     DispatchQueue.main.async { completion(.cancelled) }
                     return
                 }
-                keyboardReplayGeneration &+= 1
+                cancelKeyboardReplay()
                 let generation = keyboardReplayGeneration
                 releaseHeldDiscreteInputs()
                 sendNeutralGamepads()
@@ -1550,7 +1552,6 @@ final nonisolated class InputSender: @unchecked Sendable {
                     plan.events,
                     index: 0,
                     attempt: 1,
-                    heldModifiers: 0,
                     generation: generation,
                     completion: completion
                 )
@@ -1569,7 +1570,6 @@ final nonisolated class InputSender: @unchecked Sendable {
         _ events: [KeyboardReplayEvent],
         index: Int,
         attempt: Int,
-        heldModifiers: UInt8,
         generation: UInt64,
         completion: @escaping @Sendable (KeyboardReplayCompletionResult) -> Void
     ) {
@@ -1578,7 +1578,11 @@ final nonisolated class InputSender: @unchecked Sendable {
             return
         }
         guard index < events.count else {
-            completeKeyboardReplay(.completed, completion: completion)
+            finishKeyboardReplay(
+                .completed,
+                generation: generation,
+                completion: completion
+            )
             return
         }
 
@@ -1594,12 +1598,21 @@ final nonisolated class InputSender: @unchecked Sendable {
                 return
             }
             guard generation == keyboardReplayGeneration else {
-                completeKeyboardReplay(.cancelled, completion: completion)
+                let releases = disposition == .accepted && event.down
+                    ? [replayReleaseEvent(for: event)]
+                    : []
+                sendReplayReleaseEvents(releases) { [weak self] in
+                    guard let self else {
+                        DispatchQueue.main.async { completion(.cancelled) }
+                        return
+                    }
+                    completeKeyboardReplay(.cancelled, completion: completion)
+                }
                 return
             }
 
             if disposition == .accepted {
-                let nextHeldModifiers = replayModifierMask(after: event, current: heldModifiers)
+                recordAcceptedReplayEvent(event)
                 inputQueue.asyncAfter(deadline: .now() + .milliseconds(Self.replayEventIntervalMs)) { [weak self, events] in
                     guard let self else {
                         DispatchQueue.main.async { completion(.cancelled) }
@@ -1609,7 +1622,6 @@ final nonisolated class InputSender: @unchecked Sendable {
                         events,
                         index: index + 1,
                         attempt: 1,
-                        heldModifiers: nextHeldModifiers,
                         generation: generation,
                         completion: completion
                     )
@@ -1624,14 +1636,13 @@ final nonisolated class InputSender: @unchecked Sendable {
                         events,
                         index: index,
                         attempt: attempt + 1,
-                        heldModifiers: heldModifiers,
                         generation: generation,
                         completion: completion
                     )
                 }
             } else {
-                releaseReplayModifiers(
-                    heldModifiers,
+                finishKeyboardReplay(
+                    .transportFailure,
                     generation: generation,
                     completion: completion
                 )
@@ -1639,47 +1650,99 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
-    private func replayModifierMask(after event: KeyboardReplayEvent, current: UInt8) -> UInt8 {
-        guard let modifier = event.modifier else { return current }
-        let bit: UInt8 = modifier == .leftShift ? 1 << 0 : 1 << 1
-        return event.down ? current | bit : current & ~bit
-    }
-
-    private func releaseReplayModifiers(
-        _ modifiers: UInt8,
+    private func finishKeyboardReplay(
+        _ result: KeyboardReplayCompletionResult,
         generation: UInt64,
         completion: @escaping @Sendable (KeyboardReplayCompletionResult) -> Void
     ) {
-        guard generation == keyboardReplayGeneration else {
-            completeKeyboardReplay(.cancelled, completion: completion)
+        let releases = drainAcceptedReplayReleaseEvents()
+        sendReplayReleaseEvents(releases) { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async { completion(.cancelled) }
+                return
+            }
+            completeKeyboardReplay(
+                generation == keyboardReplayGeneration ? result : .cancelled,
+                completion: completion
+            )
+        }
+    }
+
+    private func recordAcceptedReplayEvent(_ event: KeyboardReplayEvent) {
+        if event.down {
+            guard !acceptedReplayDownEvents.contains(where: {
+                $0.virtualKey == event.virtualKey && $0.scanCode == event.scanCode
+            }) else { return }
+            guard acceptedReplayDownEvents.count < Self.maxSimultaneousReplayDownEvents else {
+                let release = replayReleaseEvent(for: event)
+                emitKeyboard(
+                    down: false,
+                    vk: release.virtualKey,
+                    scancode: release.scanCode,
+                    modifiers: release.modifiers
+                )
+                return
+            }
+            acceptedReplayDownEvents.append(event)
+        } else if let index = acceptedReplayDownEvents.lastIndex(where: {
+            $0.virtualKey == event.virtualKey && $0.scanCode == event.scanCode
+        }) {
+            acceptedReplayDownEvents.remove(at: index)
+        }
+    }
+
+    private func cancelKeyboardReplay() {
+        keyboardReplayGeneration &+= 1
+        sendReplayReleaseEvents(drainAcceptedReplayReleaseEvents())
+    }
+
+    private func drainAcceptedReplayReleaseEvents() -> [KeyboardReplayEvent] {
+        let releases = acceptedReplayDownEvents.reversed().map {
+            replayReleaseEvent(for: $0)
+        }
+        acceptedReplayDownEvents.removeAll(keepingCapacity: true)
+        return releases
+    }
+
+    private func replayReleaseEvent(for event: KeyboardReplayEvent) -> KeyboardReplayEvent {
+        let modifiers = switch event.modifier {
+        case .some(.leftShift): event.modifiers & ~0x0001
+        case .some(.rightAlt): event.modifiers & ~0x0004
+        case nil: event.modifiers
+        }
+        return KeyboardReplayEvent(
+            down: false,
+            virtualKey: event.virtualKey,
+            scanCode: event.scanCode,
+            modifiers: modifiers
+        )
+    }
+
+    private func sendReplayReleaseEvents(
+        _ events: [KeyboardReplayEvent],
+        index: Int = 0,
+        completion: (@Sendable () -> Void)? = nil
+    ) {
+        guard index < events.count else {
+            completion?()
             return
         }
-        if modifiers & (1 << 1) != 0 {
-            emitKeyboard(down: false, vk: 0xA5, scancode: 0xE038, modifiers: 0) { [weak self] _ in
-                guard let self else {
-                    DispatchQueue.main.async { completion(.cancelled) }
-                    return
-                }
-                releaseReplayModifiers(
-                    modifiers & ~(1 << 1),
-                    generation: generation,
-                    completion: completion
-                )
+        let event = events[index]
+        emitKeyboard(
+            down: false,
+            vk: event.virtualKey,
+            scancode: event.scanCode,
+            modifiers: event.modifiers
+        ) { [weak self, events] _ in
+            guard let self else {
+                completion?()
+                return
             }
-        } else if modifiers & (1 << 0) != 0 {
-            emitKeyboard(down: false, vk: 0xA0, scancode: 0x2A, modifiers: 0) { [weak self] _ in
-                guard let self else {
-                    DispatchQueue.main.async { completion(.cancelled) }
-                    return
-                }
-                releaseReplayModifiers(
-                    modifiers & ~(1 << 0),
-                    generation: generation,
-                    completion: completion
-                )
-            }
-        } else {
-            completeKeyboardReplay(.transportFailure, completion: completion)
+            sendReplayReleaseEvents(
+                events,
+                index: index + 1,
+                completion: completion
+            )
         }
     }
 
