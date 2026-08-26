@@ -9,23 +9,24 @@ struct StreamSettingsTests {
         let expected: Double
     }
 
-    @Test("Defaults describe the conservative tvOS streaming profile")
+    @Test("Defaults describe the preferred tvOS streaming profile")
     func defaults() {
         let settings = StreamSettings()
 
         #expect(settings.resolution == "1920x1080")
         #expect(settings.fps == 60)
-        #expect(settings.maxBitrateKbps == 20000)
-        #expect(settings.codec == .h264)
+        #expect(settings.maxBitrateKbps == 100_000)
+        #expect(settings.codec == .h265)
         #expect(settings.colorPreference == .automatic)
         #expect(settings.keyboardLayout == StreamSettings.defaultKeyboardLayout)
         #expect(settings.gameLanguage == StreamSettings.automaticGameLanguage)
-        #expect(!settings.enableL4S)
+        #expect(settings.enableL4S)
         #expect(!settings.micEnabled)
         #expect(settings.rumbleEnabled)
         #expect(settings.rumbleIntensity == 1)
         #expect(settings.controllerDeadzone == 0.15)
         #expect(settings.overlayTriggerButton == .start)
+        #expect(settings.enableSteamOverlayGesture)
         #expect(settings.defaultRemoteInputMode == .gamepad)
         #expect(settings.serverRoutingMode == .serverAuto)
         #expect(settings.preferredZoneUrl == nil)
@@ -114,6 +115,19 @@ struct StreamSettingsTests {
         let decoded = try decodeFixture("minimal.json")
 
         #expect(decoded == StreamSettings())
+    }
+
+    @Test("Explicit legacy streaming preferences survive new defaults")
+    func explicitLegacyStreamingPreferencesSurviveNewDefaults() throws {
+        let data = Data(
+            #"{"maxBitrateKbps":20000,"codec":"H264","enableL4S":false}"#.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: data)
+
+        #expect(decoded.maxBitrateKbps == 20000)
+        #expect(decoded.codec == .h264)
+        #expect(!decoded.enableL4S)
     }
 
     @Test("Legacy color quality migrates and decoded values still clamp")

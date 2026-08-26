@@ -15,7 +15,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
 
     var resolution: String = "1920x1080"
     var fps: Int = 60
-    var maxBitrateKbps: Int = 20000 {
+    var maxBitrateKbps: Int = 100_000 {
         didSet { maxBitrateKbps = min(maxBitrateKbps, Self.maxSelectableBitrateKbps) }
     }
 
@@ -23,7 +23,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
     var colorPreference: ColorModePreference = .automatic
     var keyboardLayout: String = Self.defaultKeyboardLayout
     var gameLanguage: String = Self.defaultGameLanguage
-    var enableL4S: Bool = false
+    var enableL4S: Bool = true
     var micEnabled: Bool = false
     var rumbleEnabled: Bool = true
     /// Rumble power multiplier (0.0–2.0, 1.0 = default). Higher values stress controller motors.
