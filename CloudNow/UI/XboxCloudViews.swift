@@ -3998,7 +3998,7 @@ private struct XboxSettingsView: View {
 
                 if supportsManualResolution {
                     CloudNowStreamQualitySection {
-                        CloudNowStreamQualityPicker(
+                        CloudNowSettingSelectionRow(
                             L10n.text("resolution"),
                             selection: xboxResolutionSelection,
                             accessibilityIdentifier: "settings.stream-quality.resolution",
@@ -4009,8 +4009,9 @@ private struct XboxSettingsView: View {
                 }
 
                 Section(L10n.text("game")) {
-                    XboxGameLanguagePicker(
-                        selection: $modeViewModel.streamSettings.gameLanguage
+                    CloudNowGameLanguageSelectionRow(
+                        selection: $modeViewModel.streamSettings.gameLanguage,
+                        automaticValue: XboxCloudStreamSettings.automaticGameLanguage
                     )
                 }
                 .disabled(isBusy)
@@ -4255,7 +4256,7 @@ private struct XboxSettingsView: View {
     }
 
     private var xboxResolutionOptions: [
-        CloudNowStreamQualityOption<XboxCloudDisplayResolution>
+        CloudNowSettingOption<XboxCloudDisplayResolution>
     ] {
         let available = Set(modeViewModel.streamCapabilities.resolutions)
         return [
@@ -4285,14 +4286,15 @@ private struct XboxSettingsView: View {
 
     private func resolutionOption(
         _ resolution: XboxCloudDisplayResolution
-    ) -> CloudNowStreamQualityOption<XboxCloudDisplayResolution> {
-        CloudNowStreamQualityOption(
+    ) -> CloudNowSettingOption<XboxCloudDisplayResolution> {
+        CloudNowSettingOption(
             value: resolution,
             title: resolution.label,
             badge: resolution == .qhd
                 ? L10n.text("maximum_abbreviation")
                 : resolution.badge,
-            systemImage: resolution.systemImage
+            systemImage: resolution.systemImage,
+            accessibilityIdentifier: resolution.rawValue
         )
     }
 
@@ -4523,30 +4525,6 @@ private struct XboxSettingsView: View {
             return true
         }
         return await sessionCoordinator.endServerSessionUsingProvider(lease)
-    }
-}
-
-private struct XboxGameLanguagePicker: View {
-    @Binding var selection: String
-
-    private static let languageCodes = [
-        "en_US", "en_GB", "fr_FR", "de_DE", "es_ES", "it_IT", "pt_BR",
-        "hi_IN", "ja_JP", "ko_KR", "zh_CN", "zh_TW", "ru_RU", "ar_SA",
-        "nl_NL", "pl_PL", "sv_SE", "fi_FI", "tr_TR", "el_GR", "he_IL",
-        "cs_CZ", "da_DK", "hr_HR", "hu_HU", "id_ID", "ms_MY", "ro_RO",
-        "sk_SK", "vi_VN", "uk_UA",
-    ]
-
-    var body: some View {
-        Picker(L10n.text("game_language"), selection: $selection) {
-            Text(L10n.text("automatic"))
-                .tag(XboxCloudStreamSettings.automaticGameLanguage)
-            ForEach(Self.languageCodes, id: \.self) { code in
-                Text(L10n.localizedLanguageName(for: code))
-                    .tag(code)
-            }
-        }
-        .accessibilityIdentifier("settings.stream-quality.game-language")
     }
 }
 

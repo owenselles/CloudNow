@@ -1,4 +1,5 @@
 @testable import CloudNow
+import Foundation
 import Testing
 
 @Suite("Controller navigation ownership")
@@ -21,6 +22,26 @@ struct UIControllerNavigationCoordinatorTests {
 
         second.stop()
         #expect(!second.ownsGlobalControllerHandlers)
+    }
+
+    @MainActor
+    @Test("A modal context suspends and restores the previous navigation mode")
+    func modalContextRestoresPreviousMode() {
+        let coordinator = UIControllerNavigationCoordinator()
+        let carouselContext = UUID()
+        let modalContext = UUID()
+
+        coordinator.activateContext(id: carouselContext, mode: .carousel)
+        #expect(coordinator.activeMode == .carousel)
+
+        coordinator.activateContext(id: modalContext, mode: .modal)
+        #expect(coordinator.activeMode == .modal)
+
+        coordinator.deactivateContext(id: modalContext)
+        #expect(coordinator.activeMode == .carousel)
+
+        coordinator.deactivateContext(id: carouselContext)
+        #expect(coordinator.activeMode == .tabs)
     }
 }
 

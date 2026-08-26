@@ -359,11 +359,12 @@ extension CloudNowControllerSettingsSection where AdditionalContent == EmptyView
     }
 }
 
-struct CloudNowStreamQualityOption<Value: Hashable>: Identifiable {
+struct CloudNowSettingOption<Value: Hashable>: Identifiable {
     let value: Value
     let title: String
     let badge: String?
     let systemImage: String?
+    let accessibilityIdentifier: String?
 
     var id: Value {
         value
@@ -373,119 +374,234 @@ struct CloudNowStreamQualityOption<Value: Hashable>: Identifiable {
         value: Value,
         title: String,
         badge: String? = nil,
-        systemImage: String? = nil
+        systemImage: String? = nil,
+        accessibilityIdentifier: String? = nil
     ) {
         self.value = value
         self.title = title
         self.badge = badge
         self.systemImage = systemImage
+        self.accessibilityIdentifier = accessibilityIdentifier
+    }
+
+    var displayTitle: String {
+        guard let badge else { return title }
+        return "\(title)  —  \(badge)"
     }
 }
 
-struct CloudNowStreamQualityOptionGroup<Value: Hashable>: Identifiable {
-    let title: String
-    let options: [CloudNowStreamQualityOption<Value>]
+struct CloudNowSettingOptionGroup<Value: Hashable>: Identifiable {
+    let title: String?
+    let options: [CloudNowSettingOption<Value>]
 
     var id: String {
-        title
+        title ?? "__default"
     }
 }
 
-struct CloudNowStreamQualityPicker<Value: Hashable>: View {
+struct CloudNowSettingSelectionRow<Value: Hashable>: View {
     let title: String
+    let description: String?
+    let descriptionIsWarning: Bool
     let accessibilityIdentifier: String
     @Binding var selection: Value
-    let options: [CloudNowStreamQualityOption<Value>]
-    let groups: [CloudNowStreamQualityOptionGroup<Value>]
+    let groups: [CloudNowSettingOptionGroup<Value>]
+
+    @Environment(UIControllerNavigationCoordinator.self) private var controllerNavigation
+    @State private var isPresentingSelection = false
 
     init(
         _ title: String,
+        description: String? = nil,
+        descriptionIsWarning: Bool = false,
         selection: Binding<Value>,
         accessibilityIdentifier: String,
-        options: [CloudNowStreamQualityOption<Value>] = [],
-        groups: [CloudNowStreamQualityOptionGroup<Value>] = []
+        options: [CloudNowSettingOption<Value>]
     ) {
         self.title = title
+        self.description = description
+        self.descriptionIsWarning = descriptionIsWarning
         self.accessibilityIdentifier = accessibilityIdentifier
         _selection = selection
-        self.options = options
+        groups = [CloudNowSettingOptionGroup(title: nil, options: options)]
+    }
+
+    init(
+        _ title: String,
+        description: String? = nil,
+        descriptionIsWarning: Bool = false,
+        selection: Binding<Value>,
+        accessibilityIdentifier: String,
+        groups: [CloudNowSettingOptionGroup<Value>]
+    ) {
+        self.title = title
+        self.description = description
+        self.descriptionIsWarning = descriptionIsWarning
+        self.accessibilityIdentifier = accessibilityIdentifier
+        _selection = selection
         self.groups = groups
     }
 
     var body: some View {
-        Picker(title, selection: $selection) {
-            ForEach(options) { option in
-                optionLabel(option)
-                    .tag(option.value)
-            }
-            ForEach(groups) { group in
-                if !group.options.isEmpty {
-                    Section(group.title) {
-                        ForEach(group.options) { option in
-                            optionLabel(option)
-                                .tag(option.value)
-                        }
+        Button {
+            isPresentingSelection = true
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                    if let description {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(
+                                descriptionIsWarning ? .orange : .secondary
+                            )
                     }
                 }
+                .padding(.vertical, 8)
+                Spacer()
+                Text(selectedOption?.displayTitle ?? "")
+                    .foregroundStyle(.secondary)
             }
         }
+        .foregroundStyle(.primary)
         .accessibilityIdentifier(accessibilityIdentifier)
-    }
-
-    @ViewBuilder
-    private func optionLabel(_ option: CloudNowStreamQualityOption<Value>) -> some View {
-        if let systemImage = option.systemImage {
-            Label(optionDisplayTitle(option), systemImage: systemImage)
-        } else {
-            Text(optionDisplayTitle(option))
+        .accessibilityLabel(title)
+        .accessibilityValue(selectedOption?.displayTitle ?? "")
+        .accessibilityHint(description ?? "")
+        .sheet(isPresented: $isPresentingSelection) {
+            CloudNowSettingSelectionSheet(
+                title: title,
+                selection: $selection,
+                groups: groups,
+                accessibilityIdentifier: accessibilityIdentifier
+            )
+            .environment(controllerNavigation)
         }
     }
 
-    private func optionDisplayTitle(_ option: CloudNowStreamQualityOption<Value>) -> String {
-        guard let badge = option.badge else { return option.title }
-        return "\(option.title)  —  \(badge)"
+    private var selectedOption: CloudNowSettingOption<Value>? {
+        groups.lazy.flatMap(\.options).first { $0.value == selection }
     }
 }
 
-struct CloudNowGameLanguagePicker: View {
-    @Binding var selection: String
+private struct CloudNowSettingSelectionSheet<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let groups: [CloudNowSettingOptionGroup<Value>]
+    let accessibilityIdentifier: String
+
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedValue: Value?
 
     var body: some View {
-        Picker(L10n.text("game_language"), selection: $selection) {
-            Text(L10n.text("automatic")).tag(StreamSettings.automaticGameLanguage)
-            Text("English (US)").tag("en_US")
-            Text("English (UK)").tag("en_GB")
-            Text("French").tag("fr_FR")
-            Text("German").tag("de_DE")
-            Text("Spanish").tag("es_ES")
-            Text("Italian").tag("it_IT")
-            Text("Portuguese").tag("pt_BR")
-            Text("Hindi").tag("hi_IN")
-            Text("Japanese").tag("ja_JP")
-            Text("Korean").tag("ko_KR")
-            Text("Chinese (Simplified)").tag("zh_CN")
-            Text("Chinese (Traditional)").tag("zh_TW")
-            Text("Russian").tag("ru_RU")
-            Text("Arabic").tag("ar_SA")
-            Text("Dutch").tag("nl_NL")
-            Text("Polish").tag("pl_PL")
-            Text("Swedish").tag("sv_SE")
-            Text("Finnish").tag("fi_FI")
-            Text("Turkish").tag("tr_TR")
-            Text("Greek").tag("el_GR")
-            Text("Hebrew").tag("he_IL")
-            Text("Czech").tag("cs_CZ")
-            Text("Danish").tag("da_DK")
-            Text("Croatian").tag("hr_HR")
-            Text("Hungarian").tag("hu_HU")
-            Text("Indonesian").tag("id_ID")
-            Text("Malay").tag("ms_MY")
-            Text("Romanian").tag("ro_RO")
-            Text("Slovak").tag("sk_SK")
-            Text("Vietnamese").tag("vi_VN")
-            Text("Ukrainian").tag("uk_UA")
+        NavigationStack {
+            VStack(spacing: 0) {
+                Text(title)
+                    .font(.title2.bold())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 64)
+                    .padding(.top, 36)
+                    .padding(.bottom, 20)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("\(accessibilityIdentifier).sheet")
+                List {
+                    ForEach(groups) { group in
+                        if !group.options.isEmpty {
+                            Section {
+                                ForEach(group.options) { option in
+                                    optionButton(option)
+                                }
+                            } header: {
+                                if let title = group.title {
+                                    Text(title)
+                                }
+                            }
+                        }
+                    }
+                }
+                .contentMargins(.horizontal, 32, for: .scrollContent)
+                .contentMargins(.bottom, 24, for: .scrollContent)
+            }
+            .navigationTitle("")
         }
-        .accessibilityIdentifier("settings.stream-quality.game-language")
+        .task {
+            await Task.yield()
+            focusedValue = selection
+        }
+        .defaultFocus($focusedValue, selection)
+        .blocksGlobalControllerNavigation()
+    }
+
+    private func optionButton(_ option: CloudNowSettingOption<Value>) -> some View {
+        Button {
+            selection = option.value
+            dismiss()
+        } label: {
+            HStack(spacing: 20) {
+                if let systemImage = option.systemImage {
+                    Image(systemName: systemImage)
+                        .font(.headline)
+                        .frame(width: 56, alignment: .center)
+                        .accessibilityHidden(true)
+                }
+                Text(option.displayTitle)
+                    .font(.headline)
+                Spacer()
+                if option.value == selection {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 24)
+        }
+        .foregroundStyle(.primary)
+        .focused($focusedValue, equals: option.value)
+        .accessibilityLabel(option.displayTitle)
+        .accessibilityAddTraits(option.value == selection ? .isSelected : [])
+        .accessibilityIdentifier(optionIdentifier(option))
+    }
+
+    private func optionIdentifier(_ option: CloudNowSettingOption<Value>) -> String {
+        let optionIdentifier = option.accessibilityIdentifier
+            ?? String(describing: option.value)
+        return "\(accessibilityIdentifier).option.\(optionIdentifier)"
+    }
+}
+
+struct CloudNowGameLanguageSelectionRow: View {
+    @Binding var selection: String
+    let automaticValue: String
+
+    private static let languageCodes = [
+        "en_US", "en_GB", "fr_FR", "de_DE", "es_ES", "it_IT", "pt_BR",
+        "hi_IN", "ja_JP", "ko_KR", "zh_CN", "zh_TW", "ru_RU", "ar_SA",
+        "nl_NL", "pl_PL", "sv_SE", "fi_FI", "tr_TR", "el_GR", "he_IL",
+        "cs_CZ", "da_DK", "hr_HR", "hu_HU", "id_ID", "ms_MY", "ro_RO",
+        "sk_SK", "vi_VN", "uk_UA",
+    ]
+
+    var body: some View {
+        CloudNowSettingSelectionRow(
+            L10n.text("game_language"),
+            selection: $selection,
+            accessibilityIdentifier: "settings.stream-quality.game-language",
+            options: [
+                CloudNowSettingOption(
+                    value: automaticValue,
+                    title: L10n.text("automatic"),
+                    accessibilityIdentifier: "automatic"
+                ),
+            ] + Self.languageCodes.map { code in
+                CloudNowSettingOption(
+                    value: code,
+                    title: L10n.localizedLanguageName(for: code),
+                    accessibilityIdentifier: code
+                )
+            }
+        )
     }
 }
 
@@ -578,85 +694,101 @@ struct SettingsView: View {
                 )
 
                 CloudNowStreamQualitySection {
-                    CloudNowStreamQualityPicker(
+                    CloudNowSettingSelectionRow(
                         L10n.text("resolution"),
                         selection: $vm.streamSettings.resolution,
                         accessibilityIdentifier: "settings.stream-quality.resolution",
                         groups: geForceNowResolutionGroups
                     )
 
-                    Picker(L10n.text("frame_rate"), selection: $vm.streamSettings.fps) {
-                        ForEach(viewModel.availableFps, id: \.self) { fps in
-                            Text("\(fps) fps").tag(fps)
+                    CloudNowSettingSelectionRow(
+                        L10n.text("frame_rate"),
+                        selection: $vm.streamSettings.fps,
+                        accessibilityIdentifier: "settings.stream-quality.frame-rate",
+                        options: viewModel.availableFps.map { fps in
+                            CloudNowSettingOption(
+                                value: fps,
+                                title: "\(fps) fps",
+                                accessibilityIdentifier: "\(fps)"
+                            )
                         }
-                    }
+                    )
 
-                    CloudNowStreamQualityPicker(
+                    CloudNowSettingSelectionRow(
                         L10n.text("codec"),
                         selection: $vm.streamSettings.codec,
                         accessibilityIdentifier: "settings.stream-quality.codec",
                         options: VideoCodec.allCases.map {
-                            CloudNowStreamQualityOption(value: $0, title: $0.label)
+                            CloudNowSettingOption(
+                                value: $0,
+                                title: $0.label,
+                                accessibilityIdentifier: $0.rawValue
+                            )
                         }
                     )
 
-                    Picker(selection: $vm.streamSettings.colorPreference) {
-                        ForEach(ColorModePreference.allCases, id: \.self) { preference in
-                            Text(preference.label).tag(preference)
+                    CloudNowSettingSelectionRow(
+                        L10n.text("color_mode"),
+                        description: vm.streamSettings.codec == .av1
+                            ? L10n.text("av1_software_path_warning")
+                            : vm.streamSettings.colorPreference.description,
+                        descriptionIsWarning: vm.streamSettings.codec == .av1,
+                        selection: $vm.streamSettings.colorPreference,
+                        accessibilityIdentifier: "settings.stream-quality.color-mode",
+                        options: ColorModePreference.allCases.map {
+                            CloudNowSettingOption(
+                                value: $0,
+                                title: $0.label,
+                                accessibilityIdentifier: $0.rawValue
+                            )
                         }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("color_mode"))
-                            if vm.streamSettings.codec == .av1 {
-                                Text(L10n.text("av1_software_path_warning"))
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            } else {
-                                Text(vm.streamSettings.colorPreference.description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
-
-                    Picker(selection: $vm.streamSettings.audioFormat) {
-                        ForEach(AudioFormatPreference.allCases, id: \.self) { format in
-                            Text(format.label).tag(format)
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("audio_format"))
-                            Text(L10n.text("audio_format_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
-
-                    Picker(L10n.text("keyboard_layout"), selection: $vm.streamSettings.keyboardLayout) {
-                        ForEach(L10n.supportedLanguageCodes, id: \.self) { code in
-                            Text(L10n.localizedLanguageName(for: code)).tag(code)
-                        }
-                    }
-
-                    CloudNowGameLanguagePicker(
-                        selection: $vm.streamSettings.gameLanguage
                     )
 
-                    Picker(selection: $vm.streamSettings.appLaunchMode) {
-                        ForEach(AppLaunchMode.allCases, id: \.self) { mode in
-                            Text(mode.label).tag(mode)
+                    CloudNowSettingSelectionRow(
+                        L10n.text("audio_format"),
+                        description: L10n.text("audio_format_description"),
+                        selection: $vm.streamSettings.audioFormat,
+                        accessibilityIdentifier: "settings.stream-quality.audio-format",
+                        options: AudioFormatPreference.allCases.map {
+                            CloudNowSettingOption(
+                                value: $0,
+                                title: $0.label,
+                                accessibilityIdentifier: $0.rawValue
+                            )
                         }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("game_launch_mode"))
-                            Text(L10n.text("game_launch_mode_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    )
+
+                    CloudNowSettingSelectionRow(
+                        L10n.text("keyboard_layout"),
+                        selection: $vm.streamSettings.keyboardLayout,
+                        accessibilityIdentifier: "settings.stream-quality.keyboard-layout",
+                        options: L10n.supportedLanguageCodes.map { code in
+                            CloudNowSettingOption(
+                                value: code,
+                                title: L10n.localizedLanguageName(for: code),
+                                accessibilityIdentifier: code
+                            )
                         }
-                        .padding(.vertical, 8)
-                    }
+                    )
+
+                    CloudNowGameLanguageSelectionRow(
+                        selection: $vm.streamSettings.gameLanguage,
+                        automaticValue: StreamSettings.automaticGameLanguage
+                    )
+
+                    CloudNowSettingSelectionRow(
+                        L10n.text("game_launch_mode"),
+                        description: L10n.text("game_launch_mode_description"),
+                        selection: $vm.streamSettings.appLaunchMode,
+                        accessibilityIdentifier: "settings.stream-quality.game-launch-mode",
+                        options: AppLaunchMode.allCases.map {
+                            CloudNowSettingOption(
+                                value: $0,
+                                title: $0.label,
+                                accessibilityIdentifier: $0.rawValue
+                            )
+                        }
+                    )
 
                     LabeledContent(L10n.text("max_bitrate")) {
                         HStack(spacing: 16) {
@@ -745,19 +877,19 @@ struct SettingsView: View {
                     controllerDeadzone: $vm.streamSettings.controllerDeadzone,
                     policy: .geForceNow
                 ) {
-                    Picker(selection: $vm.streamSettings.overlayTriggerButton) {
-                        ForEach(OverlayTriggerButton.allCases, id: \.self) { btn in
-                            Text(btn.label).tag(btn)
+                    CloudNowSettingSelectionRow(
+                        L10n.text("overlay_button"),
+                        description: L10n.text("overlay_button_description"),
+                        selection: $vm.streamSettings.overlayTriggerButton,
+                        accessibilityIdentifier: "settings.controller.overlay-button",
+                        options: OverlayTriggerButton.allCases.map {
+                            CloudNowSettingOption(
+                                value: $0,
+                                title: $0.label,
+                                accessibilityIdentifier: $0.rawValue
+                            )
                         }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("overlay_button"))
-                            Text(L10n.text("overlay_button_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    )
                     Toggle(isOn: $vm.streamSettings.enableSteamOverlayGesture) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(L10n.text("steam_overlay_gesture"))
@@ -767,19 +899,29 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
-                    Picker(selection: $vm.streamSettings.defaultRemoteInputMode) {
-                        Text(L10n.remoteInputModeLabel(.gamepad)).tag(RemoteInputMode.gamepad)
-                        Text(L10n.remoteInputModeLabel(.dualsense)).tag(RemoteInputMode.dualsense)
-                        Text(L10n.remoteInputModeLabel(.gamepadMouse)).tag(RemoteInputMode.gamepadMouse)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text("default_input_mode"))
-                            Text(L10n.text("default_input_mode_description"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    CloudNowSettingSelectionRow(
+                        L10n.text("default_input_mode"),
+                        description: L10n.text("default_input_mode_description"),
+                        selection: $vm.streamSettings.defaultRemoteInputMode,
+                        accessibilityIdentifier: "settings.controller.default-input-mode",
+                        options: [
+                            CloudNowSettingOption(
+                                value: RemoteInputMode.gamepad,
+                                title: L10n.remoteInputModeLabel(.gamepad),
+                                accessibilityIdentifier: RemoteInputMode.gamepad.rawValue
+                            ),
+                            CloudNowSettingOption(
+                                value: RemoteInputMode.dualsense,
+                                title: L10n.remoteInputModeLabel(.dualsense),
+                                accessibilityIdentifier: RemoteInputMode.dualsense.rawValue
+                            ),
+                            CloudNowSettingOption(
+                                value: RemoteInputMode.gamepadMouse,
+                                title: L10n.remoteInputModeLabel(.gamepadMouse),
+                                accessibilityIdentifier: RemoteInputMode.gamepadMouse.rawValue
+                            ),
+                        ]
+                    )
                     LabeledContent(L10n.text("protocol"), value: "XInput over GFN v2/v3")
                 }
 
@@ -1111,27 +1253,34 @@ struct SettingsView: View {
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
     ]
 
-    private var geForceNowResolutionGroups: [CloudNowStreamQualityOptionGroup<String>] {
+    private var geForceNowResolutionGroups: [CloudNowSettingOptionGroup<String>] {
         let common = commonResolutions
             .filter { viewModel.availableResolutions.contains($0.res) }
             .map {
-                CloudNowStreamQualityOption(
+                CloudNowSettingOption(
                     value: $0.res,
                     title: $0.res,
                     badge: $0.badge,
-                    systemImage: $0.symbol
+                    systemImage: $0.symbol,
+                    accessibilityIdentifier: $0.res
                 )
             }
         let commonValues = Set(commonResolutions.map(\.res))
         let other = viewModel.availableResolutions
             .filter { !commonValues.contains($0) }
-            .map { CloudNowStreamQualityOption(value: $0, title: $0) }
+            .map {
+                CloudNowSettingOption(
+                    value: $0,
+                    title: $0,
+                    accessibilityIdentifier: $0
+                )
+            }
         return [
-            CloudNowStreamQualityOptionGroup(
+            CloudNowSettingOptionGroup(
                 title: L10n.text("tv_standards"),
                 options: common
             ),
-            CloudNowStreamQualityOptionGroup(
+            CloudNowSettingOptionGroup(
                 title: L10n.text("other"),
                 options: other
             ),

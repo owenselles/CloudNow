@@ -282,6 +282,21 @@ final class CloudNowUITests: XCTestCase {
         }
         XCTAssertTrue(focusedGameLanguage.exists)
         XCUIRemote.shared.press(.select)
+        let gameLanguageSheet = element(
+            "settings.stream-quality.game-language.sheet",
+            in: app
+        )
+        XCTAssertTrue(gameLanguageSheet.waitForExistence(timeout: 3))
+        let automatic = element(
+            "settings.stream-quality.game-language.option.automatic",
+            in: app
+        )
+        XCTAssertTrue(automatic.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "Automatisch", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(automatic.isSelected)
         let japanese = app.descendants(matching: .any)
             .matching(NSPredicate(
                 format: "label == %@",
@@ -923,6 +938,68 @@ final class CloudNowUITests: XCTestCase {
 
         openSettings(in: app)
         XCTAssertTrue(element("settings-screen", in: app).waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testCodecSelectionSheetFocusesAndCommitsTheSelectedValue() {
+        let app = makeApp()
+        app.launch()
+
+        openSettings(in: app)
+        let codec = element("settings.stream-quality.codec", in: app)
+        XCTAssertTrue(codec.waitForExistence(timeout: 3))
+        XCTAssertEqual(codec.value as? String, "H265")
+
+        let focusedCodec = focusedElement(labeled: "Codec", in: app)
+        for _ in 0 ..< 30 where !focusedCodec.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedCodec.exists)
+        XCUIRemote.shared.press(.select)
+
+        let sheet = element("settings.stream-quality.codec.sheet", in: app)
+        XCTAssertTrue(sheet.waitForExistence(timeout: 3))
+        let h265 = element(
+            "settings.stream-quality.codec.option.H265",
+            in: app
+        )
+        XCTAssertTrue(h265.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "H265", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(h265.isSelected)
+
+        let h264 = element(
+            "settings.stream-quality.codec.option.H264",
+            in: app
+        )
+        XCUIRemote.shared.press(.up)
+        XCTAssertTrue(
+            focusedElement(labeled: "H264", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCUIRemote.shared.press(.select)
+
+        let sheetDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: sheet
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [sheetDismissed], timeout: 3),
+            .completed
+        )
+        XCTAssertTrue(waitForAccessibilityText("H264", in: codec))
+
+        XCTAssertTrue(focusedCodec.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(sheet.waitForExistence(timeout: 3))
+        XCTAssertTrue(h264.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "H264", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(h264.isSelected)
     }
 
     @MainActor
@@ -1917,6 +1994,19 @@ final class CloudNowUITests: XCTestCase {
         in app: XCUIApplication
     ) -> XCUIElement {
         app.buttons
+            .matching(NSPredicate(
+                format: "label == %@ AND hasFocus == true",
+                label
+            ))
+            .firstMatch
+    }
+
+    @MainActor
+    private func focusedElement(
+        labeled label: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.descendants(matching: .any)
             .matching(NSPredicate(
                 format: "label == %@ AND hasFocus == true",
                 label
