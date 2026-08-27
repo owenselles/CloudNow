@@ -130,12 +130,14 @@ combination of up to four buttons, then release them to save. Capture rejects
 combinations that conflict with the app or Steam overlay controls. It times out
 after 15 seconds; cancellation or controller disconnection preserves the saved
 shortcut. **Text Input Hold Delay** controls how long the combination must be
-held.
+held; its range and default are listed in
+[Streaming settings](StreamingSettings.md#microphone-and-controller).
 
-Controller text entry supports a narrower set of remote keyboard layouts than
-the app interface supports. See [GeForce NOW input](GeForceNOW.md#input) for the
-verified layouts, character handling, and replay limits. Existing physical
-keyboard input is unaffected.
+The text-entry interface and its errors follow the active app locale. Only
+remote key-event replay is limited to a narrower set of verified keyboard
+layouts. See [GeForce NOW input](GeForceNOW.md#input) for the verified layouts,
+character handling, and replay limits. Existing physical keyboard input is
+unaffected.
 
 ## Supported tvOS interface locales
 

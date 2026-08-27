@@ -1118,6 +1118,10 @@ struct SettingsView: View {
                         }
                     }
                     .foregroundStyle(.primary)
+                    .accessibilityIdentifier("settings.controller.text-input-buttons")
+                    .accessibilityLabel(L10n.text("text_input_buttons"))
+                    .accessibilityValue(vm.streamSettings.textInputTriggerSequence.label)
+                    .accessibilityHint(L10n.text("text_input_buttons_description"))
                     LabeledContent {
                         HStack(spacing: 16) {
                             Button {
@@ -1129,10 +1133,27 @@ struct SettingsView: View {
                                 Image(systemName: "minus.circle")
                             }
                             .buttonStyle(.plain)
+                            .disabled(
+                                vm.streamSettings.textInputTriggerDelayMs
+                                    <= StreamSettings.minTextInputTriggerDelayMs
+                            )
+                            .accessibilityIdentifier(
+                                "settings.controller.text-input-hold-delay.decrement"
+                            )
                             Text("\(vm.streamSettings.textInputTriggerDelayMs) ms")
                                 .monospacedDigit()
                                 .frame(minWidth: 92)
                                 .padding(.horizontal, 24)
+                                .accessibilityIdentifier(
+                                    "settings.controller.text-input-hold-delay.value"
+                                )
+                                .accessibilityLabel(L10n.text("text_input_hold_delay"))
+                                .accessibilityValue(
+                                    "\(vm.streamSettings.textInputTriggerDelayMs) ms"
+                                )
+                                .accessibilityHint(
+                                    L10n.text("text_input_hold_delay_description")
+                                )
                             Button {
                                 vm.streamSettings.textInputTriggerDelayMs = min(
                                     StreamSettings.maxTextInputTriggerDelayMs,
@@ -1142,6 +1163,13 @@ struct SettingsView: View {
                                 Image(systemName: "plus.circle")
                             }
                             .buttonStyle(.plain)
+                            .disabled(
+                                vm.streamSettings.textInputTriggerDelayMs
+                                    >= StreamSettings.maxTextInputTriggerDelayMs
+                            )
+                            .accessibilityIdentifier(
+                                "settings.controller.text-input-hold-delay.increment"
+                            )
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
@@ -1843,17 +1871,28 @@ private struct TextInputTriggerSequenceCaptureView: View {
     private enum FocusedControl: Hashable {
         case startListening
         case back
-        case cancel
+        case capture
     }
 
     private static let controllerPollInterval: Duration = .milliseconds(33)
+    #if DEBUG
+        private static let uiTestControllerIdentity = NSObject()
+    #endif
 
     var body: some View {
         Form {
+            CloudNowSettingsPageTitle(
+                title: L10n.text("capture_text_input_buttons"),
+                accessibilityIdentifier: "settings.controller.text-input-buttons.title"
+            )
+
             Section {
                 LabeledContent(
                     L10n.text("current_sequence"),
                     value: sequence.label
+                )
+                .accessibilityIdentifier(
+                    "settings.controller.text-input-buttons.current-sequence"
                 )
             }
 
@@ -1876,6 +1915,9 @@ private struct TextInputTriggerSequenceCaptureView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .focused($focusedControl, equals: .startListening)
+                    .accessibilityIdentifier(
+                        "settings.controller.text-input-buttons.start-listening"
+                    )
 
                     Button {
                         dismiss()
@@ -1884,6 +1926,7 @@ private struct TextInputTriggerSequenceCaptureView: View {
                     }
                     .buttonStyle(.bordered)
                     .focused($focusedControl, equals: .back)
+                    .accessibilityIdentifier("settings.controller.text-input-buttons.back")
                 }
                 .listRowBackground(Color.clear)
             } else {
@@ -1898,6 +1941,12 @@ private struct TextInputTriggerSequenceCaptureView: View {
                         .font(.body.weight(.medium))
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.vertical, 8)
+                        .focusable()
+                        .focused($focusedControl, equals: .capture)
+                        .focusEffectDisabled()
+                        .accessibilityIdentifier(
+                            "settings.controller.text-input-buttons.status"
+                        )
 
                     if let detectedSequence {
                         LabeledContent(
@@ -1910,18 +1959,19 @@ private struct TextInputTriggerSequenceCaptureView: View {
                         validationMessageView(validationMessage)
                     }
 
-                    Button(role: .cancel) {
-                        cancelCapture()
-                    } label: {
-                        Label(L10n.text("cancel"), systemImage: "xmark")
+                    Label {
+                        Text("\(L10n.text("menu_(≡)")) · \(L10n.text("cancel"))")
+                    } icon: {
+                        Image(systemName: "chevron.backward")
                     }
-                    .buttonStyle(.bordered)
-                    .focused($focusedControl, equals: .cancel)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings.controller.text-input-buttons.cancel")
                 }
                 .listRowBackground(Color.clear)
             }
         }
-        .navigationTitle(L10n.text("capture_text_input_buttons"))
+        .navigationTitle("")
+        .accessibilityIdentifier("settings.controller.text-input-buttons.page")
         .defaultFocus($focusedControl, .startListening)
         .onExitCommand {
             if isCapturing {
@@ -1931,9 +1981,12 @@ private struct TextInputTriggerSequenceCaptureView: View {
             }
         }
         .task(id: isCapturing) {
+            await Task.yield()
+            focusedControl = isCapturing ? .capture : .startListening
             guard isCapturing else { return }
             await monitorControllerButtons()
         }
+        .blocksGlobalControllerNavigation()
     }
 
     private var isCapturing: Bool {
@@ -2090,6 +2143,20 @@ private struct TextInputTriggerSequenceCaptureView: View {
     private func controllerReadings(
         from controllers: [GCController]
     ) -> [ControllerShortcutCaptureReading] {
+        #if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("--cloudnow-ui-testing"),
+               arguments.contains("--cloudnow-ui-controller-capture")
+            {
+                return [
+                    ControllerShortcutCaptureReading(
+                        controllerID: ObjectIdentifier(Self.uiTestControllerIdentity),
+                        pressedButtons: []
+                    ),
+                ]
+            }
+        #endif
+
         var readings = [ControllerShortcutCaptureReading]()
         readings.reserveCapacity(controllers.count)
         for controller in controllers {

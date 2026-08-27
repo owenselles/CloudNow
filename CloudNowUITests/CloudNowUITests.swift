@@ -1463,65 +1463,91 @@ final class CloudNowUITests: XCTestCase {
 
     @MainActor
     func testTextInputShortcutSettingsCancelCaptureWithoutChanges() {
-        let app = makeApp()
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-controller-capture",
+        ])
         app.launch()
 
         openSettings(in: app)
         XCTAssertTrue(element("settings-screen", in: app).waitForExistence(timeout: 3))
 
-        let shortcutRow = app.buttons
-            .matching(NSPredicate(
-                format: "label CONTAINS %@",
-                "Text Input Buttons"
-            ))
-            .firstMatch
+        let shortcutRow = element(
+            "settings.controller.text-input-buttons",
+            in: app
+        )
         focus(
             labelContaining: "Text Input Buttons",
             in: app,
             directions: [.down],
             pressesPerDirection: 80
         )
-        XCTAssertTrue(shortcutRow.label.contains("Y"))
-        XCTAssertTrue(shortcutRow.label.contains("Options/View"))
+        let initialShortcutValue = accessibilityValue(of: shortcutRow)
+        XCTAssertTrue(initialShortcutValue.contains("Y"))
+        XCTAssertTrue(initialShortcutValue.contains("Options/View"))
 
-        let holdDelay = app.descendants(matching: .any)
-            .matching(NSPredicate(
-                format: "label CONTAINS %@",
-                "Text Input Hold Delay"
-            ))
-            .firstMatch
-        XCTAssertTrue(holdDelay.waitForExistence(timeout: 3))
-        XCTAssertTrue(
-            "\(holdDelay.label) \(accessibilityValue(of: holdDelay))"
-                .contains("150 ms")
+        let holdDelay = element(
+            "settings.controller.text-input-hold-delay.value",
+            in: app
         )
+        XCTAssertTrue(holdDelay.waitForExistence(timeout: 3))
+        XCTAssertEqual(accessibilityValue(of: holdDelay), "150 ms")
 
         XCUIRemote.shared.press(.select)
-        XCTAssertTrue(app.navigationBars["Set Text Input Buttons"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Current Sequence"].exists)
-
-        let startListening = app.buttons["Start Listening"]
-        XCTAssertTrue(startListening.waitForExistence(timeout: 3))
-        focusAndSelect(
-            startListening,
-            directions: [.down, .up],
-            pressesPerDirection: 4
-        )
         XCTAssertTrue(
-            app.staticTexts["Press buttons now"]
+            element("settings.controller.text-input-buttons.page", in: app)
                 .waitForExistence(timeout: 3)
         )
-        XCTAssertTrue(app.buttons["Cancel"].exists)
+        XCTAssertTrue(
+            element("settings.controller.text-input-buttons.title", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            element(
+                "settings.controller.text-input-buttons.current-sequence",
+                in: app
+            ).waitForExistence(timeout: 3)
+        )
+
+        let startListening = element(
+            "settings.controller.text-input-buttons.start-listening",
+            in: app
+        )
+        XCTAssertTrue(startListening.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(startListening))
+        XCUIRemote.shared.press(.select)
+
+        let cancel = element(
+            "settings.controller.text-input-buttons.cancel",
+            in: app
+        )
+        let status = element("settings.controller.text-input-buttons.status", in: app)
+        XCTAssertTrue(status.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForAccessibilityText("Press buttons now", in: status))
+        XCTAssertTrue(cancel.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(status))
+
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(
+            element("settings.controller.text-input-buttons.page", in: app).exists
+        )
+        XCTAssertTrue(status.exists)
+        XCTAssertTrue(waitForFocus(status))
 
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(startListening.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.navigationBars["Set Text Input Buttons"].exists)
+        XCTAssertTrue(waitForFocus(startListening))
+        XCTAssertTrue(
+            element("settings.controller.text-input-buttons.page", in: app).exists
+        )
 
         XCUIRemote.shared.press(.menu)
         XCTAssertTrue(element("settings-screen", in: app).waitForExistence(timeout: 3))
         XCTAssertTrue(shortcutRow.waitForExistence(timeout: 3))
-        XCTAssertTrue(shortcutRow.label.contains("Y"))
-        XCTAssertTrue(shortcutRow.label.contains("Options/View"))
+        XCTAssertTrue(
+            focusedElement(labeled: "Text Input Buttons", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertEqual(accessibilityValue(of: shortcutRow), initialShortcutValue)
     }
 
     @MainActor

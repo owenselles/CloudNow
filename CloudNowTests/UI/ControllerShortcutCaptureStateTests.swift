@@ -43,6 +43,22 @@ struct ControllerShortcutCaptureStateTests {
         ]) == .completed(ControllerButtonSequence(buttons: [.buttonB, .buttonX])))
     }
 
+    @Test("Face A and directional buttons can complete a chord")
+    func focusEngineButtonsCompleteChord() {
+        let controller = ControllerIdentity()
+        let released = [reading(controller)]
+        var state = ControllerShortcutCaptureState()
+
+        #expect(state.start(with: released) == .none)
+        #expect(state.update(with: released) == .none)
+        #expect(state.update(with: [
+            reading(controller, buttons: [.buttonA, .dpadLeft]),
+        ]) == .none)
+        #expect(state.update(with: released) == .completed(
+            ControllerButtonSequence(buttons: [.buttonA, .dpadLeft])
+        ))
+    }
+
     @Test("Disconnecting the pinned controller stops capture")
     func pinnedControllerDisconnects() {
         let firstController = ControllerIdentity()
