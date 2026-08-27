@@ -413,28 +413,30 @@ private struct AuthRestorationView: View {
             } else {
                 FullLibraryRefreshState()
             }
-            _viewModel = State(
-                initialValue: GamesViewModel(
-                    mainGames: Self.fixtureGames,
-                    libraryGames: Self.fixtureGames,
-                    favoriteIds: ["fixture-racer"],
-                    persistenceEnabled: false,
-                    librarySyncClient: UITestLibrarySyncClient(mode: syncClientMode),
-                    libraryRefreshScheduler: LibraryRefreshScheduler(
-                        now: { 0 },
-                        sleep: { _ in }
-                    ),
-                    providerLibrarySyncEnabled: true,
-                    initialLibraryRefreshState: refreshState,
-                    libraryRefreshImporterOverride: {
-                        LibraryImportResult(
-                            finalGameCount: 81,
-                            addedGameIDs: ["fixture-retry-new"],
-                            removedGameIDs: []
-                        )
-                    }
-                )
+            let viewModel = GamesViewModel(
+                mainGames: Self.fixtureGames,
+                libraryGames: Self.fixtureGames,
+                favoriteIds: ["fixture-racer"],
+                persistenceEnabled: false,
+                librarySyncClient: UITestLibrarySyncClient(mode: syncClientMode),
+                libraryRefreshScheduler: LibraryRefreshScheduler(
+                    now: { 0 },
+                    sleep: { _ in }
+                ),
+                providerLibrarySyncEnabled: true,
+                initialLibraryRefreshState: refreshState,
+                libraryRefreshImporterOverride: {
+                    LibraryImportResult(
+                        finalGameCount: 81,
+                        addedGameIDs: ["fixture-retry-new"],
+                        removedGameIDs: []
+                    )
+                }
             )
+            if arguments.contains("--cloudnow-ui-gfn-free-membership") {
+                viewModel.subscription = Self.freeMembershipSubscription
+            }
+            _viewModel = State(initialValue: viewModel)
         }
 
         var body: some View {
@@ -473,6 +475,10 @@ private struct AuthRestorationView: View {
                     MainTabView(viewModel: viewModel, loadsRemoteData: false)
                 }
             }
+            .environment(
+                \.cloudNowServerLocationFixture,
+                Self.serverLocationFixture
+            )
             .task(id: providerCoordinator.selectedProvider) {
                 switch providerCoordinator.selectedProvider {
                 case .geForceNow:
@@ -575,6 +581,88 @@ private struct AuthRestorationView: View {
                 ]
             ),
         ]
+
+        private static let freeMembershipSubscription = SubscriptionInfo(
+            membershipTier: "FREE",
+            isUnlimited: false,
+            remainingMinutes: nil,
+            totalMinutes: nil,
+            entitledResolutions: [
+                EntitledResolution(
+                    widthInPixels: 1280,
+                    heightInPixels: 720,
+                    framesPerSecond: 60
+                ),
+                EntitledResolution(
+                    widthInPixels: 1920,
+                    heightInPixels: 1080,
+                    framesPerSecond: 60
+                ),
+            ]
+        )
+
+        private static let serverLocationFixture = CloudNowServerLocationFixture(
+            serverInfo: GFNServerInfo(
+                regions: [
+                    GFNRegion(
+                        name: "Germany",
+                        address: "https://fixture-de.example.com/"
+                    ),
+                    GFNRegion(
+                        name: "US East",
+                        address: "https://fixture-us.example.com/"
+                    ),
+                ],
+                localRegionName: "Germany",
+                vpcId: "fixture-vpc"
+            ),
+            zones: [
+                GFNZone(
+                    id: "NP-FIXTURE-DE-FRK-1",
+                    region: "EU",
+                    countryCode: "DE",
+                    city: "Frankfurt",
+                    queuePosition: 2,
+                    etaMs: nil,
+                    zoneUrl: "https://np-fixture-de-frk-1.example.com/",
+                    pingMs: 18,
+                    isMeasuring: false
+                ),
+                GFNZone(
+                    id: "NP-FIXTURE-DE-FRK-2",
+                    region: "EU",
+                    countryCode: "DE",
+                    city: "Frankfurt",
+                    queuePosition: 8,
+                    etaMs: nil,
+                    zoneUrl: "https://np-fixture-de-frk-2.example.com/",
+                    pingMs: 24,
+                    isMeasuring: false
+                ),
+                GFNZone(
+                    id: "NP-FIXTURE-DE-MUC-1",
+                    region: "EU",
+                    countryCode: "DE",
+                    city: "Munich",
+                    queuePosition: 4,
+                    etaMs: nil,
+                    zoneUrl: "https://np-fixture-de-muc-1.example.com/",
+                    pingMs: 21,
+                    isMeasuring: false
+                ),
+                GFNZone(
+                    id: "NP-FIXTURE-US-NYC-1",
+                    region: "US",
+                    countryCode: "US",
+                    city: "New York",
+                    queuePosition: 3,
+                    etaMs: nil,
+                    zoneUrl: "https://np-fixture-us-nyc-1.example.com/",
+                    pingMs: 92,
+                    isMeasuring: false
+                ),
+            ]
+        )
 
         private static let partialRefreshState = FullLibraryRefreshState(
             stage: .partialFailure,

@@ -31,6 +31,12 @@ Most stream, controller, audio, microphone, language, and accessibility changes
 apply to the next session. Changing the statistics display from the pause menu
 applies immediately.
 
+Selection controls open as full Settings pages. The saved option receives
+initial focus and keeps its checkmark. When CloudNow knows an option but the
+account, display, or permission does not currently allow it, the option remains
+focusable with an **Unavailable** label. Selecting it explains the exact reason
+and, when CloudNow can recover in place, offers the relevant action.
+
 ## Defaults and saved preferences
 
 Defaults apply when a provider has no saved settings, including after **Reset
@@ -57,8 +63,8 @@ preferences, so a newly changed default does not overwrite a previous choice.
 
 | Setting | GeForce NOW | Xbox Cloud Gaming |
 |---|---|---|
-| Resolution | Account-entitled choices | Automatic and account-aware manual choices |
-| Frame rate | Account, resolution, and display filtered | No manual control |
+| Resolution | Common choices remain visible; account entitlement decides availability | Automatic and all manual choices remain visible; membership decides availability |
+| Frame rate | Known choices remain visible; account, resolution, and display decide availability | No manual control |
 | Codec | H264, H265, AV1 | No manual control |
 | Color and HDR | Automatic, Prefer HDR, Prefer 10-bit SDR, Compatibility SDR | No manual control |
 | Audio layout | Automatic, Stereo, 5.1 Surround | No manual control |
@@ -79,8 +85,8 @@ preferences, so a newly changed default does not overwrite a previous choice.
 
 | Setting | Default | Options and eligibility | Effect |
 |---|---|---|---|
-| Resolution | 1920x1080 | Unique resolutions reported by the account entitlement service. Before entitlement data is available, CloudNow offers 1280x720 and 1920x1080. | Sets the requested stream size. The service can deliver a different size. |
-| Frame Rate | 60 fps | Derived from account entitlement records for the selected resolution, then capped by the current Apple TV output refresh rate. See [Frame-rate eligibility](#frame-rate-eligibility). | Sets the requested frame rate. Delivered FPS can be lower. |
+| Resolution | 1920x1080 | After entitlement data loads, the common HD, Full HD, 2K, 4K, and 5K choices remain visible. Choices not included in the current membership are unavailable and explain that an account upgrade or different resolution is required. Account-specific resolutions outside that common list are also shown when entitled. Before entitlement data is available, CloudNow offers 1280x720 and 1920x1080. | Sets the requested stream size. The service can deliver a different size. |
+| Frame Rate | 60 fps | The page shows the 30 and 60 fps baselines plus frame rates reported anywhere in the account entitlements. Each choice is evaluated for the selected resolution and current Apple TV output refresh rate. See [Frame-rate eligibility](#frame-rate-eligibility). | Sets the requested frame rate. Delivered FPS can be lower. |
 | Codec | H265 | H264, H265, and AV1 are always selectable. The picker does not hide codecs based on account or device checks. | Sets the requested GFN codec path. H265 is required for the current 10-bit and HDR path. |
 | Color Mode | Automatic | Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR are always selectable. Actual requests are capability checked. | Controls the preferred color request and safe fallback. See [Codec, color, and HDR](#codec-color-and-hdr). |
 | Audio Format | Automatic | Automatic, Stereo, and 5.1 Surround are always selectable. | Automatic requests 5.1 when the system maximum output-channel count is at least six. This is a heuristic rather than a reliable sink-capability check, and tvOS can still downmix. |
@@ -93,22 +99,26 @@ preferences, so a newly changed default does not overwrite a previous choice.
 #### Frame-rate eligibility
 
 GFN entitlement data records combinations of width, height, and frame rate.
-CloudNow calculates the frame-rate picker as follows:
+CloudNow calculates frame-rate availability as follows:
 
 1. Read the maximum frame rate of the active Apple TV screen. If no screen is
    available yet, use 60 as the fallback cap.
 2. Find entitlement records matching the selected resolution.
 3. If there is no exact resolution match, use frame rates from all available
    entitlement records.
-4. Remove duplicates, discard values above the display cap, and sort the
-   remaining values.
-5. If entitlement data is not available, start with 30 and 60 fps, then apply
-   the same display cap.
+4. Build the visible choices from 30 and 60 fps plus every frame rate reported
+   elsewhere in the account entitlements, remove duplicates, and sort them.
+5. Keep choices above the display cap or outside the applicable entitlement
+   records visible but unavailable. Selecting one explains the display limit,
+   membership limit, or both. Display-limited messages include the Apple TV
+   **Settings > Video and Audio > Format** recovery path.
+6. If entitlement data is not available, start with 30 and 60 fps and apply the
+   display cap without guessing a membership restriction.
 
-This means the options visible in the picker are controlled by the selected
-resolution, GFN account data, and Apple TV output format. Title support, server
-load, and network conditions can affect delivered FPS, but they do not add an
-option to the picker.
+The enabled choices remain the same values CloudNow used before this presentation
+change. Unavailable values are explanatory only and are never sent to a stream.
+Title support, server load, and network conditions can affect delivered FPS, but
+they do not change Settings eligibility.
 
 When account data loads, CloudNow replaces a saved resolution that is no longer
 available with the highest available resolution. If at least one frame-rate
@@ -143,7 +153,7 @@ delivered HDR.
 
 | Setting | Default | Availability | Effect |
 |---|---|---|---|
-| Server Location | Automatic | NVIDIA-direct accounts can choose Automatic, an official region, or a dedicated server. Partner-provider accounts show **Managed by partner** instead of a picker. | Automatic delegates routing to NVIDIA. Region pins an official service region. Server selection pins a dedicated zone. |
+| Server Location | Automatic | NVIDIA-direct accounts can choose Automatic, an official region, or a dedicated server. Partner-provider accounts see that server selection is managed by the named partner for that account. | Automatic delegates routing to NVIDIA. Region pins an official service region. Server selection pins a dedicated zone. |
 | Test Network | Action, no saved value | Always shown in the GFN Settings server section. | Measures the currently selected routing target where possible. A good test does not guarantee a title session will use the same live conditions. |
 
 Automatic routing is the safest default. A manually selected region or server
@@ -153,7 +163,7 @@ can become unavailable, add latency, or have different queue conditions.
 
 | Setting | Default | Options and eligibility | Effect |
 |---|---|---|---|
-| Use Microphone | Off | Always shown. A usable input route and microphone permission are still required. | Requests voice chat for the next session and follows supported route changes. |
+| Use Microphone | Off | Always shown. The first explicit enable attempt requests tvOS microphone permission when its state is undetermined. If access was denied, Settings explains the Apple TV privacy path and offers **Open Settings**. | Requests voice chat for the next session and follows supported route changes. Runtime route and track handling are unchanged. |
 | Controller Rumble | On | Always shown for supported controllers. | Enables GFN haptic output for the next session. |
 | Rumble Intensity | 1.00x | Shown only while rumble is on. Range 0.00x to 2.00x in 0.05x steps. | Scales haptic power. Values above 1.00x increase motor load. |
 | Deadzone | 15% | Always shown. Range 0% to 30% in 1% steps. | Increases the radial analog-stick deadzone to reduce drift. |
@@ -168,7 +178,7 @@ and game support still determine which controls and haptics are delivered.
 
 | Setting or action | Default | Availability and effect |
 |---|---|---|
-| Save In-Game Settings | On | Premium tiers, including Ultimate and Performance or legacy Priority, can change the toggle. A known Free account sees an unavailable message instead. An unknown tier can show the preference, but the service remains authoritative. |
+| Save In-Game Settings | On | Premium tiers, including Ultimate and Performance or legacy Priority, can change the toggle. A known Free account keeps the disabled toggle visible with the current membership and required plans. An unknown tier can change the preference, but the service remains authoritative. |
 | Refresh Library | Action, no saved value | Shown only in builds with provider library synchronization enabled. It refreshes linked-library and catalog data. |
 | Statistics | Off | Changed from the in-stream pause menu. Compact and Standard are available. |
 | Diagnostics | Off | Developer builds only. Enables additional local diagnostics. |
@@ -181,14 +191,18 @@ controls supported by its validated Xbox route.
 
 ### Resolution eligibility
 
-The resolution picker is shown only after account capability data provides more
-than one option:
+The resolution setting remains visible whenever the Xbox provider capability
+supports manual quality controls. Its full page always lists Automatic, 1440p,
+1080p HQ, 1080p, 720p HQ, and 720p. Automatic remains available while the
+manual choices reflect account state:
 
-| Account state | Picker options | Automatic request |
-|---|---|---|
-| Membership data loading or unavailable | Picker hidden; Automatic remains active | 1440p ceiling |
-| Known Game Pass Ultimate | Automatic, 1440p, 1080p HQ, 1080p, 720p HQ, 720p | 1440p ceiling |
-| Other known membership or no recognized tier | Automatic, 1080p, 720p | 1080p ceiling |
+| Account state | Enabled options | Unavailable-option explanation | Automatic request |
+|---|---|---|---|
+| Membership data loading | Automatic | CloudNow is checking the membership before enabling manual choices. | 1440p ceiling |
+| Membership service unavailable | Automatic | Membership could not be confirmed; **Try Again** refreshes account access. | 1440p ceiling |
+| Known Game Pass Ultimate | Automatic, 1440p, 1080p HQ, 1080p, 720p HQ, 720p | None | 1440p ceiling |
+| Other known membership | Automatic, 1080p, 720p | 1440p and HQ choices name Game Pass Ultimate as required and show the current membership. | 1080p ceiling |
+| Loaded account with no recognized tier | Automatic, 1080p, 720p | 1440p and HQ choices explain that an eligible Game Pass Ultimate membership could not be confirmed. | 1080p ceiling |
 
 A saved manual choice that is no longer eligible is displayed as Automatic.
 The session request also falls back to the account-aware Automatic ceiling.
@@ -204,7 +218,7 @@ adapt below them.
 | Controller Rumble | On | Always shown while Xbox Settings is available. | Enables Xbox haptic output for the next session. |
 | Rumble Intensity | 100% | Shown only while rumble is on. Range 0% to 100% in 5% steps. | Scales Xbox haptic output. |
 | Deadzone | 15% | Range 0% to 30% in 1% steps. | Adjusts the controller deadzone for the next session. |
-| Use Microphone | Off | Shown when the Xbox capability reports voice-chat support. The current production capability enables it. A usable input route and permission are still required. | Requests microphone attachment for the next session. |
+| Use Microphone | Off | Shown when the Xbox capability reports voice-chat support. The first explicit enable attempt requests undetermined tvOS permission; denied access shows the Apple TV privacy path and **Open Settings**. | Requests microphone attachment for the next session. Runtime route and track handling are unchanged. |
 | Test Network | Action, no saved value | Shown when the Xbox capability provides a network-test target. The current production capability does. | Tests the provider-owned target; Xbox still selects the session region. |
 | Text to Speech | Off | Always shown in the current Xbox Settings screen. | Sends the Xbox accessibility preference at session creation. |
 | Magnifier | Off | Always shown in the current Xbox Settings screen. | Sends the Xbox accessibility preference at session creation. |
@@ -235,23 +249,25 @@ progress and take effect on the next Xbox Cloud session.
 
 ## Troubleshooting quality and eligibility
 
-### 60 fps is missing in GFN
+### 60 fps is unavailable in GFN
 
 1. Check the selected resolution. GFN frame-rate entitlement is evaluated for
    that resolution.
 2. Check the account's **Max Stream Quality** in the GFN Account section.
 3. On Apple TV, open **Settings > Video and Audio > Format** and select a 60 Hz
-   format if the television, receiver, and cable support it. CloudNow filters
-   out frame rates above the current output format.
-4. Return to the frame-rate picker after account data has loaded. If you changed
-   resolution, choose one of the frame rates listed for the new resolution.
+   format if the television, receiver, and cable support it. CloudNow marks
+   frame rates above the current output format as unavailable.
+4. Return to the frame-rate page after account data has loaded. Select the
+   unavailable option to see whether the remaining cause is the display,
+   membership at the selected resolution, or both.
 
-### 1440p or HQ options are missing in Xbox
+### 1440p or HQ options are unavailable in Xbox
 
-The manual picker remains hidden while account membership data is loading or
-unavailable. Refresh the Xbox library and account-access data, then check again.
-The current implementation exposes 1440p and HQ aliases only for a recognized
-Game Pass Ultimate account.
+Select the unavailable option for the current membership result. During a
+membership-service failure, use **Try Again** directly from its explanation.
+The current implementation enables 1440p and HQ aliases only for a recognized
+Game Pass Ultimate account; standard 1080p and 720p remain available after
+membership data loads.
 
 ### Delivered quality is lower than selected
 

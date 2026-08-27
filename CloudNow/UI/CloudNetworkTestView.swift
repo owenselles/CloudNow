@@ -19,7 +19,14 @@ struct CloudNetworkTestView: View {
 
     var body: some View {
         NavigationStack {
-            ServerPickerScreen(title: L10n.text("test_network")) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(L10n.text("test_network"))
+                    .font(.title2.bold())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 64)
+                    .padding(.top, 36)
+                    .padding(.bottom, 20)
+
                 List {
                     Section {
                         if let routedTo {
@@ -55,10 +62,11 @@ struct CloudNetworkTestView: View {
                         } label: {
                             Text(L10n.text("close"))
                         }
-                        .buttonStyle(ServerRowButtonStyle())
+                        .buttonStyle(NetworkTestRowButtonStyle())
                     }
                 }
             }
+            .navigationTitle("")
             .task {
                 await run()
             }
@@ -134,5 +142,36 @@ struct CloudNetworkTestView: View {
             return .orange
         }
         return .red
+    }
+}
+
+private struct NetworkTestRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        RowBody(configuration: configuration)
+    }
+
+    private struct RowBody: View {
+        let configuration: ButtonStyle.Configuration
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(isFocused ? AnyShapeStyle(.black) : AnyShapeStyle(.primary))
+                .padding(.vertical, 14)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    isFocused
+                        ? AnyShapeStyle(.white)
+                        : AnyShapeStyle(Color.primary.opacity(0.08))
+                )
+                .clipShape(.rect(cornerRadius: 14))
+                .scaleEffect(isFocused && !reduceMotion ? 1.03 : 1)
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.15),
+                    value: isFocused
+                )
+        }
     }
 }

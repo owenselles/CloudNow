@@ -4002,7 +4002,12 @@ private struct XboxSettingsView: View {
                             L10n.text("resolution"),
                             selection: xboxResolutionSelection,
                             accessibilityIdentifier: "settings.stream-quality.resolution",
-                            options: xboxResolutionOptions
+                            options: xboxResolutionOptions,
+                            onRecoveryAction: {
+                                Task { @MainActor in
+                                    await modeViewModel.refreshContentAccess()
+                                }
+                            }
                         )
                     }
                     .disabled(isBusy)
@@ -4244,7 +4249,7 @@ private struct XboxSettingsView: View {
     private var supportsManualResolution: Bool {
         xboxCapabilities.streamOptions.value?.qualityControls.contains(
             .resolution
-        ) == true && xboxResolutionOptions.count > 1
+        ) == true
     }
 
     private var supportsMicrophone: Bool {
@@ -4267,8 +4272,27 @@ private struct XboxSettingsView: View {
             .hdHighQuality,
             .hd,
         ]
-        .filter(available.contains)
-        .map(resolutionOption)
+        .map { resolution in
+            resolutionOption(
+                resolution,
+                restriction: XboxSettingsEligibilityPolicy.resolutionRestriction(
+                    for: resolution,
+                    availableResolutions: available,
+                    context: xboxResolutionEligibilityContext
+                )
+            )
+        }
+    }
+
+    private var xboxResolutionEligibilityContext: XboxResolutionEligibilityContext {
+        switch modeViewModel.contentAccessPhase {
+        case .idle, .loading:
+            .checking
+        case .unavailable:
+            .unavailable
+        case .loaded:
+            .loaded(modeViewModel.membershipTier)
+        }
     }
 
     private var xboxResolutionSelection: Binding<XboxCloudDisplayResolution> {
@@ -4285,17 +4309,59 @@ private struct XboxSettingsView: View {
     }
 
     private func resolutionOption(
-        _ resolution: XboxCloudDisplayResolution
+        _ resolution: XboxCloudDisplayResolution,
+        restriction: XboxResolutionRestriction?
     ) -> CloudNowSettingOption<XboxCloudDisplayResolution> {
-        CloudNowSettingOption(
+        let badge = resolution == .qhd
+            ? L10n.text("maximum_abbreviation")
+            : resolution.badge
+        let displayTitle = badge.map {
+            "\(resolution.label)  —  \($0)"
+        } ?? resolution.label
+        return CloudNowSettingOption(
             value: resolution,
             title: resolution.label,
-            badge: resolution == .qhd
-                ? L10n.text("maximum_abbreviation")
-                : resolution.badge,
+            badge: badge,
             systemImage: resolution.systemImage,
-            accessibilityIdentifier: resolution.rawValue
+            accessibilityIdentifier: resolution.rawValue,
+            unavailability: xboxResolutionUnavailability(
+                restriction,
+                displayTitle: displayTitle
+            )
         )
+    }
+
+    private func xboxResolutionUnavailability(
+        _ restriction: XboxResolutionRestriction?,
+        displayTitle: String
+    ) -> CloudNowSettingUnavailability? {
+        guard let restriction else { return nil }
+        return switch restriction {
+        case .checkingMembership:
+            CloudNowSettingUnavailability(
+                reason: L10n.text("xbox_resolution_checking_membership")
+            )
+        case .membershipUnavailable:
+            CloudNowSettingUnavailability(
+                reason: L10n.text("xbox_resolution_membership_unavailable"),
+                recoveryActionTitle: L10n.text("try_again")
+            )
+        case let .requiresUltimate(currentMembership):
+            CloudNowSettingUnavailability(
+                reason: L10n.format(
+                    "xbox_resolution_requires_ultimate",
+                    displayTitle,
+                    currentMembership.displayName
+                )
+            )
+        case .requiresConfirmedUltimate:
+            CloudNowSettingUnavailability(
+                reason: L10n.format(
+                    "xbox_resolution_requires_confirmed_ultimate",
+                    displayTitle
+                )
+            )
+        }
     }
 
     private var membershipDescription: String {

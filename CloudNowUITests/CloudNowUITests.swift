@@ -282,11 +282,11 @@ final class CloudNowUITests: XCTestCase {
         }
         XCTAssertTrue(focusedGameLanguage.exists)
         XCUIRemote.shared.press(.select)
-        let gameLanguageSheet = element(
-            "settings.stream-quality.game-language.sheet",
+        let gameLanguagePage = element(
+            "settings.stream-quality.game-language.page",
             in: app
         )
-        XCTAssertTrue(gameLanguageSheet.waitForExistence(timeout: 3))
+        XCTAssertTrue(gameLanguagePage.waitForExistence(timeout: 3))
         let automatic = element(
             "settings.stream-quality.game-language.option.automatic",
             in: app
@@ -941,7 +941,7 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
-    func testCodecSelectionSheetFocusesAndCommitsTheSelectedValue() {
+    func testCodecSelectionPageFocusesAndCommitsTheSelectedValue() {
         let app = makeApp()
         app.launch()
 
@@ -957,8 +957,8 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(focusedCodec.exists)
         XCUIRemote.shared.press(.select)
 
-        let sheet = element("settings.stream-quality.codec.sheet", in: app)
-        XCTAssertTrue(sheet.waitForExistence(timeout: 3))
+        let page = element("settings.stream-quality.codec.page", in: app)
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
         let h265 = element(
             "settings.stream-quality.codec.option.H265",
             in: app
@@ -981,25 +981,287 @@ final class CloudNowUITests: XCTestCase {
         )
         XCUIRemote.shared.press(.select)
 
-        let sheetDismissed = XCTNSPredicateExpectation(
+        let pageDismissed = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
-            object: sheet
+            object: page
         )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [sheetDismissed], timeout: 3),
+            XCTWaiter.wait(for: [pageDismissed], timeout: 3),
             .completed
         )
         XCTAssertTrue(waitForAccessibilityText("H264", in: codec))
 
         XCTAssertTrue(focusedCodec.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
-        XCTAssertTrue(sheet.waitForExistence(timeout: 3))
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
         XCTAssertTrue(h264.waitForExistence(timeout: 3))
         XCTAssertTrue(
             focusedElement(labeled: "H264", in: app)
                 .waitForExistence(timeout: 3)
         )
         XCTAssertTrue(h264.isSelected)
+        XCTAssertFalse(h265.isSelected)
+    }
+
+    @MainActor
+    func testUnavailableGFNResolutionExplainsWhyWithoutChangingSelection() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-gfn-free-membership",
+        ])
+        app.launch()
+
+        openSettings(in: app)
+        let resolution = element("settings.stream-quality.resolution", in: app)
+        XCTAssertTrue(resolution.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForAccessibilityText("1920x1080", in: resolution))
+
+        let focusedResolution = focusedElement(labeled: "Resolution", in: app)
+        for _ in 0 ..< 30 where !focusedResolution.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedResolution.exists)
+        XCUIRemote.shared.press(.select)
+
+        let page = element("settings.stream-quality.resolution.page", in: app)
+        let fullHD = element(
+            "settings.stream-quality.resolution.option.1920x1080",
+            in: app
+        )
+        let fourK = element(
+            "settings.stream-quality.resolution.option.3840x2160",
+            in: app
+        )
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        XCTAssertTrue(fullHD.waitForExistence(timeout: 3))
+        XCTAssertTrue(fullHD.isSelected)
+
+        let focusedFourK = focusedElement(containing: "3840x2160", in: app)
+        for _ in 0 ..< 5 where !focusedFourK.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedFourK.exists)
+        XCTAssertTrue(fourK.waitForExistence(timeout: 3))
+        XCTAssertFalse(fourK.isSelected)
+        XCTAssertTrue(fourK.isEnabled)
+        XCUIRemote.shared.press(.select)
+
+        let reason = "3840x2160 is not included with your Free membership. "
+            + "Choose another resolution or upgrade your membership."
+        let reasonText = app.staticTexts[reason]
+        XCTAssertTrue(reasonText.waitForExistence(timeout: 3))
+
+        let ok = app.buttons["OK"]
+        XCTAssertTrue(ok.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        XCTAssertTrue(fullHD.waitForExistence(timeout: 3))
+        XCTAssertTrue(fourK.waitForExistence(timeout: 3))
+        XCTAssertTrue(fullHD.isSelected)
+        XCTAssertFalse(fourK.isSelected)
+        XCTAssertTrue(focusedFourK.waitForExistence(timeout: 3))
+
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(waitForAccessibilityText("1920x1080", in: resolution))
+    }
+
+    @MainActor
+    func testSelectionPageTitleScrollsWithItsOptions() {
+        let app = makeApp()
+        app.launch()
+
+        openSettings(in: app)
+        let gameLanguage = element(
+            "settings.stream-quality.game-language",
+            in: app
+        )
+        XCTAssertTrue(gameLanguage.waitForExistence(timeout: 3))
+        let focusedGameLanguage = focusedElement(
+            labeled: "Game Language",
+            in: app
+        )
+        for _ in 0 ..< 30 where !focusedGameLanguage.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedGameLanguage.exists)
+        XCUIRemote.shared.press(.select)
+
+        let page = element(
+            "settings.stream-quality.game-language.page",
+            in: app
+        )
+        let title = element(
+            "settings.stream-quality.game-language.title",
+            in: app
+        )
+        let bottomOption = element(
+            "settings.stream-quality.game-language.option.uk_UA",
+            in: app
+        )
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        XCTAssertTrue(title.waitForExistence(timeout: 3))
+        let window = app.windows.firstMatch
+        XCTAssertGreaterThan(visibleFraction(of: title, inside: window.frame), 0.9)
+
+        let focusedBottomOption = focusedElement(containing: "Ukrainian", in: app)
+        for _ in 0 ..< 40 where !focusedBottomOption.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedBottomOption.exists)
+        XCTAssertTrue(page.exists)
+        XCTAssertGreaterThan(
+            visibleFraction(of: bottomOption, inside: window.frame),
+            0.9
+        )
+
+        let titleScrolledOffscreen = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                self.visibleFraction(of: title, inside: window.frame) == 0
+            },
+            object: title
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [titleScrolledOffscreen], timeout: 3),
+            .completed
+        )
+        attachScreenshot(of: app, named: "Settings title scrolls with options")
+    }
+
+    @MainActor
+    func testServerLocationDrillsIntoServerBrowser() {
+        let app = makeApp()
+        app.launch()
+
+        openSettings(in: app)
+        let serverLocation = element("settings.server-location", in: app)
+        XCTAssertTrue(serverLocation.waitForExistence(timeout: 3))
+        let focusedServerLocation = focusedElement(
+            containing: "Server location",
+            in: app
+        )
+        for _ in 0 ..< 40 where !focusedServerLocation.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedServerLocation.exists)
+        XCUIRemote.shared.press(.select)
+
+        let rootPage = element("settings.server-location.page", in: app)
+        XCTAssertTrue(rootPage.waitForExistence(timeout: 3))
+        let region = element("settings.server-location.region", in: app)
+        XCTAssertTrue(region.waitForExistence(timeout: 3))
+        let focusedRegion = focusedElement(labeled: "Region", in: app)
+        for _ in 0 ..< 3 where !focusedRegion.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedRegion.exists)
+        XCUIRemote.shared.press(.select)
+
+        let regionPage = element("settings.server-location.region.page", in: app)
+        let fixtureRegion = element(
+            "settings.server-location.region.Germany",
+            in: app
+        )
+        XCTAssertTrue(regionPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(fixtureRegion.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "Germany", in: app)
+                .waitForExistence(timeout: 3)
+        )
+
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(rootPage.waitForExistence(timeout: 3))
+        let servers = element("settings.server-location.servers", in: app)
+        XCTAssertTrue(servers.waitForExistence(timeout: 3))
+        let focusedServers = focusedElement(labeled: "Servers", in: app)
+        for _ in 0 ..< 3 where !focusedServers.exists {
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedServers.exists)
+        XCUIRemote.shared.press(.select)
+
+        let serversPage = element(
+            "settings.server-location.servers.page",
+            in: app
+        )
+        let country = element("settings.server-location.country.DE", in: app)
+        XCTAssertTrue(serversPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(country.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "Germany", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCUIRemote.shared.press(.select)
+
+        let countryPage = element(
+            "settings.server-location.country.page",
+            in: app
+        )
+        let city = element(
+            "settings.server-location.city.DE.Frankfurt",
+            in: app
+        )
+        XCTAssertTrue(countryPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(city.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "Frankfurt", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCUIRemote.shared.press(.select)
+
+        let cityPage = element("settings.server-location.city.page", in: app)
+        let zone = element(
+            "settings.server-location.zone.NP-FIXTURE-DE-FRK-1",
+            in: app
+        )
+        XCTAssertTrue(cityPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(zone.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(containing: "NP-FIXTURE-DE-FRK-1", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCUIRemote.shared.press(.select)
+
+        let cityPageDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: cityPage
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [cityPageDismissed], timeout: 3),
+            .completed
+        )
+        XCTAssertTrue(
+            waitForAccessibilityText(
+                "NP-FIXTURE-DE-FRK-1",
+                in: serverLocation
+            )
+        )
+
+        XCTAssertTrue(focusedServerLocation.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(rootPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(focusedServers.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(serversPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "Germany", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(country.isSelected)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(countryPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(labeled: "Frankfurt", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(city.isSelected)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(cityPage.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            focusedElement(containing: "NP-FIXTURE-DE-FRK-1", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(zone.isSelected)
+        attachScreenshot(of: app, named: "Server browser drill-down")
     }
 
     @MainActor
@@ -2010,6 +2272,19 @@ final class CloudNowUITests: XCTestCase {
             .matching(NSPredicate(
                 format: "label == %@ AND hasFocus == true",
                 label
+            ))
+            .firstMatch
+    }
+
+    @MainActor
+    private func focusedElement(
+        containing labelFragment: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label CONTAINS %@ AND hasFocus == true",
+                labelFragment
             ))
             .firstMatch
     }

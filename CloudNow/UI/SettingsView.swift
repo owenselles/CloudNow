@@ -1,4 +1,6 @@
+import AVFoundation
 import SwiftUI
+import UIKit
 
 struct CloudNowStorageAndDataSection: View {
     let isPerformingAction: Bool
@@ -359,12 +361,23 @@ extension CloudNowControllerSettingsSection where AdditionalContent == EmptyView
     }
 }
 
+struct CloudNowSettingUnavailability: Equatable {
+    let reason: String
+    let recoveryActionTitle: String?
+
+    init(reason: String, recoveryActionTitle: String? = nil) {
+        self.reason = reason
+        self.recoveryActionTitle = recoveryActionTitle
+    }
+}
+
 struct CloudNowSettingOption<Value: Hashable>: Identifiable {
     let value: Value
     let title: String
     let badge: String?
     let systemImage: String?
     let accessibilityIdentifier: String?
+    let unavailability: CloudNowSettingUnavailability?
 
     var id: Value {
         value
@@ -375,18 +388,24 @@ struct CloudNowSettingOption<Value: Hashable>: Identifiable {
         title: String,
         badge: String? = nil,
         systemImage: String? = nil,
-        accessibilityIdentifier: String? = nil
+        accessibilityIdentifier: String? = nil,
+        unavailability: CloudNowSettingUnavailability? = nil
     ) {
         self.value = value
         self.title = title
         self.badge = badge
         self.systemImage = systemImage
         self.accessibilityIdentifier = accessibilityIdentifier
+        self.unavailability = unavailability
     }
 
     var displayTitle: String {
         guard let badge else { return title }
         return "\(title)  —  \(badge)"
+    }
+
+    var isAvailable: Bool {
+        unavailability == nil
     }
 }
 
@@ -406,9 +425,7 @@ struct CloudNowSettingSelectionRow<Value: Hashable>: View {
     let accessibilityIdentifier: String
     @Binding var selection: Value
     let groups: [CloudNowSettingOptionGroup<Value>]
-
-    @Environment(UIControllerNavigationCoordinator.self) private var controllerNavigation
-    @State private var isPresentingSelection = false
+    let onRecoveryAction: (() -> Void)?
 
     init(
         _ title: String,
@@ -416,7 +433,8 @@ struct CloudNowSettingSelectionRow<Value: Hashable>: View {
         descriptionIsWarning: Bool = false,
         selection: Binding<Value>,
         accessibilityIdentifier: String,
-        options: [CloudNowSettingOption<Value>]
+        options: [CloudNowSettingOption<Value>],
+        onRecoveryAction: (() -> Void)? = nil
     ) {
         self.title = title
         self.description = description
@@ -424,6 +442,7 @@ struct CloudNowSettingSelectionRow<Value: Hashable>: View {
         self.accessibilityIdentifier = accessibilityIdentifier
         _selection = selection
         groups = [CloudNowSettingOptionGroup(title: nil, options: options)]
+        self.onRecoveryAction = onRecoveryAction
     }
 
     init(
@@ -432,7 +451,8 @@ struct CloudNowSettingSelectionRow<Value: Hashable>: View {
         descriptionIsWarning: Bool = false,
         selection: Binding<Value>,
         accessibilityIdentifier: String,
-        groups: [CloudNowSettingOptionGroup<Value>]
+        groups: [CloudNowSettingOptionGroup<Value>],
+        onRecoveryAction: (() -> Void)? = nil
     ) {
         self.title = title
         self.description = description
@@ -440,11 +460,18 @@ struct CloudNowSettingSelectionRow<Value: Hashable>: View {
         self.accessibilityIdentifier = accessibilityIdentifier
         _selection = selection
         self.groups = groups
+        self.onRecoveryAction = onRecoveryAction
     }
 
     var body: some View {
-        Button {
-            isPresentingSelection = true
+        NavigationLink {
+            CloudNowSettingSelectionPage(
+                title: title,
+                selection: $selection,
+                groups: groups,
+                accessibilityIdentifier: accessibilityIdentifier,
+                onRecoveryAction: onRecoveryAction
+            )
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -468,15 +495,6 @@ struct CloudNowSettingSelectionRow<Value: Hashable>: View {
         .accessibilityLabel(title)
         .accessibilityValue(selectedOption?.displayTitle ?? "")
         .accessibilityHint(description ?? "")
-        .sheet(isPresented: $isPresentingSelection) {
-            CloudNowSettingSelectionSheet(
-                title: title,
-                selection: $selection,
-                groups: groups,
-                accessibilityIdentifier: accessibilityIdentifier
-            )
-            .environment(controllerNavigation)
-        }
     }
 
     private var selectedOption: CloudNowSettingOption<Value>? {
@@ -484,56 +502,79 @@ struct CloudNowSettingSelectionRow<Value: Hashable>: View {
     }
 }
 
-private struct CloudNowSettingSelectionSheet<Value: Hashable>: View {
+private struct CloudNowSettingSelectionPage<Value: Hashable>: View {
+    private struct UnavailableSelection {
+        let title: String
+        let unavailability: CloudNowSettingUnavailability
+    }
+
     let title: String
     @Binding var selection: Value
     let groups: [CloudNowSettingOptionGroup<Value>]
     let accessibilityIdentifier: String
+    let onRecoveryAction: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focusedValue: Value?
+    @State private var unavailableSelection: UnavailableSelection?
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                Text(title)
-                    .font(.title2.bold())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 64)
-                    .padding(.top, 36)
-                    .padding(.bottom, 20)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityIdentifier("\(accessibilityIdentifier).sheet")
-                List {
-                    ForEach(groups) { group in
-                        if !group.options.isEmpty {
-                            Section {
-                                ForEach(group.options) { option in
-                                    optionButton(option)
-                                }
-                            } header: {
-                                if let title = group.title {
-                                    Text(title)
-                                }
-                            }
+        Form {
+            CloudNowSettingsPageTitle(
+                title: title,
+                accessibilityIdentifier: "\(accessibilityIdentifier).title"
+            )
+
+            ForEach(groups) { group in
+                if !group.options.isEmpty {
+                    Section {
+                        ForEach(group.options) { option in
+                            optionButton(option)
+                        }
+                    } header: {
+                        if let title = group.title {
+                            Text(title)
+                                .lineLimit(1)
                         }
                     }
                 }
-                .contentMargins(.horizontal, 32, for: .scrollContent)
-                .contentMargins(.bottom, 24, for: .scrollContent)
             }
-            .navigationTitle("")
         }
+        .navigationTitle("")
+        .accessibilityIdentifier("\(accessibilityIdentifier).page")
         .task {
             await Task.yield()
             focusedValue = selection
         }
         .defaultFocus($focusedValue, selection)
         .blocksGlobalControllerNavigation()
+        .alert(
+            unavailableSelection?.title ?? "",
+            isPresented: unavailableSelectionBinding,
+            presenting: unavailableSelection
+        ) { selection in
+            if selection.unavailability.recoveryActionTitle != nil,
+               let onRecoveryAction
+            {
+                Button(selection.unavailability.recoveryActionTitle ?? "") {
+                    onRecoveryAction()
+                }
+            }
+            Button(L10n.text("ok"), role: .cancel) {}
+        } message: { selection in
+            Text(selection.unavailability.reason)
+        }
     }
 
     private func optionButton(_ option: CloudNowSettingOption<Value>) -> some View {
         Button {
+            if let unavailability = option.unavailability {
+                unavailableSelection = UnavailableSelection(
+                    title: option.displayTitle,
+                    unavailability: unavailability
+                )
+                return
+            }
             selection = option.value
             dismiss()
         } label: {
@@ -546,6 +587,8 @@ private struct CloudNowSettingSelectionSheet<Value: Hashable>: View {
                 }
                 Text(option.displayTitle)
                     .font(.headline)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Spacer()
                 if option.value == selection {
                     Image(systemName: "checkmark.circle.fill")
@@ -553,21 +596,58 @@ private struct CloudNowSettingSelectionSheet<Value: Hashable>: View {
                         .foregroundStyle(.green)
                         .accessibilityHidden(true)
                 }
+                if !option.isAvailable {
+                    Label(
+                        L10n.text("unavailable"),
+                        systemImage: "lock.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 24)
+            .foregroundStyle(option.isAvailable ? .primary : .secondary)
         }
-        .foregroundStyle(.primary)
         .focused($focusedValue, equals: option.value)
         .accessibilityLabel(option.displayTitle)
+        .accessibilityValue(
+            option.isAvailable ? "" : L10n.text("unavailable")
+        )
+        .accessibilityHint(option.unavailability?.reason ?? "")
         .accessibilityAddTraits(option.value == selection ? .isSelected : [])
         .accessibilityIdentifier(optionIdentifier(option))
+    }
+
+    private var unavailableSelectionBinding: Binding<Bool> {
+        Binding(
+            get: { unavailableSelection != nil },
+            set: { isPresented in
+                if !isPresented {
+                    unavailableSelection = nil
+                }
+            }
+        )
     }
 
     private func optionIdentifier(_ option: CloudNowSettingOption<Value>) -> String {
         let optionIdentifier = option.accessibilityIdentifier
             ?? String(describing: option.value)
         return "\(accessibilityIdentifier).option.\(optionIdentifier)"
+    }
+}
+
+private struct CloudNowSettingsPageTitle: View {
+    let title: String
+    let accessibilityIdentifier: String
+
+    var body: some View {
+        Text(title)
+            .font(.title2.bold())
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+            .listRowBackground(Color.clear)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 
@@ -624,21 +704,120 @@ struct CloudNowStreamQualitySection<Content: View>: View {
 /// to their own stream transport.
 struct CloudNowMicrophoneSettingsSection: View {
     @Binding var isEnabled: Bool
-    var isDisabled = false
+    let isDisabled: Bool
+
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var permissionStatus: CloudNowMicrophonePermissionStatus
+    @State private var isRequestingPermission = false
+
+    init(isEnabled: Binding<Bool>, isDisabled: Bool = false) {
+        _isEnabled = isEnabled
+        self.isDisabled = isDisabled
+        _permissionStatus = State(
+            initialValue: Self.currentMicrophonePermissionStatus
+        )
+    }
 
     var body: some View {
         Section(L10n.text("microphone")) {
-            Toggle(isOn: $isEnabled) {
+            Toggle(isOn: permissionAwareBinding) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L10n.text("use_microphone"))
-                    Text(L10n.text("microphone_description"))
+                    Text(microphoneDescription)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(
+                            permissionStatus == .denied ? .orange : .secondary
+                        )
                 }
                 .padding(.vertical, 8)
             }
+            .disabled(
+                permissionStatus == .denied || isRequestingPermission
+            )
+            .accessibilityIdentifier("settings.microphone.enabled")
+
+            if permissionStatus == .denied {
+                Button(action: openApplicationSettings) {
+                    Label(
+                        L10n.text("open_settings"),
+                        systemImage: "gear"
+                    )
+                }
+                .accessibilityIdentifier("settings.microphone.open-settings")
+            }
         }
         .disabled(isDisabled)
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            permissionStatus = Self.currentMicrophonePermissionStatus
+        }
+    }
+
+    private var permissionAwareBinding: Binding<Bool> {
+        Binding(
+            get: { isEnabled },
+            set: handlePreferenceChange
+        )
+    }
+
+    private var microphoneDescription: String {
+        permissionStatus == .denied
+            ? L10n.text("microphone_permission_denied_message")
+            : L10n.text("microphone_description")
+    }
+
+    private func handlePreferenceChange(_ requestedValue: Bool) {
+        switch CloudNowMicrophoneSettingsPolicy.action(
+            requestedValue: requestedValue,
+            permissionStatus: permissionStatus
+        ) {
+        case let .setEnabled(isEnabled):
+            self.isEnabled = isEnabled
+        case .requestPermission:
+            requestMicrophonePermission()
+        case .blocked:
+            break
+        }
+    }
+
+    private func requestMicrophonePermission() {
+        guard !isRequestingPermission else { return }
+        isRequestingPermission = true
+        Task { @MainActor in
+            let granted = await withCheckedContinuation { continuation in
+                AVAudioApplication.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
+            permissionStatus = granted ? .granted : .denied
+            if granted {
+                isEnabled = true
+            }
+            isRequestingPermission = false
+        }
+    }
+
+    private func openApplicationSettings() {
+        guard let settingsURL = URL(
+            string: UIApplication.openSettingsURLString
+        ) else {
+            return
+        }
+        openURL(settingsURL)
+    }
+
+    private static var currentMicrophonePermissionStatus: CloudNowMicrophonePermissionStatus {
+        switch AVAudioApplication.shared.recordPermission {
+        case .undetermined:
+            .undetermined
+        case .denied:
+            .denied
+        case .granted:
+            .granted
+        @unknown default:
+            .denied
+        }
     }
 }
 
@@ -670,22 +849,26 @@ enum CloudNowDataDialog: Equatable {
     }
 }
 
+private enum SettingsNavigationRoute: Hashable {
+    case serverLocation
+}
+
 struct SettingsView: View {
     @Environment(AuthManager.self) var authManager
     @Environment(CloudGamingProviderCoordinator.self) private var providerCoordinator
     @Environment(CloudSessionCoordinator.self) private var sessionCoordinator
     @Environment(GamesViewModel.self) var viewModel
 
-    @State private var showServerLocationPicker = false
     @State private var showNetworkTest = false
     @State private var showLibraryRefreshProgress = false
     @State private var dataDialog: CloudNowDataDialog?
     @State private var isPerformingDataAction = false
+    @State private var navigationPath: [SettingsNavigationRoute] = []
 
     var body: some View {
         @Bindable var vm = viewModel
 
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             Form {
                 CloudNowCloudServiceSection(
                     activeProvider: providerCoordinator.selectedProvider ?? .geForceNow,
@@ -705,11 +888,14 @@ struct SettingsView: View {
                         L10n.text("frame_rate"),
                         selection: $vm.streamSettings.fps,
                         accessibilityIdentifier: "settings.stream-quality.frame-rate",
-                        options: viewModel.availableFps.map { fps in
+                        options: viewModel.frameRateEligibility.map { eligibility in
                             CloudNowSettingOption(
-                                value: fps,
-                                title: "\(fps) fps",
-                                accessibilityIdentifier: "\(fps)"
+                                value: eligibility.framesPerSecond,
+                                title: "\(eligibility.framesPerSecond) fps",
+                                accessibilityIdentifier: "\(eligibility.framesPerSecond)",
+                                unavailability: frameRateUnavailability(
+                                    eligibility
+                                )
                             )
                         }
                     )
@@ -829,9 +1015,7 @@ struct SettingsView: View {
 
                 Section(L10n.text("server_location")) {
                     if isNvidiaDirectSession {
-                        Button {
-                            showServerLocationPicker = true
-                        } label: {
+                        NavigationLink(value: SettingsNavigationRoute.serverLocation) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(L10n.text("server_location"))
@@ -846,15 +1030,32 @@ struct SettingsView: View {
                             }
                         }
                         .foregroundStyle(.primary)
+                        .accessibilityIdentifier("settings.server-location")
+                        .accessibilityLabel(L10n.text("server_location"))
+                        .accessibilityValue(serverLocationValue)
+                        .accessibilityHint(serverLocationDescription)
                     } else {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(L10n.text("server_location"))
-                                Text(L10n.text("managed_by_partner"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                Text(
+                                    L10n.format(
+                                        "managed_by_partner",
+                                        authManager.session?.provider.displayName
+                                            ?? CloudGamingProvider.geForceNow.displayName
+                                    )
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 8)
+                            Spacer()
+                            Label(
+                                L10n.text("unavailable"),
+                                systemImage: "lock.fill"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                     }
 
@@ -931,25 +1132,24 @@ struct SettingsView: View {
                 }
 
                 Section(L10n.text("game")) {
-                    if viewModel.subscription?.allowsInGameSettingsPersistence == false {
+                    Toggle(isOn: $vm.streamSettings.persistInGameSettings) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(L10n.text("save_in_game_settings"))
-                            Text(L10n.text("save_in_game_settings_free_unavailable"))
+                            Text(saveInGameSettingsDescription)
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(
+                                    viewModel.subscription?
+                                        .allowsInGameSettingsPersistence == false
+                                        ? .orange
+                                        : .secondary
+                                )
                         }
                         .padding(.vertical, 8)
-                    } else {
-                        Toggle(isOn: $vm.streamSettings.persistInGameSettings) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L10n.text("save_in_game_settings"))
-                                Text(L10n.text("save_in_game_settings_description"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 8)
-                        }
                     }
+                    .disabled(
+                        viewModel.subscription?
+                            .allowsInGameSettingsPersistence == false
+                    )
                 }
 
                 if viewModel.isProviderLibrarySyncEnabled {
@@ -1033,8 +1233,13 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("")
-            .sheet(isPresented: $showServerLocationPicker) {
-                ServerLocationPickerView()
+            .navigationDestination(for: SettingsNavigationRoute.self) { route in
+                switch route {
+                case .serverLocation:
+                    ServerLocationPickerView {
+                        navigationPath.removeAll()
+                    }
+                }
             }
             .sheet(isPresented: $showNetworkTest) {
                 NetworkTestView()
@@ -1256,18 +1461,24 @@ struct SettingsView: View {
         ResolutionEntry(res: "1920x1080", badge: "Full HD", symbol: "tv"),
         ResolutionEntry(res: "2560x1440", badge: "2K", symbol: "tv"),
         ResolutionEntry(res: "3840x2160", badge: "4K", symbol: "4k.tv"),
+        ResolutionEntry(res: "5120x2880", badge: "5K", symbol: "tv"),
     ]
 
     private var geForceNowResolutionGroups: [CloudNowSettingOptionGroup<String>] {
+        let availableResolutions = Set(viewModel.availableResolutions)
+        let hasMembershipData = viewModel.subscription != nil
         let common = commonResolutions
-            .filter { viewModel.availableResolutions.contains($0.res) }
+            .filter { hasMembershipData || availableResolutions.contains($0.res) }
             .map {
                 CloudNowSettingOption(
                     value: $0.res,
                     title: $0.res,
                     badge: $0.badge,
                     systemImage: $0.symbol,
-                    accessibilityIdentifier: $0.res
+                    accessibilityIdentifier: $0.res,
+                    unavailability: availableResolutions.contains($0.res)
+                        ? nil
+                        : resolutionMembershipUnavailability($0.res)
                 )
             }
         let commonValues = Set(commonResolutions.map(\.res))
@@ -1291,29 +1502,120 @@ struct SettingsView: View {
             ),
         ]
     }
+
+    private var geForceNowMembershipName: String {
+        guard let rawValue = viewModel.subscription?.membershipTier
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawValue.isEmpty
+        else {
+            return L10n.text("unknown")
+        }
+        let normalizedValue = rawValue.uppercased()
+        if normalizedValue.contains("ULTIMATE") {
+            return "Ultimate"
+        }
+        if normalizedValue.contains("PERFORMANCE") {
+            return "Performance"
+        }
+        if normalizedValue.contains("PRIORITY") {
+            return "Priority"
+        }
+        if normalizedValue.contains("FREE") {
+            return "Free"
+        }
+        return rawValue
+    }
+
+    private var saveInGameSettingsDescription: String {
+        guard viewModel.subscription?.allowsInGameSettingsPersistence == false else {
+            return L10n.text("save_in_game_settings_description")
+        }
+        return L10n.format(
+            "save_in_game_settings_free_unavailable",
+            geForceNowMembershipName
+        )
+    }
+
+    private func resolutionMembershipUnavailability(
+        _ resolution: String
+    ) -> CloudNowSettingUnavailability {
+        CloudNowSettingUnavailability(
+            reason: L10n.format(
+                "gfn_resolution_membership_unavailable",
+                resolution,
+                geForceNowMembershipName
+            )
+        )
+    }
+
+    private func frameRateUnavailability(
+        _ eligibility: GFNFrameRateEligibility
+    ) -> CloudNowSettingUnavailability? {
+        guard let restriction = eligibility.restriction else { return nil }
+        let framesPerSecond = eligibility.framesPerSecond
+        let reason = switch restriction {
+        case let .display(maximumFramesPerSecond):
+            L10n.format(
+                "gfn_frame_rate_display_unavailable",
+                framesPerSecond,
+                framesPerSecond,
+                maximumFramesPerSecond
+            )
+        case .membership:
+            L10n.format(
+                "gfn_frame_rate_membership_unavailable",
+                framesPerSecond,
+                viewModel.streamSettings.resolution,
+                geForceNowMembershipName
+            )
+        case let .displayAndMembership(maximumFramesPerSecond):
+            L10n.format(
+                "gfn_frame_rate_display_and_membership_unavailable",
+                framesPerSecond,
+                maximumFramesPerSecond,
+                geForceNowMembershipName,
+                viewModel.streamSettings.resolution
+            )
+        }
+        return CloudNowSettingUnavailability(reason: reason)
+    }
 }
 
 // MARK: - Server Location Picker
 
-private struct ServerLocationPickerView: View {
-    private enum Route: Hashable {
-        case region
-        case servers
-        case country(String)
-        case city(countryCode: String, city: String)
+#if DEBUG
+    struct CloudNowServerLocationFixture {
+        let serverInfo: GFNServerInfo
+        let zones: [GFNZone]
     }
 
+    private struct CloudNowServerLocationFixtureKey: EnvironmentKey {
+        static let defaultValue: CloudNowServerLocationFixture? = nil
+    }
+
+    extension EnvironmentValues {
+        var cloudNowServerLocationFixture: CloudNowServerLocationFixture? {
+            get { self[CloudNowServerLocationFixtureKey.self] }
+            set { self[CloudNowServerLocationFixtureKey.self] = newValue }
+        }
+    }
+#endif
+
+private struct ServerLocationPickerView: View {
     private enum Choice: Hashable {
         case automatic
         case region
         case servers
     }
 
-    @Environment(\.dismiss) private var dismiss
     @Environment(GamesViewModel.self) private var viewModel
     @Environment(AuthManager.self) private var authManager
+    #if DEBUG
+        @Environment(\.cloudNowServerLocationFixture) private var fixture
+    #endif
 
-    @State private var path: [Route] = []
+    let onSelectionComplete: () -> Void
+
     @State private var serverInfo: GFNServerInfo?
     @State private var isLoadingRegions = true
     @State private var regionError: String?
@@ -1323,45 +1625,25 @@ private struct ServerLocationPickerView: View {
     @FocusState private var focusedChoice: Choice?
 
     var body: some View {
-        NavigationStack(path: $path) {
-            ServerPickerScreen(title: L10n.text("server_location")) {
-                List {
-                    Section {
-                        choiceRow(
-                            title: L10n.text("automatic"),
-                            subtitle: serverAutoSubtitle,
-                            selected: viewModel.streamSettings.serverRoutingMode == .serverAuto,
-                            choice: .automatic
-                        ) {
-                            selectServerAutomatic()
-                        }
-
-                        choiceRow(
-                            title: L10n.text("region"),
-                            subtitle: regionChoiceSubtitle,
-                            selected: viewModel.streamSettings.serverRoutingMode == .region,
-                            choice: .region,
-                            showsDisclosure: true
-                        ) {
-                            path.append(.region)
-                        }
-
-                        choiceRow(
-                            title: L10n.text("servers"),
-                            subtitle: serversChoiceSubtitle,
-                            selected: viewModel.streamSettings.serverRoutingMode == .client,
-                            choice: .servers,
-                            showsDisclosure: true
-                        ) {
-                            path.append(.servers)
-                        }
-                    }
+        ServerPickerScreen(
+            title: L10n.text("server_location"),
+            accessibilityIdentifier: "settings.server-location.page"
+        ) {
+            Section {
+                Button {
+                    selectServerAutomatic()
+                } label: {
+                    choiceLabel(
+                        title: L10n.text("automatic"),
+                        subtitle: serverAutoSubtitle,
+                        selected: viewModel.streamSettings.serverRoutingMode == .serverAuto
+                    )
                 }
-            }
-            .defaultFocus($focusedChoice, selectedChoice)
-            .navigationDestination(for: Route.self) { route in
-                switch route {
-                case .region:
+                .focused($focusedChoice, equals: .automatic)
+                .accessibilityLabel(L10n.text("automatic"))
+                .accessibilityValue(serverAutoSubtitle)
+
+                NavigationLink {
                     RegionPickerView(
                         serverInfo: serverInfo,
                         isLoading: isLoadingRegions,
@@ -1369,36 +1651,49 @@ private struct ServerLocationPickerView: View {
                     ) { region in
                         selectRegion(region)
                     }
-                case .servers:
+                    .task {
+                        await loadRegions()
+                    }
+                } label: {
+                    choiceLabel(
+                        title: L10n.text("region"),
+                        subtitle: regionChoiceSubtitle,
+                        selected: viewModel.streamSettings.serverRoutingMode == .region
+                    )
+                }
+                .focused($focusedChoice, equals: .region)
+                .accessibilityIdentifier("settings.server-location.region")
+                .accessibilityLabel(L10n.text("region"))
+                .accessibilityValue(regionChoiceSubtitle)
+
+                NavigationLink {
                     ServerCountryPickerView(
                         zones: serverZones,
                         isLoading: isLoadingServers,
-                        error: serverError
-                    ) { countryCode in
-                        path.append(.country(countryCode))
-                    }
+                        error: serverError,
+                        onSelect: selectDedicatedZone
+                    )
                     .task {
                         await loadServers()
                     }
-                case let .country(countryCode):
-                    ServerCityPickerView(
-                        countryCode: countryCode,
-                        zones: serverZones.filter { $0.countryCode == countryCode }
-                    ) { city in
-                        path.append(.city(countryCode: countryCode, city: city))
-                    }
-                case let .city(countryCode, city):
-                    DedicatedServerPickerView(
-                        city: city,
-                        zones: serverZones.filter { $0.countryCode == countryCode && $0.city == city }
-                    ) { zone in
-                        selectDedicatedZone(zone)
-                    }
+                } label: {
+                    choiceLabel(
+                        title: L10n.text("servers"),
+                        subtitle: serversChoiceSubtitle,
+                        selected: viewModel.streamSettings.serverRoutingMode == .client
+                    )
                 }
+                .focused($focusedChoice, equals: .servers)
+                .accessibilityIdentifier("settings.server-location.servers")
+                .accessibilityLabel(L10n.text("servers"))
+                .accessibilityValue(serversChoiceSubtitle)
             }
-            .task {
-                await loadRegions()
-            }
+        }
+        .defaultFocus($focusedChoice, selectedChoice)
+        .task {
+            await Task.yield()
+            focusedChoice = selectedChoice
+            await loadRegions()
         }
         .blocksGlobalControllerNavigation()
     }
@@ -1436,36 +1731,25 @@ private struct ServerLocationPickerView: View {
         return L10n.text("server_selection_warning")
     }
 
-    private func choiceRow(
+    private func choiceLabel(
         title: String,
         subtitle: String,
-        selected: Bool,
-        choice: Choice,
-        showsDisclosure: Bool = false,
-        action: @escaping () -> Void
+        selected: Bool
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.body.weight(.semibold))
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.body.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-                if selected {
-                    Image(systemName: "checkmark")
-                }
-                if showsDisclosure {
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(.secondary)
-                }
+            if selected {
+                Image(systemName: "checkmark")
             }
         }
-        .buttonStyle(ServerRowButtonStyle())
-        .focused($focusedChoice, equals: choice)
     }
 
     private func selectServerAutomatic() {
@@ -1473,7 +1757,7 @@ private struct ServerLocationPickerView: View {
         viewModel.streamSettings.preferredZoneUrl = nil
         viewModel.streamSettings.preferredRegionName = nil
         viewModel.streamSettings.preferredRegionAddress = nil
-        dismiss()
+        onSelectionComplete()
     }
 
     private func selectDedicatedZone(_ zone: GFNZone) {
@@ -1481,7 +1765,7 @@ private struct ServerLocationPickerView: View {
         viewModel.streamSettings.preferredZoneUrl = zone.zoneUrl
         viewModel.streamSettings.preferredRegionName = nil
         viewModel.streamSettings.preferredRegionAddress = nil
-        dismiss()
+        onSelectionComplete()
     }
 
     private func selectRegion(_ region: GFNRegion) {
@@ -1489,10 +1773,19 @@ private struct ServerLocationPickerView: View {
         viewModel.streamSettings.preferredZoneUrl = nil
         viewModel.streamSettings.preferredRegionName = region.name
         viewModel.streamSettings.preferredRegionAddress = region.address
-        dismiss()
+        onSelectionComplete()
     }
 
     private func loadRegions() async {
+        #if DEBUG
+            if let fixture {
+                serverInfo = fixture.serverInfo
+                regionError = nil
+                isLoadingRegions = false
+                return
+            }
+        #endif
+
         let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
         if let cached = ServerInfoClient.shared.cachedForBase(base) {
             serverInfo = cached
@@ -1519,6 +1812,15 @@ private struct ServerLocationPickerView: View {
     }
 
     private func loadServers() async {
+        #if DEBUG
+            if let fixture {
+                serverZones = fixture.zones
+                serverError = nil
+                isLoadingServers = false
+                return
+            }
+        #endif
+
         if !serverZones.isEmpty {
             isLoadingServers = false
             return
@@ -1543,52 +1845,30 @@ private struct ServerLocationPickerView: View {
 
 struct ServerPickerScreen<Content: View>: View {
     let title: String
+    let accessibilityIdentifier: String
     private let content: Content
 
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(
+        title: String,
+        accessibilityIdentifier: String,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
+        self.accessibilityIdentifier = accessibilityIdentifier
         self.content = content()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.title2.bold())
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 64)
-                .padding(.top, 36)
-                .padding(.bottom, 20)
+        Form {
+            CloudNowSettingsPageTitle(
+                title: title,
+                accessibilityIdentifier: "\(accessibilityIdentifier).title"
+            )
             content
         }
         .navigationTitle("")
-    }
-}
-
-struct ServerRowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        RowBody(configuration: configuration)
-    }
-
-    private struct RowBody: View {
-        let configuration: ButtonStyle.Configuration
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
-        @Environment(\.isFocused) private var isFocused
-
-        var body: some View {
-            configuration.label
-                .foregroundStyle(isFocused ? AnyShapeStyle(.black) : AnyShapeStyle(.primary))
-                .padding(.vertical, 14)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    isFocused
-                        ? AnyShapeStyle(.white)
-                        : AnyShapeStyle(Color.primary.opacity(0.08))
-                )
-                .clipShape(.rect(cornerRadius: 14))
-                .scaleEffect(isFocused && !reduceMotion ? 1.03 : 1)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isFocused)
-        }
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .blocksGlobalControllerNavigation()
     }
 }
 
@@ -1606,7 +1886,7 @@ private struct ServerCountryPickerView: View {
     let zones: [GFNZone]
     let isLoading: Bool
     let error: String?
-    let onSelect: (String) -> Void
+    let onSelect: (GFNZone) -> Void
 
     @Environment(GamesViewModel.self) private var viewModel
     @FocusState private var focusedCountryCode: String?
@@ -1625,48 +1905,59 @@ private struct ServerCountryPickerView: View {
     }
 
     var body: some View {
-        ServerPickerScreen(title: L10n.text("servers")) {
-            Group {
-                if isLoading {
-                    ProgressView {
-                        Text(L10n.text("loading_servers"))
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error {
-                    ContentUnavailableView(
-                        L10n.text("cant_load_servers"),
-                        systemImage: "wifi.exclamationmark",
-                        description: Text(error)
-                    )
-                } else {
-                    List {
-                        Section {
-                            ForEach(countries) { country in
-                                Button {
-                                    onSelect(country.code)
-                                } label: {
-                                    HStack {
-                                        Text(country.name)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        if selectedCountryCode == country.code {
-                                            Image(systemName: "checkmark")
-                                        }
-                                        Image(systemName: "chevron.right")
-                                            .foregroundStyle(.secondary)
-                                    }
+        ServerPickerScreen(
+            title: L10n.text("servers"),
+            accessibilityIdentifier: "settings.server-location.servers.page"
+        ) {
+            if isLoading {
+                ProgressView {
+                    Text(L10n.text("loading_servers"))
+                }
+                .frame(maxWidth: .infinity, minHeight: 320)
+                .listRowBackground(Color.clear)
+            } else if let error {
+                ContentUnavailableView(
+                    L10n.text("cant_load_servers"),
+                    systemImage: "wifi.exclamationmark",
+                    description: Text(error)
+                )
+                .frame(maxWidth: .infinity, minHeight: 320)
+                .listRowBackground(Color.clear)
+            } else {
+                Section {
+                    ForEach(countries) { country in
+                        NavigationLink {
+                            ServerCityPickerView(
+                                countryCode: country.code,
+                                zones: zones.filter {
+                                    $0.countryCode == country.code
+                                },
+                                onSelect: onSelect
+                            )
+                        } label: {
+                            HStack {
+                                Text(country.name)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if selectedCountryCode == country.code {
+                                    Image(systemName: "checkmark")
                                 }
-                                .buttonStyle(ServerRowButtonStyle())
-                                .focused($focusedCountryCode, equals: country.code)
                             }
                         }
+                        .focused($focusedCountryCode, equals: country.code)
+                        .accessibilityIdentifier(
+                            "settings.server-location.country.\(country.code)"
+                        )
+                        .accessibilityAddTraits(
+                            selectedCountryCode == country.code ? .isSelected : []
+                        )
                     }
                 }
             }
-            .task(id: isLoading) {
-                guard !isLoading else { return }
-                await Task.yield()
-                focusedCountryCode = selectedCountryCode ?? countries.first?.code
-            }
+        }
+        .task(id: isLoading) {
+            guard !isLoading else { return }
+            await Task.yield()
+            focusedCountryCode = selectedCountryCode ?? countries.first?.code
         }
         .defaultFocus($focusedCountryCode, selectedCountryCode ?? countries.first?.code)
     }
@@ -1675,7 +1966,7 @@ private struct ServerCountryPickerView: View {
 private struct ServerCityPickerView: View {
     let countryCode: String
     let zones: [GFNZone]
-    let onSelect: (String) -> Void
+    let onSelect: (GFNZone) -> Void
 
     @Environment(GamesViewModel.self) private var viewModel
     @FocusState private var focusedCity: String?
@@ -1692,26 +1983,34 @@ private struct ServerCityPickerView: View {
     }
 
     var body: some View {
-        ServerPickerScreen(title: localizedServerCountryName(countryCode)) {
-            List {
-                Section {
-                    ForEach(cities, id: \.self) { city in
-                        Button {
-                            onSelect(city)
-                        } label: {
-                            HStack {
-                                Text(city)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                if selectedCity == city {
-                                    Image(systemName: "checkmark")
-                                }
-                                Image(systemName: "chevron.right")
-                                    .foregroundStyle(.secondary)
+        ServerPickerScreen(
+            title: localizedServerCountryName(countryCode),
+            accessibilityIdentifier: "settings.server-location.country.page"
+        ) {
+            Section {
+                ForEach(cities, id: \.self) { city in
+                    NavigationLink {
+                        DedicatedServerPickerView(
+                            city: city,
+                            zones: zones.filter { $0.city == city },
+                            onSelect: onSelect
+                        )
+                    } label: {
+                        HStack {
+                            Text(city)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if selectedCity == city {
+                                Image(systemName: "checkmark")
                             }
                         }
-                        .buttonStyle(ServerRowButtonStyle())
-                        .focused($focusedCity, equals: city)
                     }
+                    .focused($focusedCity, equals: city)
+                    .accessibilityIdentifier(
+                        "settings.server-location.city.\(countryCode).\(city)"
+                    )
+                    .accessibilityAddTraits(
+                        selectedCity == city ? .isSelected : []
+                    )
                 }
             }
         }
@@ -1750,70 +2049,76 @@ private struct DedicatedServerPickerView: View {
     }
 
     var body: some View {
-        ServerPickerScreen(title: city) {
-            List {
-                Section {
-                    ForEach(zones) { zone in
-                        Button {
-                            onSelect(zone)
-                        } label: {
-                            HStack(spacing: 20) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(zone.id)
-                                        .font(.body)
-                                    HStack(spacing: 28) {
+        ServerPickerScreen(
+            title: city,
+            accessibilityIdentifier: "settings.server-location.city.page"
+        ) {
+            Section {
+                ForEach(zones) { zone in
+                    Button {
+                        onSelect(zone)
+                    } label: {
+                        HStack(spacing: 20) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(zone.id)
+                                    .font(.body)
+                                HStack(spacing: 28) {
+                                    serverMetric(
+                                        "Q \(zone.queuePosition)",
+                                        systemImage: "person.3.fill",
+                                        color: queueColor(zone.queuePosition),
+                                        isFocused: focusedZoneURL == zone.zoneUrl
+                                    )
+                                    if let ping = zone.pingMs {
                                         serverMetric(
-                                            "Q \(zone.queuePosition)",
-                                            systemImage: "person.3.fill",
-                                            color: queueColor(zone.queuePosition),
+                                            "\(ping) ms",
+                                            systemImage: "timer",
+                                            color: pingColor(ping),
                                             isFocused: focusedZoneURL == zone.zoneUrl
                                         )
-                                        if let ping = zone.pingMs {
-                                            serverMetric(
-                                                "\(ping) ms",
-                                                systemImage: "timer",
-                                                color: pingColor(ping),
-                                                isFocused: focusedZoneURL == zone.zoneUrl
-                                            )
-                                        } else if zone.isMeasuring {
-                                            serverMetric(
-                                                "…",
-                                                systemImage: "timer",
-                                                color: .secondary,
-                                                isFocused: focusedZoneURL == zone.zoneUrl
-                                            )
-                                        }
-                                    }
-                                    .font(.caption)
-                                }
-                                Spacer()
-                                if selectedZoneURL == zone.zoneUrl {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(focusedZoneURL == zone.zoneUrl ? .black : .green)
-                                } else if recommendedZone?.id == zone.id {
-                                    Text(L10n.text("best"))
-                                        .font(.caption.bold())
-                                        .foregroundStyle(focusedZoneURL == zone.zoneUrl ? .black : .green)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(
-                                            focusedZoneURL == zone.zoneUrl
-                                                ? Color.black.opacity(0.12)
-                                                : Color.green.opacity(0.15),
-                                            in: Capsule()
+                                    } else if zone.isMeasuring {
+                                        serverMetric(
+                                            "…",
+                                            systemImage: "timer",
+                                            color: .secondary,
+                                            isFocused: focusedZoneURL == zone.zoneUrl
                                         )
+                                    }
                                 }
+                                .font(.caption)
+                            }
+                            Spacer()
+                            if selectedZoneURL == zone.zoneUrl {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(focusedZoneURL == zone.zoneUrl ? .black : .green)
+                            } else if recommendedZone?.id == zone.id {
+                                Text(L10n.text("best"))
+                                    .font(.caption.bold())
+                                    .foregroundStyle(focusedZoneURL == zone.zoneUrl ? .black : .green)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        focusedZoneURL == zone.zoneUrl
+                                            ? Color.black.opacity(0.12)
+                                            : Color.green.opacity(0.15),
+                                        in: Capsule()
+                                    )
                             }
                         }
-                        .buttonStyle(ServerRowButtonStyle())
-                        .focused($focusedZoneURL, equals: zone.zoneUrl)
                     }
+                    .focused($focusedZoneURL, equals: zone.zoneUrl)
+                    .accessibilityIdentifier(
+                        "settings.server-location.zone.\(zone.id)"
+                    )
+                    .accessibilityAddTraits(
+                        selectedZoneURL == zone.zoneUrl ? .isSelected : []
+                    )
                 }
             }
-            .task {
-                focusedZoneURL = defaultFocusZoneURL
-                await measurePings()
-            }
+        }
+        .task {
+            focusedZoneURL = defaultFocusZoneURL
+            await measurePings()
         }
         .defaultFocus($focusedZoneURL, defaultFocusZoneURL)
     }
@@ -1914,49 +2219,56 @@ private struct RegionPickerView: View {
     }
 
     var body: some View {
-        ServerPickerScreen(title: L10n.text("region")) {
-            Group {
-                if let regions = serverInfo?.regions, !regions.isEmpty {
-                    List {
-                        Section {
-                            ForEach(regions) { region in
-                                Button {
-                                    onSelect(region)
-                                } label: {
-                                    HStack {
-                                        Text(region.name)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        if selectedRegionID == region.id {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundStyle(.green)
-                                        }
-                                    }
+        ServerPickerScreen(
+            title: L10n.text("region"),
+            accessibilityIdentifier: "settings.server-location.region.page"
+        ) {
+            if let regions = serverInfo?.regions, !regions.isEmpty {
+                Section {
+                    ForEach(regions) { region in
+                        Button {
+                            onSelect(region)
+                        } label: {
+                            HStack {
+                                Text(region.name)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                if selectedRegionID == region.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
                                 }
-                                .buttonStyle(ServerRowButtonStyle())
-                                .focused($focusedRegionID, equals: region.id)
                             }
-                        } footer: {
-                            Text(L10n.text("server_selection_warning"))
                         }
+                        .focused($focusedRegionID, equals: region.id)
+                        .accessibilityIdentifier(
+                            "settings.server-location.region.\(region.id)"
+                        )
+                        .accessibilityAddTraits(
+                            selectedRegionID == region.id ? .isSelected : []
+                        )
                     }
-                } else if isLoading {
-                    ProgressView {
-                        Text(L10n.text("loading_servers"))
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ContentUnavailableView(
-                        L10n.text("cant_load_servers"),
-                        systemImage: "wifi.exclamationmark",
-                        description: Text(error ?? "")
-                    )
+                } footer: {
+                    Text(L10n.text("server_selection_warning"))
                 }
+            } else if isLoading {
+                ProgressView {
+                    Text(L10n.text("loading_servers"))
+                }
+                .frame(maxWidth: .infinity, minHeight: 320)
+                .listRowBackground(Color.clear)
+            } else {
+                ContentUnavailableView(
+                    L10n.text("cant_load_servers"),
+                    systemImage: "wifi.exclamationmark",
+                    description: Text(error ?? "")
+                )
+                .frame(maxWidth: .infinity, minHeight: 320)
+                .listRowBackground(Color.clear)
             }
-            .task(id: isLoading) {
-                guard !isLoading else { return }
-                await Task.yield()
-                focusedRegionID = selectedRegionID ?? serverInfo?.regions.first?.id
-            }
+        }
+        .task(id: isLoading) {
+            guard !isLoading else { return }
+            await Task.yield()
+            focusedRegionID = selectedRegionID ?? serverInfo?.regions.first?.id
         }
         .defaultFocus(
             $focusedRegionID,
