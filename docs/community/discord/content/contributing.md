@@ -14,7 +14,7 @@ welcome.
 
 ## Before starting
 
-1. Read the repository README.
+1. Read the repository README and `CONTRIBUTING.md`.
 2. Search existing issues and pull requests.
 3. Discuss significant architecture or behavior changes before building them.
 4. Keep each pull request focused on one logical change.
@@ -23,7 +23,7 @@ welcome.
 
 ## Before opening a pull request
 
-- Follow the development and testing instructions in the README.
+- Follow the development and testing guide in `Documentation/Development.md`.
 - Use the exact SwiftFormat and SwiftLint versions pinned in the README's
   **Linting** section.
 - Run the documented non-mutating format and lint checks.

@@ -53,8 +53,11 @@ credentials, tokens, login QR codes, personal data, or unredacted logs.
 
 **tvOS version:**  
 
-**GeForce NOW membership tier:**  
-`Tier only; no account details`
+**Selected provider:**<br>
+`GeForce NOW / Xbox Cloud Gaming`
+
+**Current plan or membership tier:**<br>
+`Plan or tier only; no account details`
 
 **Approximate country, region, or selected server:**  
 `Do not post a precise location`
@@ -112,6 +115,8 @@ TestFlight, a release IPA, or a source build.
 - Installation: https://github.com/owenselles/CloudNow#installation
 - Releases: https://github.com/owenselles/CloudNow/releases
 - Current requirements: https://github.com/owenselles/CloudNow#requirements
+- Using CloudNow: https://github.com/owenselles/CloudNow/blob/main/Documentation/UsingCloudNow.md
+- Streaming settings: https://github.com/owenselles/CloudNow/blob/main/Documentation/StreamingSettings.md
 
 ## Before opening a help post
 

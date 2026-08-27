@@ -1,18 +1,19 @@
 # `#faq`
 
-## Message 1 — Project and installation
+## Message 1: Project and installation
 
 # Frequently Asked Questions
 
 ## What is CloudNow?
 
-CloudNow is an open-source, native Apple TV client for accessing GeForce NOW.
+CloudNow is an open-source, native Apple TV app for accessing GeForce NOW and
+Xbox Cloud Gaming.
 
-## Is this an official NVIDIA app or Discord server?
+## Is this an official NVIDIA or Microsoft app or Discord server?
 
-No. CloudNow is independent from NVIDIA. This Discord server is community-run
-unless the upstream repository owner explicitly approves it as official and
-links it from the repository.
+No. CloudNow is independent from NVIDIA and Microsoft. This Discord server is
+community-run unless the upstream repository owner explicitly approves it as
+official and links it from the repository.
 
 ## Where can I install CloudNow?
 
@@ -30,17 +31,18 @@ Store listing or download merely because it uses the CloudNow name or artwork.
 Check the current requirements in the repository README. Apple TV, tvOS, Xcode,
 and account requirements can change as the project develops.
 
-## Do I need a GeForce NOW account?
+## Do I need a cloud gaming account?
 
-Yes. CloudNow does not provide an account, subscription, game ownership, or
-service access.
+Yes. You need an eligible account for the provider you use. CloudNow does not
+provide an account, subscription, game ownership, or service access.
 
-## Message 2 — Accounts and help
+## Message 2: Accounts and help
 
-## Can community staff fix my NVIDIA account or billing?
+## Can community staff fix my provider account or billing?
 
 No. Account recovery, subscriptions, billing, regional availability, bans,
-queues, and service-side problems must go through NVIDIA's official support.
+queues, and service-side problems must go through the selected provider's
+official support.
 
 ## Can staff log in for me?
 
@@ -67,7 +69,7 @@ ambiguous and makes reports harder to compare.
 Start in `#help` if diagnosis is incomplete. Once the problem is reproducible,
 create or join a GitHub issue and link the support post.
 
-## Message 3 — Features, logs, and security
+## Message 3: Features, logs, and security
 
 ## Where do I request a feature?
 

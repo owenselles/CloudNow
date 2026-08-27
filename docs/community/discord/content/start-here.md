@@ -5,8 +5,9 @@
 # Welcome to the CloudNow Community
 
 This is a community-run space for CloudNow users and contributors. CloudNow is
-an independent, open-source GeForce NOW client for Apple TV. It is not
-affiliated with, endorsed by, or sponsored by NVIDIA.
+an independent, open-source cloud gaming app for Apple TV with GeForce NOW and
+Xbox Cloud Gaming provider modes. It is not affiliated with, endorsed by, or
+sponsored by NVIDIA or Microsoft.
 
 Use this server to:
 
@@ -41,7 +42,7 @@ are TestFlight, a release IPA, or building from source.
 
 CloudNow uses a legitimate QR-based sign-in flow. A login QR code is still
 sensitive: anyone who receives it may be able to access your session. Staff
-will never ask for your password, Apple ID, NVIDIA credentials, authentication
+will never ask for your password, Apple ID, cloud gaming credentials, authentication
 code, token, cookie, login PIN, or QR code.
 
 Do not post a suspected vulnerability in Discord. Use GitHub private
