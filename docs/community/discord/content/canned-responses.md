@@ -23,12 +23,12 @@ This appears to match `{GITHUB_ISSUE}`. Add new reproduction details there
 rather than opening a duplicate. This thread can remain open for
 troubleshooting.
 
-## NVIDIA account or billing issue
+## Provider account or billing issue
 
-CloudNow and this community cannot access NVIDIA accounts, subscriptions,
-billing, queues, or enforcement systems. Contact NVIDIA through its official
-support channels. Do not send anyone here a password, PIN, QR code, or
-authentication token.
+CloudNow and this community cannot access provider accounts, subscriptions,
+billing, queues, or enforcement systems. Contact the selected provider through
+its official support channels. Do not send anyone here a password, PIN, QR code,
+or authentication token.
 
 ## Unrecognized distribution
 

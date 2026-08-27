@@ -39,6 +39,10 @@ struct LocalizationIntegrityTests {
         "free_with_ads_session_description",
         "game_pass",
         "gameplay_time_exhausted",
+        "gfn_frame_rate_display_and_membership_unavailable",
+        "gfn_frame_rate_display_unavailable",
+        "gfn_frame_rate_membership_unavailable",
+        "gfn_resolution_membership_unavailable",
         "high_contrast",
         "info",
         "input",
@@ -48,7 +52,9 @@ struct LocalizationIntegrityTests {
         "microsoft_account",
         "microsoft_sign_in_code_expired",
         "microsoft_sign_in_declined",
+        "microphone_permission_denied_message",
         "not_eligible",
+        "open_settings",
         "owned",
         "parked_session_switch_message",
         "playability",
@@ -92,6 +98,10 @@ struct LocalizationIntegrityTests {
         "xbox_privacy",
         "xbox_provisioning_console",
         "xbox_requesting_access",
+        "xbox_resolution_checking_membership",
+        "xbox_resolution_membership_unavailable",
+        "xbox_resolution_requires_confirmed_ultimate",
+        "xbox_resolution_requires_ultimate",
         "xbox_stream_settings",
         "xbox_waiting_capacity",
     ]
@@ -132,7 +142,7 @@ struct LocalizationIntegrityTests {
 
     @Test("Every locale directly provides every branch-added cloud UI translation")
     func everyTableProvidesBranchAddedCloudUIKeys() {
-        #expect(Self.branchAddedCloudUIKeys.count == 87)
+        #expect(Self.branchAddedCloudUIKeys.count == 97)
         for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key }) {
             let missing = Self.branchAddedCloudUIKeys.subtracting(table.keys)
             #expect(missing.isEmpty, "\(locale) is missing cloud UI keys: \(missing.sorted())")

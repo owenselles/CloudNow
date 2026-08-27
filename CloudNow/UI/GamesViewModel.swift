@@ -339,20 +339,27 @@ class GamesViewModel {
         }
     }
 
-    /// FPS values available for the currently selected resolution, capped to the
-    /// screen's maximum refresh rate. Today tvOS caps at 60 Hz; if Apple raises it
-    /// in a future update this will automatically expose the higher option.
+    /// FPS eligibility for the selected resolution. Unavailable entries remain
+    /// available to Settings for explanation without changing stream normalization.
+    var frameRateEligibility: [GFNFrameRateEligibility] {
+        GFNSettingsEligibilityPolicy.frameRates(
+            entitledResolutions: subscription?.entitledResolutions,
+            selectedResolution: streamSettings.resolution,
+            maximumFramesPerSecond: maximumDisplayFramesPerSecond
+        )
+    }
+
+    /// FPS values available to the current account, resolution, and Apple TV output.
     var availableFps: [Int] {
-        let maxFps = (UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.maximumFramesPerSecond) ?? 60
-        guard let resos = subscription?.entitledResolutions, !resos.isEmpty else {
-            return [30, 60].filter { $0 <= maxFps }
-        }
-        let parts = streamSettings.resolution.split(separator: "x").compactMap { Int($0) }
-        let w = parts.first ?? 1920
-        let h = parts.last ?? 1080
-        let matching = resos.filter { $0.widthInPixels == w && $0.heightInPixels == h }
-        let source = matching.isEmpty ? resos : matching
-        return Array(Set(source.map(\.framesPerSecond))).filter { $0 <= maxFps }.sorted()
+        frameRateEligibility
+            .filter(\.isAvailable)
+            .map(\.framesPerSecond)
+    }
+
+    var maximumDisplayFramesPerSecond: Int {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.screen.maximumFramesPerSecond ?? 60
     }
 
     // MARK: Computed — Games

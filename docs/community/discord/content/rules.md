@@ -1,6 +1,6 @@
 # `#rules`
 
-## Message 1 — Scope and conduct
+## Message 1: Scope and conduct
 
 # CloudNow Community Rules
 
@@ -32,7 +32,7 @@ Search `#faq`, `#support-resources`, existing help posts, and GitHub issues
 before opening a new support post. Staff may move, close, or redirect
 conversations to keep channels useful.
 
-## Message 2 — Abuse, accounts, and distribution
+## Message 2: Abuse, accounts, and distribution
 
 ## 4. No spam, scams, or deceptive promotion
 
@@ -41,16 +41,16 @@ referral spam, credential-harvesting pages, suspicious downloads,
 cryptocurrency scams, fake giveaways, malware, or unrelated recruitment.
 
 Do not impersonate CloudNow maintainers, community staff, contributors, NVIDIA,
-Apple, Discord, or another member. Do not claim CloudNow is endorsed or
-officially supported by NVIDIA.
+Microsoft, Apple, Discord, or another member. Do not claim CloudNow is endorsed
+or officially supported by NVIDIA or Microsoft.
 
 ## 5. No account trading or service abuse
 
-Do not buy, sell, lend, request, or distribute NVIDIA, GeForce NOW, Apple,
-Discord, or other user accounts. Do not help steal or reuse sessions, evade
-subscriptions, bypass queues or regional restrictions, evade bans or access
-controls, abuse third-party infrastructure, circumvent DRM, or facilitate
-piracy.
+Do not buy, sell, lend, request, or distribute NVIDIA, GeForce NOW, Microsoft,
+Xbox, Apple, Discord, or other user accounts. Do not help steal or reuse
+sessions, evade subscriptions, bypass queues or regional restrictions, evade
+bans or access controls, abuse third-party infrastructure, circumvent DRM, or
+facilitate piracy.
 
 Responsible protocol, interoperability, networking, and security discussion is
 allowed when it does not enable abuse.
@@ -66,7 +66,7 @@ Forks and modified builds must be identified as unofficial. Unknown
 executables, paid repackaged builds, malware, and misleading distribution links
 may be removed.
 
-## Message 3 — Credentials, privacy, and support
+## Message 3: Credentials, privacy, and support
 
 ## 7. Protect credentials and personal information
 
@@ -93,10 +93,10 @@ Use the `#help` template and redact attachments. A useful version identifier is
 a release tag, TestFlight build number, or commit SHA. Confirmed defects may be
 redirected to GitHub.
 
-NVIDIA account recovery, subscriptions, billing, bans, queues, regional
-availability, and service-side issues must go through NVIDIA's support.
+Provider account recovery, subscriptions, billing, bans, queues, regional
+availability, and service-side issues must go through that provider's support.
 
-## Message 4 — Security and moderation
+## Message 4: Security and moderation
 
 ## 9. Report security issues privately
 
@@ -124,5 +124,6 @@ continue a removed discussion. Appeals may be submitted privately through
 Follow Discord's Terms of Service, Community Guidelines, and applicable law.
 
 CloudNow is an independent, open-source project for personal use. It is not
-affiliated with, endorsed by, or sponsored by NVIDIA. NVIDIA and GeForce NOW
-are trademarks of NVIDIA Corporation.
+affiliated with, endorsed by, or sponsored by NVIDIA or Microsoft. NVIDIA and
+GeForce NOW are trademarks of NVIDIA Corporation. Microsoft, Xbox, and Xbox
+Cloud Gaming are trademarks of the Microsoft group of companies.
