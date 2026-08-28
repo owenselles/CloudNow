@@ -116,6 +116,29 @@ The manual picker currently includes:
 GFN also has a separate **Keyboard Layout** setting. Its default is derived
 from the tvOS locale. Xbox does not expose a keyboard-layout setting.
 
+## Controller text entry during GFN streams
+
+The default text-entry shortcut is **Options/View (⊟) + Y**. During a GeForce
+NOW stream, hold that combination until the Apple TV keyboard opens. Enter text,
+select **Done**, review the text, then select **Send**. CloudNow sends the text as
+ordered keyboard events followed by Enter. Select **Cancel**, or press Menu, to
+return to the stream without sending text.
+
+To change the shortcut, open **GeForce NOW > Settings > Controller > Text Input
+Buttons**, select **Start Listening**, release any held buttons, press a
+combination of up to four buttons, then release them to save. Capture rejects
+combinations that conflict with the app or Steam overlay controls. It times out
+after 15 seconds; cancellation or controller disconnection preserves the saved
+shortcut. **Text Input Hold Delay** controls how long the combination must be
+held; its range and default are listed in
+[Streaming settings](StreamingSettings.md#microphone-and-controller).
+
+The text-entry interface and its errors follow the active app locale. Only
+remote key-event replay is limited to a narrower set of verified keyboard
+layouts. See [GeForce NOW input](GeForceNOW.md#input) for the verified layouts,
+character handling, and replay limits. Existing physical keyboard input is
+unaffected.
+
 ## Supported tvOS interface locales
 
 CloudNow supports the interface locale identifiers below. Rows group related

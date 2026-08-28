@@ -26,6 +26,8 @@ struct StreamSettingsTests {
         #expect(settings.rumbleIntensity == 1)
         #expect(settings.controllerDeadzone == 0.15)
         #expect(settings.overlayTriggerButton == .start)
+        #expect(settings.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
+        #expect(settings.textInputTriggerDelayMs == StreamSettings.defaultTextInputTriggerDelayMs)
         #expect(settings.enableSteamOverlayGesture)
         #expect(settings.defaultRemoteInputMode == .gamepad)
         #expect(settings.serverRoutingMode == .serverAuto)
@@ -93,6 +95,9 @@ struct StreamSettingsTests {
         expected.rumbleIntensity = 1.5
         expected.controllerDeadzone = 0.05
         expected.overlayTriggerButton = .options
+        expected.textInputTriggerSequence = ControllerButtonSequence(buttons: [.menu, .buttonX])
+        expected.textInputTriggerDelayMs = 400
+        expected.enableSteamOverlayGesture = false
         expected.defaultRemoteInputMode = .dualsense
         expected.serverRoutingMode = .region
         expected.preferredRegionName = "EU Central"
@@ -189,6 +194,61 @@ struct StreamSettingsTests {
 
         #expect(missingZone.normalizedForClient.serverRoutingMode == .serverAuto)
         #expect(missingRegion.normalizedForClient.serverRoutingMode == .serverAuto)
+    }
+
+    @Test("Changing overlay policies immediately replaces a conflicting shortcut")
+    func shortcutPolicyChangesRevalidateSequence() {
+        var overlayConflict = StreamSettings()
+        overlayConflict.enableSteamOverlayGesture = false
+        overlayConflict.textInputTriggerSequence = ControllerButtonSequence(buttons: [.options])
+        overlayConflict.overlayTriggerButton = .options
+
+        var steamConflict = StreamSettings()
+        steamConflict.enableSteamOverlayGesture = false
+        steamConflict.textInputTriggerSequence = ControllerButtonSequence(buttons: [.options])
+        steamConflict.enableSteamOverlayGesture = true
+
+        #expect(overlayConflict.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
+        #expect(steamConflict.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
+    }
+
+    @Test("Persisted invalid shortcuts normalize to the safe default")
+    func invalidShortcutNormalization() throws {
+        var invalid = StreamSettings()
+        invalid.textInputTriggerSequence = ControllerButtonSequence(buttons: [])
+
+        #expect(invalid.normalizedForClient.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
+
+        let encoded = try JSONEncoder().encode(invalid)
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: encoded)
+        #expect(decoded.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
+    }
+
+    @Test("Malformed persisted shortcut settings are canonicalized and clamped")
+    func malformedShortcutSettingsNormalization() throws {
+        let data = Data(
+            #"{"textInputTriggerSequence":{"buttons":["menu","menu"]},"textInputTriggerDelayMs":-500}"#.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: data)
+
+        #expect(decoded.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
+        #expect(decoded.textInputTriggerDelayMs == StreamSettings.minTextInputTriggerDelayMs)
+    }
+
+    @Test("An unknown persisted shortcut button keeps the remaining settings")
+    func unknownShortcutButtonFallback() throws {
+        let data = Data(
+            #"{"resolution":"3840x2160","serverRoutingMode":"region","preferredRegionName":"EU Central","preferredRegionAddress":"https://eu.example.invalid/","textInputTriggerSequence":{"buttons":["telepathy"]}}"#.utf8
+        )
+
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: data)
+
+        #expect(decoded.resolution == "3840x2160")
+        #expect(decoded.serverRoutingMode == .region)
+        #expect(decoded.preferredRegionName == "EU Central")
+        #expect(decoded.preferredRegionAddress == "https://eu.example.invalid/")
+        #expect(decoded.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
     }
 
     @Test("RTC event logging cannot remain enabled without diagnostics")

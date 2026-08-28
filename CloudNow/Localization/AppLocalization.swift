@@ -295,6 +295,30 @@ enum L10n {
         }
     }
 
+    static func controllerSequenceButtonLabel(_ button: ControllerSequenceButton) -> String {
+        switch button {
+        case .dpadUp: text("d_pad_up")
+        case .dpadDown: text("d_pad_down")
+        case .dpadLeft: text("d_pad_left")
+        case .dpadRight: text("d_pad_right")
+        case .buttonA: text("a")
+        case .buttonB: text("b")
+        case .buttonX: text("x")
+        case .buttonY: text("y")
+        case .menu: text("menu_(≡)")
+        case .options: text("options/view_(⊟)")
+        case .leftShoulder: text("l1")
+        case .rightShoulder: text("r1")
+        case .leftThumbstick: text("l3")
+        case .rightThumbstick: text("r3")
+        }
+    }
+
+    static func controllerButtonSequenceLabel(_ sequence: ControllerButtonSequence) -> String {
+        let labels = sequence.buttons.map(controllerSequenceButtonLabel)
+        return labels.isEmpty ? text("not_set") : labels.joined(separator: " + ")
+    }
+
     static func remoteInputModeLabel(_ mode: RemoteInputMode) -> String {
         switch mode {
         case .gamepad: text("remote_gamepad")

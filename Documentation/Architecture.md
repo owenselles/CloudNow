@@ -56,7 +56,7 @@ stream negotiation, input protocol, and session lifecycle.
 | Catalog | Card, artwork, Favorites, and filter presentation primitives | Public catalog, connected cloud library, metadata enrichment, and GFN filters | Offering and access discovery, playable Library projection, full Browse projection, and route-correlated filters |
 | Session safety | One server-session lease and one local-peer lease for the process | CloudMatch allocation and `SessionOrchestrator` | Xbox allocation and Leave, Continue, and End behavior |
 | RTC and media | One process-level RTC factory, audio device, passive video surface, decoded-format inspection, and microphone route coordination | Server offer, SDP answer policy, GFN codecs, and NVST behavior | Local offer, REST signaling, service codec overrides, and Xbox channel readiness |
-| Input | Device observation, responder surfaces, and controller haptics output | GFN controller, keyboard, mouse, remote pointer, and text protocols | Xbox controller, keyboard, mouse, feedback, and rumble protocols |
+| Input | Device observation, responder surfaces, and controller haptics output | GFN controller, keyboard, mouse, remote pointer, keyboard-event text replay, and haptics protocols | Xbox controller, keyboard, mouse, feedback, and rumble protocols |
 | Diagnostics | Requested and delivered media snapshots, bounded histories, redaction, network test UI, and HUD presentation | GFN negotiation and server statistics | Xbox resolution ceiling and delivered RTC statistics |
 
 Provider adapters map provider-owned state into narrow shared capability values.
@@ -165,6 +165,9 @@ or lifecycle code must preserve these properties:
   localization table and the English fallback are materialized during normal use.
 - Input-latency histories and similar diagnostics use bounded storage and remain
   disabled when no visible HUD or diagnostic consumer needs them.
+- Controller shortcut resolution uses fixed-capacity state. Submitted-text
+  planning and replay have hard byte and event limits, ordered cancellation, and
+  key-up cleanup rather than unbounded streaming work.
 - Video presentation uses latest-frame backpressure, cached format inspection,
   and bounded teardown. The H.265 path avoids the former per-NAL copy chain while
   preserving parameter sets and color metadata.

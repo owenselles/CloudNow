@@ -113,11 +113,17 @@ media evidence. Change one Xbox-owned variable at a time.
     controller input and rumble, and pause HUD behavior. Confirm that unavailable
     modes follow the established GFN fallback instead of being treated as an Xbox
     result.
-13. Interrupt and restore the GeForce NOW network path. Exercise Retry,
+13. In GeForce NOW Settings, capture and cancel a text-input button combination,
+    then save one and adjust its hold delay. Start a stream, open Apple TV text
+    entry with the saved combination, send supported text, cancel without sending,
+    and verify unsupported layout, unsupported character, and length failures do
+    not send partial input. Confirm Menu, overlay, reconnect, and stream teardown
+    release input cleanly.
+14. Interrupt and restore the GeForce NOW network path. Exercise Retry,
     background and foreground, Exit, End Session, and a new launch. Confirm that
     reconnect and session ownership remain stable and that no Xbox allocation or
     authorization work occurs during the GFN-only run.
-14. Repeat provider switches and stream entry and exit. Confirm that old peers,
+15. Repeat provider switches and stream entry and exit. Confirm that old peers,
     renderers, controllers, observers, input workers, and provider service graphs
     release after teardown. The inactive provider must not retain an active peer
     or begin network work.

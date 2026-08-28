@@ -5,6 +5,20 @@ import Testing
 
 @Suite("Artwork image pipeline cache")
 struct ArtworkImagePipelineTests {
+    enum SuspendedArtworkEvent: CaseIterable, Sendable {
+        case streaming
+        case background
+
+        func apply(to pipeline: ArtworkImagePipeline) async {
+            switch self {
+            case .streaming:
+                await pipeline.handleMemoryEvent(.streaming)
+            case .background:
+                await pipeline.handleMemoryEvent(.background)
+            }
+        }
+    }
+
     @Test("Count limit evicts the least recently used image")
     func countLimitUsesLRU() async throws {
         let image = try makeImage(width: 2, height: 2)
@@ -192,15 +206,327 @@ struct ArtworkImagePipelineTests {
         #expect(snapshot.waiterCount == 0)
     }
 
+    @Test("Lifecycle events retain, trim, and evict the intended artwork")
+    func lifecycleCachePolicy() async throws {
+        let image = try makeImage(width: 2, height: 2)
+        let loader = RecordingArtworkLoader(image: image)
+        let pipeline = makePipeline(
+            loader: loader,
+            budget: ArtworkImagePipeline.CacheBudget(
+                totalCostLimit: .max,
+                countLimit: 3
+            ),
+            backgroundBudget: ArtworkImagePipeline.CacheBudget(
+                totalCostLimit: .max,
+                countLimit: 1
+            ),
+            heroBudget: ArtworkImagePipeline.CacheBudget(
+                totalCostLimit: .max,
+                countLimit: 2
+            )
+        )
+        let urls = try testURLs()
+
+        _ = try await pipeline.image(
+            for: urls[0],
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        _ = try await pipeline.image(
+            for: urls[1],
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        _ = try await pipeline.image(
+            for: urls[2],
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        _ = try await pipeline.image(
+            for: urls[0],
+            maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+        )
+        await expectCachedImages(pipeline, boxArt: 3, heroArt: 1)
+
+        await pipeline.handleMemoryEvent(.streamOpening)
+        await expectCachedImages(pipeline, boxArt: 3, heroArt: 1)
+
+        await pipeline.handleMemoryEvent(.streaming)
+        await expectCachedImages(pipeline, boxArt: 3, heroArt: 0)
+
+        await pipeline.handleMemoryEvent(.foreground)
+        _ = try await pipeline.image(
+            for: urls[1],
+            maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+        )
+        await expectCachedImages(pipeline, boxArt: 3, heroArt: 1)
+
+        await pipeline.handleMemoryEvent(.background)
+        await expectCachedImages(pipeline, boxArt: 1, heroArt: 0)
+
+        await pipeline.handleMemoryEvent(.foreground)
+        _ = try await pipeline.image(
+            for: urls[2],
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        #expect(await loader.requestedURLs().count == 5)
+        _ = try await pipeline.image(
+            for: urls[0],
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        #expect(await loader.requestedURLs().count == 6)
+
+        await pipeline.handleMemoryEvent(.memoryWarning)
+        await expectCachedImages(pipeline, boxArt: 0, heroArt: 0)
+        _ = try await pipeline.image(
+            for: urls[1],
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        await expectCachedImages(pipeline, boxArt: 1, heroArt: 0)
+        #expect(await loader.requestedURLs().count == 7)
+    }
+
+    @Test("Stream opening cancels box art while allowing hero art to finish")
+    func streamOpeningCancelsBoxArtOnly() async throws {
+        let image = try makeImage(width: 2, height: 2)
+        let loader = GatedArtworkLoader(image: image)
+        let pipeline = makePipeline(loader: loader)
+        let urls = try testURLs()
+        let boxArt = Task {
+            try await pipeline.image(
+                for: urls[0],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        let heroArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(2)
+
+        await pipeline.handleMemoryEvent(.streamOpening)
+        let boxSnapshot = await pipeline.snapshot(
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        let heroSnapshot = await pipeline.snapshot(
+            maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+        )
+        #expect(boxSnapshot.inFlightRequestCount == 0)
+        #expect(boxSnapshot.waiterCount == 0)
+        #expect(heroSnapshot.inFlightRequestCount == 1)
+        #expect(heroSnapshot.waiterCount == 1)
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await pipeline.image(
+                for: urls[2],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        #expect(await loader.callCount() == 2)
+        let admittedHeroArt = Task {
+            try await pipeline.image(
+                for: urls[2],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(3)
+
+        await loader.releaseAll()
+        await #expect(throws: CancellationError.self) {
+            _ = try await boxArt.value
+        }
+        _ = try await heroArt.value
+        _ = try await admittedHeroArt.value
+        await expectCachedImages(pipeline, boxArt: 0, heroArt: 2)
+    }
+
+    @Test(
+        "Suspended lifecycle events cancel in-flight artwork and reject new loads",
+        arguments: SuspendedArtworkEvent.allCases
+    )
+    func suspendedEventsCancelAndReject(
+        _ event: SuspendedArtworkEvent
+    ) async throws {
+        let image = try makeImage(width: 2, height: 2)
+        let loader = GatedArtworkLoader(image: image)
+        let pipeline = makePipeline(loader: loader)
+        let urls = try testURLs()
+        let boxArt = Task {
+            try await pipeline.image(
+                for: urls[0],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        let heroArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(2)
+
+        await event.apply(to: pipeline)
+        await loader.releaseAll()
+        await #expect(throws: CancellationError.self) {
+            _ = try await boxArt.value
+        }
+        await #expect(throws: CancellationError.self) {
+            _ = try await heroArt.value
+        }
+        await expectCachedImages(pipeline, boxArt: 0, heroArt: 0)
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await pipeline.image(
+                for: urls[0],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        await #expect(throws: CancellationError.self) {
+            _ = try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        #expect(await loader.callCount() == 2)
+    }
+
+    @Test("A memory warning cancels work but permits a later recovery")
+    func memoryWarningRecovery() async throws {
+        let image = try makeImage(width: 2, height: 2)
+        let loader = GatedArtworkLoader(image: image)
+        let pipeline = makePipeline(loader: loader)
+        let urls = try testURLs()
+        let boxArt = Task {
+            try await pipeline.image(
+                for: urls[0],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        let heroArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(2)
+
+        await pipeline.handleMemoryEvent(.memoryWarning)
+        await loader.releaseAll()
+        await #expect(throws: CancellationError.self) {
+            _ = try await boxArt.value
+        }
+        await #expect(throws: CancellationError.self) {
+            _ = try await heroArt.value
+        }
+
+        let replacementBoxArt = Task {
+            try await pipeline.image(
+                for: urls[0],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        let replacementHeroArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(4)
+        await loader.releaseAll()
+        _ = try await replacementBoxArt.value
+        _ = try await replacementHeroArt.value
+        await expectCachedImages(pipeline, boxArt: 1, heroArt: 1)
+    }
+
+    @Test("Clear cache evicts decoded images and cancels every pending load")
+    func clearCacheIsCompleteBarrier() async throws {
+        let image = try makeImage(width: 2, height: 2)
+        let loader = GatedArtworkLoader(image: image)
+        let pipeline = makePipeline(loader: loader)
+        let urls = try testURLs()
+        let cachedBoxArt = Task {
+            try await pipeline.image(
+                for: urls[0],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        let cachedHeroArt = Task {
+            try await pipeline.image(
+                for: urls[0],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(2)
+        await loader.releaseAll()
+        _ = try await cachedBoxArt.value
+        _ = try await cachedHeroArt.value
+        await expectCachedImages(pipeline, boxArt: 1, heroArt: 1)
+
+        let pendingBoxArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        let pendingHeroArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(4)
+
+        await pipeline.clearCache()
+        await expectCachedImages(pipeline, boxArt: 0, heroArt: 0)
+        await loader.releaseAll()
+        await #expect(throws: CancellationError.self) {
+            _ = try await pendingBoxArt.value
+        }
+        await #expect(throws: CancellationError.self) {
+            _ = try await pendingHeroArt.value
+        }
+
+        let replacementBoxArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        let replacementHeroArt = Task {
+            try await pipeline.image(
+                for: urls[1],
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
+        }
+        await loader.waitForCallCount(6)
+        await loader.releaseAll()
+        _ = try await replacementBoxArt.value
+        _ = try await replacementHeroArt.value
+        await expectCachedImages(pipeline, boxArt: 1, heroArt: 1)
+
+        await pipeline.handleMemoryEvent(.background)
+        await pipeline.clearCache()
+        await #expect(throws: CancellationError.self) {
+            _ = try await pipeline.image(
+                for: urls[2],
+                maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+            )
+        }
+        #expect(await loader.callCount() == 6)
+    }
+
     private func makePipeline(
         loader: RecordingArtworkLoader,
-        budget: ArtworkImagePipeline.CacheBudget? = nil
+        budget: ArtworkImagePipeline.CacheBudget? = nil,
+        backgroundBudget: ArtworkImagePipeline.CacheBudget? = nil,
+        heroBudget: ArtworkImagePipeline.CacheBudget? = nil
     ) -> ArtworkImagePipeline {
         ArtworkImagePipeline(
             imageLoader: { url, maxPixelSize in
                 try await loader.load(url: url, maxPixelSize: maxPixelSize)
             },
-            foregroundBoxArtBudget: budget
+            foregroundBoxArtBudget: budget,
+            backgroundBoxArtBudget: backgroundBudget,
+            heroArtBudget: heroBudget
         )
     }
 
@@ -252,6 +578,23 @@ struct ArtworkImagePipelineTests {
             await Task.yield()
         }
         return false
+    }
+
+    private func expectCachedImages(
+        _ pipeline: ArtworkImagePipeline,
+        boxArt expectedBoxArt: Int,
+        heroArt expectedHeroArt: Int
+    ) async {
+        let boxArt = await pipeline.snapshot(
+            maxPixelSize: ArtworkImagePipeline.boxArtPixelSize
+        )
+        let heroArt = await pipeline.snapshot(
+            maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+        )
+        #expect(boxArt.cachedImageCount == expectedBoxArt)
+        #expect(heroArt.cachedImageCount == expectedHeroArt)
+        #expect(boxArt.inFlightRequestCount == 0)
+        #expect(heroArt.inFlightRequestCount == 0)
     }
 }
 

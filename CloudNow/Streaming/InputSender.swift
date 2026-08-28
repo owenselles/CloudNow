@@ -237,11 +237,24 @@ nonisolated enum InputPacketCategory: String, Sendable {
     case hapticsEnabled
 }
 
-nonisolated enum InputSendDisposition: Sendable {
+nonisolated enum InputSendDisposition: Equatable, Sendable {
     case accepted
     case channelUnavailable
     case rejected
     case superseded
+}
+
+nonisolated enum SubmittedTextValidationResult: Equatable, Sendable {
+    case supported
+    case unsupportedCharacters
+    case unsupportedLayout
+    case tooLong
+}
+
+nonisolated enum KeyboardReplayCompletionResult: Equatable, Sendable {
+    case completed
+    case transportFailure
+    case cancelled
 }
 
 /// Reusable fixed-capacity storage handed exclusively from InputSender to the WebRTC send queue.
@@ -640,6 +653,9 @@ final nonisolated class InputSender: @unchecked Sendable {
     /// Called when remoteMode changes due to controller connect/disconnect auto-switching.
     var onRemoteModeChanged: (@MainActor @Sendable (RemoteInputMode) -> Void)?
 
+    /// Called when the user presses the controller keyboard shortcut.
+    var controllerKeyboardShortcutHandler: (@MainActor @Sendable () -> Void)?
+
     private weak var channel: DataChannelSender?
     private let encoder = InputEncoder()
     private let inputQueue = DispatchQueue(label: "com.cloudnow.input", qos: .userInteractive)
@@ -649,6 +665,9 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var remoteMode: RemoteInputMode = .gamepad
     private var deadzone: Float = 0.15
     private var overlayTriggerButton: OverlayTriggerButton = .start
+    private var textInputTriggerMask: UInt16 = 0
+    private var textInputTriggerDelayMs = StreamSettings.defaultTextInputTriggerDelayMs
+    private var keyboardLayout = StreamSettings.defaultKeyboardLayout
     private var steamOverlayGestureEnabled = true
     private var isPaused = false
 
@@ -678,14 +697,20 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private var overlayPresses: [Int: OverlayPressState] = [:]
     private var overlayReplaySlots = Set<Int>()
+    private var keyboardShortcutResolvers: [Int: ControllerKeyboardShortcutResolver] = [:]
     private var steamHoldTicks: [Int: Int] = [:]
     private var steamTriggeredSlots = Set<Int>()
+    private var keyboardReplayGeneration: UInt64 = 0
+    private var acceptedReplayDownEvents: [KeyboardReplayEvent] = []
     private static let sampleInterval = 8_333_333
     private static let gamepadKeepAlive = UInt64(33_333_333)
     private static let heartbeatInterval = UInt64(2_000_000_000)
     private static let overlayLongPressThreshold = 216
     private static let steamLongPressThreshold = 120
     private static let microGamepadSuppressionWindow = UInt64(100_000_000)
+    private static let replayEventIntervalMs: Int = 18
+    private static let replayMaxSendAttempts = 3
+    private static let maxSimultaneousReplayDownEvents = 4
 
     init(channel: DataChannelSender) {
         self.channel = channel
@@ -717,6 +742,7 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     func stop() {
         inputQueue.sync {
+            cancelKeyboardReplay()
             sampler?.setEventHandler {}
             sampler?.cancel()
             sampler = nil
@@ -740,6 +766,9 @@ final nonisolated class InputSender: @unchecked Sendable {
         protocolVersion: Int,
         deadzone: Float,
         overlayTriggerButton: OverlayTriggerButton,
+        textInputTriggerSequence: ControllerButtonSequence,
+        textInputTriggerDelayMs: Int,
+        keyboardLayout: String,
         steamOverlayGestureEnabled: Bool,
         remoteMode: RemoteInputMode,
         rumbleEnabled: Bool = true,
@@ -749,10 +778,19 @@ final nonisolated class InputSender: @unchecked Sendable {
             encoder.setProtocolVersion(protocolVersion)
             self.deadzone = deadzone
             self.overlayTriggerButton = overlayTriggerButton
+            textInputTriggerMask = textInputTriggerSequence.buttons.reduce(into: UInt16(0)) { mask, button in
+                mask |= xinputMask(for: button)
+            }
+            self.textInputTriggerDelayMs = min(
+                max(textInputTriggerDelayMs, StreamSettings.minTextInputTriggerDelayMs),
+                StreamSettings.maxTextInputTriggerDelayMs
+            )
+            self.keyboardLayout = keyboardLayout
             self.steamOverlayGestureEnabled = steamOverlayGestureEnabled
             self.remoteMode = remoteMode
             self.rumbleEnabled = rumbleEnabled
             self.rumbleIntensity = rumbleIntensity
+            keyboardShortcutResolvers.removeAll()
             haptics.values.forEach { $0.setIntensityScale(rumbleIntensity) }
         }
     }
@@ -761,6 +799,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         inputQueue.async { [weak self] in
             guard let self, isPaused != paused else { return }
             isPaused = paused
+            cancelKeyboardReplay()
             pointerDelta = (0, 0)
             microPointerDelta = (0, 0)
             controllerTouchpadPointerDelta = (0, 0)
@@ -772,6 +811,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             if paused {
                 overlayPresses.removeAll()
                 overlayReplaySlots.removeAll()
+                keyboardShortcutResolvers.removeAll()
                 steamHoldTicks.removeAll()
                 steamTriggeredSlots.removeAll()
                 releaseHeldDiscreteInputs()
@@ -817,6 +857,8 @@ final nonisolated class InputSender: @unchecked Sendable {
         releaseHeldMouseButtons()
         overlayPresses.removeAll()
         overlayReplaySlots.removeAll()
+        keyboardShortcutResolvers.removeAll()
+        cancelKeyboardReplay()
         steamHoldTicks.removeAll()
         steamTriggeredSlots.removeAll()
         lastSnapshots.removeAll()
@@ -834,6 +876,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         category: InputPacketCategory,
         gamepadSlot: Int? = nil,
         replaceableGamepadSnapshot: Bool = false,
+        completion: (@Sendable (InputSendDisposition) -> Void)? = nil,
         _ encode: (EncodedInputPacket) -> Void
     ) {
         let packet = packetPool.popLast() ?? EncodedInputPacket()
@@ -845,11 +888,21 @@ final nonisolated class InputSender: @unchecked Sendable {
         encode(packet)
         guard let channel else {
             packetPool.append(packet)
+            completion?(.channelUnavailable)
             return
         }
-        channel.sendData(packet) { [weak self, packet] _ in
-            self?.inputQueue.async { [weak self, packet] in
-                self?.packetPool.append(packet)
+        channel.sendData(packet) { [weak self, packet, completion] disposition in
+            guard let self else {
+                completion?(disposition)
+                return
+            }
+            inputQueue.async { [weak self, packet, completion] in
+                guard let self else {
+                    completion?(.channelUnavailable)
+                    return
+                }
+                packetPool.append(packet)
+                completion?(disposition)
             }
         }
     }
@@ -986,7 +1039,9 @@ final nonisolated class InputSender: @unchecked Sendable {
         if changed & overlayButtonMask != 0 {
             if buttons & overlayButtonMask != 0 {
                 overlayPresses[slot] = OverlayPressState()
-            } else {
+            } else if ControllerKeyboardShortcutOverlayPolicy.shouldFinishPressOnRelease(
+                resolverOwnsGesture: keyboardShortcutResolvers[slot]?.ownsCandidateGesture == true
+            ) {
                 finishOverlayPress(for: controller, slot: slot)
             }
         }
@@ -1003,9 +1058,45 @@ final nonisolated class InputSender: @unchecked Sendable {
         guard let slot = controllerSlots[ObjectIdentifier(controller)] else { return }
         var state = mapGCControllerToXInput(controller, deadzone: deadzone)
         lastButtons[slot] = state.buttons
+        let physicalState = state
+
+        let shortcutResolution = applyKeyboardShortcutState(
+            buttons: state.buttons,
+            slot: slot,
+            now: now
+        )
+        state.buttons = shortcutResolution.forwardedButtons
+        if shortcutResolution.replayTransitions.count > 0 {
+            let preservesLocalGestures = !shortcutResolution.bypassesLocalGestureHandling
+            sendKeyboardShortcutReplay(
+                shortcutResolution.replayTransitions,
+                currentState: physicalState,
+                slot: slot,
+                now: now,
+                excludedButtons: preservesLocalGestures
+                    ? overlayButtonMask
+                    : 0
+            )
+            if ControllerKeyboardShortcutOverlayPolicy.shouldReplayDeferredTap(
+                resolution: shortcutResolution,
+                overlayButtonMask: overlayButtonMask,
+                physicalButtons: physicalState.buttons,
+                hasPendingPress: overlayPresses[slot] != nil
+            ) {
+                overlayPresses[slot] = nil
+                sendOverlayTap(for: controller, slot: slot)
+            }
+        }
+        if shortcutResolution.bypassesLocalGestureHandling {
+            overlayPresses[slot] = nil
+            steamHoldTicks[slot] = nil
+            steamTriggeredSlots.remove(slot)
+        }
 
         if sampleOverlay {
-            if isOverlayButtonHeld(on: controller) {
+            if shortcutResolution.suppressesOverlayGestures {
+                overlayPresses[slot] = nil
+            } else if isOverlayButtonHeld(on: controller) {
                 var press = overlayPresses[slot] ?? OverlayPressState()
                 press.ticks += 1
                 if !press.triggered, press.ticks >= Self.overlayLongPressThreshold {
@@ -1017,7 +1108,10 @@ final nonisolated class InputSender: @unchecked Sendable {
                 finishOverlayPress(for: controller, slot: slot)
             }
 
-            if steamOverlayGestureEnabled, isSteamButtonHeld(on: controller) {
+            if shortcutResolution.suppressesSteamGestures {
+                steamHoldTicks[slot] = nil
+                steamTriggeredSlots.remove(slot)
+            } else if steamOverlayGestureEnabled, isSteamButtonHeld(on: controller) {
                 let ticks = (steamHoldTicks[slot] ?? 0) + 1
                 steamHoldTicks[slot] = ticks
                 if ticks >= Self.steamLongPressThreshold,
@@ -1033,15 +1127,16 @@ final nonisolated class InputSender: @unchecked Sendable {
 
         // The trigger is withheld for the entire gesture. A short press is replayed
         // as down/up on release; a long press is consumed by the local overlay.
-        if overlayPresses[slot] != nil || isOverlayButtonHeld(on: controller) {
-            state.buttons &= ~overlayButtonMask
-        } else if overlayReplaySlots.contains(slot) {
-            state.buttons |= overlayButtonMask
+        if !shortcutResolution.bypassesLocalGestureHandling {
+            if overlayPresses[slot] != nil || isOverlayButtonHeld(on: controller) {
+                state.buttons &= ~overlayButtonMask
+            } else if overlayReplaySlots.contains(slot) {
+                state.buttons |= overlayButtonMask
+            }
+            if steamTriggeredSlots.contains(slot) {
+                state.buttons &= ~steamButtonMask
+            }
         }
-        if steamTriggeredSlots.contains(slot) {
-            state.buttons &= ~steamButtonMask
-        }
-
         sendGamepadSnapshot(
             GamepadSnapshot(
                 buttons: state.buttons,
@@ -1162,6 +1257,65 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
     }
 
+    private func applyKeyboardShortcutState(
+        buttons: UInt16,
+        slot: Int,
+        now: UInt64
+    ) -> ControllerKeyboardShortcutResolution {
+        var resolver = keyboardShortcutResolvers[slot] ?? ControllerKeyboardShortcutResolver(
+            targetMask: textInputTriggerMask,
+            eligibleButtonMask: Self.keyboardShortcutEligibleMask,
+            holdDurationNanoseconds: UInt64(textInputTriggerDelayMs) * 1_000_000
+        )
+        let resolution = resolver.resolve(buttons: buttons, now: now)
+        keyboardShortcutResolvers[slot] = resolver
+        if resolution.triggered {
+            notifyControllerKeyboardShortcut()
+        }
+        return resolution
+    }
+
+    private func sendKeyboardShortcutReplay(
+        _ transitions: ShortcutTransitionBuffer,
+        currentState: (
+            buttons: UInt16,
+            leftTrigger: UInt8,
+            rightTrigger: UInt8,
+            lx: Int16,
+            ly: Int16,
+            rx: Int16,
+            ry: Int16
+        ),
+        slot: Int,
+        now: UInt64,
+        excludedButtons: UInt16
+    ) {
+        // Replay against the last state the remote actually received. Using the
+        // current physical state here would collapse a newly pressed unrelated
+        // button into the older buffered target edge.
+        let replayButtons = transitions.projected(
+            onto: (lastSnapshots[slot]?.buttons ?? 0) & ~textInputTriggerMask,
+            excluding: excludedButtons
+        )
+        for index in 0 ..< replayButtons.count {
+            sendGamepadSnapshot(
+                GamepadSnapshot(
+                    buttons: replayButtons[index],
+                    leftTrigger: currentState.leftTrigger,
+                    rightTrigger: currentState.rightTrigger,
+                    leftStickX: currentState.lx,
+                    leftStickY: currentState.ly,
+                    rightStickX: currentState.rx,
+                    rightStickY: currentState.ry,
+                    bitmap: gamepadBitmap
+                ),
+                slot: slot,
+                now: now,
+                force: true
+            )
+        }
+    }
+
     private func sendNeutralGamepads() {
         if extendedControllers.isEmpty, remoteMode == .gamepad {
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap | Self.connectedGamepadBit(for: 0)), slot: 0, force: true)
@@ -1192,6 +1346,54 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private var steamButtonMask: UInt16 {
         overlayTriggerButton == .start ? GFNInput.back : GFNInput.start
+    }
+
+    private static let keyboardShortcutEligibleMask = GFNInput.dpadUp
+        | GFNInput.dpadDown
+        | GFNInput.dpadLeft
+        | GFNInput.dpadRight
+        | GFNInput.start
+        | GFNInput.back
+        | GFNInput.ls
+        | GFNInput.rs
+        | GFNInput.lb
+        | GFNInput.rb
+        | GFNInput.buttonA
+        | GFNInput.buttonB
+        | GFNInput.buttonX
+        | GFNInput.buttonY
+
+    private func xinputMask(for button: ControllerSequenceButton) -> UInt16 {
+        switch button {
+        case .dpadUp:
+            GFNInput.dpadUp
+        case .dpadDown:
+            GFNInput.dpadDown
+        case .dpadLeft:
+            GFNInput.dpadLeft
+        case .dpadRight:
+            GFNInput.dpadRight
+        case .buttonA:
+            GFNInput.buttonA
+        case .buttonB:
+            GFNInput.buttonB
+        case .buttonX:
+            GFNInput.buttonX
+        case .buttonY:
+            GFNInput.buttonY
+        case .menu:
+            GFNInput.start
+        case .options:
+            GFNInput.back
+        case .leftShoulder:
+            GFNInput.lb
+        case .rightShoulder:
+            GFNInput.rb
+        case .leftThumbstick:
+            GFNInput.ls
+        case .rightThumbstick:
+            GFNInput.rs
+        }
     }
 
     private func isOverlayButtonHeld(on controller: GCController) -> Bool {
@@ -1244,6 +1446,11 @@ final nonisolated class InputSender: @unchecked Sendable {
         DispatchQueue.main.async { handler?(mode) }
     }
 
+    private func notifyControllerKeyboardShortcut() {
+        let handler = controllerKeyboardShortcutHandler
+        DispatchQueue.main.async { handler?() }
+    }
+
     private func sendMouseButtonNow(down: Bool, button: UInt8) {
         guard !isPaused else { return }
         if down {
@@ -1267,9 +1474,10 @@ final nonisolated class InputSender: @unchecked Sendable {
         down: Bool,
         vk: UInt16,
         scancode: UInt16,
-        modifiers: UInt16
+        modifiers: UInt16,
+        completion: (@Sendable (InputSendDisposition) -> Void)? = nil
     ) {
-        sendEncoded(category: .keyboard) {
+        sendEncoded(category: .keyboard, completion: completion) {
             encoder.encodeKeyboard(
                 down: down,
                 vk: vk,
@@ -1316,6 +1524,233 @@ final nonisolated class InputSender: @unchecked Sendable {
                 modifiers: key.modifiers
             )
         }
+    }
+
+    @discardableResult
+    func replaySubmittedText(
+        _ text: String,
+        appendEnter: Bool = true,
+        completion: @escaping @Sendable (KeyboardReplayCompletionResult) -> Void
+    ) -> SubmittedTextValidationResult {
+        let planningResult = KeyboardReplayPlanner.plan(
+            for: text,
+            keyboardLayout: keyboardLayout,
+            appendEnter: appendEnter
+        )
+        switch planningResult {
+        case let .supported(plan):
+            inputQueue.async { [weak self, plan] in
+                guard let self else {
+                    DispatchQueue.main.async { completion(.cancelled) }
+                    return
+                }
+                cancelKeyboardReplay()
+                let generation = keyboardReplayGeneration
+                releaseHeldDiscreteInputs()
+                sendNeutralGamepads()
+                replayKeyboardEvents(
+                    plan.events,
+                    index: 0,
+                    attempt: 1,
+                    generation: generation,
+                    completion: completion
+                )
+            }
+            return .supported
+        case .unsupportedCharacters:
+            return .unsupportedCharacters
+        case .unsupportedLayout:
+            return .unsupportedLayout
+        case .tooLong:
+            return .tooLong
+        }
+    }
+
+    private func replayKeyboardEvents(
+        _ events: [KeyboardReplayEvent],
+        index: Int,
+        attempt: Int,
+        generation: UInt64,
+        completion: @escaping @Sendable (KeyboardReplayCompletionResult) -> Void
+    ) {
+        guard generation == keyboardReplayGeneration else {
+            completeKeyboardReplay(.cancelled, completion: completion)
+            return
+        }
+        guard index < events.count else {
+            finishKeyboardReplay(
+                .completed,
+                generation: generation,
+                completion: completion
+            )
+            return
+        }
+
+        let event = events[index]
+        emitKeyboard(
+            down: event.down,
+            vk: event.virtualKey,
+            scancode: event.scanCode,
+            modifiers: event.modifiers
+        ) { [weak self, events] disposition in
+            guard let self else {
+                DispatchQueue.main.async { completion(.cancelled) }
+                return
+            }
+            guard generation == keyboardReplayGeneration else {
+                let releases = disposition == .accepted && event.down
+                    ? [replayReleaseEvent(for: event)]
+                    : []
+                sendReplayReleaseEvents(releases) { [weak self] in
+                    guard let self else {
+                        DispatchQueue.main.async { completion(.cancelled) }
+                        return
+                    }
+                    completeKeyboardReplay(.cancelled, completion: completion)
+                }
+                return
+            }
+
+            if disposition == .accepted {
+                recordAcceptedReplayEvent(event)
+                inputQueue.asyncAfter(deadline: .now() + .milliseconds(Self.replayEventIntervalMs)) { [weak self, events] in
+                    guard let self else {
+                        DispatchQueue.main.async { completion(.cancelled) }
+                        return
+                    }
+                    replayKeyboardEvents(
+                        events,
+                        index: index + 1,
+                        attempt: 1,
+                        generation: generation,
+                        completion: completion
+                    )
+                }
+            } else if attempt < Self.replayMaxSendAttempts {
+                inputQueue.asyncAfter(deadline: .now() + .milliseconds(Self.replayEventIntervalMs)) { [weak self, events] in
+                    guard let self else {
+                        DispatchQueue.main.async { completion(.cancelled) }
+                        return
+                    }
+                    replayKeyboardEvents(
+                        events,
+                        index: index,
+                        attempt: attempt + 1,
+                        generation: generation,
+                        completion: completion
+                    )
+                }
+            } else {
+                finishKeyboardReplay(
+                    .transportFailure,
+                    generation: generation,
+                    completion: completion
+                )
+            }
+        }
+    }
+
+    private func finishKeyboardReplay(
+        _ result: KeyboardReplayCompletionResult,
+        generation: UInt64,
+        completion: @escaping @Sendable (KeyboardReplayCompletionResult) -> Void
+    ) {
+        let releases = drainAcceptedReplayReleaseEvents()
+        sendReplayReleaseEvents(releases) { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async { completion(.cancelled) }
+                return
+            }
+            completeKeyboardReplay(
+                generation == keyboardReplayGeneration ? result : .cancelled,
+                completion: completion
+            )
+        }
+    }
+
+    private func recordAcceptedReplayEvent(_ event: KeyboardReplayEvent) {
+        if event.down {
+            guard !acceptedReplayDownEvents.contains(where: {
+                $0.virtualKey == event.virtualKey && $0.scanCode == event.scanCode
+            }) else { return }
+            guard acceptedReplayDownEvents.count < Self.maxSimultaneousReplayDownEvents else {
+                let release = replayReleaseEvent(for: event)
+                emitKeyboard(
+                    down: false,
+                    vk: release.virtualKey,
+                    scancode: release.scanCode,
+                    modifiers: release.modifiers
+                )
+                return
+            }
+            acceptedReplayDownEvents.append(event)
+        } else if let index = acceptedReplayDownEvents.lastIndex(where: {
+            $0.virtualKey == event.virtualKey && $0.scanCode == event.scanCode
+        }) {
+            acceptedReplayDownEvents.remove(at: index)
+        }
+    }
+
+    private func cancelKeyboardReplay() {
+        keyboardReplayGeneration &+= 1
+        sendReplayReleaseEvents(drainAcceptedReplayReleaseEvents())
+    }
+
+    private func drainAcceptedReplayReleaseEvents() -> [KeyboardReplayEvent] {
+        let releases = acceptedReplayDownEvents.reversed().map {
+            replayReleaseEvent(for: $0)
+        }
+        acceptedReplayDownEvents.removeAll(keepingCapacity: true)
+        return releases
+    }
+
+    private func replayReleaseEvent(for event: KeyboardReplayEvent) -> KeyboardReplayEvent {
+        let modifiers = switch event.modifier {
+        case .some(.leftShift): event.modifiers & ~0x0001
+        case .some(.rightAlt): event.modifiers & ~0x0004
+        case nil: event.modifiers
+        }
+        return KeyboardReplayEvent(
+            down: false,
+            virtualKey: event.virtualKey,
+            scanCode: event.scanCode,
+            modifiers: modifiers
+        )
+    }
+
+    private func sendReplayReleaseEvents(
+        _ events: [KeyboardReplayEvent],
+        index: Int = 0,
+        completion: (@Sendable () -> Void)? = nil
+    ) {
+        guard index < events.count else {
+            completion?()
+            return
+        }
+        let event = events[index]
+        emitKeyboard(
+            down: false,
+            vk: event.virtualKey,
+            scancode: event.scanCode,
+            modifiers: event.modifiers
+        ) { [weak self, events] _ in
+            guard let self else {
+                completion?()
+                return
+            }
+            sendReplayReleaseEvents(
+                events,
+                index: index + 1,
+                completion: completion
+            )
+        }
+    }
+
+    private func completeKeyboardReplay(
+        _ result: KeyboardReplayCompletionResult,
+        completion: @escaping @Sendable (KeyboardReplayCompletionResult) -> Void
+    ) {
+        DispatchQueue.main.async { completion(result) }
     }
 
     private func controllerTouchpad(for controller: GCController) -> ControllerTouchpad? {
@@ -1500,6 +1935,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             lastSnapshotSend[slot] = nil
             overlayPresses[slot] = nil
             overlayReplaySlots.remove(slot)
+            keyboardShortcutResolvers[slot] = nil
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
             sendGamepadSnapshot(neutralSnapshot(bitmap: gamepadBitmap), slot: slot, force: true)

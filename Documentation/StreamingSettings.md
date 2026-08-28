@@ -75,7 +75,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Game language | Selectable | Selectable |
 | Game launch mode | Default or Big Picture | Not exposed |
 | Microphone | Supported when the route and permission allow it | Supported when the Xbox capability is available |
-| Controller tuning | Rumble, intensity, deadzone, overlay, input mode | Rumble, intensity, deadzone |
+| Controller tuning | Rumble, intensity, deadzone, overlay, text-entry shortcut, input mode | Rumble, intensity, deadzone |
 | Save in-game settings | Plan dependent | Not exposed |
 | Xbox accessibility preferences | Not exposed | Text to speech, magnifier, high contrast |
 
@@ -168,11 +168,16 @@ can become unavailable, add latency, or have different queue conditions.
 | Rumble Intensity | 1.00x | Shown only while rumble is on. Range 0.00x to 2.00x in 0.05x steps. | Scales haptic power. Values above 1.00x increase motor load. |
 | Deadzone | 15% | Always shown. Range 0% to 30% in 1% steps. | Increases the radial analog-stick deadzone to reduce drift. |
 | Overlay Button | Start | Start or Options/Back | Long-pressing the selected button opens the CloudNow stream overlay. |
+| Text Input Buttons | Options/View (⊟) + Y | A captured combination of one to four supported buttons. A single button that conflicts with the app or enabled Steam overlay control is rejected. | Opens local Apple TV text entry during a GFN stream. See [Using CloudNow](UsingCloudNow.md#controller-text-entry-during-gfn-streams). |
+| Text Input Hold Delay | 150 ms | 50 to 1,500 ms in 50 ms steps | Sets how long the text-input combination must be held before the local keyboard opens. |
 | Steam Overlay Gesture | On | Always shown | Long-pressing the other menu button sends Shift+Tab to the session. |
 | Default Input Mode | Controller | Controller, Controller + Touchpad, or Controller + Mouse (Siri Remote) | Chooses the input mode used when a stream starts. Touchpad mode supports DualShock 4 and DualSense trackpads. |
 
 GFN exposes the controller protocol as XInput over GFN v2/v3. Device support
 and game support still determine which controls and haptics are delivered.
+Text Input Buttons opens a native full-page capture flow. The page waits for
+held buttons to be released before collecting a combination, keeps capture tied
+to the controller that started it, and restores Settings focus after cancellation.
 
 ### Game, library, and diagnostics
 
