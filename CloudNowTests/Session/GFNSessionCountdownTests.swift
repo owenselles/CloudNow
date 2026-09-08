@@ -83,8 +83,14 @@ struct GFNSessionCountdownTests {
         )
     }
 
-    @Test("Displayed minutes count down without reaching zero early")
-    func displayedMinutes() throws {
+    @Test("Displayed timer counts down each second without going negative")
+    func displayedTimer() throws {
+        let oneHourCountdown = try #require(
+            GFNSessionCountdown(
+                secondsLeft: 3600,
+                receivedAt: Date(timeIntervalSince1970: 1000)
+            )
+        )
         let countdown = try #require(
             GFNSessionCountdown(
                 secondsLeft: 900,
@@ -93,29 +99,39 @@ struct GFNSessionCountdownTests {
         )
 
         #expect(
-            countdown.minutesRemaining(
+            oneHourCountdown.formattedTimeRemaining(
                 at: Date(timeIntervalSince1970: 1000)
-            ) == 15
+            ) == "60:00"
         )
         #expect(
-            countdown.minutesRemaining(
+            countdown.formattedTimeRemaining(
+                at: Date(timeIntervalSince1970: 1000)
+            ) == "15:00"
+        )
+        #expect(
+            countdown.formattedTimeRemaining(
                 at: Date(timeIntervalSince1970: 1001)
-            ) == 15
+            ) == "14:59"
         )
         #expect(
-            countdown.minutesRemaining(
+            countdown.formattedTimeRemaining(
                 at: Date(timeIntervalSince1970: 1060)
-            ) == 14
+            ) == "14:00"
         )
         #expect(
-            countdown.minutesRemaining(
+            countdown.formattedTimeRemaining(
                 at: Date(timeIntervalSince1970: 1899)
-            ) == 1
+            ) == "00:01"
         )
         #expect(
-            countdown.minutesRemaining(
+            countdown.formattedTimeRemaining(
                 at: Date(timeIntervalSince1970: 1900)
-            ) == 0
+            ) == "00:00"
+        )
+        #expect(
+            countdown.formattedTimeRemaining(
+                at: Date(timeIntervalSince1970: 2000)
+            ) == "00:00"
         )
     }
 

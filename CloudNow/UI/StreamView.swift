@@ -23,9 +23,7 @@ private struct GFNSessionEndCountdownView: View {
                 Text(
                     L10n.format(
                         "session_ends_in",
-                        L10n.localizedMinutes(
-                            countdown.minutesRemaining(at: context.date)
-                        )
+                        countdown.formattedTimeRemaining(at: context.date)
                     )
                 )
                 .font(.callout.weight(.semibold))

@@ -53,10 +53,13 @@ nonisolated struct GFNSessionCountdown: Equatable, Sendable {
         max(0, Int(ceil(endsAt.timeIntervalSince(date))))
     }
 
-    func minutesRemaining(at date: Date) -> Int {
+    func formattedTimeRemaining(at date: Date) -> String {
         let seconds = secondsRemaining(at: date)
-        guard seconds > 0 else { return 0 }
-        return Int(ceil(Double(seconds) / 60))
+        return String(
+            format: "%02d:%02d",
+            seconds / 60,
+            seconds % 60
+        )
     }
 
     func shouldShow(at date: Date, warningMinutes: Int) -> Bool {
