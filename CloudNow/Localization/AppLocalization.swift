@@ -179,6 +179,23 @@ enum L10n {
         )
     }
 
+    static func localizedMinutes(
+        _ minutes: Int,
+        locale: Locale = localizationLocale
+    ) -> String {
+        let formatter = MeasurementFormatter()
+        formatter.locale = locale
+        formatter.unitOptions = .providedUnit
+        formatter.unitStyle = .long
+        formatter.numberFormatter.maximumFractionDigits = 0
+        return formatter.string(
+            from: Measurement(
+                value: Double(minutes),
+                unit: UnitDuration.minutes
+            )
+        )
+    }
+
     static func storeName(for appStore: String) -> String {
         switch appStore {
         case "STEAM": "Steam"

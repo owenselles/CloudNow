@@ -9,6 +9,11 @@ struct StreamSettingsTests {
         let expected: Double
     }
 
+    struct IntClampCase: Sendable {
+        let input: Int
+        let expected: Int
+    }
+
     @Test("Defaults describe the preferred tvOS streaming profile")
     func defaults() {
         let settings = StreamSettings()
@@ -37,6 +42,10 @@ struct StreamSettingsTests {
         #expect(!settings.enableRtcEventLog)
         #expect(settings.appLaunchMode == .bigPicture)
         #expect(settings.persistInGameSettings)
+        #expect(
+            settings.sessionEndWarningMinutes
+                == StreamSettings.defaultSessionEndWarningMinutes
+        )
         #expect(settings.audioFormat == .automatic)
     }
 
@@ -79,6 +88,22 @@ struct StreamSettingsTests {
         #expect(settings.rumbleIntensity == testCase.expected)
     }
 
+    @Test(
+        "Session end warning clamps both bounds",
+        arguments: [
+            IntClampCase(input: -1, expected: 1),
+            IntClampCase(input: 20, expected: 20),
+            IntClampCase(input: 90, expected: 60),
+        ]
+    )
+    func sessionEndWarningClamping(testCase: IntClampCase) {
+        var settings = StreamSettings()
+
+        settings.sessionEndWarningMinutes = testCase.input
+
+        #expect(settings.sessionEndWarningMinutes == testCase.expected)
+    }
+
     @Test("Current settings round-trip through Codable")
     func codableRoundTrip() throws {
         var expected = StreamSettings()
@@ -107,6 +132,7 @@ struct StreamSettingsTests {
         expected.enableRtcEventLog = true
         expected.appLaunchMode = .default
         expected.persistInGameSettings = false
+        expected.sessionEndWarningMinutes = 30
         expected.audioFormat = .surround51
 
         let encoded = try JSONEncoder().encode(expected)

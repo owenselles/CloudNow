@@ -42,6 +42,9 @@ nonisolated struct LastSessionRecord: Codable {
     let clientId: String?
     let deviceId: String?
     let createdAt: Date
+    /// First successful media connection for this server session. Missing on records
+    /// written before session countdowns were introduced.
+    let sessionStartedAt: Date?
     /// Provider that created this session. Records written before this field was
     /// added decode to NVIDIAAuth.defaultIdpId so they are treated as NVIDIA sessions.
     let idpId: String
@@ -52,7 +55,7 @@ nonisolated struct LastSessionRecord: Codable {
     let userId: String?
 
     enum CodingKeys: String, CodingKey {
-        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, idpId, userId
+        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, sessionStartedAt, idpId, userId
     }
 
     init(
@@ -64,6 +67,7 @@ nonisolated struct LastSessionRecord: Codable {
         clientId: String?,
         deviceId: String?,
         createdAt: Date,
+        sessionStartedAt: Date? = nil,
         idpId: String,
         userId: String?
     ) {
@@ -75,6 +79,7 @@ nonisolated struct LastSessionRecord: Codable {
         self.clientId = clientId
         self.deviceId = deviceId
         self.createdAt = createdAt
+        self.sessionStartedAt = sessionStartedAt
         self.idpId = idpId
         self.userId = userId
     }
@@ -89,8 +94,25 @@ nonisolated struct LastSessionRecord: Codable {
         clientId = try c.decodeIfPresent(String.self, forKey: .clientId)
         deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
+        sessionStartedAt = try c.decodeIfPresent(Date.self, forKey: .sessionStartedAt)
         idpId = try c.decodeIfPresent(String.self, forKey: .idpId) ?? NVIDIAAuth.defaultIdpId
         userId = try c.decodeIfPresent(String.self, forKey: .userId)
+    }
+
+    func recordingSessionStart(_ startedAt: Date) -> Self {
+        Self(
+            sessionId: sessionId,
+            serverIp: serverIp,
+            appId: appId,
+            base: base,
+            routingZoneUrl: routingZoneUrl,
+            clientId: clientId,
+            deviceId: deviceId,
+            createdAt: createdAt,
+            sessionStartedAt: startedAt,
+            idpId: idpId,
+            userId: userId
+        )
     }
 }
 
