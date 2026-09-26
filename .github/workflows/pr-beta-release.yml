@@ -1,17 +1,21 @@
-name: PR Beta Release
+name: Beta Release
 
 on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Open pull request number to release as a beta
+        description: Open pull request number
         required: true
         type: number
+      branch:
+        description: Optional PR branch name; must match the pull request
+        required: false
+        type: string
 
 run-name: "PR #${{ inputs.pr_number }} beta release"
 
 concurrency:
-  group: pr-beta-${{ inputs.pr_number }}
+  group: beta-release-pr-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 permissions: {}
@@ -20,19 +24,19 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       pull-requests: read
     outputs:
-      base_sha: ${{ steps.pr.outputs.base_sha }}
-      head_sha: ${{ steps.pr.outputs.head_sha }}
-      merge_sha: ${{ steps.pr.outputs.merge_sha }}
-      tag: ${{ steps.pr.outputs.tag }}
+      branch: ${{ steps.source.outputs.branch }}
+      commit_sha: ${{ steps.source.outputs.commit_sha }}
+      source_label: ${{ steps.source.outputs.source_label }}
+      tag: ${{ steps.source.outputs.tag }}
     steps:
-      - name: Validate pull request
-        id: pr
+      - name: Resolve beta source
+        id: source
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          REQUESTED_BRANCH: ${{ inputs.branch }}
         run: |
           set -euo pipefail
 
@@ -47,36 +51,38 @@ jobs:
 
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
           if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
-            '.state == "open" and .base.ref == "main" and .head.repo.full_name == $repo' \
+            '.state == "open" and .head.repo.full_name == $repo' \
             <<< "$pr" > /dev/null; then
-            echo "::error::PR must be open, target main, and come from this repository."
+            echo "::error::PR must be open and come from this repository."
             exit 1
           fi
 
-          head_sha="$(jq -r '.head.sha' <<< "$pr")"
-          merge_sha="$(jq -r '.merge_commit_sha // empty' <<< "$pr")"
-          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ||
-                ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::PR test-merge commit is unavailable. Resolve conflicts, then retry."
+          commit_sha="$(jq -r '.head.sha' <<< "$pr")"
+          branch="$(jq -r '.head.ref' <<< "$pr")"
+          if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::PR head does not point to a commit."
             exit 1
           fi
 
-          merge_commit="$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$merge_sha")"
-          base_sha="$(jq -r '.parents[0].sha // empty' <<< "$merge_commit")"
-          merge_head_sha="$(jq -r '.parents[1].sha // empty' <<< "$merge_commit")"
-          parent_count="$(jq '.parents | length' <<< "$merge_commit")"
-          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          if [[ "$parent_count" != "2" || ! "$base_sha" =~ ^[0-9a-f]{40}$ ||
-                ! "$main_sha" =~ ^[0-9a-f]{40}$ || "$base_sha" != "$main_sha" ||
-                "$merge_head_sha" != "$head_sha" ]]; then
-            echo "::error::PR test-merge commit does not match current main and PR head. Retry."
+          requested_branch="${REQUESTED_BRANCH#refs/heads/}"
+          if [[ -n "$requested_branch" && "$requested_branch" != "$branch" ]]; then
+            echo "::error::PR #$PR_NUMBER uses branch '$branch', not '$requested_branch'."
             exit 1
           fi
 
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
-          echo "tag=beta-pr-$PR_NUMBER-${merge_sha:0:12}" >> "$GITHUB_OUTPUT"
+          workflow_changes="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100" \
+            --jq '.[] | select(.filename | startswith(".github/workflows/")) | .filename')"
+          if [[ -n "$workflow_changes" ]]; then
+            echo "::error::Beta releases do not support PRs that change workflow files."
+            exit 1
+          fi
+
+          tag="v$(date +%Y.%m.%d)-${commit_sha:0:7}-beta.$PR_NUMBER"
+          printf 'branch=%s\n' "$branch" >> "$GITHUB_OUTPUT"
+          printf 'commit_sha=%s\n' "$commit_sha" >> "$GITHUB_OUTPUT"
+          printf 'source_label=PR #%s (%s)\n' "$PR_NUMBER" "$branch" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 
   build:
     needs: resolve
@@ -91,28 +97,20 @@ jobs:
       LC_ALL: en_US.UTF-8
       TZ: UTC
     steps:
-      - name: Checkout tested PR merge commit
+      - name: Checkout beta source commit
         uses: actions/checkout@v7
         with:
-          ref: refs/pull/${{ inputs.pr_number }}/merge
-          fetch-depth: 2
+          ref: ${{ needs.resolve.outputs.commit_sha }}
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify checked-out commit
         env:
-          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
-          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+          COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
         run: |
-          read -r actual base head extra <<< "$(git rev-list --parents -n 1 HEAD)"
-          if [[ "$actual" != "$MERGE_SHA" || "$base" != "$BASE_SHA" ||
-                "$head" != "$HEAD_SHA" || -n "${extra:-}" ]]; then
-            echo "::error::Checked-out PR merge commit does not match validated PR."
-            exit 1
-          fi
-
-          if [[ -n "$(git diff --name-only "$BASE_SHA" "$MERGE_SHA" -- .github/workflows)" ]]; then
-            echo "::error::GitHub's default token cannot release PRs that change workflow files."
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "$COMMIT_SHA" ]]; then
+            echo "::error::Checked-out commit does not match the resolved beta source."
             exit 1
           fi
 
@@ -180,7 +178,7 @@ jobs:
       - name: Transfer IPA to release job
         uses: actions/upload-artifact@v7
         with:
-          name: cloudnow-pr-beta-ipa
+          name: cloudnow-beta-ipa
           path: ${{ runner.temp }}/CloudNow.ipa
           if-no-files-found: error
           retention-days: 7
@@ -195,36 +193,30 @@ jobs:
       - name: Download IPA
         uses: actions/download-artifact@v7
         with:
-          name: cloudnow-pr-beta-ipa
+          name: cloudnow-beta-ipa
           path: ${{ runner.temp }}/pr-beta
 
       - name: Publish GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
-          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          SOURCE_LABEL: ${{ needs.resolve.outputs.source_label }}
+          COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           set -euo pipefail
 
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
           if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
-            --arg head "$HEAD_SHA" --arg merge "$MERGE_SHA" \
-            '.state == "open" and .base.ref == "main" and
-             .head.repo.full_name == $repo and .head.sha == $head and
-             .merge_commit_sha == $merge' \
+            --arg branch "$BRANCH" --arg commit "$COMMIT_SHA" \
+            '.state == "open" and .head.repo.full_name == $repo and
+             .head.ref == $branch and .head.sha == $commit' \
             <<< "$pr" > /dev/null; then
             echo "::error::PR changed while the beta IPA was building. Run workflow again."
             exit 1
           fi
-
-          current_main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          if [[ "$current_main_sha" != "$BASE_SHA" ]]; then
-            echo "::error::Main changed while the beta IPA was building. Run workflow again."
-            exit 1
-          fi
+          source_url="https://github.com/$GITHUB_REPOSITORY/pull/$PR_NUMBER"
 
           refs="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG")"
           if jq -e --arg ref "refs/tags/$TAG" \
@@ -233,15 +225,15 @@ jobs:
             exit 1
           fi
 
-          notes="Beta build of PR #$PR_NUMBER: https://github.com/$GITHUB_REPOSITORY/pull/$PR_NUMBER
+          notes="Beta build of $SOURCE_LABEL: $source_url
 
-          Tested merge commit: $MERGE_SHA
+          Tested commit: $COMMIT_SHA
 
           This IPA is unsigned. Sign and sideload it to test on Apple TV."
           release_url="$(gh release create "$TAG" "$RUNNER_TEMP/pr-beta/CloudNow.ipa" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$MERGE_SHA" \
-            --title "CloudNow PR #$PR_NUMBER beta (${MERGE_SHA:0:12})" \
+            --target "$COMMIT_SHA" \
+            --title "CloudNow $TAG" \
             --notes "$notes" \
             --prerelease \
             --latest=false)"
