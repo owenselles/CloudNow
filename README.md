@@ -174,6 +174,18 @@ not copied between files.
 - [Release validation](Documentation/ReleaseValidation.md): automated gates,
   physical Apple TV checks, provider smoke tests, and evidence recording.
 
+For an opt-in beta of an open PR from this repository, open **Actions > PR Beta
+Release > Run workflow**, select `main`, and enter the PR number. The workflow
+runs the full test plan and lint checks on the current PR merge commit, then
+publishes an unsigned IPA as a GitHub pre-release tagged
+`beta-pr-<number>-<commit>`. Download, sign, and sideload it as described in
+[Option B](#option-b-pre-built-ipa). A new PR commit or `main` update needs a
+new manual run. Pre-releases are public to everyone who can read this
+repository; they do not replace the normal `main` release. This workflow
+appears only after it is merged into `main`. PRs that change
+`.github/workflows/` are not supported because GitHub's default token cannot
+create a release for those commits.
+
 ## Linting
 
 CloudNow uses SwiftLint and SwiftFormat. CI gates pull requests on failures.

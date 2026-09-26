@@ -1,0 +1,231 @@
+name: PR Beta Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open pull request number to release as a beta
+        required: true
+        type: number
+
+run-name: "PR #${{ inputs.pr_number }} beta release"
+
+concurrency:
+  group: pr-beta-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      merge_sha: ${{ steps.pr.outputs.merge_sha }}
+      tag: ${{ steps.pr.outputs.tag }}
+    steps:
+      - name: Validate pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Select main in the Run workflow branch menu."
+            exit 1
+          fi
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Enter a positive pull request number."
+            exit 1
+          fi
+
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
+            '.state == "open" and .base.ref == "main" and .head.repo.full_name == $repo' \
+            <<< "$pr" > /dev/null; then
+            echo "::error::PR must be open, target main, and come from this repository."
+            exit 1
+          fi
+
+          base_sha="$(jq -r '.base.sha' <<< "$pr")"
+          head_sha="$(jq -r '.head.sha' <<< "$pr")"
+          merge_sha="$(jq -r '.merge_commit_sha // empty' <<< "$pr")"
+          if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ||
+                ! "$head_sha" =~ ^[0-9a-f]{40}$ ||
+                ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::PR test-merge commit is unavailable. Resolve conflicts, then retry."
+            exit 1
+          fi
+
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+          echo "tag=beta-pr-$PR_NUMBER-${merge_sha:0:12}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: macos-26
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      CLOUDNOW_DISABLE_LIVE_SERVICES: "1"
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      TZ: UTC
+    steps:
+      - name: Checkout tested PR merge commit
+        uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/merge
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify checked-out commit
+        env:
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+        run: |
+          read -r actual base head extra <<< "$(git rev-list --parents -n 1 HEAD)"
+          if [[ "$actual" != "$MERGE_SHA" || "$base" != "$BASE_SHA" ||
+                "$head" != "$HEAD_SHA" || -n "${extra:-}" ]]; then
+            echo "::error::Checked-out PR merge commit does not match validated PR."
+            exit 1
+          fi
+
+          if [[ -n "$(git diff --name-only "$BASE_SHA" "$MERGE_SHA" -- .github/workflows)" ]]; then
+            echo "::error::GitHub's default token cannot release PRs that change workflow files."
+            exit 1
+          fi
+
+      - name: Run tvOS test plan
+        run: Scripts/test.sh
+
+      - name: Install SwiftFormat 0.62.1
+        run: |
+          mkdir -p "$RUNNER_TEMP/swiftformat" "$RUNNER_TEMP/pinned-tools"
+          curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
+            https://github.com/nicklockwood/SwiftFormat/releases/download/0.62.1/swiftformat.artifactbundle.zip
+          unzip -qo "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat"
+          SF_BIN=$(find "$RUNNER_TEMP/swiftformat" -type f -name swiftformat -perm -111 | head -1)
+          install -m 0755 "$SF_BIN" "$RUNNER_TEMP/pinned-tools/swiftformat"
+          test "$("$RUNNER_TEMP/pinned-tools/swiftformat" --version)" = "0.62.1"
+
+      - name: Install SwiftLint 0.65.0
+        run: |
+          mkdir -p "$RUNNER_TEMP/swiftlint" "$RUNNER_TEMP/pinned-tools"
+          curl -fsSL -o "$RUNNER_TEMP/swiftlint.zip" \
+            https://github.com/realm/SwiftLint/releases/download/0.65.0/portable_swiftlint.zip
+          unzip -qo "$RUNNER_TEMP/swiftlint.zip" -d "$RUNNER_TEMP/swiftlint"
+          SL_BIN=$(find "$RUNNER_TEMP/swiftlint" -type f -name swiftlint -perm -111 | head -1)
+          install -m 0755 "$SL_BIN" "$RUNNER_TEMP/pinned-tools/swiftlint"
+          test "$("$RUNNER_TEMP/pinned-tools/swiftlint" version)" = "0.65.0"
+
+      - name: SwiftFormat (format check)
+        run: |
+          "$RUNNER_TEMP/pinned-tools/swiftformat" --lint --config .swiftformat \
+            CloudNow CloudNowTests CloudNowUITests
+
+      - name: SwiftLint (strict)
+        run: |
+          "$RUNNER_TEMP/pinned-tools/swiftlint" --strict --config .swiftlint.yml \
+            CloudNow CloudNowTests CloudNowUITests
+
+      - name: Resolve SPM dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project CloudNow.xcodeproj \
+            -scheme CloudNow \
+            -clonedSourcePackagesDirPath .spm-packages
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project CloudNow.xcodeproj \
+            -scheme CloudNow \
+            -configuration Release \
+            -destination "generic/platform=tvOS" \
+            -archivePath "$RUNNER_TEMP/CloudNow.xcarchive" \
+            -clonedSourcePackagesDirPath .spm-packages \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -r "$RUNNER_TEMP/CloudNow.xcarchive/Products/Applications/CloudNow.app" \
+            "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          zip -r CloudNow.ipa Payload/
+
+      - name: Transfer IPA to release job
+        uses: actions/upload-artifact@v7
+        with:
+          name: cloudnow-pr-beta-ipa
+          path: ${{ runner.temp }}/CloudNow.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Download IPA
+        uses: actions/download-artifact@v7
+        with:
+          name: cloudnow-pr-beta-ipa
+          path: ${{ runner.temp }}/pr-beta
+
+      - name: Publish GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
+            --arg base "$BASE_SHA" --arg head "$HEAD_SHA" --arg merge "$MERGE_SHA" \
+            '.state == "open" and .base.ref == "main" and
+             .head.repo.full_name == $repo and .base.sha == $base and
+             .head.sha == $head and .merge_commit_sha == $merge' \
+            <<< "$pr" > /dev/null; then
+            echo "::error::PR changed while the beta IPA was building. Run workflow again."
+            exit 1
+          fi
+
+          refs="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG")"
+          if jq -e --arg ref "refs/tags/$TAG" \
+            'any(.[]; .ref == $ref)' <<< "$refs" > /dev/null; then
+            echo "::error::Beta tag $TAG already exists; this commit was released."
+            exit 1
+          fi
+
+          notes="Beta build of PR #$PR_NUMBER: https://github.com/$GITHUB_REPOSITORY/pull/$PR_NUMBER
+
+          Tested merge commit: $MERGE_SHA
+
+          This IPA is unsigned. Sign and sideload it to test on Apple TV."
+          release_url="$(gh release create "$TAG" "$RUNNER_TEMP/pr-beta/CloudNow.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$MERGE_SHA" \
+            --title "CloudNow PR #$PR_NUMBER beta (${MERGE_SHA:0:12})" \
+            --notes "$notes" \
+            --prerelease \
+            --latest=false)"
+          echo "Beta release: $release_url" >> "$GITHUB_STEP_SUMMARY"
