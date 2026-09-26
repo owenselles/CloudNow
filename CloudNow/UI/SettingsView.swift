@@ -1216,6 +1216,64 @@ struct SettingsView: View {
                 }
 
                 Section(L10n.text("game")) {
+                    LabeledContent {
+                        HStack(spacing: 16) {
+                            Button {
+                                vm.streamSettings.sessionEndWarningMinutes = max(
+                                    StreamSettings.minSessionEndWarningMinutes,
+                                    vm.streamSettings.sessionEndWarningMinutes - 1
+                                )
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(
+                                vm.streamSettings.sessionEndWarningMinutes
+                                    <= StreamSettings.minSessionEndWarningMinutes
+                            )
+                            .accessibilityIdentifier(
+                                "settings.game.session-end-warning.decrement"
+                            )
+
+                            Text(
+                                L10n.localizedMinutes(
+                                    vm.streamSettings.sessionEndWarningMinutes
+                                )
+                            )
+                            .monospacedDigit()
+                            .frame(minWidth: 128)
+                            .padding(.horizontal, 24)
+                            .accessibilityIdentifier(
+                                "settings.game.session-end-warning.value"
+                            )
+
+                            Button {
+                                vm.streamSettings.sessionEndWarningMinutes = min(
+                                    StreamSettings.maxSessionEndWarningMinutes,
+                                    vm.streamSettings.sessionEndWarningMinutes + 1
+                                )
+                            } label: {
+                                Image(systemName: "plus.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(
+                                vm.streamSettings.sessionEndWarningMinutes
+                                    >= StreamSettings.maxSessionEndWarningMinutes
+                            )
+                            .accessibilityIdentifier(
+                                "settings.game.session-end-warning.increment"
+                            )
+                        }
+                    } label: {
+                        CloudNowSettingLabel(
+                            title: L10n.text("session_end_warning"),
+                            description: L10n.text(
+                                "session_end_warning_description"
+                            )
+                        )
+                    }
+                    .accessibilityIdentifier("settings.game.session-end-warning")
+
                     Toggle(isOn: $vm.streamSettings.persistInGameSettings) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(L10n.text("save_in_game_settings"))

@@ -13,6 +13,9 @@ nonisolated struct StreamSettings: Codable, Equatable {
     static let maxTextInputTriggerDelayMs = 1500
     static let textInputTriggerDelayStepMs = 50
     static let defaultTextInputTriggerDelayMs = 150
+    static let minSessionEndWarningMinutes = 1
+    static let maxSessionEndWarningMinutes = 60
+    static let defaultSessionEndWarningMinutes = 15
     static let defaultKeyboardLayout = L10n.keyboardLayoutCode()
     static let automaticGameLanguage = "automatic"
     static let defaultGameLanguage = automaticGameLanguage
@@ -90,6 +93,16 @@ nonisolated struct StreamSettings: Codable, Equatable {
     /// Persist in-game graphics settings across sessions on the cloud rig. A premium-tier
     /// (Performance/Ultimate) feature; the server ignores the flag for non-entitled accounts.
     var persistInGameSettings: Bool = true
+    /// Shows a local countdown when this many minutes remain in the current GFN session.
+    var sessionEndWarningMinutes: Int = Self.defaultSessionEndWarningMinutes {
+        didSet {
+            sessionEndWarningMinutes = min(
+                max(sessionEndWarningMinutes, Self.minSessionEndWarningMinutes),
+                Self.maxSessionEndWarningMinutes
+            )
+        }
+    }
+
     /// Requested audio channel layout. Automatic follows the connected audio system's
     /// capability (5.1 only when the route reports ≥6 output channels).
     var audioFormat: AudioFormatPreference = .automatic
@@ -147,6 +160,7 @@ extension StreamSettings {
         case statsMode, diagnosticsEnabled, enableRtcEventLog
         case appLaunchMode
         case persistInGameSettings
+        case sessionEndWarningMinutes
         case audioFormat
         case colorQuality
     }
@@ -232,6 +246,17 @@ extension StreamSettings {
         enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
         appLaunchMode = try c.decodeIfPresent(AppLaunchMode.self, forKey: .appLaunchMode) ?? d.appLaunchMode
         persistInGameSettings = try c.decodeIfPresent(Bool.self, forKey: .persistInGameSettings) ?? d.persistInGameSettings
+        let storedSessionEndWarningMinutes = try c.decodeIfPresent(
+            Int.self,
+            forKey: .sessionEndWarningMinutes
+        ) ?? d.sessionEndWarningMinutes
+        sessionEndWarningMinutes = min(
+            max(
+                storedSessionEndWarningMinutes,
+                Self.minSessionEndWarningMinutes
+            ),
+            Self.maxSessionEndWarningMinutes
+        )
         audioFormat = try c.decodeIfPresent(AudioFormatPreference.self, forKey: .audioFormat) ?? d.audioFormat
     }
 
@@ -263,6 +288,7 @@ extension StreamSettings {
         try c.encode(enableRtcEventLog, forKey: .enableRtcEventLog)
         try c.encode(appLaunchMode, forKey: .appLaunchMode)
         try c.encode(persistInGameSettings, forKey: .persistInGameSettings)
+        try c.encode(sessionEndWarningMinutes, forKey: .sessionEndWarningMinutes)
         try c.encode(audioFormat, forKey: .audioFormat)
     }
 }

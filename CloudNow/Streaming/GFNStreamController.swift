@@ -13,16 +13,6 @@ private nonisolated let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", c
 private nonisolated let videoColorLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "VideoColor")
 private nonisolated let audioSyncLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "AudioSync")
 
-// MARK: - Session Time Warning
-
-/// Severity levels for GFN session time-limit notifications from the control channel.
-struct StreamTimeWarning: Equatable {
-    /// 1 = approaching limit, 2 = 5 minutes left, 3 = last warning (imminent kick)
-    var code: Int
-    /// Seconds remaining as reported by the server, if available.
-    var secondsLeft: Int?
-}
-
 // MARK: - Stream State
 
 enum StreamState: Equatable {
@@ -322,8 +312,12 @@ final class GFNStreamController: NSObject {
     private(set) var diagnosticsEnabled = false
     private(set) var microphoneEnabledForConnection = false
     private(set) var videoDiagnostics = VideoPipelineSnapshot()
-    /// Wall-clock start of the current stream, for the HUD's session duration row.
+    /// Wall-clock start of the current media connection, for the HUD's duration row.
     private(set) var streamingStartedAt: Date?
+    /// First media connection for the current server session; survives local resume.
+    private(set) var sessionStartedAt: Date?
+    /// Tier-based session deadline, resynchronized by authoritative server warnings.
+    private(set) var sessionCountdown: GFNSessionCountdown?
     private(set) var colorState = StreamColorState(
         preference: .automatic,
         requestedMode: .sdr8,
@@ -370,6 +364,7 @@ final class GFNStreamController: NSObject {
     private var protocolVersion = 2
     private var partialReliableThresholdMs = 300
     private var sessionInfo: SessionInfo?
+    private var membershipTier: String?
     private var settings = StreamSettings()
     /// Account HDR entitlement resolved from the subscription tier at connect time.
     private var accountAllowsHDR: Bool?
@@ -406,7 +401,13 @@ final class GFNStreamController: NSObject {
 
     // MARK: Connect
 
-    func connect(session: SessionInfo, settings: StreamSettings, accountAllowsHDR: Bool? = nil) async {
+    func connect(
+        session: SessionInfo,
+        settings: StreamSettings,
+        accountAllowsHDR: Bool? = nil,
+        membershipTier: String? = nil,
+        sessionStartedAt: Date? = nil
+    ) async {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
         let currentState = state
         switch currentState {
@@ -427,6 +428,8 @@ final class GFNStreamController: NSObject {
         state = .connecting
         serverStopped = false
         sessionInfo = session
+        self.membershipTier = membershipTier
+        self.sessionStartedAt = sessionStartedAt
         self.settings = settings
         self.accountAllowsHDR = accountAllowsHDR
         colorState = StreamColorState(
@@ -447,6 +450,8 @@ final class GFNStreamController: NSObject {
         stats = initialStats
         audioStats = AudioStats()
         streamingStartedAt = nil
+        sessionCountdown = nil
+        timeWarning = nil
         inputSendQueue.sync {
             inputSendState.withLock { state in
                 state.generated = 0
@@ -768,6 +773,9 @@ final class GFNStreamController: NSObject {
         fpsHistory = []
         bitrateHistory = []
         streamingStartedAt = nil
+        sessionStartedAt = nil
+        sessionCountdown = nil
+        membershipTier = nil
         signalingComplete = false
         inputReady = false
         previousVideoStats = nil
@@ -2114,7 +2122,14 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
                 reconnectAttempt = 0
                 state = .streaming
                 if streamingStartedAt == nil {
-                    streamingStartedAt = Date()
+                    let connectedAt = Date()
+                    streamingStartedAt = connectedAt
+                    let startedAt = sessionStartedAt ?? connectedAt
+                    sessionStartedAt = startedAt
+                    sessionCountdown = GFNSessionCountdown(
+                        membershipTier: membershipTier,
+                        startedAt: startedAt
+                    )
                 }
                 startStatsTimer()
             case .disconnected:
@@ -2263,22 +2278,25 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             let text = String(data: buffer.data, encoding: .utf8) ?? "<binary \(buffer.data.count)B>"
             gfnLog.debug("[ControlChannel] Message: \(text, privacy: .private)")
 
-            // Parse timerNotification — maps server codes to severity levels (matches OpenNOW)
-            if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
-               let notification = json["timerNotification"] as? [String: Any],
-               let rawCode = notification["code"] as? Int
-            {
-                let mappedCode: Int? = switch rawCode {
-                case 1, 2: 1 // approaching limit
-                case 4: 2 // ~5 minutes left
-                case 6: 3 // last warning, kick imminent
-                default: nil
-                }
-                if let code = mappedCode {
-                    let secondsLeft = notification["secondsLeft"] as? Int
-                    Task { @MainActor [weak self] in
-                        guard let self, isCurrentControlChannel(dataChannel) else { return }
-                        timeWarning = StreamTimeWarning(code: code, secondsLeft: secondsLeft)
+            if let warning = StreamTimeWarning(
+                timerNotificationData: buffer.data
+            ) {
+                let receivedAt = Date()
+                Task { @MainActor [weak self] in
+                    guard let self, isCurrentControlChannel(dataChannel) else { return }
+                    timeWarning = warning
+                    if warning.reportsSessionLimit,
+                       let secondsLeft = warning.secondsLeft
+                    {
+                        sessionCountdown = sessionCountdown?
+                            .synchronized(
+                                secondsLeft: secondsLeft,
+                                receivedAt: receivedAt
+                            )
+                            ?? GFNSessionCountdown(
+                                secondsLeft: secondsLeft,
+                                receivedAt: receivedAt
+                            )
                     }
                 }
             }

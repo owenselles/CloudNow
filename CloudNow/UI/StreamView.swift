@@ -10,6 +10,36 @@ private enum LoadingPhase: Equatable {
     case timedOut
 }
 
+private struct GFNSessionEndCountdownView: View {
+    let countdown: GFNSessionCountdown
+    let warningMinutes: Int
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            if countdown.shouldShow(
+                at: context.date,
+                warningMinutes: warningMinutes
+            ) {
+                Text(
+                    L10n.format(
+                        "session_ends_in",
+                        countdown.formattedTimeRemaining(at: context.date)
+                    )
+                )
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.red)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.black.opacity(0.72), in: .rect(cornerRadius: 8))
+                .padding(.leading, 40)
+                .padding(.top, 40)
+                .accessibilityIdentifier("stream.session-end-countdown")
+            }
+        }
+    }
+}
+
 struct StreamView: View {
     let game: GameInfo
     var settings: StreamSettings = .init()
@@ -112,6 +142,9 @@ struct StreamView: View {
             case .idle, .disconnected, .failed, .sessionEnded:
                 releaseLocalPeerLease()
             }
+        }
+        .onChange(of: streamController.sessionStartedAt) { _, startedAt in
+            persistSessionStart(startedAt)
         }
         // During streaming, VideoSurfaceView is first responder and intercepts Menu via UIKit,
         // signaling us through menuPressCount. .onExitCommand fires when the focus engine is
@@ -369,7 +402,27 @@ struct StreamView: View {
                         .transition(.opacity)
                     }
 
-                    if let warning = streamController.timeWarning, overlayState == .none {
+                    if let countdown = streamController.sessionCountdown,
+                       overlayState == .none
+                    {
+                        GFNSessionEndCountdownView(
+                            countdown: countdown,
+                            warningMinutes: settings.sessionEndWarningMinutes
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .topLeading
+                        )
+                    }
+
+                    if let warning = streamController.timeWarning,
+                       overlayState == .none,
+                       !warning.reportsSessionLimit
+                       || warning.secondsLeft == nil
+                       || streamController.sessionCountdown == nil
+                    {
                         timeWarningBanner(warning)
                             .transition(.move(edge: .top).combined(with: .opacity))
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -711,7 +764,13 @@ struct StreamView: View {
                     _ = await stopOwnedSessionAndReleaseLease()
                     return
                 }
-                await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
+                await streamController.connect(
+                    session: sessionInfo,
+                    settings: settings,
+                    accountAllowsHDR: viewModel.subscription?.allowsHDR,
+                    membershipTier: currentMembershipTier,
+                    sessionStartedAt: persistedSessionStart(for: sessionInfo)
+                )
                 return
             } catch is CancellationError {
                 return
@@ -867,6 +926,7 @@ struct StreamView: View {
                     clientId: sessionInfo.clientId,
                     deviceId: sessionInfo.deviceId,
                     createdAt: Date(),
+                    sessionStartedAt: persistedSessionStart(for: sessionInfo),
                     idpId: authManager.session?.provider.idpId ?? NVIDIAAuth.defaultIdpId,
                     userId: authManager.session?.user.userId
                 ))
@@ -896,7 +956,13 @@ struct StreamView: View {
                 _ = await stopOwnedSessionAndReleaseLease()
                 return
             }
-            await streamController.connect(session: sessionInfo, settings: settings, accountAllowsHDR: viewModel.subscription?.allowsHDR)
+            await streamController.connect(
+                session: sessionInfo,
+                settings: settings,
+                accountAllowsHDR: viewModel.subscription?.allowsHDR,
+                membershipTier: currentMembershipTier,
+                sessionStartedAt: persistedSessionStart(for: sessionInfo)
+            )
         } catch is CancellationError {
             return
         } catch SessionOrchestrationError.setupTimedOut {
@@ -927,6 +993,30 @@ struct StreamView: View {
         case .timedOut:
             loadingPhase = .timedOut
         }
+    }
+
+    private var currentMembershipTier: String? {
+        viewModel.subscription?.membershipTier
+            ?? authManager.session?.user.membershipTier
+    }
+
+    private func persistedSessionStart(for session: SessionInfo) -> Date? {
+        guard viewModel.lastSession?.sessionId == session.sessionId else {
+            return nil
+        }
+        return viewModel.lastSession?.sessionStartedAt
+    }
+
+    private func persistSessionStart(_ startedAt: Date?) {
+        guard let startedAt,
+              let session = createdSession,
+              let record = viewModel.lastSession,
+              record.sessionId == session.sessionId,
+              record.sessionStartedAt == nil
+        else {
+            return
+        }
+        viewModel.saveLastSession(record.recordingSessionStart(startedAt))
     }
 
     private func installReconnectHandler(

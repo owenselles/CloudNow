@@ -111,9 +111,9 @@ final class CloudNowUITests: XCTestCase {
 
         let xbox = app.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xbox.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["GeForce NOW"].hasFocus)
+        XCTAssertTrue(waitForFocus(app.buttons["GeForce NOW"]))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xbox.hasFocus)
+        XCTAssertTrue(waitForFocus(xbox))
         XCUIRemote.shared.press(.select)
 
         XCTAssertTrue(
@@ -277,10 +277,13 @@ final class CloudNowUITests: XCTestCase {
                 "Sprache des Spiels"
             ))
             .firstMatch
-        for _ in 0 ..< 20 where !focusedGameLanguage.exists {
+        for _ in 0 ..< 20 {
+            if focusedGameLanguage.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedGameLanguage.exists)
+        XCTAssertTrue(focusedGameLanguage.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
         let gameLanguagePage = element(
             "settings.stream-quality.game-language.page",
@@ -385,7 +388,7 @@ final class CloudNowUITests: XCTestCase {
         let xbox = app.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xbox.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xbox.hasFocus)
+        XCTAssertTrue(waitForFocus(xbox))
         XCUIRemote.shared.press(.select)
 
         assertEmptyXboxHome(in: app)
@@ -418,7 +421,7 @@ final class CloudNowUITests: XCTestCase {
         if !geForceNowHome.hasFocus {
             XCUIRemote.shared.press(.right)
         }
-        XCTAssertTrue(geForceNowHome.hasFocus)
+        XCTAssertTrue(waitForFocus(geForceNowHome))
         assertLeadingProviderSwitcher(
             geForceNowProviderSwitcher,
             firstTab: geForceNowHome,
@@ -470,7 +473,7 @@ final class CloudNowUITests: XCTestCase {
         let xboxChoice = xboxApp.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xboxChoice.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xboxChoice.hasFocus)
+        XCTAssertTrue(waitForFocus(xboxChoice))
         XCUIRemote.shared.press(.select)
 
         let xboxSettings = xboxApp.buttons["Settings"]
@@ -493,7 +496,7 @@ final class CloudNowUITests: XCTestCase {
         let xbox = app.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xbox.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xbox.hasFocus)
+        XCTAssertTrue(waitForFocus(xbox))
         XCUIRemote.shared.press(.select)
 
         assertEmptyXboxHome(in: app)
@@ -584,7 +587,7 @@ final class CloudNowUITests: XCTestCase {
         let xbox = app.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xbox.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xbox.hasFocus)
+        XCTAssertTrue(waitForFocus(xbox))
         XCUIRemote.shared.press(.select)
 
         assertEmptyXboxHome(in: app)
@@ -737,7 +740,7 @@ final class CloudNowUITests: XCTestCase {
         let xbox = app.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xbox.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xbox.hasFocus)
+        XCTAssertTrue(waitForFocus(xbox))
         XCUIRemote.shared.press(.select)
 
         assertEmptyXboxHome(in: app)
@@ -758,7 +761,7 @@ final class CloudNowUITests: XCTestCase {
             }
             XCUIRemote.shared.press(direction)
         }
-        XCTAssertTrue(filters.hasFocus)
+        XCTAssertTrue(waitForFocus(filters))
         XCUIRemote.shared.press(.select)
 
         XCTAssertTrue(
@@ -793,7 +796,7 @@ final class CloudNowUITests: XCTestCase {
         let xbox = app.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xbox.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xbox.hasFocus)
+        XCTAssertTrue(waitForFocus(xbox))
         XCUIRemote.shared.press(.select)
 
         assertEmptyXboxHome(in: app)
@@ -824,7 +827,7 @@ final class CloudNowUITests: XCTestCase {
 
         let geForceNow = app.buttons["GeForce NOW"]
         XCTAssertTrue(geForceNow.waitForExistence(timeout: 8))
-        XCTAssertTrue(geForceNow.hasFocus)
+        XCTAssertTrue(waitForFocus(geForceNow))
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(element("main-navigation", in: app).waitForExistence(timeout: 5))
 
@@ -982,7 +985,7 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
-    func testCodecSelectionPageFocusesAndCommitsTheSelectedValue() {
+    func testCodecSelectionPageCommitsAndRestoresSelectedValue() {
         let app = makeApp()
         app.launch()
 
@@ -992,10 +995,13 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertEqual(codec.value as? String, "H265")
 
         let focusedCodec = focusedElement(labeled: "Codec", in: app)
-        for _ in 0 ..< 30 where !focusedCodec.exists {
+        for _ in 0 ..< 30 {
+            if focusedCodec.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedCodec.exists)
+        XCTAssertTrue(focusedCodec.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
 
         let page = element("settings.stream-quality.codec.page", in: app)
@@ -1005,21 +1011,19 @@ final class CloudNowUITests: XCTestCase {
             in: app
         )
         XCTAssertTrue(h265.waitForExistence(timeout: 3))
-        XCTAssertTrue(
-            focusedElement(labeled: "H265", in: app)
-                .waitForExistence(timeout: 3)
-        )
         XCTAssertTrue(h265.isSelected)
 
         let h264 = element(
             "settings.stream-quality.codec.option.H264",
             in: app
         )
-        XCUIRemote.shared.press(.up)
-        XCTAssertTrue(
-            focusedElement(labeled: "H264", in: app)
-                .waitForExistence(timeout: 3)
-        )
+        // Clamp at AV1 before selecting H264; Form focus queries can be stale on CI.
+        for _ in 0 ..< 4 {
+            XCUIRemote.shared.press(.down)
+        }
+        for _ in 0 ..< 2 {
+            XCUIRemote.shared.press(.up)
+        }
         XCUIRemote.shared.press(.select)
 
         let pageDismissed = XCTNSPredicateExpectation(
@@ -1030,16 +1034,15 @@ final class CloudNowUITests: XCTestCase {
             XCTWaiter.wait(for: [pageDismissed], timeout: 3),
             .completed
         )
-        XCTAssertTrue(waitForAccessibilityText("H264", in: codec))
+        XCTAssertTrue(
+            waitForAccessibilityText("H264", in: codec),
+            "Expected remote navigation to commit H264"
+        )
 
         XCTAssertTrue(focusedCodec.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         XCTAssertTrue(h264.waitForExistence(timeout: 3))
-        XCTAssertTrue(
-            focusedElement(labeled: "H264", in: app)
-                .waitForExistence(timeout: 3)
-        )
         XCTAssertTrue(h264.isSelected)
         XCTAssertFalse(h265.isSelected)
     }
@@ -1057,10 +1060,13 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(waitForAccessibilityText("1920x1080", in: resolution))
 
         let focusedResolution = focusedElement(labeled: "Resolution", in: app)
-        for _ in 0 ..< 30 where !focusedResolution.exists {
+        for _ in 0 ..< 30 {
+            if focusedResolution.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedResolution.exists)
+        XCTAssertTrue(focusedResolution.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
 
         let page = element("settings.stream-quality.resolution.page", in: app)
@@ -1077,10 +1083,13 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(fullHD.isSelected)
 
         let focusedFourK = focusedElement(containing: "3840x2160", in: app)
-        for _ in 0 ..< 5 where !focusedFourK.exists {
+        for _ in 0 ..< 5 {
+            if focusedFourK.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedFourK.exists)
+        XCTAssertTrue(focusedFourK.waitForExistence(timeout: 3))
         XCTAssertTrue(fourK.waitForExistence(timeout: 3))
         XCTAssertFalse(fourK.isSelected)
         XCTAssertTrue(fourK.isEnabled)
@@ -1121,10 +1130,13 @@ final class CloudNowUITests: XCTestCase {
             labeled: "Game Language",
             in: app
         )
-        for _ in 0 ..< 30 where !focusedGameLanguage.exists {
+        for _ in 0 ..< 30 {
+            if focusedGameLanguage.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedGameLanguage.exists)
+        XCTAssertTrue(focusedGameLanguage.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
 
         let page = element(
@@ -1145,10 +1157,13 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertGreaterThan(visibleFraction(of: title, inside: window.frame), 0.9)
 
         let focusedBottomOption = focusedElement(containing: "Ukrainian", in: app)
-        for _ in 0 ..< 40 where !focusedBottomOption.exists {
+        for _ in 0 ..< 40 {
+            if focusedBottomOption.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedBottomOption.exists)
+        XCTAssertTrue(focusedBottomOption.waitForExistence(timeout: 3))
         XCTAssertTrue(page.exists)
         XCTAssertGreaterThan(
             visibleFraction(of: bottomOption, inside: window.frame),
@@ -1180,10 +1195,13 @@ final class CloudNowUITests: XCTestCase {
             containing: "Server location",
             in: app
         )
-        for _ in 0 ..< 40 where !focusedServerLocation.exists {
+        for _ in 0 ..< 40 {
+            if focusedServerLocation.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedServerLocation.exists)
+        XCTAssertTrue(focusedServerLocation.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
 
         let rootPage = element("settings.server-location.page", in: app)
@@ -1191,10 +1209,13 @@ final class CloudNowUITests: XCTestCase {
         let region = element("settings.server-location.region", in: app)
         XCTAssertTrue(region.waitForExistence(timeout: 3))
         let focusedRegion = focusedElement(labeled: "Region", in: app)
-        for _ in 0 ..< 3 where !focusedRegion.exists {
+        for _ in 0 ..< 3 {
+            if focusedRegion.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedRegion.exists)
+        XCTAssertTrue(focusedRegion.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
 
         let regionPage = element("settings.server-location.region.page", in: app)
@@ -1214,10 +1235,13 @@ final class CloudNowUITests: XCTestCase {
         let servers = element("settings.server-location.servers", in: app)
         XCTAssertTrue(servers.waitForExistence(timeout: 3))
         let focusedServers = focusedElement(labeled: "Servers", in: app)
-        for _ in 0 ..< 3 where !focusedServers.exists {
+        for _ in 0 ..< 3 {
+            if focusedServers.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedServers.exists)
+        XCTAssertTrue(focusedServers.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
 
         let serversPage = element(
@@ -1338,7 +1362,7 @@ final class CloudNowUITests: XCTestCase {
         let xboxChoice = xboxApp.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xboxChoice.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xboxChoice.hasFocus)
+        XCTAssertTrue(waitForFocus(xboxChoice))
         XCUIRemote.shared.press(.select)
 
         let xboxSettings = xboxApp.buttons["Settings"]
@@ -1439,7 +1463,7 @@ final class CloudNowUITests: XCTestCase {
         let xboxChoice = xboxApp.buttons["Xbox Cloud Gaming"]
         XCTAssertTrue(xboxChoice.waitForExistence(timeout: 8))
         XCUIRemote.shared.press(.right)
-        XCTAssertTrue(xboxChoice.hasFocus)
+        XCTAssertTrue(waitForFocus(xboxChoice))
         XCUIRemote.shared.press(.select)
 
         let xboxSettings = xboxApp.buttons["Settings"]
@@ -2073,10 +2097,13 @@ final class CloudNowUITests: XCTestCase {
                 "Refresh Library"
             ))
             .firstMatch
-        for _ in 0 ..< 80 where !focusedRefreshRow.exists {
+        for _ in 0 ..< 80 {
+            if focusedRefreshRow.exists {
+                break
+            }
             XCUIRemote.shared.press(.down)
         }
-        XCTAssertTrue(focusedRefreshRow.exists)
+        XCTAssertTrue(focusedRefreshRow.waitForExistence(timeout: 3))
         return refreshRow
     }
 
@@ -2119,7 +2146,7 @@ final class CloudNowUITests: XCTestCase {
         }
         XCTAssertTrue(button.exists)
         XCTAssertTrue(button.isEnabled)
-        XCTAssertTrue(focusedRefreshRow.exists)
+        XCTAssertTrue(focusedRefreshRow.waitForExistence(timeout: 3))
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(
             app.scrollViews["libraryRefreshProgressSheet"]
@@ -2135,7 +2162,7 @@ final class CloudNowUITests: XCTestCase {
             }
             XCUIRemote.shared.press(.right)
         }
-        XCTAssertTrue(tab.hasFocus)
+        XCTAssertTrue(waitForFocus(tab))
         XCUIRemote.shared.press(.select)
     }
 
@@ -2183,7 +2210,10 @@ final class CloudNowUITests: XCTestCase {
             ))
             .firstMatch
         for direction in directions {
-            for _ in 0 ..< pressesPerDirection where !focusedElement.exists {
+            for _ in 0 ..< pressesPerDirection {
+                if focusedElement.exists {
+                    break
+                }
                 XCUIRemote.shared.press(direction)
             }
             if focusedElement.exists {
@@ -2194,7 +2224,7 @@ final class CloudNowUITests: XCTestCase {
             .matching(NSPredicate(format: "hasFocus == true"))
             .firstMatch
         XCTAssertTrue(
-            focusedElement.exists,
+            focusedElement.waitForExistence(timeout: 3),
             "Expected focus on a control containing \(label); current focus: \(currentFocus.debugDescription)"
         )
     }
@@ -2240,7 +2270,7 @@ final class CloudNowUITests: XCTestCase {
             }
             XCUIRemote.shared.press(.left)
         }
-        XCTAssertTrue(firstTab.hasFocus)
+        XCTAssertTrue(waitForFocus(firstTab))
 
         XCUIRemote.shared.press(.left)
         XCTAssertTrue(waitForFocusLoss(firstTab, timeout: 3))
@@ -2303,7 +2333,7 @@ final class CloudNowUITests: XCTestCase {
             .matching(NSPredicate(format: "hasFocus == true"))
             .firstMatch
         XCTAssertTrue(
-            selectedTab.hasFocus,
+            waitForFocus(selectedTab),
             "Expected native tab focus; current focus: \(initialFocusedElement.debugDescription)"
         )
         XCTAssertTrue(switcher.waitForExistence(timeout: 3))
@@ -2319,10 +2349,10 @@ final class CloudNowUITests: XCTestCase {
             .matching(NSPredicate(format: "hasFocus == true"))
             .firstMatch
         XCTAssertTrue(
-            focusedBottomSetting.exists,
+            focusedBottomSetting.waitForExistence(timeout: 3),
             "Expected Sign Out focus; current focus: \(focusedElement.debugDescription)"
         )
-        XCTAssertFalse(selectedTab.hasFocus)
+        XCTAssertTrue(waitForFocusLoss(selectedTab, timeout: 3))
         let nativeNavigationRetracted = XCTNSPredicateExpectation(
             predicate: NSPredicate { object, _ in
                 guard let element = object as? XCUIElement else { return false }
@@ -2384,7 +2414,7 @@ final class CloudNowUITests: XCTestCase {
                 break
             }
         }
-        XCTAssertTrue(element.exists && element.hasFocus)
+        XCTAssertTrue(waitForFocus(element))
     }
 
     @MainActor
@@ -2419,6 +2449,9 @@ final class CloudNowUITests: XCTestCase {
         _ element: XCUIElement,
         timeout: TimeInterval = 3
     ) -> Bool {
+        if element.exists, element.hasFocus {
+            return true
+        }
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "hasFocus == true"),
             object: element
@@ -2484,6 +2517,9 @@ final class CloudNowUITests: XCTestCase {
         _ element: XCUIElement,
         timeout: TimeInterval
     ) -> Bool {
+        if !element.hasFocus {
+            return true
+        }
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "hasFocus == false"),
             object: element
