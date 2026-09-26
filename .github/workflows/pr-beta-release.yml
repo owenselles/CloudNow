@@ -20,6 +20,7 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       base_sha: ${{ steps.pr.outputs.base_sha }}
@@ -52,13 +53,23 @@ jobs:
             exit 1
           fi
 
-          base_sha="$(jq -r '.base.sha' <<< "$pr")"
           head_sha="$(jq -r '.head.sha' <<< "$pr")"
           merge_sha="$(jq -r '.merge_commit_sha // empty' <<< "$pr")"
-          if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ||
-                ! "$head_sha" =~ ^[0-9a-f]{40}$ ||
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ||
                 ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::PR test-merge commit is unavailable. Resolve conflicts, then retry."
+            exit 1
+          fi
+
+          merge_commit="$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$merge_sha")"
+          base_sha="$(jq -r '.parents[0].sha // empty' <<< "$merge_commit")"
+          merge_head_sha="$(jq -r '.parents[1].sha // empty' <<< "$merge_commit")"
+          parent_count="$(jq '.parents | length' <<< "$merge_commit")"
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$parent_count" != "2" || ! "$base_sha" =~ ^[0-9a-f]{40}$ ||
+                ! "$main_sha" =~ ^[0-9a-f]{40}$ || "$base_sha" != "$main_sha" ||
+                "$merge_head_sha" != "$head_sha" ]]; then
+            echo "::error::PR test-merge commit does not match current main and PR head. Retry."
             exit 1
           fi
 
@@ -200,12 +211,18 @@ jobs:
 
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
           if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
-            --arg base "$BASE_SHA" --arg head "$HEAD_SHA" --arg merge "$MERGE_SHA" \
+            --arg head "$HEAD_SHA" --arg merge "$MERGE_SHA" \
             '.state == "open" and .base.ref == "main" and
-             .head.repo.full_name == $repo and .base.sha == $base and
-             .head.sha == $head and .merge_commit_sha == $merge' \
+             .head.repo.full_name == $repo and .head.sha == $head and
+             .merge_commit_sha == $merge' \
             <<< "$pr" > /dev/null; then
             echo "::error::PR changed while the beta IPA was building. Run workflow again."
+            exit 1
+          fi
+
+          current_main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_main_sha" != "$BASE_SHA" ]]; then
+            echo "::error::Main changed while the beta IPA was building. Run workflow again."
             exit 1
           fi
 
