@@ -24,7 +24,10 @@ jobs:
   resolve:
     runs-on: ubuntu-latest
     permissions:
+      actions: read
+      checks: read
       pull-requests: read
+      statuses: read
     outputs:
       branch: ${{ steps.source.outputs.branch }}
       commit_sha: ${{ steps.source.outputs.commit_sha }}
@@ -51,9 +54,10 @@ jobs:
 
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
           if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
-            '.state == "open" and .head.repo.full_name == $repo' \
+            '.state == "open" and .base.ref == "main" and
+             .head.repo.full_name == $repo' \
             <<< "$pr" > /dev/null; then
-            echo "::error::PR must be open and come from this repository."
+            echo "::error::PR must be open, target main, and come from this repository."
             exit 1
           fi
 
@@ -75,6 +79,92 @@ jobs:
             --jq '.[] | select(.filename | startswith(".github/workflows/")) | .filename')"
           if [[ -n "$workflow_changes" ]]; then
             echo "::error::Beta releases do not support PRs that change workflow files."
+            exit 1
+          fi
+
+          require_workflow_success() {
+            local workflow="$1"
+            local label="$2"
+            local pages
+            local latest
+
+            pages="$(gh api --paginate --slurp --method GET \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs" \
+              -f event=pull_request \
+              -f head_sha="$commit_sha" \
+              -F per_page=100)"
+            latest="$(jq -c --arg commit "$commit_sha" --argjson pr "$PR_NUMBER" \
+              '[.[].workflow_runs[] |
+                select(.event == "pull_request" and .head_sha == $commit) |
+                select(any(.pull_requests[]?;
+                  .number == $pr and .head.sha == $commit))] |
+               max_by([.run_number, .run_attempt])' <<< "$pages")"
+            if [[ "$latest" == "null" ]]; then
+              echo "::error::$label has no run for PR #$PR_NUMBER at $commit_sha."
+              exit 1
+            fi
+            if ! jq -e \
+              '.status == "completed" and .conclusion == "success"' \
+              <<< "$latest" > /dev/null; then
+              echo "::error::$label has not completed successfully for $commit_sha."
+              exit 1
+            fi
+          }
+
+          require_workflow_success "tests.yml" "The PR Tests workflow"
+          require_workflow_success "lint.yml" "The PR Lint workflow"
+
+          check_pages="$(gh api --paginate --slurp --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/$GITHUB_REPOSITORY/commits/$commit_sha/check-runs" \
+            -f filter=latest \
+            -F per_page=100)"
+          if [[ "$(jq '[.[].check_runs[]] | length' <<< "$check_pages")" == "0" ]]; then
+            echo "::error::No check runs were found for commit $commit_sha."
+            exit 1
+          fi
+
+          unsuccessful_checks="$(jq -r \
+            '.[].check_runs[] |
+             select(.status != "completed" or .conclusion != "success") |
+             "\(.app.slug) / \(.name): \(.status) (\(.conclusion))"' \
+            <<< "$check_pages")"
+          if [[ -n "$unsuccessful_checks" ]]; then
+            echo "::error::Every PR check run must complete successfully before a beta release."
+            echo "$unsuccessful_checks"
+            exit 1
+          fi
+
+          if ! jq -e \
+            'any(.[].check_runs[]; .app.slug == "github-advanced-security" and
+             .name == "CodeQL" and .status == "completed" and
+             .conclusion == "success")' <<< "$check_pages" > /dev/null; then
+            echo "::error::The PR CodeQL check has not completed successfully."
+            exit 1
+          fi
+
+          status_pages="$(gh api --paginate --slurp --method GET \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/$GITHUB_REPOSITORY/commits/$commit_sha/status" \
+            -F per_page=100)"
+          unsuccessful_statuses="$(jq -r \
+            '.[].statuses[] | select(.state != "success") |
+             "\(.context): \(.state)"' <<< "$status_pages")"
+          if [[ -n "$unsuccessful_statuses" ]]; then
+            echo "::error::Every PR commit status must be successful before a beta release."
+            echo "$unsuccessful_statuses"
+            exit 1
+          fi
+
+          current_pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
+            --arg branch "$branch" --arg commit "$commit_sha" \
+            '.state == "open" and .base.ref == "main" and
+             .head.repo.full_name == $repo and .head.ref == $branch and
+             .head.sha == $commit' \
+            <<< "$current_pr" > /dev/null; then
+            echo "::error::PR changed while its checks were being validated. Run workflow again."
             exit 1
           fi
 
@@ -113,39 +203,6 @@ jobs:
             echo "::error::Checked-out commit does not match the resolved beta source."
             exit 1
           fi
-
-      - name: Run tvOS test plan
-        run: Scripts/test.sh
-
-      - name: Install SwiftFormat 0.62.1
-        run: |
-          mkdir -p "$RUNNER_TEMP/swiftformat" "$RUNNER_TEMP/pinned-tools"
-          curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
-            https://github.com/nicklockwood/SwiftFormat/releases/download/0.62.1/swiftformat.artifactbundle.zip
-          unzip -qo "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat"
-          SF_BIN=$(find "$RUNNER_TEMP/swiftformat" -type f -name swiftformat -perm -111 | head -1)
-          install -m 0755 "$SF_BIN" "$RUNNER_TEMP/pinned-tools/swiftformat"
-          test "$("$RUNNER_TEMP/pinned-tools/swiftformat" --version)" = "0.62.1"
-
-      - name: Install SwiftLint 0.65.0
-        run: |
-          mkdir -p "$RUNNER_TEMP/swiftlint" "$RUNNER_TEMP/pinned-tools"
-          curl -fsSL -o "$RUNNER_TEMP/swiftlint.zip" \
-            https://github.com/realm/SwiftLint/releases/download/0.65.0/portable_swiftlint.zip
-          unzip -qo "$RUNNER_TEMP/swiftlint.zip" -d "$RUNNER_TEMP/swiftlint"
-          SL_BIN=$(find "$RUNNER_TEMP/swiftlint" -type f -name swiftlint -perm -111 | head -1)
-          install -m 0755 "$SL_BIN" "$RUNNER_TEMP/pinned-tools/swiftlint"
-          test "$("$RUNNER_TEMP/pinned-tools/swiftlint" version)" = "0.65.0"
-
-      - name: SwiftFormat (format check)
-        run: |
-          "$RUNNER_TEMP/pinned-tools/swiftformat" --lint --config .swiftformat \
-            CloudNow CloudNowTests CloudNowUITests
-
-      - name: SwiftLint (strict)
-        run: |
-          "$RUNNER_TEMP/pinned-tools/swiftlint" --strict --config .swiftlint.yml \
-            CloudNow CloudNowTests CloudNowUITests
 
       - name: Resolve SPM dependencies
         run: |
@@ -210,8 +267,9 @@ jobs:
           pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
           if ! jq -e --arg repo "$GITHUB_REPOSITORY" \
             --arg branch "$BRANCH" --arg commit "$COMMIT_SHA" \
-            '.state == "open" and .head.repo.full_name == $repo and
-             .head.ref == $branch and .head.sha == $commit' \
+            '.state == "open" and .base.ref == "main" and
+             .head.repo.full_name == $repo and .head.ref == $branch and
+             .head.sha == $commit' \
             <<< "$pr" > /dev/null; then
             echo "::error::PR changed while the beta IPA was building. Run workflow again."
             exit 1

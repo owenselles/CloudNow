@@ -179,13 +179,15 @@ Release > Run workflow**, select `main`, and enter the PR number (for example,
 `113`). You can also enter its branch name (for example,
 `feat/gfn-session-countdown`) to verify the exact source; branch builds always
 require their associated PR number. The workflow pins the PR's current head
-commit, runs the full test plan and lint checks, then publishes an unsigned IPA
-as a GitHub pre-release. Beta tags extend the normal release format with the PR
-identifier, such as `v2026.09.26-7267df9-beta.113`. Download, sign, and sideload
-it as described in [Option B](#option-b-pre-built-ipa). If the selected PR moves
-while the IPA is building, run the workflow again. Pre-releases are public to
-everyone who can read this repository; they do not replace the normal `main`
-release. This workflow appears only after it is merged into `main`.
+commit and requires every reported PR check to be successful, including the PR
+`Tests` and `Lint` workflows. It does not rerun those checks. After the gate
+passes, it builds and publishes an unsigned IPA as a GitHub pre-release. Beta
+tags extend the normal release format with the PR identifier, such as
+`v2026.09.26-7267df9-beta.113`. Download, sign, and sideload it as described in
+[Option B](#option-b-pre-built-ipa). If the selected PR moves while the IPA is
+building, run the workflow again after the new PR checks pass. Pre-releases are
+public to everyone who can read this repository; they do not replace the normal
+`main` release. This workflow appears only after it is merged into `main`.
 
 ## Linting
 
