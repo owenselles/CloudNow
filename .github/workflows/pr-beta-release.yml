@@ -245,7 +245,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: read
+      pull-requests: write
     steps:
       - name: Download IPA
         uses: actions/download-artifact@v7
@@ -283,6 +283,15 @@ jobs:
             exit 1
           fi
 
+          comment_marker="<!-- cloudnow-beta-release -->"
+          comments="$(gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100")"
+          comment_id="$(jq -r --arg marker "$comment_marker" \
+            '[.[][] |
+              select(.user.login == "github-actions[bot]" and .user.type == "Bot") |
+              select((.body // "") | startswith($marker))] |
+             min_by(.id) | .id // empty' <<< "$comments")"
+
           notes="Beta build of $SOURCE_LABEL: $source_url
 
           Tested commit: $COMMIT_SHA
@@ -296,3 +305,28 @@ jobs:
             --prerelease \
             --latest=false)"
           echo "Beta release: $release_url" >> "$GITHUB_STEP_SUMMARY"
+
+          comment_body="$comment_marker
+
+          ### ✅ Beta release ready for testing
+
+          A beta build is available for this PR.
+
+          [View beta release]($release_url)
+
+          | | |
+          | --- | --- |
+          | Version | \`$TAG\` |
+          | Commit | \`${COMMIT_SHA:0:7}\` |"
+
+          if [[ -n "$comment_id" ]]; then
+            jq -n --arg body "$comment_body" '{body: $body}' | \
+              gh api --method PATCH \
+                "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
+                --input - > /dev/null
+          else
+            jq -n --arg body "$comment_body" '{body: $body}' | \
+              gh api --method POST \
+                "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+                --input - > /dev/null
+          fi
