@@ -284,13 +284,6 @@ jobs:
           fi
 
           comment_marker="<!-- cloudnow-beta-release -->"
-          comments="$(gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments?per_page=100")"
-          comment_id="$(jq -r --arg marker "$comment_marker" \
-            '[.[][] |
-              select(.user.login == "github-actions[bot]" and .user.type == "Bot") |
-              select((.body // "") | startswith($marker))] |
-             min_by(.id) | .id // empty' <<< "$comments")"
 
           notes="Beta build of $SOURCE_LABEL: $source_url
 
@@ -319,14 +312,7 @@ jobs:
           | Version | \`$TAG\` |
           | Commit | \`${COMMIT_SHA:0:7}\` |"
 
-          if [[ -n "$comment_id" ]]; then
-            jq -n --arg body "$comment_body" '{body: $body}' | \
-              gh api --method PATCH \
-                "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
-                --input - > /dev/null
-          else
-            jq -n --arg body "$comment_body" '{body: $body}' | \
-              gh api --method POST \
-                "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-                --input - > /dev/null
-          fi
+          jq -n --arg body "$comment_body" '{body: $body}' | \
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+              --input - > /dev/null
