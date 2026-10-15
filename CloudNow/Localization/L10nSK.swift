@@ -475,5 +475,7 @@ enum L10nSK {
         "gfn_game_eta_elapsed": "Aktualizácia trvá dlhšie, než sa odhadovalo.",
         "gfn_game_check_status": "Skontrolovať dostupnosť",
         "gfn_game_status_failed": "Dostupnosť sa nepodarilo aktualizovať. Skúste to znova.",
+        "game_subscriptions": "Predplatné",
+        "available_with_subscription": "Dostupné s predplatným %@",
     ]
 }

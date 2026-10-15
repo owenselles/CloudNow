@@ -475,5 +475,7 @@ enum L10nZHHans {
         "gfn_game_eta_elapsed": "更新所需时间超出了预期。",
         "gfn_game_check_status": "检查可用状态",
         "gfn_game_status_failed": "无法刷新可用状态。请重试。",
+        "game_subscriptions": "订阅",
+        "available_with_subscription": "可通过 %@ 游玩",
     ]
 }

@@ -475,5 +475,7 @@ enum L10nHR {
         "gfn_game_eta_elapsed": "Ažuriranje traje dulje od očekivanog.",
         "gfn_game_check_status": "Provjeri dostupnost",
         "gfn_game_status_failed": "Dostupnost se nije mogla osvježiti. Pokušajte ponovno.",
+        "game_subscriptions": "Pretplate",
+        "available_with_subscription": "Dostupno uz %@",
     ]
 }

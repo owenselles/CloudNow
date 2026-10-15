@@ -475,5 +475,7 @@ enum L10nTR {
         "gfn_game_eta_elapsed": "Güncelleme tahmin edilenden uzun sürüyor.",
         "gfn_game_check_status": "Kullanılabilirliği kontrol et",
         "gfn_game_status_failed": "Kullanılabilirlik yenilenemedi. Tekrar deneyin.",
+        "game_subscriptions": "Abonelikler",
+        "available_with_subscription": "%@ ile kullanılabilir",
     ]
 }

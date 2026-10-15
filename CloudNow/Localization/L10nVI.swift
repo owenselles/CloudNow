@@ -475,5 +475,7 @@ enum L10nVI {
         "gfn_game_eta_elapsed": "Quá trình cập nhật mất nhiều thời gian hơn dự kiến.",
         "gfn_game_check_status": "Kiểm tra khả dụng",
         "gfn_game_status_failed": "Không thể làm mới trạng thái khả dụng. Hãy thử lại.",
+        "game_subscriptions": "Gói đăng ký",
+        "available_with_subscription": "Có trong gói đăng ký %@",
     ]
 }

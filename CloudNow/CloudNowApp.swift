@@ -555,6 +555,13 @@ private struct AuthRestorationView: View {
                         appId: "fixture-app",
                         isOwned: true
                     ),
+                    GameVariant(
+                        id: "fixture-racer-ubisoft",
+                        appStore: "UPLAY",
+                        appId: "fixture-app-ubisoft",
+                        isOwned: true,
+                        subscriptions: [.xboxGamePass, .ubisoftPremium, .ubisoftClassic]
+                    ),
                 ]
             ),
             GameInfo(

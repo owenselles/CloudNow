@@ -475,5 +475,7 @@ enum L10nNB {
         "gfn_game_eta_elapsed": "Oppdateringen tar lengre tid enn anslått.",
         "gfn_game_check_status": "Sjekk tilgjengelighet",
         "gfn_game_status_failed": "Tilgjengeligheten kunne ikke oppdateres. Prøv igjen.",
+        "game_subscriptions": "Abonnementer",
+        "available_with_subscription": "Tilgjengelig med %@",
     ]
 }

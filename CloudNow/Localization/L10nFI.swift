@@ -475,5 +475,7 @@ enum L10nFI {
         "gfn_game_eta_elapsed": "Päivitys kestää arvioitua kauemmin.",
         "gfn_game_check_status": "Tarkista saatavuus",
         "gfn_game_status_failed": "Saatavuutta ei voitu päivittää. Yritä uudelleen.",
+        "game_subscriptions": "Tilaukset",
+        "available_with_subscription": "Saatavilla tilauksella %@",
     ]
 }

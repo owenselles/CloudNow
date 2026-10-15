@@ -475,5 +475,7 @@ enum L10nCA {
         "gfn_game_eta_elapsed": "L’actualització està trigant més del previst.",
         "gfn_game_check_status": "Comprova la disponibilitat",
         "gfn_game_status_failed": "No s’ha pogut actualitzar la disponibilitat. Torna-ho a provar.",
+        "game_subscriptions": "Subscripcions",
+        "available_with_subscription": "Disponible amb %@",
     ]
 }

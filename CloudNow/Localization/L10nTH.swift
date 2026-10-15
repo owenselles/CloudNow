@@ -475,5 +475,7 @@ enum L10nTH {
         "gfn_game_eta_elapsed": "การอัปเดตใช้เวลานานกว่าที่คาดไว้",
         "gfn_game_check_status": "ตรวจสอบความพร้อมใช้งาน",
         "gfn_game_status_failed": "ไม่สามารถรีเฟรชสถานะความพร้อมใช้งานได้ โปรดลองอีกครั้ง",
+        "game_subscriptions": "การสมัครสมาชิก",
+        "available_with_subscription": "เล่นได้ด้วยการสมัครสมาชิก %@",
     ]
 }

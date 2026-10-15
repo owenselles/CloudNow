@@ -475,5 +475,7 @@ enum L10nRU {
         "gfn_game_eta_elapsed": "Обновление занимает больше времени, чем ожидалось.",
         "gfn_game_check_status": "Проверить доступность",
         "gfn_game_status_failed": "Не удалось обновить сведения о доступности. Повторите попытку.",
+        "game_subscriptions": "Подписки",
+        "available_with_subscription": "Доступно с подпиской %@",
     ]
 }

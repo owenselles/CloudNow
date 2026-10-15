@@ -475,5 +475,7 @@ enum L10nNL {
         "gfn_game_eta_elapsed": "Het bijwerken duurt langer dan verwacht.",
         "gfn_game_check_status": "Beschikbaarheid controleren",
         "gfn_game_status_failed": "De beschikbaarheid kon niet worden vernieuwd. Probeer het opnieuw.",
+        "game_subscriptions": "Abonnementen",
+        "available_with_subscription": "Beschikbaar met %@",
     ]
 }

@@ -475,5 +475,7 @@ enum L10nHU {
         "gfn_game_eta_elapsed": "A frissítés a becsültnél tovább tart.",
         "gfn_game_check_status": "Elérhetőség ellenőrzése",
         "gfn_game_status_failed": "Nem sikerült frissíteni az elérhetőséget. Próbáld újra.",
+        "game_subscriptions": "Előfizetések",
+        "available_with_subscription": "%@ előfizetéssel elérhető",
     ]
 }

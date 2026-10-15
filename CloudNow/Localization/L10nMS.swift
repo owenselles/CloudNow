@@ -475,5 +475,7 @@ enum L10nMS {
         "gfn_game_eta_elapsed": "Kemas kini mengambil masa lebih lama daripada anggaran.",
         "gfn_game_check_status": "Semak ketersediaan",
         "gfn_game_status_failed": "Ketersediaan tidak dapat dimuat semula. Cuba lagi.",
+        "game_subscriptions": "Langganan",
+        "available_with_subscription": "Tersedia dengan %@",
     ]
 }

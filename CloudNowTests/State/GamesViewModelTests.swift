@@ -189,6 +189,56 @@ struct GamesViewModelTests {
     }
 
     @MainActor
+    @Test("Subscription metadata survives ownership overlays, enrichment, and preferred-store selection")
+    func subscriptionsSurviveOwnershipAndStoreSelection() async throws {
+        var catalogGame = makeGame(id: "shared", title: "Catalog title")
+        catalogGame.variants = [
+            GameVariant(id: "xbox", appStore: "XBOX", subscriptions: [.xboxGamePass]),
+            GameVariant(id: "ubisoft", appStore: "UPLAY", subscriptions: [.ubisoftPremium]),
+        ]
+        var libraryGame = makeGame(id: "shared", title: "Library title", isInLibrary: true)
+        libraryGame.variants = [
+            GameVariant(id: "xbox", appStore: "XBOX", isOwned: true, subscriptions: []),
+            GameVariant(id: "ubisoft", appStore: "UPLAY", isOwned: true, subscriptions: [.ubisoftClassic]),
+        ]
+        var snapshot = AppPersistenceStore.GamesSnapshot()
+        snapshot.vpcId = "TEST-VPC"
+        let viewModel = GamesViewModel(
+            gamesClient: ScriptedGamesClient(
+                mainOutcomes: [.success([catalogGame])],
+                libraryOutcomes: [.success([libraryGame])]
+            ),
+            cloudMatchClient: FakeActiveSessionsClient(),
+            membershipClient: FakeMembershipClient(),
+            persistence: FakeGamesPersistence(snapshot: snapshot)
+        )
+        let authManager = await makeAuthenticatedManager()
+
+        await viewModel.load(authManager: authManager)
+
+        let catalog = try #require(viewModel.mainGames.first)
+        #expect(catalog.isInLibrary)
+        let allVariantsOwned = catalog.variants.allSatisfy(\.isOwned)
+        #expect(allVariantsOwned)
+        #expect(catalog.subscriptions == [.xboxGamePass, .ubisoftPremium])
+        let library = try #require(viewModel.libraryGames.first)
+        #expect(library.title == catalogGame.title)
+        #expect(library.variants == libraryGame.variants)
+        #expect(library.subscriptions == [.ubisoftClassic])
+
+        viewModel.setPreferredStore(gameId: "shared", variantId: "ubisoft")
+
+        let preferredCatalog = viewModel.gameWithPreferredStore(catalog)
+        #expect(preferredCatalog.variants.first?.id == "ubisoft")
+        #expect(preferredCatalog.variants.first?.subscriptions == [.ubisoftPremium])
+        #expect(preferredCatalog.subscriptions == catalog.subscriptions)
+        let preferredLibrary = viewModel.gameWithPreferredStore(library)
+        #expect(preferredLibrary.variants.first?.id == "ubisoft")
+        #expect(preferredLibrary.variants.first?.subscriptions == [.ubisoftClassic])
+        #expect(preferredLibrary.variants.last?.subscriptions == [])
+    }
+
+    @MainActor
     @Test("Catalog, library, subscription, and sessions publish from injected clients")
     func loadsAllRemoteDatasets() async {
         let catalogGame = makeGame(

@@ -202,7 +202,7 @@ enum L10n {
         case "EPIC_GAMES_STORE": "Epic Games"
         case "GOG": "GOG"
         case "EA_APP": "EA App"
-        case "UBISOFT": "Ubisoft Connect"
+        case "UBISOFT", "UPLAY", "UBISOFT_CONNECT": "Ubisoft Connect"
         case "MICROSOFT": "Xbox"
         case "BATTLENET": "Battle.net"
         default: appStore.replacingOccurrences(of: "_", with: " ").capitalized

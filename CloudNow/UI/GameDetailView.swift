@@ -54,6 +54,7 @@ struct GameDetailView: View {
         case about
         case details
         case availability
+        case variant(String)
         case exitCatcher
     }
 
@@ -232,7 +233,7 @@ struct GameDetailView: View {
 
     private func handleFocusChange(_ focus: DetailFocus?, proxy: ScrollViewProxy) {
         switch focus {
-        case .play, .favorite, .availability:
+        case .play, .favorite, .availability, .variant:
             backgroundBlurred = false
             withAnimation(reduceMotion ? nil : .smooth) {
                 proxy.scrollTo("hero", anchor: .top)
@@ -312,6 +313,7 @@ struct GameDetailView: View {
                         .shadow(color: .black.opacity(0.5), radius: 4)
 
                     genreLine
+                    subscriptionLabels
 
                     if let desc = game.longDescription, !desc.isEmpty {
                         Text(desc)
@@ -508,6 +510,32 @@ struct GameDetailView: View {
 
     // MARK: Right column
 
+    private var subscriptionLabels: some View {
+        let variants = game.isInLibrary
+            ? Array(viewModel.gameWithPreferredStore(game).variants.prefix(1))
+            : game.variants
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(variants, id: \.id) { variant in
+                if let subscriptions = variant.subscriptions, !subscriptions.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(variant.storeName)
+                            .font(.caption.weight(.semibold))
+                        Text(L10n.format(
+                            "available_with_subscription",
+                            subscriptions.map(\.label).joined(separator: ", ")
+                        ))
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .foregroundStyle(.white.opacity(0.85))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("game-subscriptions-\(variant.id)")
+                }
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+
     private var rightColumn: some View {
         VStack(alignment: .trailing, spacing: 14) {
             if let dev = game.developer {
@@ -556,11 +584,18 @@ struct GameDetailView: View {
                         if isSelected {
                             Image(systemName: "checkmark").font(.caption.weight(.bold))
                         }
-                        Text(variant.storeName).font(.callout.weight(isSelected ? .semibold : .regular))
+                        Text(variant.storeName)
+                            .font(.callout.weight(isSelected ? .semibold : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
-                    .foregroundStyle(isSelected ? .white : .white.opacity(0.55))
+                    .foregroundStyle(
+                        focusedElement == .variant(variant.id) ? .black : (isSelected ? .white : .white.opacity(0.55))
+                    )
                 }
                 .buttonStyle(.plain)
+                .focused($focusedElement, equals: .variant(variant.id))
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
     }

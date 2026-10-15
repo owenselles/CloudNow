@@ -898,6 +898,68 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testGeForceNowSubscriptionLabelsFollowSelectedStore() {
+        let app = makeApp()
+        app.launch()
+
+        let library = app.buttons["Library"]
+        XCTAssertTrue(library.waitForExistence(timeout: 8))
+        selectTab(library, movingRight: 1)
+        let racer = app.buttons["Fixture Racer"]
+        XCTAssertTrue(racer.waitForExistence(timeout: 3))
+        XCTAssertTrue((racer.value as? String)?.contains("Available with Xbox Game Pass") == true)
+        attachScreenshot(of: app, named: "GFN subscription catalog badges")
+        XCUIRemote.shared.press(.down)
+        XCUIRemote.shared.press(.down)
+        focusAndSelect(app.buttons["catalog-filter-button"], directions: [.right, .left], pressesPerDirection: 4)
+        let gamePass = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Xbox Game Pass")).firstMatch
+        XCTAssertTrue(gamePass.waitForExistence(timeout: 3))
+        focusAndSelect(gamePass, directions: [.down, .left, .right], pressesPerDirection: 16)
+        XCUIRemote.shared.press(.right)
+        attachScreenshot(of: app, named: "GFN subscription filters")
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(racer.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Fixture Strategy"].exists)
+        let gridWidth = racer.frame.width
+        focusAndSelect(racer, directions: [.down, .left, .right], pressesPerDirection: 12)
+        let carouselRacer = focusedButton(labeled: "Fixture Racer", in: app)
+        let carouselReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                carouselRacer.exists && carouselRacer.frame.width > gridWidth * 2
+            },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [carouselReady], timeout: 3), .completed)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(app.buttons["Play"]))
+        XCTAssertFalse(element("game-subscriptions-fixture-racer-steam", in: app).exists)
+        XCTAssertFalse(element("game-subscriptions-fixture-racer-ubisoft", in: app).exists)
+
+        let ubisoft = app.buttons["Ubisoft Connect"]
+        XCTAssertTrue(ubisoft.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.right)
+        XCUIRemote.shared.press(.right)
+        XCUIRemote.shared.press(.down)
+        XCTAssertTrue(waitForFocus(ubisoft))
+        attachScreenshot(of: app, named: "GFN unselected store focus contrast")
+        XCUIRemote.shared.press(.select)
+        let labels = element("game-subscriptions-fixture-racer-ubisoft", in: app)
+        XCTAssertTrue(labels.waitForExistence(timeout: 3))
+        XCTAssertTrue(labels.label.contains("Available with Xbox Game Pass, Ubisoft+ Premium, Ubisoft+ Classics"))
+        attachScreenshot(of: app, named: "GFN subscriptions for selected store")
+
+        XCUIRemote.shared.press(.up)
+        XCUIRemote.shared.press(.select)
+        let steamSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"),
+            object: app.buttons["Steam"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [steamSelected], timeout: 3), .completed)
+        XCTAssertFalse(labels.exists)
+    }
+
+    @MainActor
     func testGeForceNowLibraryCarouselNavigatesCollapsesAndRestoresFocus() {
         let app = makeApp()
         app.launch()

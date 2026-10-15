@@ -475,5 +475,7 @@ enum L10nKO {
         "gfn_game_eta_elapsed": "업데이트가 예상보다 오래 걸리고 있습니다.",
         "gfn_game_check_status": "이용 가능 여부 확인",
         "gfn_game_status_failed": "이용 가능 여부를 새로 고칠 수 없습니다. 다시 시도하세요.",
+        "game_subscriptions": "구독",
+        "available_with_subscription": "%@ 구독으로 이용 가능",
     ]
 }

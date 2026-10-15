@@ -475,5 +475,7 @@ enum L10nFR {
         "gfn_game_eta_elapsed": "La mise à jour prend plus de temps que prévu.",
         "gfn_game_check_status": "Vérifier la disponibilité",
         "gfn_game_status_failed": "La disponibilité n’a pas pu être actualisée. Réessayez.",
+        "game_subscriptions": "Abonnements",
+        "available_with_subscription": "Disponible avec %@",
     ]
 }

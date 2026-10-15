@@ -475,5 +475,7 @@ enum L10nJA {
         "gfn_game_eta_elapsed": "アップデートに予想より時間がかかっています。",
         "gfn_game_check_status": "利用状況を確認",
         "gfn_game_status_failed": "利用状況を更新できませんでした。もう一度お試しください。",
+        "game_subscriptions": "サブスクリプション",
+        "available_with_subscription": "%@で利用可能",
     ]
 }

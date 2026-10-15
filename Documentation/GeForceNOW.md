@@ -35,10 +35,21 @@ GeForce NOW presents three catalog surfaces:
 - Store contains the public provider catalog and marks titles already present in
   the cloud library.
 
-Search, sorting, Favorites, collection, genre, and store filters use provider
+Search, sorting, Favorites, collection, genre, store, and subscription filters use provider
 catalog data. Feature filters appear only when the current data supports them.
 Library and Store keep independent loading, error, search, sorting, and filter
 state.
+
+Game cards show Xbox Game Pass, Ubisoft+ Premium, and Ubisoft+ Classics labels
+from NVIDIA's per-variant subscription metadata. Details show subscriptions for
+the selected launch store; games outside the library list the eligible stores.
+These labels describe catalog inclusion, not the account's active subscriptions
+or ownership. Library subscription filters consider owned variants. Combining a
+store and subscription filter requires both to match the same variant.
+
+Missing or unknown subscription metadata produces no label. An unsupported
+subscription field is omitted on retry without disabling the catalog. Fresh
+browse metadata replaces cached subscription labels, including an empty list.
 
 A library refresh discovers linked stores, requests provider synchronization,
 then reloads the authoritative cloud library. The live browse response remains the

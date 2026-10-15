@@ -4,6 +4,119 @@ import Testing
 
 @Suite("Games GraphQL and catalog client")
 struct GamesClientTests {
+    @Test("Browse and search retain explicit per-store subscription metadata", arguments: [false, true])
+    func variantSubscriptions(isSearch: Bool) async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.url?.host == "static.nvidiagrid.net" {
+                return StubbedHTTPResponse(json: "[]")
+            }
+            let body = try jsonObject(from: request)
+            let query = try #require(body["query"] as? String)
+            #expect(query.contains("appStore subscriptions supportedControls"))
+            return StubbedHTTPResponse(json: browsePage(items: [
+                #"{"id":"game","title":"Game","variants":[{"id":"steam","appStore":"STEAM","subscriptions":null},{"id":"xbox","appStore":"XBOX","subscriptions":["XBOX_GAME_PASS","FUTURE_SUBSCRIPTION"]},{"id":"ubisoft","appStore":"UBISOFT","subscriptions":["UBISOFT_CLASSIC","UBISOFT_PREMIUM","UBISOFT_PREMIUM"]},{"id":"other-xbox","appStore":"XBOX"}]}"#,
+            ], hasNextPage: false, cursor: ""))
+        }
+        let client = GamesClient(transport: transport)
+        let games = if isSearch {
+            try await client.search(token: "token", query: "Game", vpcId: "vpc")
+        } else {
+            try await client.fetchMainGames(token: "token", vpcId: "vpc")
+        }
+        let game = try #require(games.first)
+        #expect(game.variants[0].subscriptions == nil)
+        #expect(game.variants[1].subscriptions == [.xboxGamePass])
+        #expect(game.variants[2].subscriptions == [.ubisoftClassic, .ubisoftPremium, .ubisoftPremium])
+        #expect(game.variants[3].subscriptions == nil)
+        #expect(game.subscriptions == [.xboxGamePass, .ubisoftPremium, .ubisoftClassic])
+        #expect(!game.isInLibrary)
+    }
+
+    @Test("Unsupported subscription fields retry browse and search without changing other metadata", arguments: [false, true])
+    func subscriptionCompatibilityFallback(isSearch: Bool) async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.url?.host == "static.nvidiagrid.net" {
+                return StubbedHTTPResponse(json: "[]")
+            }
+            let body = try jsonObject(from: request)
+            let query = try #require(body["query"] as? String)
+            if query.contains("appStore subscriptions") {
+                return StubbedHTTPResponse(json: #"{"errors":[{"message":"Cannot query field \"subscriptions\" on type \"AppVariant\"."}],"data":null}"#)
+            }
+            #expect(query.contains("genres"))
+            return StubbedHTTPResponse(json: browsePage(items: [
+                #"{"id":"game","title":"Game","genres":["ACTION"],"variants":[{"id":"xbox","appStore":"XBOX"}]}"#,
+            ], hasNextPage: false, cursor: ""))
+        }
+        let client = GamesClient(transport: transport)
+        let games = if isSearch {
+            try await client.search(token: "token", query: "Game", vpcId: "vpc")
+        } else {
+            try await client.fetchMainGames(token: "token", vpcId: "vpc")
+        }
+        let game = try #require(games.first)
+        #expect(game.subscriptions.isEmpty)
+        #expect(game.genres == ["ACTION"])
+        let requests = await transport.requests().filter { $0.httpMethod == "POST" }
+        #expect(requests.count == 2)
+    }
+
+    @Test("Subscription service errors do not trigger schema compatibility retries")
+    func subscriptionServiceError() async {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(json: #"{"errors":[{"message":"Subscription service temporarily unavailable"}],"data":null}"#)
+        }
+        await #expect(throws: GamesError.self) {
+            try await GamesClient(transport: transport).search(token: "token", query: "Game", vpcId: "vpc")
+        }
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Game caches accept absent, null, and unknown subscriptions", arguments: [
+        "",
+        #", "subscriptions": null"#,
+        #", "subscriptions": ["FUTURE_SUBSCRIPTION", "XBOX_GAME_PASS"]"#,
+    ])
+    func cachedSubscriptions(subscriptionField: String) throws {
+        let data = Data("""
+        {"id":"game","title":"Game","isInLibrary":false,"variants":[{"id":"variant","appStore":"XBOX"\(subscriptionField)}]}
+        """.utf8)
+        let game = try JSONDecoder().decode(GameInfo.self, from: data)
+        let expected: [GameSubscription]? = subscriptionField.contains("XBOX_GAME_PASS") ? [.xboxGamePass] : nil
+        #expect(game.variants.first?.subscriptions == expected)
+        let encoded = try JSONEncoder().encode(game)
+        let decoded = try JSONDecoder().decode(GameInfo.self, from: encoded)
+        #expect(decoded == game)
+        #expect(GameSubscription.allCases.map(\.label) == ["Xbox Game Pass", "Ubisoft+ Premium", "Ubisoft+ Classics"])
+    }
+
+    @Test("Fresh browse can remove subscriptions while descriptive metadata stays cached")
+    func freshSubscriptionsReplaceCachedMetadata() async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            if let variables = try metadataVariables(from: request) {
+                let ids = try #require(variables["appIds"] as? [String])
+                return try StubbedHTTPResponse(data: metadataResponse(ids: ids))
+            }
+            let subscriptions = index == 0 ? #"["UBISOFT_PREMIUM"]"# : "[]"
+            let page = libraryBrowsePage(ids: ["one"]).replacingOccurrences(
+                of: #""appStore": "STEAM","#,
+                with: "\"appStore\": \"STEAM\", \"subscriptions\": \(subscriptions),"
+            )
+            return StubbedHTTPResponse(json: page)
+        }
+        let client = GamesClient(
+            transport: transport,
+            metadataCache: InMemoryGameMetadataCache()
+        )
+        let first = try await client.fetchLibrary(token: "token", vpcId: "vpc")
+        let second = try await client.fetchLibrary(token: "token", vpcId: "vpc")
+        #expect(first.first?.subscriptions == [.ubisoftPremium])
+        #expect(second.first?.subscriptions == [])
+        #expect(second.first?.variants.first?.subscriptions == [])
+        let requests = await transport.requests()
+        #expect(requests.filter(isMetadataRequest).count == 1)
+    }
+
     @Test("Browse request builds headers and variables, derives features, orders selected variant, and merges public catalog")
     func browseAndMerge() async throws {
         let browse = try NetworkingFixture.data("games-browse.json")

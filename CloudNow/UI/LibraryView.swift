@@ -194,8 +194,33 @@ struct GameCardLabel: View {
                     foregroundColor: .white,
                     backgroundColor: .green.opacity(0.85)
                 )
-                : nil
+                : nil,
+            additionalBadges: game.subscriptions.map {
+                CloudCatalogCardBadge(
+                    title: $0.label,
+                    systemImage: nil,
+                    foregroundColor: .white,
+                    backgroundColor: .black.opacity(0.8)
+                )
+            }
         )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(game.title)
+        .accessibilityValue(accessibilityDetails)
+    }
+
+    private var accessibilityDetails: String {
+        var details: [String] = []
+        if showLibraryBadge, game.isInLibrary {
+            details.append(L10n.text("in_library"))
+        }
+        if !game.subscriptions.isEmpty {
+            details.append(L10n.format(
+                "available_with_subscription",
+                game.subscriptions.map(\.label).joined(separator: ", ")
+            ))
+        }
+        return details.joined(separator: ". ")
     }
 }
 

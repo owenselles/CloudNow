@@ -14,6 +14,7 @@ struct CloudCatalogCardLabel: View {
     let artworkURL: String?
     var heroArtworkURL: String?
     var badge: CloudCatalogCardBadge?
+    var additionalBadges: [CloudCatalogCardBadge] = []
     var networkCachePolicy: ArtworkNetworkCachePolicy = .shared
 
     var body: some View {
@@ -39,26 +40,28 @@ struct CloudCatalogCardLabel: View {
                 .lineLimit(2)
                 .padding(10)
 
-            if let badge {
-                Label {
-                    Text(badge.title)
-                } icon: {
-                    if let systemImage = badge.systemImage {
-                        Image(systemName: systemImage)
+            VStack(alignment: .trailing, spacing: 6) {
+                ForEach((badge.map { [$0] } ?? []) + additionalBadges, id: \.title) { badge in
+                    Label {
+                        Text(badge.title)
+                    } icon: {
+                        if let systemImage = badge.systemImage {
+                            Image(systemName: systemImage)
+                        }
                     }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(badge.foregroundColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(badge.backgroundColor, in: Capsule())
                 }
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(badge.foregroundColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(badge.backgroundColor, in: Capsule())
-                .padding(8)
-                .frame(
-                    maxWidth: .infinity,
-                    maxHeight: .infinity,
-                    alignment: .topTrailing
-                )
             }
+            .padding(8)
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: .topTrailing
+            )
         }
         .prefetchHeroArtOnFocus(heroArtworkURL)
     }

@@ -25,10 +25,11 @@ struct GameFilterState: Equatable {
     var collections: Set<GameCollectionFilter> = []
     var genres: Set<String> = []
     var stores: Set<String> = []
+    var subscriptions: Set<GameSubscription> = []
     var features: Set<GameFeature> = []
 
     var activeSelectionCount: Int {
-        collections.count + genres.count + stores.count + features.count
+        collections.count + genres.count + stores.count + subscriptions.count + features.count
     }
 
     var isEmpty: Bool {
@@ -39,6 +40,7 @@ struct GameFilterState: Equatable {
         collections.removeAll()
         genres.removeAll()
         stores.removeAll()
+        subscriptions.removeAll()
         features.removeAll()
     }
 }
@@ -52,6 +54,7 @@ struct GameFilterValueOption: Identifiable, Equatable {
 struct GameFilterOptions: Equatable {
     let genres: [GameFilterValueOption]
     let stores: [GameFilterValueOption]
+    let subscriptions: [GameFilterValueOption]
     let features: [GameFilterValueOption]
     let libraryCount: Int
     let favoriteCount: Int
@@ -59,6 +62,7 @@ struct GameFilterOptions: Equatable {
     init(games: [GameInfo], favoriteIds: Set<String>, context: GameFilterContext) {
         var genreCounts: [String: Int] = [:]
         var storeCounts: [String: Int] = [:]
+        var subscriptionCounts: [GameSubscription: Int] = [:]
         var featureCounts: [GameFeature: Int] = [:]
 
         for game in games {
@@ -66,17 +70,21 @@ struct GameFilterOptions: Equatable {
                 genreCounts[genre, default: 0] += 1
             }
 
-            let rawStores: [String] = switch context {
+            let variants: [GameVariant] = switch context {
             case .store:
-                game.variants.map(\.appStore)
+                game.variants
             case .library:
-                game.ownedStores
+                game.variants.filter(\.isOwned)
             }
-            let storesForGame = Set(rawStores.map(GameStoreFilter.normalizedCode))
+            let storesForGame = Set(variants.map { GameStoreFilter.normalizedCode($0.appStore) })
             for code in storesForGame {
                 if GameStoreFilter.isDisplayable(code) {
                     storeCounts[code, default: 0] += 1
                 }
+            }
+
+            for subscription in Set(variants.flatMap { $0.subscriptions ?? [] }) {
+                subscriptionCounts[subscription, default: 0] += 1
             }
 
             for feature in Set(game.supportedFeatures ?? []) {
@@ -91,6 +99,11 @@ struct GameFilterOptions: Equatable {
         stores = storeCounts.map { store, count in
             GameFilterValueOption(id: store, label: L10n.storeName(for: store), count: count)
         }.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+
+        subscriptions = GameSubscription.allCases.compactMap { subscription in
+            guard let count = subscriptionCounts[subscription], count > 0 else { return nil }
+            return GameFilterValueOption(id: subscription.rawValue, label: subscription.label, count: count)
+        }
 
         features = GameFeature.allCases.compactMap { feature in
             guard let count = featureCounts[feature], count > 0 else { return nil }
@@ -195,15 +208,15 @@ enum GameFilterEngine {
             return false
         }
 
-        if !state.stores.isEmpty {
-            let gameStores: [String] = switch context {
-            case .store:
-                game.variants.map(\.appStore)
-            case .library:
-                game.ownedStores
+        if !state.stores.isEmpty || !state.subscriptions.isEmpty {
+            let matchesVariant = game.variants.contains { variant in
+                (context == .store || variant.isOwned)
+                    && (state.stores.isEmpty
+                        || state.stores.contains(GameStoreFilter.normalizedCode(variant.appStore)))
+                    && (state.subscriptions.isEmpty
+                        || !state.subscriptions.isDisjoint(with: variant.subscriptions ?? []))
             }
-            let normalizedStores = Set(gameStores.map(GameStoreFilter.normalizedCode))
-            if state.stores.isDisjoint(with: normalizedStores) {
+            if !matchesVariant {
                 return false
             }
         }
@@ -437,6 +450,11 @@ struct GameFilterBar: View {
                 filterState.stores.remove(store)
             })
         }
+        for subscription in GameSubscription.allCases where filterState.subscriptions.contains(subscription) {
+            chips.append(CloudCatalogActiveFilter(id: "subscription-\(subscription.rawValue)", label: subscription.label) {
+                filterState.subscriptions.remove(subscription)
+            })
+        }
         for feature in filterState.features.sorted(by: { $0.rawValue < $1.rawValue }) {
             chips.append(CloudCatalogActiveFilter(id: "feature-\(feature.rawValue)", label: feature.label) {
                 filterState.features.remove(feature)
@@ -483,6 +501,7 @@ private enum GameFilterSection: String, Hashable {
     case collections
     case genres
     case stores
+    case subscriptions
     case features
 }
 
@@ -574,6 +593,7 @@ private struct GameFilterSheet: View {
         .collections,
         .genres,
         .stores,
+        .subscriptions,
         .features,
     ]
 
@@ -612,6 +632,17 @@ private struct GameFilterSheet: View {
                                 options: options.stores,
                                 selected: { state.stores.contains($0) },
                                 toggle: toggleStore
+                            )
+                        }
+
+                        if !options.subscriptions.isEmpty {
+                            valueSection(
+                                section: .subscriptions,
+                                title: L10n.text("game_subscriptions"),
+                                selectedCount: state.subscriptions.count,
+                                options: options.subscriptions,
+                                selected: { id in state.subscriptions.contains(where: { $0.rawValue == id }) },
+                                toggle: toggleSubscription
                             )
                         }
 
@@ -796,6 +827,15 @@ private struct GameFilterSheet: View {
             state.features.remove(feature)
         } else {
             state.features.insert(feature)
+        }
+    }
+
+    private func toggleSubscription(_ rawValue: String) {
+        guard let subscription = GameSubscription(rawValue: rawValue) else { return }
+        if state.subscriptions.contains(subscription) {
+            state.subscriptions.remove(subscription)
+        } else {
+            state.subscriptions.insert(subscription)
         }
     }
 }

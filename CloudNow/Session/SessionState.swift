@@ -862,6 +862,21 @@ nonisolated struct SubscriptionInfo: Codable {
 
 // MARK: - Games
 
+/// Catalog subscription availability; it does not describe the user's entitlements.
+nonisolated enum GameSubscription: String, Codable, CaseIterable, Hashable {
+    case xboxGamePass = "XBOX_GAME_PASS"
+    case ubisoftPremium = "UBISOFT_PREMIUM"
+    case ubisoftClassic = "UBISOFT_CLASSIC"
+
+    var label: String {
+        switch self {
+        case .xboxGamePass: "Xbox Game Pass"
+        case .ubisoftPremium: "Ubisoft+ Premium"
+        case .ubisoftClassic: "Ubisoft+ Classics"
+        }
+    }
+}
+
 /// A streaming feature GFN surfaces as a loading-screen badge. Matches the three feature keys
 /// the official client shows there (RTX_ENABLED, HDR, REFLEX_ENABLED); labels are brand terms
 /// shown untranslated. Symbols are Apple SF Symbols to avoid third-party badge artwork.
@@ -922,6 +937,11 @@ nonisolated struct GameInfo: Identifiable, Equatable, Codable {
     /// Stores this game is owned through (drives the Library filter chips).
     var ownedStores: [String] {
         variants.filter(\.isOwned).map(\.appStore)
+    }
+
+    var subscriptions: [GameSubscription] {
+        let available = Set(variants.flatMap { $0.subscriptions ?? [] })
+        return GameSubscription.allCases.filter { available.contains($0) }
     }
 }
 
@@ -1029,6 +1049,7 @@ nonisolated struct GameVariant: Equatable, Codable {
     var supportedControls: [String]?
     /// Current provider status; excluded from persistence because it changes independently of metadata.
     var availability: GFNGameAvailability? = nil
+    var subscriptions: [GameSubscription]? = nil
 
     @MainActor var storeName: String {
         L10n.storeName(for: appStore)
@@ -1037,7 +1058,7 @@ nonisolated struct GameVariant: Equatable, Codable {
 
 extension GameVariant {
     private enum CodingKeys: String, CodingKey {
-        case id, appStore, appId, isOwned, supportedControls
+        case id, appStore, appId, isOwned, supportedControls, subscriptions
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1047,6 +1068,8 @@ extension GameVariant {
         appId = try c.decodeIfPresent(String.self, forKey: .appId)
         isOwned = try c.decodeIfPresent(Bool.self, forKey: .isOwned) ?? false
         supportedControls = try c.decodeIfPresent([String].self, forKey: .supportedControls)
+        subscriptions = try c.decodeIfPresent([String].self, forKey: .subscriptions)?
+            .compactMap { GameSubscription(rawValue: $0) }
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1056,6 +1079,7 @@ extension GameVariant {
         try c.encodeIfPresent(appId, forKey: .appId)
         try c.encode(isOwned, forKey: .isOwned)
         try c.encodeIfPresent(supportedControls, forKey: .supportedControls)
+        try c.encodeIfPresent(subscriptions, forKey: .subscriptions)
     }
 }
 

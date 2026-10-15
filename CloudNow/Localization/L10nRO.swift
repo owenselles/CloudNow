@@ -475,5 +475,7 @@ enum L10nRO {
         "gfn_game_eta_elapsed": "Actualizarea durează mai mult decât s-a estimat.",
         "gfn_game_check_status": "Verifică disponibilitatea",
         "gfn_game_status_failed": "Disponibilitatea nu a putut fi reîmprospătată. Încearcă din nou.",
+        "game_subscriptions": "Abonamente",
+        "available_with_subscription": "Disponibil cu %@",
     ]
 }

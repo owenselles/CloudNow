@@ -475,5 +475,7 @@ enum L10nHI {
         "gfn_game_eta_elapsed": "अपडेट में अनुमान से ज़्यादा समय लग रहा है।",
         "gfn_game_check_status": "उपलब्धता जाँचें",
         "gfn_game_status_failed": "उपलब्धता रीफ़्रेश नहीं की जा सकी। फिर से कोशिश करें।",
+        "game_subscriptions": "सदस्यताएँ",
+        "available_with_subscription": "%@ के साथ उपलब्ध",
     ]
 }

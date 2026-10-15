@@ -475,5 +475,7 @@ enum L10nAR {
         "gfn_game_eta_elapsed": "يستغرق التحديث وقتًا أطول من المقدّر.",
         "gfn_game_check_status": "التحقق من التوفر",
         "gfn_game_status_failed": "تعذّر تحديث حالة التوفر. حاول مجددًا.",
+        "game_subscriptions": "الاشتراكات",
+        "available_with_subscription": "متاح مع %@",
     ]
 }

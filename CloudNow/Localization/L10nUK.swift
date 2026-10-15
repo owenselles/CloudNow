@@ -475,5 +475,7 @@ enum L10nUK {
         "gfn_game_eta_elapsed": "Оновлення триває довше, ніж очікувалося.",
         "gfn_game_check_status": "Перевірити доступність",
         "gfn_game_status_failed": "Не вдалося оновити відомості про доступність. Повторіть спробу.",
+        "game_subscriptions": "Передплати",
+        "available_with_subscription": "Доступно за передплатою %@",
     ]
 }

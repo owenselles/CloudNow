@@ -475,5 +475,7 @@ enum L10nID {
         "gfn_game_eta_elapsed": "Pembaruan berlangsung lebih lama dari perkiraan.",
         "gfn_game_check_status": "Periksa ketersediaan",
         "gfn_game_status_failed": "Ketersediaan tidak dapat diperbarui. Coba lagi.",
+        "game_subscriptions": "Langganan",
+        "available_with_subscription": "Tersedia dengan %@",
     ]
 }

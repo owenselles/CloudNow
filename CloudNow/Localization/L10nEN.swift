@@ -475,5 +475,7 @@ enum L10nEN {
         "gfn_game_eta_elapsed": "Patching is taking longer than estimated.",
         "gfn_game_check_status": "Check availability",
         "gfn_game_status_failed": "Availability could not be refreshed. Try again.",
+        "game_subscriptions": "Subscriptions",
+        "available_with_subscription": "Available with %@",
     ]
 }

@@ -475,5 +475,7 @@ enum L10nZHHant {
         "gfn_game_eta_elapsed": "更新所需時間超出了預期。",
         "gfn_game_check_status": "檢查可用狀態",
         "gfn_game_status_failed": "無法重新整理可用狀態。請再試一次。",
+        "game_subscriptions": "訂閱",
+        "available_with_subscription": "可透過 %@ 遊玩",
     ]
 }

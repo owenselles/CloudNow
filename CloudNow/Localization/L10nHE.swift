@@ -475,5 +475,7 @@ enum L10nHE {
         "gfn_game_eta_elapsed": "העדכון נמשך זמן רב מהמשוער.",
         "gfn_game_check_status": "בדיקת זמינות",
         "gfn_game_status_failed": "לא ניתן היה לרענן את הזמינות. נסו שוב.",
+        "game_subscriptions": "מינויים",
+        "available_with_subscription": "זמין במסגרת %@",
     ]
 }

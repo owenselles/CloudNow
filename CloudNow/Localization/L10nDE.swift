@@ -475,5 +475,7 @@ enum L10nDE {
         "gfn_game_eta_elapsed": "Die Aktualisierung dauert länger als erwartet.",
         "gfn_game_check_status": "Verfügbarkeit prüfen",
         "gfn_game_status_failed": "Die Verfügbarkeit konnte nicht aktualisiert werden. Versuche es erneut.",
+        "game_subscriptions": "Abonnements",
+        "available_with_subscription": "Verfügbar mit %@",
     ]
 }

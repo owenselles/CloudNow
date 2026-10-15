@@ -54,7 +54,7 @@ actor GamesClient {
             items {
                 id title genres supportedControls
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                variants { id appStore supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
+                variants { id appStore subscriptions supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
                 gfn { playabilityState minimumMembershipTierLabel }
             }
         }
@@ -68,7 +68,7 @@ actor GamesClient {
             items {
                 id title genres supportedControls
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                variants { id appStore supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
+                variants { id appStore subscriptions supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
                 gfn { playabilityState minimumMembershipTierLabel }
             }
         }
@@ -214,14 +214,16 @@ actor GamesClient {
         filters: [String: Any],
         searchString: String? = nil,
         maxPages: Int = 3,
-        includeGenres: Bool = true
+        includeGenres: Bool = true,
+        includeSubscriptions: Bool = true
     ) async throws -> [GameInfo] {
         do {
             do {
                 let games = try await browsePages(
                     token: token, vpcId: vpcId, localeCode: localeCode,
                     filters: filters, searchString: searchString,
-                    pageSize: 500, maxPages: maxPages, includeGenres: includeGenres
+                    pageSize: 500, maxPages: maxPages, includeGenres: includeGenres,
+                    includeSubscriptions: includeSubscriptions
                 )
                 if !games.isEmpty {
                     return games
@@ -233,14 +235,22 @@ actor GamesClient {
             return try await browsePages(
                 token: token, vpcId: vpcId, localeCode: localeCode,
                 filters: filters, searchString: searchString,
-                pageSize: 200, maxPages: maxPages, includeGenres: includeGenres
+                pageSize: 200, maxPages: maxPages, includeGenres: includeGenres,
+                includeSubscriptions: includeSubscriptions
             )
         } catch let GamesError.graphql(message) where includeGenres && message.localizedCaseInsensitiveContains("genre") {
             gamesLog.warning("[GamesClient] browse genres unavailable; retrying compatible query")
             return try await browseCatalog(
                 token: token, vpcId: vpcId, localeCode: localeCode,
                 filters: filters, searchString: searchString,
-                maxPages: maxPages, includeGenres: false
+                maxPages: maxPages, includeGenres: false, includeSubscriptions: includeSubscriptions
+            )
+        } catch let GamesError.graphql(message) where includeSubscriptions && Self.isUnsupportedSubscriptionsField(message) {
+            gamesLog.warning("[GamesClient] browse subscriptions unavailable; retrying compatible query")
+            return try await browseCatalog(
+                token: token, vpcId: vpcId, localeCode: localeCode,
+                filters: filters, searchString: searchString,
+                maxPages: maxPages, includeGenres: includeGenres, includeSubscriptions: false
             )
         }
     }
@@ -253,7 +263,8 @@ actor GamesClient {
         searchString: String?,
         pageSize: Int,
         maxPages: Int,
-        includeGenres: Bool
+        includeGenres: Bool,
+        includeSubscriptions: Bool
     ) async throws -> [GameInfo] {
         var allGames: [GameInfo] = []
         var seen = Set<String>()
@@ -268,13 +279,16 @@ actor GamesClient {
                 "cursor": cursor,
                 "filters": filters,
             ]
-            let query: String
+            var query: String
             if let search = searchString, !search.isEmpty {
                 variables["searchString"] = search
                 variables["sortString"] = "itemMetadata.relevance:DESC,sortName:ASC"
                 query = includeGenres ? GamesClient.searchQuery : GamesClient.searchQueryWithoutGenres
             } else {
                 query = includeGenres ? GamesClient.browseQuery : GamesClient.browseQueryWithoutGenres
+            }
+            if !includeSubscriptions {
+                query = query.replacingOccurrences(of: "appStore subscriptions", with: "appStore")
             }
 
             let body: [String: Any] = ["query": query, "variables": variables]
@@ -296,6 +310,11 @@ actor GamesClient {
             }
 
             let payload = try JSONDecoder().decode(BrowseResponse.self, from: data)
+            if let subscriptionErrors = payload.errors?.filter({ Self.isUnsupportedSubscriptionsField($0.message) }),
+               !subscriptionErrors.isEmpty
+            {
+                throw GamesError.graphql(subscriptionErrors.map(\.message).joined(separator: "; "))
+            }
             if let genreErrors = payload.errors?.filter({
                 $0.message.localizedCaseInsensitiveContains("genre")
             }), !genreErrors.isEmpty {
@@ -333,7 +352,8 @@ actor GamesClient {
                 appId: isNumericId(vid) ? vid : nil,
                 isOwned: v.gfn?.library?.isOwned == true,
                 supportedControls: v.supportedControls,
-                availability: v.gfn.map { GFNGameAvailability(status: $0.status) }
+                availability: v.gfn.map { GFNGameAvailability(status: $0.status) },
+                subscriptions: v.subscriptions?.compactMap { GameSubscription(rawValue: $0) }
             )
         } ?? []
 
@@ -870,7 +890,8 @@ actor GamesClient {
                 id: vid,
                 appStore: appStore,
                 appId: isNumericId(vid) ? vid : nil,
-                supportedControls: v.supportedControls
+                supportedControls: v.supportedControls,
+                subscriptions: v.subscriptions?.compactMap { GameSubscription(rawValue: $0) }
             )
         } ?? []
 
@@ -908,6 +929,10 @@ actor GamesClient {
     }
 
     // MARK: - Helpers
+
+    private static func isUnsupportedSubscriptionsField(_ message: String) -> Bool {
+        message.localizedCaseInsensitiveContains("Cannot query field \"subscriptions\"")
+    }
 
     private func optimizeImageUrl(_ url: String, width: Int = 272) -> String? {
         guard !url.isEmpty else { return nil }
@@ -1092,6 +1117,7 @@ private nonisolated struct BrowseResponse: Decodable {
                 let id: String?
                 let appStore: String?
                 let supportedControls: [String]?
+                let subscriptions: [String]?
                 let gfn: GFNMeta?
                 struct GFNMeta: Decodable {
                     let status: String?
@@ -1200,6 +1226,7 @@ private nonisolated struct AppData: Decodable {
         let id: String?
         let appStore: String?
         let supportedControls: [String]?
+        let subscriptions: [String]?
         let gfn: GFNMeta?
         struct GFNMeta: Decodable {
             let library: LibraryMeta?

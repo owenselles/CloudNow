@@ -475,5 +475,7 @@ enum L10nEL {
         "gfn_game_eta_elapsed": "Η ενημέρωση διαρκεί περισσότερο από το αναμενόμενο.",
         "gfn_game_check_status": "Έλεγχος διαθεσιμότητας",
         "gfn_game_status_failed": "Δεν ήταν δυνατή η ανανέωση της διαθεσιμότητας. Δοκιμάστε ξανά.",
+        "game_subscriptions": "Συνδρομές",
+        "available_with_subscription": "Διαθέσιμο με %@",
     ]
 }

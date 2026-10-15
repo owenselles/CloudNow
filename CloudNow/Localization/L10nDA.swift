@@ -475,5 +475,7 @@ enum L10nDA {
         "gfn_game_eta_elapsed": "Opdateringen tager længere tid end forventet.",
         "gfn_game_check_status": "Tjek tilgængelighed",
         "gfn_game_status_failed": "Tilgængeligheden kunne ikke opdateres. Prøv igen.",
+        "game_subscriptions": "Abonnementer",
+        "available_with_subscription": "Tilgængeligt med %@",
     ]
 }

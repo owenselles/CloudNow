@@ -475,5 +475,7 @@ enum L10nPTPT {
         "gfn_game_eta_elapsed": "A atualização está a demorar mais do que o previsto.",
         "gfn_game_check_status": "Verificar disponibilidade",
         "gfn_game_status_failed": "Não foi possível atualizar a disponibilidade. Tente novamente.",
+        "game_subscriptions": "Subscrições",
+        "available_with_subscription": "Disponível com %@",
     ]
 }

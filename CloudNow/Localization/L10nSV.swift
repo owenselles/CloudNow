@@ -475,5 +475,7 @@ enum L10nSV {
         "gfn_game_eta_elapsed": "Uppdateringen tar längre tid än beräknat.",
         "gfn_game_check_status": "Kontrollera tillgänglighet",
         "gfn_game_status_failed": "Tillgängligheten kunde inte uppdateras. Försök igen.",
+        "game_subscriptions": "Prenumerationer",
+        "available_with_subscription": "Tillgängligt med %@",
     ]
 }
