@@ -465,5 +465,15 @@ enum L10nFR {
         "xbox_resolution_requires_ultimate": "%@ nécessite Xbox Game Pass Ultimate. Abonnement actuel : %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ nécessite Xbox Game Pass Ultimate. Aucun abonnement éligible n'a pu être confirmé pour ce compte.",
         "managed_by_partner": "La sélection du serveur pour ce compte est gérée par %@.",
+        "gfn_game_patching": "Mise à jour en cours",
+        "gfn_game_maintenance": "En maintenance",
+        "gfn_game_patching_description": "Ce jeu est en cours de mise à jour. Réessayez une fois la mise à jour terminée.",
+        "gfn_game_compatibility_description": "NVIDIA résout des problèmes de compatibilité pour ce jeu.",
+        "gfn_game_developer_maintenance_description": "NVIDIA travaille avec le développeur pour rétablir ce jeu.",
+        "gfn_game_estimated_remaining": "Temps restant estimé : %@",
+        "gfn_game_eta_unavailable": "Aucune estimation de fin n’est disponible.",
+        "gfn_game_eta_elapsed": "La mise à jour prend plus de temps que prévu.",
+        "gfn_game_check_status": "Vérifier la disponibilité",
+        "gfn_game_status_failed": "La disponibilité n’a pas pu être actualisée. Réessayez.",
     ]
 }

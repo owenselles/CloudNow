@@ -465,5 +465,15 @@ enum L10nNB {
         "controller_changes_next_session": "Kontrollerendringer tas i bruk i neste skyøkt.",
         "ending_session": "Avslutter skyøkten…",
         "managed_by_partner": "Servervalget for denne kontoen administreres av %@.",
+        "gfn_game_patching": "Oppdateres",
+        "gfn_game_maintenance": "Under vedlikehold",
+        "gfn_game_patching_description": "Dette spillet oppdateres. Prøv igjen når oppdateringen er ferdig.",
+        "gfn_game_compatibility_description": "NVIDIA løser kompatibilitetsproblemer for dette spillet.",
+        "gfn_game_developer_maintenance_description": "NVIDIA samarbeider med utvikleren om å gjøre dette spillet tilgjengelig igjen.",
+        "gfn_game_estimated_remaining": "Anslått gjenstående tid: %@",
+        "gfn_game_eta_unavailable": "Ingen anslått fullføringstid er tilgjengelig.",
+        "gfn_game_eta_elapsed": "Oppdateringen tar lengre tid enn anslått.",
+        "gfn_game_check_status": "Sjekk tilgjengelighet",
+        "gfn_game_status_failed": "Tilgjengeligheten kunne ikke oppdateres. Prøv igjen.",
     ]
 }

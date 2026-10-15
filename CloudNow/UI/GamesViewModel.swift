@@ -1430,6 +1430,34 @@ class GamesViewModel {
 
     // MARK: Preferred Store
 
+    /// Detail availability is fetched independently of the descriptive metadata cache.
+    func fetchGameAvailability(
+        for game: GameInfo,
+        authManager: AuthManager
+    ) async throws -> [String: GFNGameAvailability] {
+        if !persistenceEnabled {
+            return [:]
+        }
+        guard let session = authManager.session else { throw AuthError.noSession }
+        let generation = cacheGeneration
+        let token = try await authManager.resolveToken()
+        try Task.checkCancellation()
+        guard cacheGeneration == generation,
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        let availability = try await gamesClient.fetchAvailability(
+            token: token,
+            appId: game.id,
+            streamingBaseUrl: session.provider.streamingServiceUrl,
+            vpcId: currentVpcId
+        )
+        try Task.checkCancellation()
+        guard cacheGeneration == generation,
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        return availability
+    }
+
     func setPreferredStore(gameId: String, variantId: String) {
         preferredStoreIds[gameId] = variantId
         let stores = preferredStoreIds

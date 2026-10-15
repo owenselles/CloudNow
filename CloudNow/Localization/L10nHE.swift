@@ -465,5 +465,15 @@ enum L10nHE {
         "xbox_resolution_requires_ultimate": "%@ דורש Xbox Game Pass Ultimate. המינוי הנוכחי: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ דורש Xbox Game Pass Ultimate. לא ניתן היה לאשר מינוי מתאים לחשבון זה.",
         "managed_by_partner": "בחירת השרת עבור חשבון זה מנוהלת על ידי %@.",
+        "gfn_game_patching": "מתבצע עדכון",
+        "gfn_game_maintenance": "בתחזוקה",
+        "gfn_game_patching_description": "המשחק הזה מתעדכן. נסו שוב לאחר השלמת העדכון.",
+        "gfn_game_compatibility_description": "NVIDIA פותרת בעיות תאימות במשחק הזה.",
+        "gfn_game_developer_maintenance_description": "NVIDIA עובדת עם המפתח כדי להחזיר את המשחק הזה לזמינות.",
+        "gfn_game_estimated_remaining": "זמן משוער שנותר: %@",
+        "gfn_game_eta_unavailable": "אין הערכה למועד ההשלמה.",
+        "gfn_game_eta_elapsed": "העדכון נמשך זמן רב מהמשוער.",
+        "gfn_game_check_status": "בדיקת זמינות",
+        "gfn_game_status_failed": "לא ניתן היה לרענן את הזמינות. נסו שוב.",
     ]
 }

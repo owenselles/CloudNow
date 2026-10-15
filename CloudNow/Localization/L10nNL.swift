@@ -465,5 +465,15 @@ enum L10nNL {
         "controller_changes_next_session": "Wijzigingen aan de controller worden toegepast op de volgende cloudsessie.",
         "ending_session": "Cloudsessie wordt beëindigd…",
         "managed_by_partner": "De serverselectie voor dit account wordt beheerd door %@.",
+        "gfn_game_patching": "Wordt bijgewerkt",
+        "gfn_game_maintenance": "In onderhoud",
+        "gfn_game_patching_description": "Deze game wordt bijgewerkt. Probeer het opnieuw wanneer de update is voltooid.",
+        "gfn_game_compatibility_description": "NVIDIA lost compatibiliteitsproblemen voor deze game op.",
+        "gfn_game_developer_maintenance_description": "NVIDIA werkt samen met de ontwikkelaar om deze game weer beschikbaar te maken.",
+        "gfn_game_estimated_remaining": "Geschatte resterende tijd: %@",
+        "gfn_game_eta_unavailable": "Er is geen geschatte voltooiingstijd beschikbaar.",
+        "gfn_game_eta_elapsed": "Het bijwerken duurt langer dan verwacht.",
+        "gfn_game_check_status": "Beschikbaarheid controleren",
+        "gfn_game_status_failed": "De beschikbaarheid kon niet worden vernieuwd. Probeer het opnieuw.",
     ]
 }

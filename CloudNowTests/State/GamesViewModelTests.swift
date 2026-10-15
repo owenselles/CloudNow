@@ -4,6 +4,38 @@ import Testing
 
 @Suite("Games view-model state")
 struct GamesViewModelTests {
+    @MainActor
+    @Test("Detail availability is fresh and does not replace catalog ownership or metadata")
+    func freshDetailAvailability() async throws {
+        let game = makeGame(id: "maintenance", title: "Maintenance")
+        let availability = GFNGameAvailability(status: "PATCHING")
+        let client = ScriptedGamesClient(availability: ["steam": availability])
+        let viewModel = GamesViewModel(mainGames: [game], gamesClient: client)
+        let auth = await makeAuthenticatedManager()
+
+        let result = try await viewModel.fetchGameAvailability(for: game, authManager: auth)
+
+        #expect(result == ["steam": availability])
+        #expect(viewModel.mainGames == [game])
+    }
+
+    @MainActor
+    @Test("Availability follows the actual launch variant and stale preferences fall back safely")
+    func preferredStoreAvailability() {
+        var game = makeGame(id: "maintenance", title: "Maintenance")
+        game.variants = [
+            GameVariant(id: "steam", appStore: "STEAM", availability: GFNGameAvailability(status: "PATCHING")),
+            GameVariant(id: "epic", appStore: "EPIC_GAMES_STORE", availability: GFNGameAvailability(status: "AVAILABLE")),
+        ]
+        let viewModel = GamesViewModel(persistenceEnabled: false)
+
+        #expect(viewModel.gameWithPreferredStore(game).variants.first?.availability?.isUnavailable == true)
+        viewModel.setPreferredStore(gameId: game.id, variantId: "epic")
+        #expect(viewModel.gameWithPreferredStore(game).variants.first?.availability?.isUnavailable == false)
+        viewModel.setPreferredStore(gameId: game.id, variantId: "removed")
+        #expect(viewModel.gameWithPreferredStore(game).variants.first?.id == "steam")
+    }
+
     @Test("Re-leaving the same session restarts its expiry task")
     func resumableExpiryIdentityIncludesLeaveTime() {
         let firstLeave = ResumableSessionExpiryIdentity(
@@ -1481,6 +1513,10 @@ private enum GamesViewModelTestError: Error {
 }
 
 private actor ForegroundCancellationGamesClient: GamesCatalogClient {
+    func fetchAvailability(token _: String, appId _: String, streamingBaseUrl _: String, vpcId _: String?) -> [String: GFNGameAvailability] {
+        [:]
+    }
+
     private let initial: GameInfo
     private var foregroundContinuation: CheckedContinuation<Void, Error>?
     private var cancellationRequested = false
@@ -1590,6 +1626,11 @@ private actor EmptyLibrarySyncClient: LibrarySyncClient {
 }
 
 private actor ScriptedGamesClient: GamesCatalogClient {
+    func fetchAvailability(token _: String, appId _: String, streamingBaseUrl _: String, vpcId _: String?) -> [String: GFNGameAvailability] {
+        availability
+    }
+
+    private let availability: [String: GFNGameAvailability]
     private let mainOutcomes: [ScriptedGamesOutcome]
     private let libraryOutcomes: [ScriptedGamesOutcome]
     private let blockedMainRequestIndex: Int?
@@ -1617,8 +1658,10 @@ private actor ScriptedGamesClient: GamesCatalogClient {
         libraryOutcomes: [ScriptedGamesOutcome] = [.success([])],
         blocksFirstMainRequest: Bool = false,
         blockedMainRequestIndex: Int? = nil,
-        blockedLibraryRequestIndex: Int? = nil
+        blockedLibraryRequestIndex: Int? = nil,
+        availability: [String: GFNGameAvailability] = [:]
     ) {
+        self.availability = availability
         self.mainOutcomes = mainOutcomes
         self.libraryOutcomes = libraryOutcomes
         self.blockedMainRequestIndex = blockedMainRequestIndex

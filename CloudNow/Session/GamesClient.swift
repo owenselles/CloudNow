@@ -75,6 +75,27 @@ actor GamesClient {
     }
     """
 
+    private static let availabilityQuery = """
+    query GetAppDataQueryForAppId($vpcId: String!, $locale: String!, $appIds: [String]!) {
+        apps(vpcId: $vpcId, language: $locale, appIds: $appIds) {
+            items {
+                id
+                variants {
+                    id
+                    gfn {
+                        status
+                        stateDetails {
+                            ... on VariantGfnAutoPatchingMetadata { subType endTime }
+                            ... on VariantGfnManualPatchingMetadata { subType endTime }
+                            ... on VariantGfnMaintenanceMetadata { subType }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    """
+
     /// Older regional GraphQL deployments may not expose genres on browse results yet.
     /// Retrying without this field preserves catalog loading while simply hiding genre filters.
     private static let browseQueryWithoutGenres = browseQuery.replacingOccurrences(of: "id title genres", with: "id title")
@@ -129,6 +150,43 @@ actor GamesClient {
             filters: [:],
             searchString: query.trimmingCharacters(in: .whitespacesAndNewlines),
             maxPages: 3
+        )
+    }
+
+    /// Availability is fetched on demand, independently of cached descriptive metadata.
+    func fetchAvailability(
+        token: String,
+        appId: String,
+        streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl,
+        vpcId: String? = nil
+    ) async throws -> [String: GFNGameAvailability] {
+        try Task.checkCancellation()
+        let localeCode = localeCode
+        let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
+        try Task.checkCancellation()
+        let body: [String: Any] = [
+            "query": Self.availabilityQuery,
+            "variables": ["vpcId": vpcId, "locale": localeCode, "appIds": [appId]],
+        ]
+        var request = URLRequest(url: URL(string: Self.graphqlURL)!)
+        request.httpMethod = "POST"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        setGFNHeaders(on: &request, token: token)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await transport.data(for: request)
+        try Task.checkCancellation()
+        try validateHTTPResponse(response, data: data)
+        let payload = try JSONDecoder().decode(AvailabilityResponse.self, from: data)
+        try validateGraphQL(errors: payload.errors)
+        let app = payload.data?.apps?.items?.first { $0.id?.stringValue == appId }
+        return Dictionary(
+            (app?.variants ?? []).compactMap { variant in
+                guard let id = variant.id, let availability = variant.gfn else { return nil }
+                return (id, availability)
+            },
+            uniquingKeysWith: { _, latest in latest }
         )
     }
 
@@ -274,7 +332,8 @@ actor GamesClient {
                 appStore: v.appStore ?? "unknown",
                 appId: isNumericId(vid) ? vid : nil,
                 isOwned: v.gfn?.library?.isOwned == true,
-                supportedControls: v.supportedControls
+                supportedControls: v.supportedControls,
+                availability: v.gfn.map { GFNGameAvailability(status: $0.status) }
             )
         } ?? []
 
@@ -976,6 +1035,29 @@ private nonisolated struct MetadataResponse: Decodable {
     }
 }
 
+private nonisolated struct AvailabilityResponse: Decodable {
+    let data: AvailabilityData?
+    let errors: [GQLError]?
+
+    struct AvailabilityData: Decodable {
+        let apps: Apps?
+
+        struct Apps: Decodable {
+            let items: [App]?
+        }
+
+        struct App: Decodable {
+            let id: AnyCodableGameId?
+            let variants: [Variant]?
+        }
+
+        struct Variant: Decodable {
+            let id: String?
+            let gfn: GFNGameAvailability?
+        }
+    }
+}
+
 private nonisolated struct BrowseResponse: Decodable {
     let data: BrowseData?
     let errors: [GQLError]?
@@ -1012,6 +1094,7 @@ private nonisolated struct BrowseResponse: Decodable {
                 let supportedControls: [String]?
                 let gfn: GFNMeta?
                 struct GFNMeta: Decodable {
+                    let status: String?
                     let library: LibraryMeta?
                     let features: [FeatureFlag]?
                     /// A GfnSubscriptionFeature union member: `key` on the interface, `value` on

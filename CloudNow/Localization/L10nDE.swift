@@ -465,5 +465,15 @@ enum L10nDE {
         "xbox_resolution_requires_ultimate": "%@ erfordert Xbox Game Pass Ultimate. Aktuelle Mitgliedschaft: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ erfordert Xbox Game Pass Ultimate. Für dieses Konto konnte keine berechtigte Mitgliedschaft bestätigt werden.",
         "managed_by_partner": "Die Serverauswahl für dieses Konto wird von %@ verwaltet.",
+        "gfn_game_patching": "Wird aktualisiert",
+        "gfn_game_maintenance": "Wird gewartet",
+        "gfn_game_patching_description": "Dieses Spiel wird aktualisiert. Versuche es erneut, wenn die Aktualisierung abgeschlossen ist.",
+        "gfn_game_compatibility_description": "NVIDIA behebt Kompatibilitätsprobleme bei diesem Spiel.",
+        "gfn_game_developer_maintenance_description": "NVIDIA arbeitet mit dem Entwickler daran, dieses Spiel wieder verfügbar zu machen.",
+        "gfn_game_estimated_remaining": "Geschätzte verbleibende Zeit: %@",
+        "gfn_game_eta_unavailable": "Es liegt keine Schätzung zur Fertigstellung vor.",
+        "gfn_game_eta_elapsed": "Die Aktualisierung dauert länger als erwartet.",
+        "gfn_game_check_status": "Verfügbarkeit prüfen",
+        "gfn_game_status_failed": "Die Verfügbarkeit konnte nicht aktualisiert werden. Versuche es erneut.",
     ]
 }

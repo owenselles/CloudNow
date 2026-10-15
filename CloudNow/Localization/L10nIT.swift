@@ -465,5 +465,15 @@ enum L10nIT {
         "controller_changes_next_session": "Le modifiche al controller si applicano alla prossima sessione cloud.",
         "ending_session": "Chiusura della sessione cloud…",
         "managed_by_partner": "La selezione del server per questo account è gestita da %@.",
+        "gfn_game_patching": "Aggiornamento in corso",
+        "gfn_game_maintenance": "In manutenzione",
+        "gfn_game_patching_description": "Questo gioco è in fase di aggiornamento. Riprova al termine dell’aggiornamento.",
+        "gfn_game_compatibility_description": "NVIDIA sta risolvendo problemi di compatibilità per questo gioco.",
+        "gfn_game_developer_maintenance_description": "NVIDIA sta collaborando con lo sviluppatore per ripristinare questo gioco.",
+        "gfn_game_estimated_remaining": "Tempo rimanente stimato: %@",
+        "gfn_game_eta_unavailable": "Non è disponibile una stima del completamento.",
+        "gfn_game_eta_elapsed": "L’aggiornamento sta richiedendo più tempo del previsto.",
+        "gfn_game_check_status": "Verifica disponibilità",
+        "gfn_game_status_failed": "Impossibile aggiornare la disponibilità. Riprova.",
     ]
 }

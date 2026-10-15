@@ -465,5 +465,15 @@ enum L10nZHHant {
         "controller_changes_next_session": "控制器變更將於下一個雲端工作階段生效。",
         "ending_session": "正在結束雲端工作階段…",
         "managed_by_partner": "此帳戶的伺服器選擇由 %@ 管理。",
+        "gfn_game_patching": "正在更新",
+        "gfn_game_maintenance": "維護中",
+        "gfn_game_patching_description": "此遊戲正在更新。請在更新完成後再試。",
+        "gfn_game_compatibility_description": "NVIDIA 正在解決此遊戲的相容性問題。",
+        "gfn_game_developer_maintenance_description": "NVIDIA 正在與開發者合作，以恢復此遊戲。",
+        "gfn_game_estimated_remaining": "預計剩餘時間：%@",
+        "gfn_game_eta_unavailable": "目前沒有預計完成時間。",
+        "gfn_game_eta_elapsed": "更新所需時間超出了預期。",
+        "gfn_game_check_status": "檢查可用狀態",
+        "gfn_game_status_failed": "無法重新整理可用狀態。請再試一次。",
     ]
 }

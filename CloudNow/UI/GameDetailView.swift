@@ -16,6 +16,8 @@ struct GameDetailView: View {
     var rendersBackground = true
 
     @Environment(GamesViewModel.self) var viewModel
+    @Environment(AuthManager.self) private var authManager
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showFullDescription = false
@@ -24,12 +26,34 @@ struct GameDetailView: View {
     @State private var backgroundBlurred = false
     @State private var appeared = false
     @State private var dismissing = false
+    @State private var availabilityByVariant: [String: GFNGameAvailability] = [:]
+    @State private var didLoadAvailability = false
+    @State private var availabilityFailed = false
+    @State private var availabilityLoading = false
+    @State private var availabilityRevision = 0
+    @State private var availabilityRequestID: UUID?
+
+    private struct AvailabilityRequest: Hashable {
+        let gameId: String
+        let revision: Int
+        let active: Bool
+    }
+
+    private var selectedAvailability: GFNGameAvailability? {
+        guard let variant = viewModel.gameWithPreferredStore(game).variants.first else { return nil }
+        return availabilityByVariant[variant.id] ?? (didLoadAvailability ? nil : variant.availability)
+    }
+
+    private var isSelectedGameUnavailable: Bool {
+        didLoadAvailability && !availabilityFailed && selectedAvailability?.isUnavailable == true
+    }
 
     private enum DetailFocus: Hashable {
         case play
         case favorite
         case about
         case details
+        case availability
         case exitCatcher
     }
 
@@ -43,7 +67,7 @@ struct GameDetailView: View {
 
     private var preferredFocusTarget: DetailFocus {
         if game.isInLibrary {
-            return .play
+            return isSelectedGameUnavailable ? .favorite : .play
         }
         if let description = game.longDescription, !description.isEmpty {
             return .about
@@ -66,12 +90,46 @@ struct GameDetailView: View {
     }
 
     var body: some View {
-        if isEmbeddedCarousel {
-            embeddedBody
-        } else if isCarouselExpanded {
-            carouselExpandedBody
-        } else {
-            fullScreenBody
+        Group {
+            if isEmbeddedCarousel {
+                embeddedBody
+            } else if isCarouselExpanded {
+                carouselExpandedBody
+            } else {
+                fullScreenBody
+            }
+        }
+        .task(id: AvailabilityRequest(gameId: game.id, revision: availabilityRevision, active: scenePhase == .active)) {
+            guard !isEmbeddedCarousel, scenePhase == .active else { return }
+            await refreshAvailability()
+        }
+        .onChange(of: isSelectedGameUnavailable) { _, unavailable in
+            if unavailable, focusedElement == .play {
+                focusedElement = .favorite
+            }
+        }
+    }
+
+    private func refreshAvailability() async {
+        let requestID = UUID()
+        availabilityRequestID = requestID
+        availabilityLoading = true
+        defer {
+            if availabilityRequestID == requestID {
+                availabilityLoading = false
+            }
+        }
+        do {
+            let result = try await viewModel.fetchGameAvailability(for: game, authManager: authManager)
+            try Task.checkCancellation()
+            availabilityByVariant = result
+            didLoadAvailability = true
+            availabilityFailed = false
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            availabilityFailed = true
         }
     }
 
@@ -174,7 +232,7 @@ struct GameDetailView: View {
 
     private func handleFocusChange(_ focus: DetailFocus?, proxy: ScrollViewProxy) {
         switch focus {
-        case .play, .favorite:
+        case .play, .favorite, .availability:
             backgroundBlurred = false
             withAnimation(reduceMotion ? nil : .smooth) {
                 proxy.scrollTo("hero", anchor: .top)
@@ -273,6 +331,8 @@ struct GameDetailView: View {
                             .foregroundStyle(.secondary)
                     }
 
+                    availabilityNotice
+
                     if game.isInLibrary {
                         HStack(spacing: 16) {
                             Button {
@@ -282,6 +342,7 @@ struct GameDetailView: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.green)
+                            .disabled(isSelectedGameUnavailable)
                             .focused($focusedElement, equals: .play)
 
                             let isFav = viewModel.favoriteIds.contains(game.id)
@@ -311,6 +372,27 @@ struct GameDetailView: View {
     }
 
     // MARK: Screenshots
+
+    @ViewBuilder
+    private var availabilityNotice: some View {
+        if let availability = selectedAvailability, availability.isUnavailable {
+            GFNGameAvailabilityNotice(availability: availability)
+        }
+        if availabilityFailed {
+            Text(L10n.text("gfn_game_status_failed"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        if !isEmbeddedCarousel, selectedAvailability?.isUnavailable == true || availabilityFailed {
+            Button {
+                availabilityRevision += 1
+            } label: {
+                Label(L10n.text("gfn_game_check_status"), systemImage: "arrow.clockwise")
+            }
+            .disabled(availabilityLoading)
+            .focused($focusedElement, equals: .availability)
+        }
+    }
 
     private var screenshotsRow: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -481,6 +563,38 @@ struct GameDetailView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+private struct GFNGameAvailabilityNotice: View {
+    let availability: GFNGameAvailability
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let key = availability.titleKey {
+                Label(L10n.text(key), systemImage: "wrench.and.screwdriver")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.orange)
+            }
+            if let key = availability.messageKey {
+                Text(L10n.text(key))
+                    .font(.callout)
+            }
+            if let deadline = availability.estimatedEndDate {
+                let countdown = GFNSessionCountdown(endsAt: deadline)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(countdown.secondsRemaining(at: context.date) > 0
+                        ? L10n.format("gfn_game_estimated_remaining", countdown.formattedTimeRemaining(at: context.date))
+                        : L10n.text("gfn_game_eta_elapsed"))
+                        .monospacedDigit()
+                }
+            } else {
+                Text(L10n.text("gfn_game_eta_unavailable"))
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.white.opacity(0.85))
+        .frame(maxWidth: 560, alignment: .leading)
     }
 }
 

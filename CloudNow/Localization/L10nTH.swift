@@ -465,5 +465,15 @@ enum L10nTH {
         "controller_changes_next_session": "การเปลี่ยนแปลงคอนโทรลเลอร์จะมีผลในเซสชันคลาวด์ถัดไป",
         "ending_session": "กำลังสิ้นสุดเซสชันคลาวด์…",
         "managed_by_partner": "การเลือกเซิร์ฟเวอร์สำหรับบัญชีนี้จัดการโดย %@",
+        "gfn_game_patching": "กำลังอัปเดต",
+        "gfn_game_maintenance": "อยู่ระหว่างการบำรุงรักษา",
+        "gfn_game_patching_description": "เกมนี้กำลังอัปเดต ลองอีกครั้งเมื่อการอัปเดตเสร็จสิ้น",
+        "gfn_game_compatibility_description": "NVIDIA กำลังแก้ไขปัญหาความเข้ากันได้ของเกมนี้",
+        "gfn_game_developer_maintenance_description": "NVIDIA กำลังทำงานร่วมกับผู้พัฒนาเพื่อให้เกมนี้กลับมาเล่นได้อีกครั้ง",
+        "gfn_game_estimated_remaining": "เวลาที่เหลือโดยประมาณ: %@",
+        "gfn_game_eta_unavailable": "ยังไม่มีเวลาที่คาดว่าจะเสร็จสิ้น",
+        "gfn_game_eta_elapsed": "การอัปเดตใช้เวลานานกว่าที่คาดไว้",
+        "gfn_game_check_status": "ตรวจสอบความพร้อมใช้งาน",
+        "gfn_game_status_failed": "ไม่สามารถรีเฟรชสถานะความพร้อมใช้งานได้ โปรดลองอีกครั้ง",
     ]
 }

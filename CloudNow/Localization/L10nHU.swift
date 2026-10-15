@@ -465,5 +465,15 @@ enum L10nHU {
         "controller_changes_next_session": "A kontroller módosításai a következő felhőalapú munkamenetben lépnek életbe.",
         "ending_session": "Felhőalapú munkamenet befejezése…",
         "managed_by_partner": "A kiszolgálóválasztást a(z) %@ kezeli ennél a fióknál.",
+        "gfn_game_patching": "Frissítés folyamatban",
+        "gfn_game_maintenance": "Karbantartás alatt",
+        "gfn_game_patching_description": "Ez a játék frissítés alatt áll. Próbáld újra a frissítés befejezése után.",
+        "gfn_game_compatibility_description": "Az NVIDIA a játék kompatibilitási problémáinak megoldásán dolgozik.",
+        "gfn_game_developer_maintenance_description": "Az NVIDIA a fejlesztővel együtt dolgozik azon, hogy a játék ismét elérhető legyen.",
+        "gfn_game_estimated_remaining": "Becsült hátralévő idő: %@",
+        "gfn_game_eta_unavailable": "Nem áll rendelkezésre becsült befejezési idő.",
+        "gfn_game_eta_elapsed": "A frissítés a becsültnél tovább tart.",
+        "gfn_game_check_status": "Elérhetőség ellenőrzése",
+        "gfn_game_status_failed": "Nem sikerült frissíteni az elérhetőséget. Próbáld újra.",
     ]
 }

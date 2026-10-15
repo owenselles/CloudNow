@@ -12,6 +12,13 @@ nonisolated protocol GamesCatalogClient: Sendable {
         streamingBaseUrl: String,
         vpcId: String?
     ) async throws -> [GameInfo]
+
+    func fetchAvailability(
+        token: String,
+        appId: String,
+        streamingBaseUrl: String,
+        vpcId: String?
+    ) async throws -> [String: GFNGameAvailability]
 }
 
 extension GamesClient: GamesCatalogClient {}

@@ -465,5 +465,15 @@ enum L10nFI {
         "xbox_resolution_requires_ultimate": "%@ vaatii Xbox Game Pass Ultimate -jäsenyyden. Nykyinen jäsenyys: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ vaatii Xbox Game Pass Ultimate -jäsenyyden. Tälle tilille ei voitu vahvistaa kelvollista jäsenyyttä.",
         "managed_by_partner": "Tämän tilin palvelinvalintaa hallinnoi %@.",
+        "gfn_game_patching": "Päivitetään",
+        "gfn_game_maintenance": "Huollossa",
+        "gfn_game_patching_description": "Tätä peliä päivitetään. Yritä uudelleen, kun päivitys on valmis.",
+        "gfn_game_compatibility_description": "NVIDIA ratkaisee tämän pelin yhteensopivuusongelmia.",
+        "gfn_game_developer_maintenance_description": "NVIDIA tekee yhteistyötä kehittäjän kanssa, jotta tämä peli saadaan jälleen käyttöön.",
+        "gfn_game_estimated_remaining": "Arvioitu jäljellä oleva aika: %@",
+        "gfn_game_eta_unavailable": "Valmistumisaika-arviota ei ole saatavilla.",
+        "gfn_game_eta_elapsed": "Päivitys kestää arvioitua kauemmin.",
+        "gfn_game_check_status": "Tarkista saatavuus",
+        "gfn_game_status_failed": "Saatavuutta ei voitu päivittää. Yritä uudelleen.",
     ]
 }

@@ -465,5 +465,15 @@ enum L10nZHHans {
         "controller_changes_next_session": "控制器更改将在下一次云会话中生效。",
         "ending_session": "正在结束云会话…",
         "managed_by_partner": "此账户的服务器选择由 %@ 管理。",
+        "gfn_game_patching": "正在更新",
+        "gfn_game_maintenance": "维护中",
+        "gfn_game_patching_description": "此游戏正在更新。请在更新完成后重试。",
+        "gfn_game_compatibility_description": "NVIDIA 正在解决此游戏的兼容性问题。",
+        "gfn_game_developer_maintenance_description": "NVIDIA 正在与开发者合作，以恢复此游戏。",
+        "gfn_game_estimated_remaining": "预计剩余时间：%@",
+        "gfn_game_eta_unavailable": "暂无预计完成时间。",
+        "gfn_game_eta_elapsed": "更新所需时间超出了预期。",
+        "gfn_game_check_status": "检查可用状态",
+        "gfn_game_status_failed": "无法刷新可用状态。请重试。",
     ]
 }

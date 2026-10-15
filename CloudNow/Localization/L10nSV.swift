@@ -465,5 +465,15 @@ enum L10nSV {
         "controller_changes_next_session": "Ändringar av handkontrollen gäller från och med nästa molnsession.",
         "ending_session": "Avslutar molnsessionen…",
         "managed_by_partner": "Servervalet hanteras av %@ för det här kontot.",
+        "gfn_game_patching": "Uppdateras",
+        "gfn_game_maintenance": "Under underhåll",
+        "gfn_game_patching_description": "Det här spelet uppdateras. Försök igen när uppdateringen är klar.",
+        "gfn_game_compatibility_description": "NVIDIA löser kompatibilitetsproblem för det här spelet.",
+        "gfn_game_developer_maintenance_description": "NVIDIA arbetar med utvecklaren för att göra det här spelet tillgängligt igen.",
+        "gfn_game_estimated_remaining": "Beräknad återstående tid: %@",
+        "gfn_game_eta_unavailable": "Det finns ingen beräknad sluttid.",
+        "gfn_game_eta_elapsed": "Uppdateringen tar längre tid än beräknat.",
+        "gfn_game_check_status": "Kontrollera tillgänglighet",
+        "gfn_game_status_failed": "Tillgängligheten kunde inte uppdateras. Försök igen.",
     ]
 }

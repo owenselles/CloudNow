@@ -465,5 +465,15 @@ enum L10nHR {
         "controller_changes_next_session": "Promjene kontrolera primjenjuju se na sljedeću sesiju u oblaku.",
         "ending_session": "Završavanje sesije u oblaku…",
         "managed_by_partner": "Odabirom poslužitelja za ovaj račun upravlja %@.",
+        "gfn_game_patching": "Ažuriranje u tijeku",
+        "gfn_game_maintenance": "Održavanje u tijeku",
+        "gfn_game_patching_description": "Ova se igra ažurira. Pokušajte ponovno kada ažuriranje završi.",
+        "gfn_game_compatibility_description": "NVIDIA rješava probleme s kompatibilnošću ove igre.",
+        "gfn_game_developer_maintenance_description": "NVIDIA surađuje s razvojnim timom kako bi ova igra ponovno bila dostupna.",
+        "gfn_game_estimated_remaining": "Procijenjeno preostalo vrijeme: %@",
+        "gfn_game_eta_unavailable": "Procjena završetka nije dostupna.",
+        "gfn_game_eta_elapsed": "Ažuriranje traje dulje od očekivanog.",
+        "gfn_game_check_status": "Provjeri dostupnost",
+        "gfn_game_status_failed": "Dostupnost se nije mogla osvježiti. Pokušajte ponovno.",
     ]
 }

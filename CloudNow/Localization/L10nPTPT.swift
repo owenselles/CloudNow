@@ -465,5 +465,15 @@ enum L10nPTPT {
         "controller_changes_next_session": "As alterações do comando aplicam-se à próxima sessão na nuvem.",
         "ending_session": "A terminar a sessão na nuvem…",
         "managed_by_partner": "A seleção do servidor é gerida por %@ para esta conta.",
+        "gfn_game_patching": "A atualizar",
+        "gfn_game_maintenance": "Em manutenção",
+        "gfn_game_patching_description": "Este jogo está a ser atualizado. Tente novamente quando a atualização terminar.",
+        "gfn_game_compatibility_description": "A NVIDIA está a resolver problemas de compatibilidade deste jogo.",
+        "gfn_game_developer_maintenance_description": "A NVIDIA está a trabalhar com o programador para disponibilizar este jogo novamente.",
+        "gfn_game_estimated_remaining": "Tempo restante estimado: %@",
+        "gfn_game_eta_unavailable": "Não está disponível uma previsão de conclusão.",
+        "gfn_game_eta_elapsed": "A atualização está a demorar mais do que o previsto.",
+        "gfn_game_check_status": "Verificar disponibilidade",
+        "gfn_game_status_failed": "Não foi possível atualizar a disponibilidade. Tente novamente.",
     ]
 }

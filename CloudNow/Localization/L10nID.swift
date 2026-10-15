@@ -465,5 +465,15 @@ enum L10nID {
         "controller_changes_next_session": "Perubahan pengontrol diterapkan pada sesi cloud berikutnya.",
         "ending_session": "Mengakhiri sesi cloud…",
         "managed_by_partner": "Pemilihan server untuk akun ini dikelola oleh %@.",
+        "gfn_game_patching": "Sedang diperbarui",
+        "gfn_game_maintenance": "Dalam pemeliharaan",
+        "gfn_game_patching_description": "Game ini sedang diperbarui. Coba lagi setelah pembaruan selesai.",
+        "gfn_game_compatibility_description": "NVIDIA sedang mengatasi masalah kompatibilitas game ini.",
+        "gfn_game_developer_maintenance_description": "NVIDIA bekerja sama dengan pengembang agar game ini tersedia kembali.",
+        "gfn_game_estimated_remaining": "Perkiraan waktu tersisa: %@",
+        "gfn_game_eta_unavailable": "Perkiraan waktu selesai tidak tersedia.",
+        "gfn_game_eta_elapsed": "Pembaruan berlangsung lebih lama dari perkiraan.",
+        "gfn_game_check_status": "Periksa ketersediaan",
+        "gfn_game_status_failed": "Ketersediaan tidak dapat diperbarui. Coba lagi.",
     ]
 }

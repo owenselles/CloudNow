@@ -465,5 +465,15 @@ enum L10nAR {
         "xbox_resolution_requires_ultimate": "%@ يتطلب Xbox Game Pass Ultimate. العضوية الحالية: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ يتطلب Xbox Game Pass Ultimate. تعذّر تأكيد عضوية مؤهلة لهذا الحساب.",
         "managed_by_partner": "تتم إدارة اختيار الخادم بواسطة %@ لهذا الحساب.",
+        "gfn_game_patching": "جارٍ التحديث",
+        "gfn_game_maintenance": "قيد الصيانة",
+        "gfn_game_patching_description": "يجري تحديث هذه اللعبة. حاول مجددًا عند اكتمال التحديث.",
+        "gfn_game_compatibility_description": "تعمل NVIDIA على حل مشكلات التوافق لهذه اللعبة.",
+        "gfn_game_developer_maintenance_description": "تعمل NVIDIA مع المطوّر لإتاحة هذه اللعبة مجددًا.",
+        "gfn_game_estimated_remaining": "الوقت المتبقي المقدّر: %@",
+        "gfn_game_eta_unavailable": "لا يتوفر وقت تقديري للاكتمال.",
+        "gfn_game_eta_elapsed": "يستغرق التحديث وقتًا أطول من المقدّر.",
+        "gfn_game_check_status": "التحقق من التوفر",
+        "gfn_game_status_failed": "تعذّر تحديث حالة التوفر. حاول مجددًا.",
     ]
 }

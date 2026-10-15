@@ -465,5 +465,15 @@ enum L10nEL {
         "xbox_resolution_requires_ultimate": "%@ απαιτεί Xbox Game Pass Ultimate. Τρέχουσα συνδρομή: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ απαιτεί Xbox Game Pass Ultimate. Δεν ήταν δυνατή η επιβεβαίωση κατάλληλης συνδρομής για αυτόν τον λογαριασμό.",
         "managed_by_partner": "Η επιλογή διακομιστή για αυτόν τον λογαριασμό γίνεται από %@.",
+        "gfn_game_patching": "Γίνεται ενημέρωση",
+        "gfn_game_maintenance": "Υπό συντήρηση",
+        "gfn_game_patching_description": "Αυτό το παιχνίδι ενημερώνεται. Δοκιμάστε ξανά όταν ολοκληρωθεί η ενημέρωση.",
+        "gfn_game_compatibility_description": "Η NVIDIA επιλύει προβλήματα συμβατότητας για αυτό το παιχνίδι.",
+        "gfn_game_developer_maintenance_description": "Η NVIDIA συνεργάζεται με τον δημιουργό για την αποκατάσταση αυτού του παιχνιδιού.",
+        "gfn_game_estimated_remaining": "Εκτιμώμενος χρόνος που απομένει: %@",
+        "gfn_game_eta_unavailable": "Δεν υπάρχει διαθέσιμη εκτίμηση ολοκλήρωσης.",
+        "gfn_game_eta_elapsed": "Η ενημέρωση διαρκεί περισσότερο από το αναμενόμενο.",
+        "gfn_game_check_status": "Έλεγχος διαθεσιμότητας",
+        "gfn_game_status_failed": "Δεν ήταν δυνατή η ανανέωση της διαθεσιμότητας. Δοκιμάστε ξανά.",
     ]
 }

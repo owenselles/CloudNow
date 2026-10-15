@@ -465,5 +465,15 @@ enum L10nVI {
         "controller_changes_next_session": "Các thay đổi đối với tay cầm sẽ áp dụng cho phiên đám mây tiếp theo.",
         "ending_session": "Đang kết thúc phiên đám mây…",
         "managed_by_partner": "Việc chọn máy chủ cho tài khoản này do %@ quản lý.",
+        "gfn_game_patching": "Đang cập nhật",
+        "gfn_game_maintenance": "Đang bảo trì",
+        "gfn_game_patching_description": "Trò chơi này đang được cập nhật. Hãy thử lại khi cập nhật hoàn tất.",
+        "gfn_game_compatibility_description": "NVIDIA đang khắc phục các vấn đề tương thích của trò chơi này.",
+        "gfn_game_developer_maintenance_description": "NVIDIA đang phối hợp với nhà phát triển để khôi phục trò chơi này.",
+        "gfn_game_estimated_remaining": "Thời gian còn lại ước tính: %@",
+        "gfn_game_eta_unavailable": "Chưa có thời gian hoàn tất dự kiến.",
+        "gfn_game_eta_elapsed": "Quá trình cập nhật mất nhiều thời gian hơn dự kiến.",
+        "gfn_game_check_status": "Kiểm tra khả dụng",
+        "gfn_game_status_failed": "Không thể làm mới trạng thái khả dụng. Hãy thử lại.",
     ]
 }

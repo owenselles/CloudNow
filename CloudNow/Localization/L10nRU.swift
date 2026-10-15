@@ -465,5 +465,15 @@ enum L10nRU {
         "controller_changes_next_session": "Изменения контроллера вступят в силу в следующем облачном сеансе.",
         "ending_session": "Завершение облачного сеанса…",
         "managed_by_partner": "Выбором сервера для этой учётной записи управляет %@.",
+        "gfn_game_patching": "Обновляется",
+        "gfn_game_maintenance": "На обслуживании",
+        "gfn_game_patching_description": "Эта игра обновляется. Повторите попытку после завершения обновления.",
+        "gfn_game_compatibility_description": "NVIDIA устраняет проблемы совместимости этой игры.",
+        "gfn_game_developer_maintenance_description": "NVIDIA работает с разработчиком над восстановлением доступности этой игры.",
+        "gfn_game_estimated_remaining": "Примерное оставшееся время: %@",
+        "gfn_game_eta_unavailable": "Примерное время завершения неизвестно.",
+        "gfn_game_eta_elapsed": "Обновление занимает больше времени, чем ожидалось.",
+        "gfn_game_check_status": "Проверить доступность",
+        "gfn_game_status_failed": "Не удалось обновить сведения о доступности. Повторите попытку.",
     ]
 }

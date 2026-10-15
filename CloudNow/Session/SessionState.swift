@@ -1027,6 +1027,8 @@ nonisolated struct GameVariant: Equatable, Codable {
     /// True when GFN reports MANUAL, PLATFORM_SYNC, or IN_LIBRARY for this variant.
     var isOwned: Bool = false
     var supportedControls: [String]?
+    /// Current provider status; excluded from persistence because it changes independently of metadata.
+    var availability: GFNGameAvailability? = nil
 
     @MainActor var storeName: String {
         L10n.storeName(for: appStore)

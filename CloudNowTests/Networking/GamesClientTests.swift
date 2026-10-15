@@ -277,6 +277,32 @@ struct GamesClientTests {
         #expect(restored == game)
     }
 
+    @Test("Fresh library availability replaces patching while descriptive metadata stays cached")
+    func availabilityRefreshIgnoresMetadataCache() async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            if let variables = try metadataVariables(from: request) {
+                let ids = try #require(variables["appIds"] as? [String])
+                return try StubbedHTTPResponse(data: metadataResponse(ids: ids))
+            }
+            let page = libraryBrowsePage(ids: ["one"])
+            return StubbedHTTPResponse(json: index == 0
+                ? page.replacingOccurrences(of: "AVAILABLE", with: "PATCHING")
+                : page)
+        }
+        let client = GamesClient(
+            transport: transport,
+            localeCode: { "en-US" },
+            metadataCache: InMemoryGameMetadataCache()
+        )
+        let first = try await client.fetchLibrary(token: "token", vpcId: "vpc")
+        let second = try await client.fetchLibrary(token: "token", vpcId: "vpc")
+
+        #expect(first.first?.variants.first?.availability?.isUnavailable == true)
+        #expect(second.first?.variants.first?.availability?.isUnavailable == false)
+        let requests = await transport.requests()
+        #expect(requests.filter(isMetadataRequest).count == 1)
+    }
+
     @Test("A Library request uses one locale for browse, metadata, and cache scope")
     func libraryRequestKeepsCapturedLocale() async throws {
         let cache = InMemoryGameMetadataCache()

@@ -465,5 +465,15 @@ enum L10nSK {
         "controller_changes_next_session": "Zmeny ovládača sa prejavia v nasledujúcej cloudovej relácii.",
         "ending_session": "Ukončuje sa cloudová relácia…",
         "managed_by_partner": "Výber servera pre tento účet spravuje %@.",
+        "gfn_game_patching": "Prebieha aktualizácia",
+        "gfn_game_maintenance": "Prebieha údržba",
+        "gfn_game_patching_description": "Táto hra sa aktualizuje. Skúste to znova po dokončení aktualizácie.",
+        "gfn_game_compatibility_description": "NVIDIA rieši problémy s kompatibilitou tejto hry.",
+        "gfn_game_developer_maintenance_description": "NVIDIA spolupracuje s vývojárom na obnovení dostupnosti tejto hry.",
+        "gfn_game_estimated_remaining": "Odhadovaný zostávajúci čas: %@",
+        "gfn_game_eta_unavailable": "Odhad dokončenia nie je k dispozícii.",
+        "gfn_game_eta_elapsed": "Aktualizácia trvá dlhšie, než sa odhadovalo.",
+        "gfn_game_check_status": "Skontrolovať dostupnosť",
+        "gfn_game_status_failed": "Dostupnosť sa nepodarilo aktualizovať. Skúste to znova.",
     ]
 }

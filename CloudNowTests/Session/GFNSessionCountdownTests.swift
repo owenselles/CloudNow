@@ -4,6 +4,15 @@ import Testing
 
 @Suite("GFN session countdown")
 struct GFNSessionCountdownTests {
+    @Test("An absolute maintenance deadline reuses the countdown without a membership tier")
+    func absoluteDeadline() {
+        let countdown = GFNSessionCountdown(endsAt: Date(timeIntervalSince1970: 1061))
+
+        #expect(countdown.formattedTimeRemaining(at: Date(timeIntervalSince1970: 1000)) == "01:01")
+        #expect(countdown.formattedTimeRemaining(at: Date(timeIntervalSince1970: 1001)) == "01:00")
+        #expect(countdown.formattedTimeRemaining(at: Date(timeIntervalSince1970: 1100)) == "00:00")
+    }
+
     struct TierCase: Sendable {
         let membershipTier: String?
         let expectedSeconds: Int?

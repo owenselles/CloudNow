@@ -465,5 +465,15 @@ enum L10nKO {
         "controller_changes_next_session": "컨트롤러 변경 사항은 다음 클라우드 세션부터 적용됩니다.",
         "ending_session": "클라우드 세션 종료 중…",
         "managed_by_partner": "이 계정의 서버 선택은 %@에서 관리합니다.",
+        "gfn_game_patching": "업데이트 중",
+        "gfn_game_maintenance": "점검 중",
+        "gfn_game_patching_description": "이 게임은 업데이트 중입니다. 업데이트가 완료되면 다시 시도하세요.",
+        "gfn_game_compatibility_description": "NVIDIA에서 이 게임의 호환성 문제를 해결하고 있습니다.",
+        "gfn_game_developer_maintenance_description": "NVIDIA에서 개발사와 협력하여 이 게임을 복구하고 있습니다.",
+        "gfn_game_estimated_remaining": "예상 남은 시간: %@",
+        "gfn_game_eta_unavailable": "예상 완료 시간을 확인할 수 없습니다.",
+        "gfn_game_eta_elapsed": "업데이트가 예상보다 오래 걸리고 있습니다.",
+        "gfn_game_check_status": "이용 가능 여부 확인",
+        "gfn_game_status_failed": "이용 가능 여부를 새로 고칠 수 없습니다. 다시 시도하세요.",
     ]
 }

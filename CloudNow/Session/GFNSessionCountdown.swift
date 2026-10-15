@@ -30,6 +30,10 @@ nonisolated enum GFNSessionLimit {
 nonisolated struct GFNSessionCountdown: Equatable, Sendable {
     let endsAt: Date
 
+    init(endsAt: Date) {
+        self.endsAt = endsAt
+    }
+
     init?(
         membershipTier: String?,
         startedAt: Date

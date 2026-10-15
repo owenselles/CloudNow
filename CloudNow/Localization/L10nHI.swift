@@ -465,5 +465,15 @@ enum L10nHI {
         "xbox_resolution_requires_ultimate": "%@ के लिए Xbox Game Pass Ultimate चाहिए। मौजूदा सदस्यता: %@।",
         "xbox_resolution_requires_confirmed_ultimate": "%@ के लिए Xbox Game Pass Ultimate चाहिए। इस अकाउंट के लिए योग्य सदस्यता की पुष्टि नहीं हो सकी।",
         "managed_by_partner": "इस अकाउंट के लिए सर्वर चयन %@ द्वारा प्रबंधित किया जाता है।",
+        "gfn_game_patching": "अपडेट हो रहा है",
+        "gfn_game_maintenance": "रखरखाव जारी है",
+        "gfn_game_patching_description": "यह गेम अपडेट हो रहा है। अपडेट पूरा होने पर फिर से कोशिश करें।",
+        "gfn_game_compatibility_description": "NVIDIA इस गेम की संगतता संबंधी समस्याएँ ठीक कर रहा है।",
+        "gfn_game_developer_maintenance_description": "NVIDIA इस गेम को फिर से उपलब्ध कराने के लिए डेवलपर के साथ काम कर रहा है।",
+        "gfn_game_estimated_remaining": "अनुमानित शेष समय: %@",
+        "gfn_game_eta_unavailable": "पूरा होने के समय का अनुमान उपलब्ध नहीं है।",
+        "gfn_game_eta_elapsed": "अपडेट में अनुमान से ज़्यादा समय लग रहा है।",
+        "gfn_game_check_status": "उपलब्धता जाँचें",
+        "gfn_game_status_failed": "उपलब्धता रीफ़्रेश नहीं की जा सकी। फिर से कोशिश करें।",
     ]
 }

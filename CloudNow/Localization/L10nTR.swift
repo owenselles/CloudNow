@@ -465,5 +465,15 @@ enum L10nTR {
         "controller_changes_next_session": "Kumanda değişiklikleri bir sonraki bulut oturumunda uygulanır.",
         "ending_session": "Bulut oturumu sonlandırılıyor…",
         "managed_by_partner": "Bu hesap için sunucu seçimi %@ tarafından yönetiliyor.",
+        "gfn_game_patching": "Güncelleniyor",
+        "gfn_game_maintenance": "Bakımda",
+        "gfn_game_patching_description": "Bu oyun güncelleniyor. Güncelleme tamamlandığında tekrar deneyin.",
+        "gfn_game_compatibility_description": "NVIDIA bu oyunun uyumluluk sorunlarını çözüyor.",
+        "gfn_game_developer_maintenance_description": "NVIDIA bu oyunu yeniden kullanılabilir hale getirmek için geliştiriciyle çalışıyor.",
+        "gfn_game_estimated_remaining": "Tahmini kalan süre: %@",
+        "gfn_game_eta_unavailable": "Tahmini tamamlanma süresi mevcut değil.",
+        "gfn_game_eta_elapsed": "Güncelleme tahmin edilenden uzun sürüyor.",
+        "gfn_game_check_status": "Kullanılabilirliği kontrol et",
+        "gfn_game_status_failed": "Kullanılabilirlik yenilenemedi. Tekrar deneyin.",
     ]
 }

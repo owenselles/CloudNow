@@ -465,5 +465,15 @@ enum L10nCA {
         "xbox_resolution_requires_ultimate": "%@ requereix Xbox Game Pass Ultimate. Subscripció actual: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ requereix Xbox Game Pass Ultimate. No s'ha pogut confirmar cap subscripció apta per a aquest compte.",
         "managed_by_partner": "La selecció del servidor d'aquest compte la gestiona %@.",
+        "gfn_game_patching": "S’està actualitzant",
+        "gfn_game_maintenance": "En manteniment",
+        "gfn_game_patching_description": "Aquest joc s’està actualitzant. Torna-ho a provar quan acabi l’actualització.",
+        "gfn_game_compatibility_description": "NVIDIA està resolent problemes de compatibilitat d’aquest joc.",
+        "gfn_game_developer_maintenance_description": "NVIDIA està treballant amb el desenvolupador per restablir aquest joc.",
+        "gfn_game_estimated_remaining": "Temps restant estimat: %@",
+        "gfn_game_eta_unavailable": "No hi ha cap estimació de finalització disponible.",
+        "gfn_game_eta_elapsed": "L’actualització està trigant més del previst.",
+        "gfn_game_check_status": "Comprova la disponibilitat",
+        "gfn_game_status_failed": "No s’ha pogut actualitzar la disponibilitat. Torna-ho a provar.",
     ]
 }

@@ -465,5 +465,15 @@ enum L10nDA {
         "xbox_resolution_requires_ultimate": "%@ kræver Xbox Game Pass Ultimate. Aktuelt medlemskab: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ kræver Xbox Game Pass Ultimate. Et kvalificeret medlemskab kunne ikke bekræftes for denne konto.",
         "managed_by_partner": "Servervalg for denne konto administreres af %@.",
+        "gfn_game_patching": "Opdateres",
+        "gfn_game_maintenance": "Under vedligeholdelse",
+        "gfn_game_patching_description": "Dette spil opdateres. Prøv igen, når opdateringen er færdig.",
+        "gfn_game_compatibility_description": "NVIDIA løser kompatibilitetsproblemer for dette spil.",
+        "gfn_game_developer_maintenance_description": "NVIDIA samarbejder med udvikleren om at gøre dette spil tilgængeligt igen.",
+        "gfn_game_estimated_remaining": "Anslået resterende tid: %@",
+        "gfn_game_eta_unavailable": "Der er ingen anslået sluttid tilgængelig.",
+        "gfn_game_eta_elapsed": "Opdateringen tager længere tid end forventet.",
+        "gfn_game_check_status": "Tjek tilgængelighed",
+        "gfn_game_status_failed": "Tilgængeligheden kunne ikke opdateres. Prøv igen.",
     ]
 }

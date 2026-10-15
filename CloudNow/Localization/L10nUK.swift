@@ -465,5 +465,15 @@ enum L10nUK {
         "controller_changes_next_session": "Зміни контролера набудуть чинності в наступному хмарному сеансі.",
         "ending_session": "Завершення хмарного сеансу…",
         "managed_by_partner": "Вибором сервера для цього облікового запису керує %@.",
+        "gfn_game_patching": "Оновлюється",
+        "gfn_game_maintenance": "На обслуговуванні",
+        "gfn_game_patching_description": "Ця гра оновлюється. Повторіть спробу після завершення оновлення.",
+        "gfn_game_compatibility_description": "NVIDIA усуває проблеми сумісності цієї гри.",
+        "gfn_game_developer_maintenance_description": "NVIDIA працює з розробником над відновленням доступності цієї гри.",
+        "gfn_game_estimated_remaining": "Орієнтовний час до завершення: %@",
+        "gfn_game_eta_unavailable": "Орієнтовний час завершення невідомий.",
+        "gfn_game_eta_elapsed": "Оновлення триває довше, ніж очікувалося.",
+        "gfn_game_check_status": "Перевірити доступність",
+        "gfn_game_status_failed": "Не вдалося оновити відомості про доступність. Повторіть спробу.",
     ]
 }

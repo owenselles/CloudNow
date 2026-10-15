@@ -465,5 +465,15 @@ enum L10nMS {
         "controller_changes_next_session": "Perubahan pengawal digunakan pada sesi awan seterusnya.",
         "ending_session": "Menamatkan sesi awan…",
         "managed_by_partner": "Pemilihan pelayan untuk akaun ini diurus oleh %@.",
+        "gfn_game_patching": "Sedang dikemas kini",
+        "gfn_game_maintenance": "Dalam penyelenggaraan",
+        "gfn_game_patching_description": "Permainan ini sedang dikemas kini. Cuba lagi selepas kemas kini selesai.",
+        "gfn_game_compatibility_description": "NVIDIA sedang menyelesaikan isu keserasian untuk permainan ini.",
+        "gfn_game_developer_maintenance_description": "NVIDIA bekerjasama dengan pembangun untuk memulihkan permainan ini.",
+        "gfn_game_estimated_remaining": "Anggaran masa yang tinggal: %@",
+        "gfn_game_eta_unavailable": "Tiada anggaran masa siap tersedia.",
+        "gfn_game_eta_elapsed": "Kemas kini mengambil masa lebih lama daripada anggaran.",
+        "gfn_game_check_status": "Semak ketersediaan",
+        "gfn_game_status_failed": "Ketersediaan tidak dapat dimuat semula. Cuba lagi.",
     ]
 }

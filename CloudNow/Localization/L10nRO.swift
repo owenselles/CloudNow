@@ -465,5 +465,15 @@ enum L10nRO {
         "controller_changes_next_session": "Modificările controlerului se aplică următoarei sesiuni cloud.",
         "ending_session": "Se încheie sesiunea cloud…",
         "managed_by_partner": "Selectarea serverului este gestionată de %@ pentru acest cont.",
+        "gfn_game_patching": "Se actualizează",
+        "gfn_game_maintenance": "În mentenanță",
+        "gfn_game_patching_description": "Acest joc se actualizează. Încearcă din nou după finalizarea actualizării.",
+        "gfn_game_compatibility_description": "NVIDIA rezolvă probleme de compatibilitate pentru acest joc.",
+        "gfn_game_developer_maintenance_description": "NVIDIA colaborează cu dezvoltatorul pentru a face acest joc disponibil din nou.",
+        "gfn_game_estimated_remaining": "Timp rămas estimat: %@",
+        "gfn_game_eta_unavailable": "Nu este disponibilă o estimare a finalizării.",
+        "gfn_game_eta_elapsed": "Actualizarea durează mai mult decât s-a estimat.",
+        "gfn_game_check_status": "Verifică disponibilitatea",
+        "gfn_game_status_failed": "Disponibilitatea nu a putut fi reîmprospătată. Încearcă din nou.",
     ]
 }

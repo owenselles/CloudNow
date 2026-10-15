@@ -51,6 +51,20 @@ change. CloudNow validates the response and falls back to Reload Library when
 discovery or schema checks fail. It synchronizes only accounts already linked by
 the provider.
 
+### Patching and maintenance
+
+Opening a game's expanded details checks live availability for its store variants.
+The selected **Launch Via** store determines the status shown and whether Play is
+disabled for patching or maintenance. Other stores can remain playable.
+
+When NVIDIA supplies a patch completion estimate, CloudNow displays a countdown.
+An expired estimate does not mean patching has finished: the status remains until
+**Check availability** confirms a change. Missing estimates are identified explicitly.
+Maintenance details distinguish service compatibility work from work with the game
+developer. Availability is not persisted in the catalog cache; a failed refresh
+keeps the last known status as advisory, offers another check, and allows a launch
+attempt. Only a successful detail check disables Play. Existing sessions are unaffected.
+
 ## Cache behavior
 
 Catalog and library caches are scoped before they are displayed. Public catalog

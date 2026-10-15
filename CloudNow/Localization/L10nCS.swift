@@ -465,5 +465,15 @@ enum L10nCS {
         "xbox_resolution_requires_ultimate": "%@ vyžaduje Xbox Game Pass Ultimate. Aktuální členství: %@.",
         "xbox_resolution_requires_confirmed_ultimate": "%@ vyžaduje Xbox Game Pass Ultimate. Pro tento účet se nepodařilo ověřit způsobilé členství.",
         "managed_by_partner": "Výběr serveru pro tento účet spravuje %@.",
+        "gfn_game_patching": "Probíhá aktualizace",
+        "gfn_game_maintenance": "Probíhá údržba",
+        "gfn_game_patching_description": "Tato hra se aktualizuje. Zkuste to znovu po dokončení aktualizace.",
+        "gfn_game_compatibility_description": "NVIDIA řeší problémy s kompatibilitou této hry.",
+        "gfn_game_developer_maintenance_description": "NVIDIA spolupracuje s vývojářem na obnovení dostupnosti této hry.",
+        "gfn_game_estimated_remaining": "Odhadovaný zbývající čas: %@",
+        "gfn_game_eta_unavailable": "Odhad dokončení není k dispozici.",
+        "gfn_game_eta_elapsed": "Aktualizace trvá déle, než se odhadovalo.",
+        "gfn_game_check_status": "Zkontrolovat dostupnost",
+        "gfn_game_status_failed": "Dostupnost se nepodařilo aktualizovat. Zkuste to znovu.",
     ]
 }

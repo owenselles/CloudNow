@@ -465,5 +465,15 @@ enum L10nEN {
         "managed_by_partner": "Server selection is managed by %@ for this account.",
         "microphone_permission_denied_message": "Microphone access is disabled for CloudNow. Enable it in Apple TV Settings > General > Privacy & Security > Microphone.",
         "open_settings": "Open Settings",
+        "gfn_game_patching": "Patching",
+        "gfn_game_maintenance": "Under maintenance",
+        "gfn_game_patching_description": "This game is being updated. Try again when patching finishes.",
+        "gfn_game_compatibility_description": "NVIDIA is resolving compatibility issues for this game.",
+        "gfn_game_developer_maintenance_description": "NVIDIA is working with the developer to restore this game.",
+        "gfn_game_estimated_remaining": "Estimated time remaining: %@",
+        "gfn_game_eta_unavailable": "No completion estimate is available.",
+        "gfn_game_eta_elapsed": "Patching is taking longer than estimated.",
+        "gfn_game_check_status": "Check availability",
+        "gfn_game_status_failed": "Availability could not be refreshed. Try again.",
     ]
 }

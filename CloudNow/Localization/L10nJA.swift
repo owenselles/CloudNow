@@ -465,5 +465,15 @@ enum L10nJA {
         "controller_changes_next_session": "コントローラの変更は次のクラウドセッションから適用されます。",
         "ending_session": "クラウドセッションを終了中…",
         "managed_by_partner": "このアカウントのサーバー選択は %@ によって管理されています。",
+        "gfn_game_patching": "アップデート中",
+        "gfn_game_maintenance": "メンテナンス中",
+        "gfn_game_patching_description": "このゲームはアップデート中です。完了後にもう一度お試しください。",
+        "gfn_game_compatibility_description": "NVIDIAはこのゲームの互換性の問題を解決しています。",
+        "gfn_game_developer_maintenance_description": "NVIDIAは開発元と協力して、このゲームの復旧に取り組んでいます。",
+        "gfn_game_estimated_remaining": "推定残り時間：%@",
+        "gfn_game_eta_unavailable": "完了予定時刻は不明です。",
+        "gfn_game_eta_elapsed": "アップデートに予想より時間がかかっています。",
+        "gfn_game_check_status": "利用状況を確認",
+        "gfn_game_status_failed": "利用状況を更新できませんでした。もう一度お試しください。",
     ]
 }

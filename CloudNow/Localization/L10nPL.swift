@@ -465,5 +465,15 @@ enum L10nPL {
         "controller_changes_next_session": "Zmiany kontrolera zostaną zastosowane w następnej sesji w chmurze.",
         "ending_session": "Kończenie sesji w chmurze…",
         "managed_by_partner": "Wyborem serwera dla tego konta zarządza %@.",
+        "gfn_game_patching": "Aktualizowanie",
+        "gfn_game_maintenance": "Prace konserwacyjne",
+        "gfn_game_patching_description": "Ta gra jest aktualizowana. Spróbuj ponownie po zakończeniu aktualizacji.",
+        "gfn_game_compatibility_description": "NVIDIA rozwiązuje problemy ze zgodnością tej gry.",
+        "gfn_game_developer_maintenance_description": "NVIDIA współpracuje z deweloperem, aby przywrócić dostępność tej gry.",
+        "gfn_game_estimated_remaining": "Szacowany pozostały czas: %@",
+        "gfn_game_eta_unavailable": "Szacowany czas zakończenia jest niedostępny.",
+        "gfn_game_eta_elapsed": "Aktualizacja trwa dłużej, niż przewidywano.",
+        "gfn_game_check_status": "Sprawdź dostępność",
+        "gfn_game_status_failed": "Nie udało się odświeżyć dostępności. Spróbuj ponownie.",
     ]
 }
