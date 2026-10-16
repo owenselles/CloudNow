@@ -42,9 +42,10 @@ struct CloudMatchJourneyBoundaryTests {
     }
 
     @Test(
-        "App-scoped cleanup skips other titles and continues after a failed delete"
+        "App-scoped cleanup confirms each stop and propagates failures without touching other titles",
+        arguments: [false, true]
     )
-    func appScopedCleanup() async {
+    func appScopedCleanup(failDelete: Bool) async throws {
         let activeSessionsJSON = #"{"requestStatus":{"statusCode":1},"sessions":[{"sessionId":"target-a","status":2,"sessionRequestData":{"appId":"12345"},"connectionInfo":[{"ip":"203.0.113.21","port":443,"usage":14,"resourcePath":"/nvst/"}]},{"sessionId":"other-title","status":2,"sessionRequestData":{"appId":"99999"},"connectionInfo":[{"ip":"203.0.113.22","port":443,"usage":14,"resourcePath":"/nvst/"}]},{"sessionId":"target-b","status":3,"sessionRequestData":{"appId":12345},"connectionInfo":[{"ip":"203.0.113.23","port":443,"usage":14,"resourcePath":"/nvst/"}]}]}"#
         let transport = RecordingHTTPTransport { request, index in
             switch index {
@@ -55,15 +56,30 @@ struct CloudMatchJourneyBoundaryTests {
                 #expect(request.httpMethod == "DELETE")
                 #expect(request.url?.host == "203.0.113.21")
                 #expect(request.url?.path == "/v2/session/target-a")
-                return StubbedHTTPResponse(
-                    statusCode: 503,
-                    json: #"{"error":"temporary"}"#
-                )
+                return failDelete
+                    ? StubbedHTTPResponse(statusCode: 503, json: #"{"error":"temporary"}"#)
+                    : StubbedHTTPResponse(statusCode: 204)
             case 2:
+                #expect(request.httpMethod == "GET")
+                #expect(request.url?.path == "/v2/session/target-a")
+                return StubbedHTTPResponse(
+                    json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"target-a","status":3}}"#
+                )
+            case 3:
+                #expect(request.httpMethod == "GET")
+                #expect(request.url?.path == "/v2/session/target-a")
+                return StubbedHTTPResponse(
+                    json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"target-a","status":4}}"#
+                )
+            case 4:
                 #expect(request.httpMethod == "DELETE")
                 #expect(request.url?.host == "203.0.113.23")
                 #expect(request.url?.path == "/v2/session/target-b")
                 return StubbedHTTPResponse(statusCode: 204)
+            case 5:
+                #expect(request.httpMethod == "GET")
+                #expect(request.url?.path == "/v2/session/target-b")
+                return StubbedHTTPResponse(statusCode: 404)
             default:
                 throw TestTransportError.unexpectedRequest(
                     "Unexpected cleanup request \(index)"
@@ -72,17 +88,28 @@ struct CloudMatchJourneyBoundaryTests {
         }
         let client = CloudMatchClient(
             transport: transport,
-            deviceId: { "fixture-device" }
+            deviceId: { "fixture-device" },
+            sleep: { _ in }
         )
 
-        await client.stopActiveSessions(
-            matchingAppId: "12345",
-            token: "fixture-token",
-            base: "https://region.example.invalid"
-        )
+        if failDelete {
+            await #expect(throws: CloudMatchError.self) {
+                try await client.stopActiveSessions(
+                    matchingAppId: "12345",
+                    token: "fixture-token",
+                    base: "https://region.example.invalid"
+                )
+            }
+        } else {
+            try await client.stopActiveSessions(
+                matchingAppId: "12345",
+                token: "fixture-token",
+                base: "https://region.example.invalid"
+            )
+        }
 
         let requests = await transport.requests()
-        #expect(requests.count == 3)
+        #expect(requests.count == (failDelete ? 2 : 6))
         #expect(
             !requests.contains {
                 $0.url?.path == "/v2/session/other-title"

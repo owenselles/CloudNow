@@ -425,6 +425,7 @@ actor CloudMatchClient {
     private let deviceId: @Sendable () -> String
     private let now: @Sendable () -> Date
     private let timezoneOffsetMilliseconds: @Sendable () -> Int
+    private let sleep: @Sendable (TimeInterval) async throws -> Void
 
     init(
         transport: any HTTPTransport = URLSessionHTTPTransport(configuration: .ephemeral),
@@ -433,6 +434,9 @@ actor CloudMatchClient {
         now: @escaping @Sendable () -> Date = Date.init,
         timezoneOffsetMilliseconds: @escaping @Sendable () -> Int = {
             TimeZone.current.secondsFromGMT() * 1000
+        },
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
+            try await Task.sleep(for: .seconds($0))
         }
     ) {
         self.transport = transport
@@ -440,6 +444,7 @@ actor CloudMatchClient {
         self.deviceId = deviceId
         self.now = now
         self.timezoneOffsetMilliseconds = timezoneOffsetMilliseconds
+        self.sleep = sleep
     }
 
     private func validateHTTPStatus(_ response: URLResponse, data: Data, context: String) throws {
@@ -624,6 +629,7 @@ actor CloudMatchClient {
         clientId: String? = nil,
         deviceId: String? = nil
     ) async throws {
+        try Task.checkCancellation()
         let effectiveBase = serverIp.map { "https://\($0)" } ?? base
         let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
         var request = URLRequest(url: url)
@@ -649,6 +655,39 @@ actor CloudMatchClient {
                 message: "HTTP \(statusCode): \(redactedHTTPBody(data))"
             )
         }
+        if !data.isEmpty {
+            let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+            try validateAPIStatus(payload, context: "stopSession")
+        }
+
+        // DELETE acknowledges the stop request; the rig may still be shutting down.
+        // Keep ownership until the same endpoint confirms that this session ended.
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 5
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        for attempt in 0 ..< 15 {
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { break }
+            let (data, response) = try await transport.data(for: request)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            if statusCode == 404 || statusCode == 410 {
+                return
+            }
+            try validateHTTPStatus(response, data: data, context: "stopSession")
+            let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+            try validateAPIStatus(payload, context: "stopSession")
+            guard let session = payload.session, session.sessionId == sessionId else {
+                throw CloudMatchError.missingSession(context: "stopSession")
+            }
+            if session.status == 4 {
+                return
+            }
+            if attempt < 14 {
+                try await sleep(2)
+            }
+        }
+        throw CloudMatchError.sessionStopTimedOut
     }
 
     // MARK: Active Sessions
@@ -687,23 +726,19 @@ actor CloudMatchClient {
         }
     }
 
-    func stopActiveSessions(matchingAppId appId: String, token: String, base: String) async {
-        do {
-            let activeSessions = try await getActiveSessions(token: token, base: base)
-            let matches = activeSessions.filter { $0.appId == appId }
-            guard !matches.isEmpty else { return }
+    func stopActiveSessions(matchingAppId appId: String, token: String, base: String) async throws {
+        let activeSessions = try await getActiveSessions(token: token, base: base)
+        let matches = activeSessions.filter { $0.appId == appId }
+        guard !matches.isEmpty else { return }
 
-            cloudMatchLog.info("[CloudMatch] stopping \(matches.count, privacy: .public) active session(s) for appId=\(appId, privacy: .public)")
-            for session in matches {
-                try? await stopSession(
-                    sessionId: session.sessionId,
-                    token: token,
-                    base: base,
-                    serverIp: session.serverIp
-                )
-            }
-        } catch {
-            cloudMatchLog.warning("[CloudMatch] stopActiveSessions failed: \(error, privacy: .private)")
+        cloudMatchLog.info("[CloudMatch] stopping \(matches.count, privacy: .public) active session(s) for appId=\(appId, privacy: .public)")
+        for session in matches {
+            try await stopSession(
+                sessionId: session.sessionId,
+                token: token,
+                base: base,
+                serverIp: session.serverIp
+            )
         }
     }
 
@@ -1074,14 +1109,30 @@ actor CloudMatchClient {
 
 nonisolated enum CloudMatchError: Error, LocalizedError {
     case sessionCreateFailed(String)
+    case sessionStopTimedOut
     case missingServerIp
     case missingSession(context: String)
     case requestFailed(context: String, message: String)
     case apiStatus(context: String, statusCode: Int, description: String?)
 
+    var isSessionConflict: Bool {
+        let message: String
+        switch self {
+        case let .sessionCreateFailed(raw):
+            message = raw
+        case let .apiStatus(context, _, description) where context == "createSession":
+            message = description ?? ""
+        default:
+            return false
+        }
+        return message.contains("SESSION_LIMIT_EXCEEDED_STATUS")
+            || message.contains("REQUEST_LIMIT_EXCEEDED_STATUS")
+    }
+
     var errorDescription: String? {
         switch self {
         case let .sessionCreateFailed(msg): "Session creation failed: \(msg)"
+        case .sessionStopTimedOut: "Previous session is still stopping. Please try again."
         case .missingServerIp: "CloudMatch response missing server IP."
         case let .missingSession(context): "\(context) missing session data."
         case let .requestFailed(context, message): "\(context) failed: \(message)"

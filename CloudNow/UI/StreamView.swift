@@ -610,7 +610,9 @@ struct StreamView: View {
         if upper.contains("ENTITLEMENT") || raw.contains("3237093650") {
             return L10n.format("not_in_library", game.title)
         }
-        if upper.contains("SESSION_LIMIT_EXCEEDED") {
+        if upper.contains("SESSION_LIMIT_EXCEEDED")
+            || raw == CloudMatchError.sessionStopTimedOut.localizedDescription
+        {
             return L10n.text("previous_session_still_active")
         }
         // Never surface the raw JSON body on the failure screen: when the payload carries
@@ -1324,7 +1326,7 @@ struct StreamView: View {
             guard shouldForceStopExistingSession(error) else { throw error }
 
             streamLog.warning("[Session] active session conflict detected for appId=\(appId, privacy: .public), stopping matches and retrying once")
-            await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
+            try await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
             try requireCurrentSessionAttempt(generation)
 
             let sessionInfo = try await sessionOrchestrator.createSession(
@@ -1344,8 +1346,7 @@ struct StreamView: View {
     }
 
     private func shouldForceStopExistingSession(_ error: Error) -> Bool {
-        guard case let CloudMatchError.sessionCreateFailed(raw) = error else { return false }
-        return raw.contains("SESSION_LIMIT_EXCEEDED_STATUS") || raw.contains("REQUEST_LIMIT_EXCEEDED_STATUS")
+        (error as? CloudMatchError)?.isSessionConflict == true
     }
 
     private func reportAd(id: String, action: AdAction, watchedMs: Int? = nil) {
