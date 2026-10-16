@@ -204,6 +204,7 @@ final class LibraryRefreshCoordinator {
     private struct RunContext {
         let generation: UInt64
         let userId: String
+        let providerCodes: Set<String>?
         let retryProviderCodes: Set<String>?
         let previousProviders: [String: ProviderSyncProgress]
         let previousBaselines: [String: SyncBaseline]
@@ -254,6 +255,7 @@ final class LibraryRefreshCoordinator {
     private var previousBaselines: [String: SyncBaseline] = [:]
     private var retryNotBefore: [String: TimeInterval] = [:]
     private var unresolvedSubmissionProviderCodes = Set<String>()
+    private var selectedProviderCodes: Set<String>?
 
     init(
         client: any LibrarySyncClient,
@@ -273,15 +275,22 @@ final class LibraryRefreshCoordinator {
         state = initialState
     }
 
+    /// A nil selection syncs every connected store; an empty selection only imports
+    /// the library. Retries retain the original selection.
     @discardableResult
     func start(
         userId: String,
+        providerCodes: Set<String>? = nil,
         retryProviderCodes: Set<String>? = nil,
         resolveToken: @escaping TokenResolver,
         userIsCurrent: @escaping UserValidator,
         importLibrary: @escaping LibraryImporter
     ) -> Bool {
         guard activeTask == nil else { return false }
+
+        if retryProviderCodes == nil {
+            selectedProviderCodes = providerCodes
+        }
 
         generation &+= 1
         let runGeneration = generation
@@ -293,6 +302,7 @@ final class LibraryRefreshCoordinator {
         let context = RunContext(
             generation: runGeneration,
             userId: userId,
+            providerCodes: selectedProviderCodes,
             retryProviderCodes: retryProviderCodes,
             previousProviders: previousProviders,
             previousBaselines: previousBaselines,
@@ -314,6 +324,7 @@ final class LibraryRefreshCoordinator {
         activeTask = nil
         if resetState {
             state = FullLibraryRefreshState()
+            selectedProviderCodes = nil
             previousBaselines = [:]
             retryNotBefore = [:]
             unresolvedSubmissionProviderCodes = []
@@ -368,7 +379,9 @@ final class LibraryRefreshCoordinator {
                 },
                 uniquingKeysWith: { first, _ in first }
             )
-            state.providers = discovery.map { provider in
+            state.providers = discovery.filter {
+                context.providerCodes?.contains($0.code) ?? true
+            }.map { provider in
                 ProviderSyncProgress(
                     providerCode: provider.code,
                     displayName: provider.displayName,

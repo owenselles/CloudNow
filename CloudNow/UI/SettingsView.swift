@@ -852,6 +852,7 @@ enum CloudNowDataDialog: Equatable {
 
 private enum SettingsNavigationRoute: Hashable {
     case serverLocation
+    case storeConnections
 }
 
 struct SettingsView: View {
@@ -1296,6 +1297,14 @@ struct SettingsView: View {
 
                 if viewModel.isProviderLibrarySyncEnabled {
                     Section(L10n.text("library")) {
+                        NavigationLink(value: SettingsNavigationRoute.storeConnections) {
+                            CloudNowSettingLabel(
+                                title: L10n.text("connected_stores"),
+                                description: L10n.text("connected_stores_description")
+                            )
+                        }
+                        .accessibilityIdentifier("settings.store-connections")
+
                         Button {
                             viewModel.startFullLibraryRefresh(authManager: authManager)
                             showLibraryRefreshProgress = true
@@ -1381,6 +1390,8 @@ struct SettingsView: View {
                     ServerLocationPickerView {
                         navigationPath.removeAll()
                     }
+                case .storeConnections:
+                    StoreConnectionsView()
                 }
             }
             .sheet(isPresented: $showNetworkTest) {

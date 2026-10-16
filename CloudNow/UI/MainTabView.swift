@@ -70,6 +70,9 @@ struct MainTabView: View {
             )
         }
         .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
+                viewModel.cancelStoreConnection()
+            }
             guard phase == .active, loadsRemoteData else { return }
             viewModel.startForegroundLibraryRefresh(authManager: authManager)
         }

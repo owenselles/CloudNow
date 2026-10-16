@@ -1459,6 +1459,119 @@ struct GamesViewModelTests {
     }
 
     @MainActor
+    @Test("Connecting a store reuses sync only when supported", arguments: [true, false])
+    func storeConnectionRefreshesLibrary(supportsSync: Bool) async {
+        let client = StoreIntegrationClient(supportsSync: supportsSync)
+        var importCount = 0
+        let viewModel = GamesViewModel(
+            persistenceEnabled: false,
+            librarySyncClient: client,
+            libraryRefreshScheduler: LibraryRefreshScheduler(now: { 0 }, sleep: { _ in }),
+            storeConnectionClient: client,
+            storeConnectionScheduler: LibraryRefreshScheduler(now: { 0 }, sleep: { _ in }),
+            providerLibrarySyncEnabled: true,
+            libraryRefreshImporterOverride: {
+                importCount += 1
+                return LibraryImportResult(finalGameCount: 4, addedGameIDs: [], removedGameIDs: [])
+            }
+        )
+        let authManager = await makeAuthenticatedManager()
+        viewModel.refreshStoreConnections(authManager: authManager)
+        await viewModel.storeConnections.waitForOperation()
+        let store = await client.store()
+
+        viewModel.connectStore(store, authManager: authManager)
+        #expect(!viewModel.canStartFullLibraryRefresh)
+        viewModel.startFullLibraryRefresh(authManager: authManager)
+        await viewModel.storeConnections.waitForOperation()
+        #expect(await waitForLibraryRefresh(viewModel))
+
+        #expect(viewModel.storeConnections.stores.first?.isConnected == true)
+        #expect(await client.requestedCodes == (supportsSync ? [store.code] : []))
+        #expect(viewModel.libraryRefreshState.stage == .completed)
+        #expect(importCount == 1)
+        #expect(viewModel.canManageStoreConnections)
+    }
+
+    @MainActor
+    @Test("Disconnect imports authoritative ownership without starting store sync")
+    func disconnectStoreImportsLibrary() async {
+        let client = StoreIntegrationClient(connected: true)
+        var importCount = 0
+        let viewModel = GamesViewModel(
+            persistenceEnabled: false,
+            librarySyncClient: client,
+            storeConnectionClient: client,
+            providerLibrarySyncEnabled: true,
+            libraryRefreshImporterOverride: {
+                importCount += 1
+                return LibraryImportResult(finalGameCount: 0, addedGameIDs: [], removedGameIDs: ["old"])
+            }
+        )
+        let authManager = await makeAuthenticatedManager()
+        await viewModel.disconnectStore(client.store(), authManager: authManager)
+        await viewModel.storeConnections.waitForOperation()
+        #expect(await waitForLibraryRefresh(viewModel))
+
+        #expect(viewModel.storeConnections.stores.first?.isConnected == false)
+        #expect(await client.requestedCodes.isEmpty)
+        #expect(importCount == 1)
+        #expect(viewModel.libraryRefreshState.summary?.removedGameIDs == ["old"])
+    }
+
+    @MainActor
+    @Test("Store resync validates current capability and connection")
+    func storeResyncUsesDiscoveredCapabilities() async {
+        let client = StoreIntegrationClient(connected: true)
+        let viewModel = GamesViewModel(
+            persistenceEnabled: false,
+            librarySyncClient: client,
+            libraryRefreshScheduler: LibraryRefreshScheduler(now: { 0 }, sleep: { _ in }),
+            storeConnectionClient: client,
+            providerLibrarySyncEnabled: true,
+            libraryRefreshImporterOverride: {
+                LibraryImportResult(finalGameCount: 4, addedGameIDs: [], removedGameIDs: [])
+            }
+        )
+        let authManager = await makeAuthenticatedManager()
+        viewModel.startStoreLibraryRefresh(providerCode: "STEAM", authManager: authManager)
+        #expect(viewModel.libraryRefreshState.stage == .idle)
+        viewModel.refreshStoreConnections(authManager: authManager)
+        await viewModel.storeConnections.waitForOperation()
+        viewModel.startStoreLibraryRefresh(providerCode: "UNKNOWN", authManager: authManager)
+        #expect(viewModel.libraryRefreshState.stage == .idle)
+        viewModel.startStoreLibraryRefresh(providerCode: "STEAM", authManager: authManager)
+        #expect(await waitForLibraryRefresh(viewModel))
+        #expect(await client.requestedCodes == ["STEAM"])
+    }
+
+    @MainActor
+    @Test("Provider deactivation cancels store authorization and clears account data")
+    func providerDeactivationCancelsStoreAuthorization() async {
+        let client = StoreIntegrationClient()
+        let viewModel = GamesViewModel(
+            persistenceEnabled: false,
+            storeConnectionClient: client,
+            providerLibrarySyncEnabled: true
+        )
+        let authManager = await makeAuthenticatedManager()
+        viewModel.refreshStoreConnections(authManager: authManager)
+        await viewModel.storeConnections.waitForOperation()
+        await viewModel.connectStore(client.store(), authManager: authManager)
+        for _ in 0 ..< 10000 where viewModel.storeConnections.authorization == nil {
+            await Task.yield()
+        }
+        #expect(viewModel.storeConnections.authorization != nil)
+
+        await viewModel.deactivateForInactiveProvider()
+
+        #expect(viewModel.storeConnections.phase == .idle)
+        #expect(viewModel.storeConnections.stores.isEmpty)
+        #expect(viewModel.libraryRefreshState.stage == .idle)
+        #expect(await client.pollCount == 0)
+    }
+
+    @MainActor
     private func waitForLibraryRefresh(
         _ viewModel: GamesViewModel
     ) async -> Bool {
@@ -1651,6 +1764,94 @@ private final class MutableLocaleCode {
 
     init(_ value: String) {
         self.value = value
+    }
+}
+
+private actor StoreIntegrationClient: StoreConnectionClient, LibrarySyncClient {
+    private var connected: Bool
+    private let supportsSync: Bool
+    private(set) var requestedCodes: [String] = []
+    private(set) var pollCount = 0
+
+    init(connected: Bool = false, supportsSync: Bool = true) {
+        self.connected = connected
+        self.supportsSync = supportsSync
+    }
+
+    func store() -> StoreConnection {
+        StoreConnection(
+            code: supportsSync ? "STEAM" : "EPIC",
+            displayName: supportsSync ? "Steam" : "Epic Games",
+            accountDisplayName: connected ? "Fixture Account" : nil,
+            iconURL: nil,
+            isConnected: connected,
+            requiresReconnect: false,
+            supportsLinking: true,
+            supportsSync: supportsSync,
+            supportsAutomaticSignIn: !supportsSync,
+            isExpired: false,
+            sortOrder: 0,
+            snapshot: nil
+        )
+    }
+
+    func discoverStores(token _: String, userId _: String) -> [StoreConnection] {
+        [store()]
+    }
+
+    func requestAuthorization(providerCode _: String, token _: String) -> StoreDeviceAuthorization {
+        StoreDeviceAuthorization(
+            deviceCode: "fixture-device",
+            userCode: "FIXTURE",
+            verificationURL: URL(string: "https://example.invalid/connect")!,
+            verificationURLComplete: URL(string: "https://example.invalid/connect?code=FIXTURE")!,
+            expiresIn: 60,
+            interval: 5
+        )
+    }
+
+    func pollAuthorization(deviceCode _: String) -> StoreAuthorizationStatus {
+        pollCount += 1
+        connected = true
+        return .authorized
+    }
+
+    func disconnect(providerCode _: String, token _: String) {
+        connected = false
+    }
+
+    func discover(token _: String, userId _: String) -> [ConnectedGameLibrary] {
+        ["STEAM", "XBOX"].map {
+            ConnectedGameLibrary(
+                code: $0,
+                displayName: $0,
+                accountDisplayName: "Fixture Account",
+                iconURL: nil,
+                supportsSync: true,
+                sortOrder: 0,
+                snapshot: ProviderSyncSnapshot(
+                    providerCode: $0,
+                    totalSyncedGames: 3,
+                    state: .success,
+                    syncDate: Date(timeIntervalSince1970: 1000)
+                )
+            )
+        }
+    }
+
+    func requestSync(providerCode: String, token _: String) {
+        requestedCodes.append(providerCode)
+    }
+
+    func fetchSnapshots(token _: String, userId _: String) -> [ProviderSyncSnapshot] {
+        requestedCodes.map {
+            ProviderSyncSnapshot(
+                providerCode: $0,
+                totalSyncedGames: 4,
+                state: .success,
+                syncDate: Date(timeIntervalSince1970: 1001)
+            )
+        }
     }
 }
 

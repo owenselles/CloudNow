@@ -1117,6 +1117,102 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testStoreConnectionsShowCapabilitiesAndCancelAuthorization() {
+        let app = makeApp()
+        app.launch()
+        openStoreConnections(in: app)
+
+        XCTAssertTrue(app.buttons["store-connections.resync.STEAM"].exists)
+        XCTAssertTrue(app.buttons["store-connections.disconnect.STEAM"].exists)
+        XCTAssertTrue(element("store-connections.status.STEAM", in: app).label.contains("Fixture Steam"))
+
+        let connect = app.buttons["store-connections.connect.UBISOFT"]
+        let connectRow = storeConnectionRow("store-connections.connect.UBISOFT", in: app)
+        focusAndSelect(connectRow, directions: [.down], pressesPerDirection: 20)
+        XCTAssertTrue(element("store-device-code-login", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(element("store-device-code-login.qr", in: app).exists)
+        XCTAssertEqual(
+            element("store-device-code-login.qr", in: app).value as? String,
+            "https://example.invalid/activate?user_code=STORE123"
+        )
+        attachScreenshot(of: app, named: "GFN store connection phone sign-in")
+
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(element("settings.store-connections.page", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(element("store-device-code-login.qr", in: app).exists)
+        XCTAssertTrue(connect.isEnabled)
+        XCTAssertFalse(app.buttons["store-connections.disconnect.UBISOFT"].exists)
+
+        focusAndSelect(connectRow, directions: [.down, .up], pressesPerDirection: 12)
+        let cancel = app.buttons["store-device-code-login.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        focusAndSelect(cancel, directions: [.down], pressesPerDirection: 5)
+        XCTAssertTrue(element("settings.store-connections.page", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(element("store-device-code-login.qr", in: app).exists)
+        XCTAssertTrue(waitForFocus(connectRow))
+        XCTAssertTrue(app.buttons["store-connections.disconnect.EPIC"].isEnabled)
+        XCTAssertTrue(app.buttons["store-connections.connect.XBOX"].isEnabled)
+
+        focusAndSelect(
+            storeConnectionRow("store-connections.disconnect.EPIC", in: app),
+            directions: [.down],
+            pressesPerDirection: 4
+        )
+        let epicAlert = app.alerts.firstMatch
+        XCTAssertTrue(epicAlert.waitForExistence(timeout: 3))
+        XCTAssertEqual(epicAlert.label, "Disconnect Epic Games?")
+        focusAndSelect(
+            epicAlert.buttons.matching(identifier: "Cancel").firstMatch,
+            directions: [.down, .up],
+            pressesPerDirection: 3
+        )
+        XCTAssertFalse(app.buttons["store-connections.resync.EPIC"].exists)
+
+        let reconnect = app.buttons["store-connections.connect.XBOX"]
+        focus(
+            labelContaining: "Reconnect",
+            in: app,
+            directions: [.down],
+            pressesPerDirection: 12
+        )
+        XCTAssertTrue(reconnect.label.contains("Reconnect"))
+        XCTAssertFalse(app.buttons["store-connections.resync.XBOX"].exists)
+
+        let ea = element("store-connections.status.EA", in: app)
+        focus(storeConnectionRow("store-connections.disconnect.XBOX", in: app), directions: [.down], pressesPerDirection: 4)
+        XCTAssertTrue(ea.label.contains("Sign in when launching a game."))
+        XCTAssertTrue(ea.isHittable)
+        XCTAssertFalse(app.buttons["store-connections.connect.EA"].exists)
+        XCTAssertFalse(app.buttons["store-connections.resync.EA"].exists)
+        attachScreenshot(of: app, named: "GFN store connections and unsupported store guidance")
+    }
+
+    @MainActor
+    func testStoreDisconnectRequiresConfirmationAndCancelKeepsConnection() {
+        let app = makeApp()
+        app.launch()
+        openStoreConnections(in: app)
+
+        let disconnect = app.buttons["store-connections.disconnect.STEAM"]
+        focusAndSelect(
+            storeConnectionRow("store-connections.disconnect.STEAM", in: app),
+            directions: [.down],
+            pressesPerDirection: 12
+        )
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        XCTAssertEqual(alert.label, "Disconnect Steam?")
+        let cancel = alert.buttons.matching(identifier: "Cancel").firstMatch
+        focusAndSelect(cancel, directions: [.down, .up], pressesPerDirection: 3)
+
+        XCTAssertTrue(element("settings.store-connections.page", in: app).waitForExistence(timeout: 3))
+        XCTAssertTrue(disconnect.exists)
+        XCTAssertTrue(app.buttons["store-connections.resync.STEAM"].isEnabled)
+        XCTAssertFalse(app.buttons["store-connections.connect.STEAM"].exists)
+        attachScreenshot(of: app, named: "GFN connected store library sync")
+    }
+
+    @MainActor
     func testCodecSelectionPageCommitsAndRestoresSelectedValue() {
         let app = makeApp()
         app.launch()
@@ -2214,6 +2310,30 @@ final class CloudNowUITests: XCTestCase {
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8))
         selectTab(settings, movingRight: 3)
+    }
+
+    @MainActor
+    private func openStoreConnections(in app: XCUIApplication) {
+        openSettings(in: app)
+        focusAndSelect(
+            labelContaining: "Connected Stores",
+            in: app,
+            directions: [.down],
+            pressesPerDirection: 80
+        )
+        XCTAssertTrue(
+            element("settings.store-connections.page", in: app)
+                .waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(
+            app.buttons["store-connections.resync.STEAM"]
+                .waitForExistence(timeout: 5)
+        )
+    }
+
+    @MainActor
+    private func storeConnectionRow(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.cells.containing(.any, identifier: identifier).firstMatch
     }
 
     @MainActor

@@ -182,6 +182,58 @@ actor GFNLibrarySyncClient {
             }
     }
 
+    func discoverStores(token: String, userId: String) async throws -> [StoreConnection] {
+        async let definitionsRequest = fetchDefinitions(token: token, userId: userId)
+        async let accountRequest = fetchAccount(token: token, userId: userId)
+        let (definitions, account) = try await (definitionsRequest, accountRequest)
+        let definitionsByCode = Dictionary(
+            definitions.map { (normalizedProviderCode($0.store), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let linkedStores = Dictionary(
+            account.stores.compactMap { store -> (String, AccountLinkingData)? in
+                guard let linkingData = store.accountLinkingData else { return nil }
+                return (normalizedProviderCode(store.store), linkingData)
+            },
+            uniquingKeysWith: { _, last in last }
+        )
+        return Set(definitionsByCode.keys).union(linkedStores.keys)
+            .filter { !$0.isEmpty && !["UNKNOWN", "NONE"].contains($0) }
+            .map { code in
+                let definition = definitionsByCode[code]
+                let linkingData = linkedStores[code]
+                let supportsSync = definition?.features.contains {
+                    $0.typeName == "AccountGamesSyncing" && $0.supported == true
+                } == true
+                let supportsAutomaticSignIn = definition?.features.contains {
+                    $0.typeName == "AccountLinkingSso" && $0.supported == true
+                } == true
+                let snapshot = linkingData.map { makeSnapshot(providerCode: code, linkingData: $0) }
+                // ALS uses remaining seconds; -1 and 0 mean no expiry.
+                let isExpired = (linkingData?.expiresIn?.value).map { $0 < -1 } ?? false
+                return StoreConnection(
+                    code: code,
+                    displayName: nonEmpty(definition?.label) ?? code,
+                    accountDisplayName: nonEmpty(linkingData?.userDisplayName),
+                    iconURL: nonEmpty(definition?.smallImageURL).flatMap(URL.init(string:)),
+                    isConnected: linkingData != nil,
+                    requiresReconnect: snapshot?.state == .denied || isExpired,
+                    supportsLinking: supportsSync || supportsAutomaticSignIn,
+                    supportsSync: supportsSync,
+                    supportsAutomaticSignIn: supportsAutomaticSignIn,
+                    isExpired: isExpired,
+                    sortOrder: definition?.sortOrder ?? .max,
+                    snapshot: snapshot
+                )
+            }
+            .sorted {
+                if $0.sortOrder != $1.sortOrder {
+                    return $0.sortOrder < $1.sortOrder
+                }
+                return $0.code < $1.code
+            }
+    }
+
     func requestSync(providerCode: String, token: String) async throws {
         guard let encodedProviderCode = providerCode.addingPercentEncoding(
             withAllowedCharacters: Self.pathSegmentAllowedCharacters
@@ -498,6 +550,7 @@ private nonisolated struct StoreData: Decodable {
 
 private nonisolated struct AccountLinkingData: Decodable {
     let userDisplayName: String?
+    let expiresIn: FlexibleInt?
     let accountSyncingData: AccountSyncingData?
 }
 

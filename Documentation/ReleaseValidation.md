@@ -132,6 +132,35 @@ media evidence. Change one Xbox-owned variable at a time.
     release after teardown. The inactive provider must not retain an active peer
     or begin network work.
 
+## GeForce NOW connected stores
+
+Use a test account and stores that expose the relevant capabilities. Do not
+capture live linking QR codes, codes, or authorization URLs as screenshots or
+test artifacts.
+
+1. Open Connected Stores and verify the provider's reported connection states
+   and capabilities against the official GeForce NOW app.
+2. Connect an unlinked store on a phone using the displayed QR code or code.
+   Complete any store authentication and approval. Confirm that CloudNow reports
+   Connected only after provider confirmation and refreshes the library when
+   synchronization is supported.
+3. Reconnect a store requiring renewed authorization. Verify existing game counts
+   and manual Resync Library behavior, including sync failures and retry.
+4. Cancel an in-progress link, then start a new one. Let another code expire and
+   verify that a fresh code is required. A closed or expired session must not
+   replace the state of a newer attempt.
+5. Cancel the disconnect confirmation and verify that nothing changes. Then
+   confirm a disconnect and compare the refreshed state with the official app.
+   If the request fails, verify that Refresh Connections resolves the actual
+   provider state before another attempt.
+6. Sign out or change GeForce NOW accounts during linking. Verify that old
+   results cannot populate the new account. Switch to Xbox mode and confirm that
+   its accounts, library refresh, and settings remain unaffected.
+7. Verify that Steam linking does not promise game-session sign-in, Epic sign-in
+   is limited to supported titles, and unsupported stores retain in-session
+   login. Confirm that a connection-only store does not receive a library sync
+   request.
+
 ## Ad-supported Xbox account
 
 For an account enrolled in the ad-supported preview without normal cloud gaming

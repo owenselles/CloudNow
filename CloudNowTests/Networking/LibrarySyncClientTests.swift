@@ -4,6 +4,58 @@ import Testing
 
 @Suite("Provider library synchronization client")
 struct LibrarySyncClientTests {
+    @Test("Store discovery includes unlinked stores without changing linked-only library discovery")
+    func allStoreDiscovery() async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            StubbedHTTPResponse(json: queryValues(from: request)["requestType"] == "staticAppData"
+                ? staticDefinitionsResponse : connectedAccountsResponse)
+        }
+        let client = GFNLibrarySyncClient(transport: transport)
+        let stores = try await client.discoverStores(token: "fixture-token", userId: "user")
+        #expect(stores.map(\.code) == ["STEAM", "BATTLE_NET", "EPIC", "DISCONNECTED", "SERVER_ONLY_PROVIDER"])
+        let steam = try #require(stores.first { $0.code == "STEAM" })
+        #expect(steam.id == "STEAM")
+        #expect(steam.isConnected)
+        #expect(steam.supportsLinking)
+        #expect(steam.supportsSync)
+        #expect(!steam.supportsAutomaticSignIn)
+        #expect(!steam.requiresReconnect)
+        #expect(!steam.isExpired)
+        #expect(steam.snapshot?.totalSyncedGames == 23)
+        let epic = try #require(stores.first { $0.code == "EPIC" })
+        #expect(epic.supportsLinking)
+        #expect(epic.supportsAutomaticSignIn)
+        #expect(!epic.supportsSync)
+        #expect(!epic.isExpired)
+        let unlinked = try #require(stores.first { $0.code == "DISCONNECTED" })
+        #expect(!unlinked.isConnected)
+        #expect(unlinked.supportsLinking)
+        #expect(unlinked.snapshot == nil)
+        #expect(stores.first { $0.code == "BATTLE_NET" }?.requiresReconnect == true)
+        #expect(stores.first { $0.code == "BATTLE_NET" }?.isExpired == false)
+        let linked = try await client.discover(token: "fixture-token", userId: "user")
+        #expect(!linked.contains { $0.code == "DISCONNECTED" })
+    }
+
+    @Test("Store connection expiry preserves ALS no-expiry sentinels", arguments: [-60, -1, 0, 60])
+    func storeConnectionExpiry(seconds: Int) async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            if queryValues(from: request)["requestType"] == "staticAppData" {
+                return StubbedHTTPResponse(json: staticDefinitionsResponse)
+            }
+            return StubbedHTTPResponse(json: """
+            {"data":{"userAccount":{"storesData":[
+              {"store":"EPIC","accountLinkingData":{"expiresIn":"\(seconds)"}}
+            ]}}}
+            """)
+        }
+        let client = GFNLibrarySyncClient(transport: transport)
+        let stores = try await client.discoverStores(token: "token", userId: "user")
+        let epic = try #require(stores.first { $0.code == "EPIC" })
+        #expect(epic.requiresReconnect == (seconds < -1))
+        #expect(epic.isExpired == (seconds < -1))
+    }
+
     @Test("Discovery uses persisted LCARS contracts and keeps every connected store visible")
     func discoveryRequestAndDecoding() async throws {
         let transport = RecordingHTTPTransport { request, _ in

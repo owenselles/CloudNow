@@ -73,6 +73,122 @@ struct LibraryRefreshCoordinatorTests {
         #expect(importer.callCount == 1)
     }
 
+    @Test("A selected store sync ignores other stores while importing the full library")
+    func selectedProviderImportsFullLibrary() async {
+        let baseline = Date(timeIntervalSince1970: 1500)
+        let client = CoordinatorLibrarySyncClient(
+            discoveries: [.success([
+                provider("STEAM", date: baseline),
+                provider("XBOX", date: baseline),
+            ])],
+            snapshots: [.success([
+                snapshot("STEAM", date: baseline.addingTimeInterval(1), count: 3),
+                snapshot("XBOX", date: baseline, count: nil, state: .unknown(nil)),
+            ])]
+        )
+        let clock = CoordinatorTestScheduler(autoAdvance: true)
+        let coordinator = makeCoordinator(client: client, scheduler: clock.scheduler)
+        let importer = CoordinatorImportRecorder(result: LibraryImportResult(
+            finalGameCount: 20,
+            addedGameIDs: ["steam-new", "xbox-new"],
+            removedGameIDs: ["xbox-removed"]
+        ))
+
+        #expect(start(
+            coordinator,
+            providerCodes: ["STEAM"],
+            importer: importer,
+            validity: CoordinatorValidity()
+        ))
+        #expect(await eventually { coordinator.state.stage == .completed })
+
+        #expect(await client.requestedProviderCodes() == ["STEAM"])
+        #expect(await client.snapshotCallCount() == 1)
+        #expect(coordinator.state.providers.map(\.providerCode) == ["STEAM"])
+        #expect(coordinator.state.providers.first?.phase == .succeeded(gameCount: 3))
+        #expect(importer.callCount == 1)
+        #expect(coordinator.state.summary?.finalGameCount == 20)
+        #expect(coordinator.state.summary?.addedGameIDs == ["steam-new", "xbox-new"])
+        #expect(coordinator.state.summary?.removedGameIDs == ["xbox-removed"])
+    }
+
+    @Test("An empty store selection imports without triggering or polling connected stores")
+    func emptyProviderSelectionImportsDirectly() async {
+        let client = CoordinatorLibrarySyncClient(discoveries: [.success([
+            provider("STEAM", date: nil),
+            provider("XBOX", date: nil),
+        ])])
+        let clock = CoordinatorTestScheduler(autoAdvance: true)
+        let coordinator = makeCoordinator(
+            client: client,
+            scheduler: clock.scheduler,
+            propagationDelay: 5
+        )
+        let importer = CoordinatorImportRecorder()
+
+        #expect(start(
+            coordinator,
+            providerCodes: [],
+            importer: importer,
+            validity: CoordinatorValidity()
+        ))
+        #expect(await eventually { coordinator.state.stage == .completed })
+
+        #expect(coordinator.state.providers.isEmpty)
+        #expect(coordinator.state.finalPhase == .succeeded(gameCount: 7))
+        #expect(await client.requestedProviderCodes().isEmpty)
+        #expect(await client.snapshotCallCount() == 0)
+        #expect(await clock.recordedSleeps().isEmpty)
+        #expect(importer.callCount == 1)
+    }
+
+    @Test("Retry preserves the selected store and a new full refresh restores every store")
+    func selectedProviderRetryAndFullRefresh() async {
+        let baseline = Date(timeIntervalSince1970: 1600)
+        let discovery = Result<[ConnectedGameLibrary], LibrarySyncError>.success([
+            provider("STEAM", date: baseline),
+            provider("XBOX", date: baseline),
+        ])
+        let client = CoordinatorLibrarySyncClient(
+            discoveries: [discovery, discovery, discovery],
+            requestOutcomes: ["STEAM": [.failure(.httpStatus(503))]],
+            snapshots: [
+                .success([snapshot("STEAM", date: baseline.addingTimeInterval(1), count: 3)]),
+                .success([
+                    snapshot("STEAM", date: baseline.addingTimeInterval(2), count: 4),
+                    snapshot("XBOX", date: baseline.addingTimeInterval(2), count: 5),
+                ]),
+            ]
+        )
+        let clock = CoordinatorTestScheduler(autoAdvance: true)
+        let coordinator = makeCoordinator(client: client, scheduler: clock.scheduler)
+        let importer = CoordinatorImportRecorder()
+        let validity = CoordinatorValidity()
+
+        #expect(start(coordinator, providerCodes: ["STEAM"], importer: importer, validity: validity))
+        #expect(await eventually { coordinator.state.stage == .partialFailure })
+        #expect(coordinator.state.providers.first?.phase.isRetryable == true)
+
+        #expect(start(coordinator, retryProviderCodes: ["STEAM"], importer: importer, validity: validity))
+        #expect(await eventually { coordinator.state.stage == .completed })
+        #expect(await client.requestedProviderCodes() == ["STEAM", "STEAM"])
+        #expect(await client.snapshotCallCount() == 1)
+        #expect(coordinator.state.providers.map(\.providerCode) == ["STEAM"])
+        #expect(importer.callCount == 2)
+
+        coordinator.acknowledgeCompletion()
+        #expect(start(coordinator, importer: importer, validity: validity))
+        #expect(await eventually { coordinator.state.stage == .completed })
+
+        let requests = await client.requestedProviderCodes()
+        #expect(requests.filter { $0 == "STEAM" }.count == 3)
+        #expect(requests.filter { $0 == "XBOX" }.count == 1)
+        #expect(Set(coordinator.state.providers.map(\.providerCode)) == ["STEAM", "XBOX"])
+        #expect(coordinator.state.providers.allSatisfy { $0.phase.isTerminal && !$0.phase.isFailure })
+        #expect(await client.snapshotCallCount() == 2)
+        #expect(importer.callCount == 3)
+    }
+
     @Test("Final import waits until every accepted provider reaches a terminal state")
     func importWaitsForAllProviders() async {
         let baseline = Date(timeIntervalSince1970: 2000)
@@ -1349,12 +1465,14 @@ private extension LibraryRefreshCoordinatorTests {
     @discardableResult
     func start(
         _ coordinator: LibraryRefreshCoordinator,
+        providerCodes: Set<String>? = nil,
         retryProviderCodes: Set<String>? = nil,
         importer: CoordinatorImportRecorder,
         validity: CoordinatorValidity
     ) -> Bool {
         coordinator.start(
             userId: "user",
+            providerCodes: providerCodes,
             retryProviderCodes: retryProviderCodes,
             resolveToken: { _ in "token" },
             userIsCurrent: { validity.isCurrent },

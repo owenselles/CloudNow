@@ -423,6 +423,7 @@ private struct AuthRestorationView: View {
                     now: { 0 },
                     sleep: { _ in }
                 ),
+                storeConnectionClient: UITestStoreConnectionClient(),
                 providerLibrarySyncEnabled: true,
                 initialLibraryRefreshState: refreshState,
                 libraryRefreshImporterOverride: {
@@ -910,6 +911,71 @@ private struct AuthRestorationView: View {
                 priority: 7
             ),
         ]
+    }
+
+    private actor UITestStoreConnectionClient: StoreConnectionClient {
+        private var disconnectedCodes: Set<String> = []
+
+        func discoverStores(token _: String, userId _: String) async throws -> [StoreConnection] {
+            [
+                store(code: "STEAM", name: "Steam", connected: true, sync: true, automaticSignIn: false, order: 0),
+                store(code: "UBISOFT", name: "Ubisoft", connected: false, sync: true, automaticSignIn: true, order: 1),
+                store(code: "EPIC", name: "Epic Games", connected: true, sync: false, automaticSignIn: true, order: 2),
+                store(code: "XBOX", name: "Xbox", connected: true, sync: true, automaticSignIn: true, order: 3, reconnect: true),
+                store(code: "EA", name: "EA app", connected: false, sync: false, automaticSignIn: false, order: 4, linking: false),
+            ]
+        }
+
+        func requestAuthorization(providerCode _: String, token _: String) async throws -> StoreDeviceAuthorization {
+            StoreDeviceAuthorization(
+                deviceCode: "fixture-store-device-code",
+                userCode: "STORE123",
+                verificationURL: URL(string: "https://example.invalid/activate")!,
+                verificationURLComplete: URL(string: "https://example.invalid/activate?user_code=STORE123")!,
+                expiresIn: 600,
+                interval: 5
+            )
+        }
+
+        func pollAuthorization(deviceCode _: String) async throws -> StoreAuthorizationStatus {
+            .pending
+        }
+
+        func disconnect(providerCode: String, token _: String) async throws {
+            disconnectedCodes.insert(providerCode)
+        }
+
+        private func store(
+            code: String,
+            name: String,
+            connected: Bool,
+            sync: Bool,
+            automaticSignIn: Bool,
+            order: Int,
+            reconnect: Bool = false,
+            linking: Bool = true
+        ) -> StoreConnection {
+            let isConnected = connected && !disconnectedCodes.contains(code)
+            return StoreConnection(
+                code: code,
+                displayName: name,
+                accountDisplayName: isConnected ? "Fixture \(name)" : nil,
+                iconURL: nil,
+                isConnected: isConnected,
+                requiresReconnect: isConnected && reconnect,
+                supportsLinking: linking,
+                supportsSync: sync,
+                supportsAutomaticSignIn: automaticSignIn,
+                isExpired: false,
+                sortOrder: order,
+                snapshot: isConnected && sync ? ProviderSyncSnapshot(
+                    providerCode: code,
+                    totalSyncedGames: code == "STEAM" ? 42 : nil,
+                    state: reconnect ? .denied : .success,
+                    syncDate: Date(timeIntervalSince1970: 1000)
+                ) : nil
+            )
+        }
     }
 
     private actor UITestLibrarySyncClient: LibrarySyncClient {

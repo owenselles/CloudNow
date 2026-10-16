@@ -164,6 +164,11 @@ class GamesViewModel {
             && hasCompletedInitialLoad
             && libraryLoadPhase != .loading
             && catalogLoadPhase != .loading
+            && !storeConnections.isBusy
+    }
+
+    var canManageStoreConnections: Bool {
+        canStartFullLibraryRefresh && !isFullLibraryRefreshRunning
     }
 
     var canPresentFullLibraryRefresh: Bool {
@@ -247,6 +252,7 @@ class GamesViewModel {
     private let membershipClient: any MembershipClient
     private let persistence: any GamesPersistence
     private let libraryRefreshCoordinator: LibraryRefreshCoordinator
+    let storeConnections: StoreConnectionsCoordinator
     private let providerLibrarySyncEnabled: Bool
     private let libraryRefreshImporterOverride: LibraryRefreshCoordinator.LibraryImporter?
     private let localeCodeProvider: @MainActor @Sendable () -> String
@@ -311,6 +317,8 @@ class GamesViewModel {
         persistence: any GamesPersistence = AppPersistenceStore.shared,
         librarySyncClient: any LibrarySyncClient = GFNLibrarySyncClient(),
         libraryRefreshScheduler: LibraryRefreshScheduler = .continuous,
+        storeConnectionClient: any StoreConnectionClient = GFNStoreConnectionClient(),
+        storeConnectionScheduler: LibraryRefreshScheduler = .continuous,
         providerLibrarySyncEnabled: Bool = FeatureFlags.providerLibrarySyncEnabled,
         initialLibraryRefreshState: FullLibraryRefreshState = FullLibraryRefreshState(),
         libraryRefreshImporterOverride: LibraryRefreshCoordinator.LibraryImporter? = nil,
@@ -326,6 +334,10 @@ class GamesViewModel {
             client: librarySyncClient,
             scheduler: libraryRefreshScheduler,
             initialState: initialLibraryRefreshState
+        )
+        storeConnections = StoreConnectionsCoordinator(
+            client: storeConnectionClient,
+            scheduler: storeConnectionScheduler
         )
         self.providerLibrarySyncEnabled = providerLibrarySyncEnabled
         self.libraryRefreshImporterOverride = libraryRefreshImporterOverride
@@ -445,6 +457,7 @@ class GamesViewModel {
         }
         if currentAccountScope != accountScope {
             libraryRefreshCoordinator.cancel()
+            storeConnections.cancel(clearStores: true)
             mainGames = []
             libraryGames = []
             activeSessions = []
@@ -941,6 +954,7 @@ class GamesViewModel {
     func refreshLibrary(authManager: AuthManager) async {
         guard libraryLoadPhase != .loading,
               hasCompletedInitialLoad,
+              !storeConnections.isBusy,
               !isFullLibraryRefreshRunning
         else { return }
         let identity = beginLoad()
@@ -990,6 +1004,7 @@ class GamesViewModel {
         guard foregroundLibraryRefreshTask == nil,
               libraryLoadPhase != .loading,
               hasCompletedInitialLoad,
+              !storeConnections.isBusy,
               !isFullLibraryRefreshRunning
         else {
             return
@@ -1037,9 +1052,101 @@ class GamesViewModel {
         libraryRefreshCoordinator.acknowledgeCompletion()
     }
 
+    func refreshStoreConnections(authManager: AuthManager) {
+        guard canManageStoreConnections,
+              let context = storeConnectionContext(authManager: authManager)
+        else { return }
+        storeConnections.refresh(
+            userId: context.userId,
+            resolveToken: context.resolveToken,
+            userIsCurrent: context.userIsCurrent
+        )
+    }
+
+    func connectStore(_ store: StoreConnection, authManager: AuthManager) {
+        guard canManageStoreConnections,
+              let context = storeConnectionContext(authManager: authManager)
+        else { return }
+        storeConnections.connect(
+            store: store,
+            userId: context.userId,
+            resolveToken: context.resolveToken,
+            userIsCurrent: context.userIsCurrent
+        ) { [weak self, weak authManager] connected in
+            guard let self, let authManager, context.userIsCurrent() else { return }
+            beginFullLibraryRefresh(
+                authManager: authManager,
+                retryProviderCodes: nil,
+                providerCodes: connected.supportsSync ? [connected.code] : []
+            )
+        }
+    }
+
+    func disconnectStore(_ store: StoreConnection, authManager: AuthManager) {
+        guard canManageStoreConnections,
+              let context = storeConnectionContext(authManager: authManager)
+        else { return }
+        storeConnections.disconnect(
+            store: store,
+            userId: context.userId,
+            resolveToken: context.resolveToken,
+            userIsCurrent: context.userIsCurrent
+        ) { [weak self, weak authManager] _ in
+            guard let self, let authManager, context.userIsCurrent() else { return }
+            beginFullLibraryRefresh(
+                authManager: authManager,
+                retryProviderCodes: nil,
+                providerCodes: []
+            )
+        }
+    }
+
+    func cancelStoreConnection() {
+        storeConnections.cancel()
+    }
+
+    func startStoreLibraryRefresh(providerCode: String, authManager: AuthManager) {
+        guard canManageStoreConnections,
+              storeConnections.stores.contains(where: {
+                  $0.code == providerCode && $0.isConnected
+                      && $0.supportsSync && !$0.requiresReconnect
+              })
+        else { return }
+        beginFullLibraryRefresh(
+            authManager: authManager,
+            retryProviderCodes: nil,
+            providerCodes: [providerCode]
+        )
+    }
+
+    private func storeConnectionContext(authManager: AuthManager) -> (
+        userId: String,
+        resolveToken: LibraryRefreshCoordinator.TokenResolver,
+        userIsCurrent: LibraryRefreshCoordinator.UserValidator
+    )? {
+        guard let session = authManager.session else { return nil }
+        let userId = session.user.userId
+        let idpId = session.provider.idpId
+        return (
+            userId: userId,
+            resolveToken: { [weak authManager] rejectedToken in
+                guard let authManager else { throw AuthError.noSession }
+                if let rejectedToken {
+                    return try await authManager.resolveToken(rejecting: rejectedToken)
+                }
+                return try await authManager.resolveToken()
+            },
+            userIsCurrent: { [weak authManager] in
+                guard let current = authManager?.session else { return false }
+                return current.provider.idpId == idpId && current.user.userId == userId
+            }
+        )
+    }
+
     private func beginFullLibraryRefresh(
         authManager: AuthManager,
-        retryProviderCodes: Set<String>?
+        retryProviderCodes: Set<String>?,
+        providerCodes: Set<String>? = nil
     ) {
         guard providerLibrarySyncEnabled,
               let userId = authManager.session?.user.userId,
@@ -1047,6 +1154,7 @@ class GamesViewModel {
               hasCompletedInitialLoad,
               libraryLoadPhase != .loading,
               catalogLoadPhase != .loading,
+              !storeConnections.isBusy,
               !isFullLibraryRefreshRunning
         else { return }
         _ = beginLoad()
@@ -1057,6 +1165,7 @@ class GamesViewModel {
 
         _ = libraryRefreshCoordinator.start(
             userId: userId,
+            providerCodes: providerCodes,
             retryProviderCodes: retryProviderCodes,
             resolveToken: { [weak authManager] rejectedToken in
                 guard let authManager else { throw AuthError.noSession }
@@ -1599,6 +1708,7 @@ class GamesViewModel {
     }
 
     func prepareForCacheClear() {
+        storeConnections.cancel(clearStores: true)
         cancelForegroundLibraryRefresh()
         cacheGeneration &+= 1
         ownershipCacheGeneration &+= 1
@@ -1608,6 +1718,7 @@ class GamesViewModel {
     }
 
     func prepareForLogout() {
+        storeConnections.cancel(clearStores: true)
         cancelForegroundLibraryRefresh()
         loadGeneration &+= 1
         libraryRefreshCoordinator.cancel()
@@ -1616,6 +1727,7 @@ class GamesViewModel {
     }
 
     func prepareForDataReset() {
+        storeConnections.cancel(clearStores: true)
         cancelForegroundLibraryRefresh()
         cacheGeneration &+= 1
         ownershipCacheGeneration &+= 1
@@ -1626,6 +1738,7 @@ class GamesViewModel {
     }
 
     func resetAllData() async {
+        storeConnections.cancel(clearStores: true)
         cancelForegroundLibraryRefresh()
         libraryRefreshCoordinator.cancel()
         mainGames = []

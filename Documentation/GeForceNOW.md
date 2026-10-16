@@ -66,8 +66,37 @@ but it cannot replace newer browse-owned fields.
 
 The library synchronization route follows a provider web contract that may
 change. CloudNow validates the response and falls back to Reload Library when
-discovery or schema checks fail. It synchronizes only accounts already linked by
-the provider.
+discovery or schema checks fail. Only connected accounts with provider-reported
+sync support are synchronized.
+
+### Connected stores
+
+GeForce NOW Settings includes **Connected Stores** for connecting, reconnecting,
+and disconnecting store accounts. Store availability, connection state, library
+sync, and automatic sign-in capabilities come from the provider. These controls
+do not change Xbox Cloud Gaming accounts or settings.
+
+Connect and Reconnect display a provider-issued QR code and code for a temporary
+linking session. The user completes store sign-in and authorization on their
+phone; CloudNow does not collect store passwords. The app checks the connection
+after authorization and reuses the existing library refresh for stores that
+support synchronization. **Resync Library** uses the same synchronization path;
+**Refresh Connections** checks account state again. Disconnect requires explicit
+confirmation and a refreshed provider response before reporting success.
+
+Closing the linking screen cancels local polling. An expired code requires a new
+Connect attempt. Sign-out or account changes invalidate pending results so they
+cannot update another account's connection state. The account-linking contract
+is undocumented and may change. If linking a supported store fails in CloudNow,
+users can connect it in the official GeForce NOW app and refresh connections in
+CloudNow.
+
+Linking and game-session sign-in remain separate capabilities. Steam linking
+synchronizes the library but does not sign into streamed games; Steam's own QR
+login can be used when its launcher displays one. Epic automatic sign-in applies
+only to supported titles. EA sign-in remains inside the streamed game session
+when provider account linking is unavailable. A connected store does not imply
+ownership, an active subscription, or automatic sign-in for every game.
 
 ### Patching and maintenance
 
@@ -204,8 +233,9 @@ or dedicated-server overrides to those sessions.
 
 - CloudNow is an independent client. Provider APIs and service behavior can change
   without notice.
-- Connected-store synchronization uses an undocumented web contract and may fall
-  back to a normal Library reload.
+- Connected-store linking and synchronization use undocumented web contracts.
+  Linking can become unavailable, and synchronization may fall back to a normal
+  Library reload.
 - Queue ad playback is controlled by the provider and can be required during high
   demand.
 - PrintedWaste queue and location metadata can be older than the provider's live
