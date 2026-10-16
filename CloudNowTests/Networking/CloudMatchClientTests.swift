@@ -247,6 +247,166 @@ struct CloudMatchClientTests {
         )
     }
 
+    @Test("Stop waits for confirmed termination using the same endpoint and identity")
+    func stopSessionWaitsForTermination() async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            #expect(request.url?.absoluteString == "https://203.0.113.10/v2/session/session-id")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "GFNJWT token")
+            #expect(request.value(forHTTPHeaderField: "nv-client-id") == "client")
+            #expect(request.value(forHTTPHeaderField: "x-device-id") == "device")
+            #expect(request.value(forHTTPHeaderField: "Origin") == nil)
+            if index == 0 {
+                #expect(request.httpMethod == "DELETE")
+                return StubbedHTTPResponse(json: #"{"requestStatus":{"statusCode":1}}"#)
+            }
+            #expect(request.httpMethod == "GET")
+            #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
+            #expect(request.timeoutInterval <= 5)
+            return StubbedHTTPResponse(
+                json: "{\"requestStatus\":{\"statusCode\":1},\"session\":{\"sessionId\":\"session-id\",\"status\":\(index == 1 ? 2 : 4)}}"
+            )
+        }
+        let client = CloudMatchClient(transport: transport, sleep: { seconds in
+            #expect(seconds == 2)
+        })
+
+        try await client.stopSession(
+            sessionId: "session-id",
+            token: "token",
+            base: "https://region.example.invalid",
+            serverIp: "203.0.113.10",
+            clientId: "client",
+            deviceId: "device"
+        )
+
+        #expect(await transport.requests().count == 3)
+    }
+
+    @Test("Stop confirms termination when subsequent polling finds no session", arguments: [404, 410])
+    func stopSessionDisappears(statusCode: Int) async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            #expect(request.httpMethod == (index == 0 ? "DELETE" : "GET"))
+            return StubbedHTTPResponse(statusCode: index == 0 ? 204 : statusCode)
+        }
+
+        try await CloudMatchClient(transport: transport, sleep: { _ in }).stopSession(
+            sessionId: "session-id",
+            token: "token",
+            base: "https://region.example.invalid"
+        )
+
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Stop preserves API rejection despite HTTP success", arguments: ["DELETE", "GET"])
+    func stopSessionAPIRejection(failingMethod: String) async {
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == failingMethod {
+                return StubbedHTTPResponse(
+                    json: #"{"requestStatus":{"statusCode":42,"statusDescription":"STOP_REJECTED"}}"#
+                )
+            }
+            return StubbedHTTPResponse(statusCode: 204)
+        }
+
+        do {
+            try await CloudMatchClient(transport: transport, sleep: { _ in }).stopSession(
+                sessionId: "session-id",
+                token: "token",
+                base: "https://region.example.invalid"
+            )
+            Issue.record("Expected stop rejection to propagate")
+        } catch let CloudMatchError.apiStatus(context, statusCode, description) {
+            #expect(context == "stopSession")
+            #expect(statusCode == 42)
+            #expect(description == "STOP_REJECTED")
+        } catch {
+            Issue.record(error)
+        }
+
+        #expect(await transport.requests().count == (failingMethod == "DELETE" ? 1 : 2))
+    }
+
+    @Test("Stop fails after bounded confirmation attempts when the session stays active")
+    func stopSessionConfirmationTimeout() async {
+        let transport = RecordingHTTPTransport { _, index in
+            if index == 0 {
+                return StubbedHTTPResponse(statusCode: 204)
+            }
+            return StubbedHTTPResponse(
+                json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"session-id","status":2}}"#
+            )
+        }
+
+        do {
+            try await CloudMatchClient(transport: transport, sleep: { _ in }).stopSession(
+                sessionId: "session-id",
+                token: "token",
+                base: "https://region.example.invalid"
+            )
+            Issue.record("An active session must not be reported as stopped")
+        } catch CloudMatchError.sessionStopTimedOut {
+            #expect(await transport.requests().count == 16)
+        } catch {
+            Issue.record(error)
+        }
+    }
+
+    @Test("Stop propagates cancellation between confirmation attempts")
+    func stopSessionConfirmationCancellation() async {
+        let transport = RecordingHTTPTransport { _, index in
+            if index == 0 {
+                return StubbedHTTPResponse(statusCode: 204)
+            }
+            return StubbedHTTPResponse(
+                json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"session-id","status":2}}"#
+            )
+        }
+        let client = CloudMatchClient(transport: transport, sleep: { _ in throw CancellationError() })
+
+        await #expect(throws: CancellationError.self) {
+            try await client.stopSession(
+                sessionId: "session-id",
+                token: "token",
+                base: "https://region.example.invalid"
+            )
+        }
+
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test(
+        "Creation conflicts are recognized in HTTP-success API responses",
+        arguments: ["SESSION_LIMIT_EXCEEDED_STATUS", "REQUEST_LIMIT_EXCEEDED_STATUS"]
+    )
+    func createSessionAPIConflict(description: String) async {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(
+                json: "{\"requestStatus\":{\"statusCode\":42,\"statusDescription\":\"\(description)\"}}"
+            )
+        }
+
+        do {
+            _ = try await CloudMatchClient(transport: transport).createSession(makeSessionRequest())
+            Issue.record("Expected session conflict")
+        } catch let error as CloudMatchError {
+            #expect(error.isSessionConflict)
+        } catch {
+            Issue.record(error)
+        }
+    }
+
+    @Test("Unrelated API errors do not trigger session-conflict recovery")
+    func unrelatedErrorsAreNotSessionConflicts() {
+        #expect(!CloudMatchError.apiStatus(
+            context: "stopSession", statusCode: 42, description: "SESSION_LIMIT_EXCEEDED_STATUS"
+        ).isSessionConflict)
+        #expect(!CloudMatchError.apiStatus(
+            context: "createSession", statusCode: 42, description: "NO_CAPACITY"
+        ).isSessionConflict)
+        #expect(!CloudMatchError.sessionStopTimedOut.isSessionConflict)
+    }
+
     @Test("Claim sends a minimal resume body after ready preflight")
     func claimReadySession() async throws {
         let fixture = try NetworkingFixture.data("cloudmatch-session.json")
