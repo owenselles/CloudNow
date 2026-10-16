@@ -189,20 +189,15 @@ struct GameCardLabel: View {
             heroArtworkURL: game.heroImageUrl ?? game.heroBannerUrl,
             badge: showLibraryBadge && game.isInLibrary
                 ? CloudCatalogCardBadge(
-                    title: "In Library",
+                    title: L10n.text("in_library"),
                     systemImage: nil,
-                    foregroundColor: .white,
+                    foregroundColor: .black,
                     backgroundColor: .green.opacity(0.85)
                 )
                 : nil,
-            additionalBadges: game.subscriptions.map {
-                CloudCatalogCardBadge(
-                    title: $0.label,
-                    systemImage: nil,
-                    foregroundColor: .white,
-                    backgroundColor: .black.opacity(0.8)
-                )
-            }
+            focusedFooter: game.subscriptions.isEmpty
+                ? nil
+                : game.subscriptions.map(\.label).joined(separator: "\n")
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(game.title)

@@ -908,7 +908,7 @@ final class CloudNowUITests: XCTestCase {
         let racer = app.buttons["Fixture Racer"]
         XCTAssertTrue(racer.waitForExistence(timeout: 3))
         XCTAssertTrue((racer.value as? String)?.contains("Available with Xbox Game Pass") == true)
-        attachScreenshot(of: app, named: "GFN subscription catalog badges")
+        attachScreenshot(of: app, named: "GFN subscription footer hidden")
         XCUIRemote.shared.press(.down)
         XCUIRemote.shared.press(.down)
         focusAndSelect(app.buttons["catalog-filter-button"], directions: [.right, .left], pressesPerDirection: 4)
@@ -928,6 +928,16 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(racer.waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["Fixture Strategy"].exists)
         let gridWidth = racer.frame.width
+        focus(racer, directions: [.down, .left, .right], pressesPerDirection: 12)
+        attachScreenshot(of: app, named: "GFN subscription footer focused")
+        XCUIRemote.shared.press(.up)
+        let footerUnfocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasFocus == false"),
+            object: racer
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [footerUnfocused], timeout: 3), .completed)
+        XCTAssertTrue((racer.value as? String)?.contains("Available with Xbox Game Pass") == true)
+        attachScreenshot(of: app, named: "GFN subscription footer hidden after focus moves")
         focusAndSelect(racer, directions: [.down, .left, .right], pressesPerDirection: 12)
         let carouselRacer = focusedButton(labeled: "Fixture Racer", in: app)
         let carouselReady = XCTNSPredicateExpectation(
@@ -964,6 +974,17 @@ final class CloudNowUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [steamSelected], timeout: 3), .completed)
         XCTAssertFalse(labels.exists)
+
+        app.terminate()
+        let frenchApp = makeApp(language: "fr", localeIdentifier: "fr_FR")
+        frenchApp.launch()
+        let store = frenchApp.buttons["Boutique"]
+        XCTAssertTrue(store.waitForExistence(timeout: 8))
+        selectTab(store, movingRight: 2)
+        let frenchRacer = frenchApp.buttons["Fixture Racer"]
+        XCTAssertTrue(frenchRacer.waitForExistence(timeout: 3))
+        XCTAssertTrue((frenchRacer.value as? String)?.contains("Dans la bibliothèque") == true)
+        attachScreenshot(of: frenchApp, named: "GFN library badge French")
     }
 
     @MainActor

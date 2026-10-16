@@ -14,8 +14,11 @@ struct CloudCatalogCardLabel: View {
     let artworkURL: String?
     var heroArtworkURL: String?
     var badge: CloudCatalogCardBadge?
-    var additionalBadges: [CloudCatalogCardBadge] = []
+    var focusedFooter: String?
     var networkCachePolicy: ArtworkNetworkCachePolicy = .shared
+
+    @Environment(\.isFocused) private var isFocused
+    @ScaledMetric(relativeTo: .caption2) private var badgeFontSize = 16
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -34,34 +37,47 @@ struct CloudCatalogCardLabel: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: 12))
 
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .padding(10)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
 
-            VStack(alignment: .trailing, spacing: 6) {
-                ForEach((badge.map { [$0] } ?? []) + additionalBadges, id: \.title) { badge in
-                    Label {
-                        Text(badge.title)
-                    } icon: {
-                        if let systemImage = badge.systemImage {
-                            Image(systemName: systemImage)
-                        }
-                    }
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(badge.foregroundColor)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(badge.backgroundColor, in: Capsule())
+                if isFocused, let focusedFooter {
+                    Text(focusedFooter)
+                        .font(.system(size: badgeFontSize, weight: .medium))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(8)
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: .infinity,
-                alignment: .topTrailing
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                .black.opacity(isFocused && focusedFooter != nil ? 0.8 : 0),
+                in: RoundedRectangle(cornerRadius: 12)
             )
+
+            if let badge {
+                Label {
+                    Text(badge.title)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    if let systemImage = badge.systemImage {
+                        Image(systemName: systemImage)
+                    }
+                }
+                .font(.system(size: badgeFontSize, weight: .semibold))
+                .foregroundStyle(badge.foregroundColor)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(badge.backgroundColor, in: Capsule())
+                .padding(8)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity,
+                    alignment: .topLeading
+                )
+            }
         }
         .prefetchHeroArtOnFocus(heroArtworkURL)
     }

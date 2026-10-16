@@ -40,8 +40,10 @@ catalog data. Feature filters appear only when the current data supports them.
 Library and Store keep independent loading, error, search, sorting, and filter
 state.
 
-Game cards show Xbox Game Pass, Ubisoft+ Premium, and Ubisoft+ Classics labels
-from NVIDIA's per-variant subscription metadata. Details show subscriptions for
+Focused game cards show Xbox Game Pass, Ubisoft+ Premium, and Ubisoft+ Classics
+in a compact text footer using NVIDIA's per-variant subscription metadata.
+The footer hides when focus leaves; game titles and library status badges remain
+visible. Details show subscriptions for
 the selected launch store; games outside the library list the eligible stores.
 These labels describe catalog inclusion, not the account's active subscriptions
 or ownership. Library subscription filters consider owned variants. Combining a
