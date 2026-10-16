@@ -912,9 +912,16 @@ final class CloudNowUITests: XCTestCase {
         XCUIRemote.shared.press(.down)
         XCUIRemote.shared.press(.down)
         focusAndSelect(app.buttons["catalog-filter-button"], directions: [.right, .left], pressesPerDirection: 4)
-        let gamePass = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Xbox Game Pass")).firstMatch
+        let gamePass = filterOptionButton(labeled: "Xbox Game Pass", in: app)
         XCTAssertTrue(gamePass.waitForExistence(timeout: 3))
-        focusAndSelect(gamePass, directions: [.down, .left, .right], pressesPerDirection: 16)
+        focus(labelContaining: "Subscriptions", in: app, directions: [.down], pressesPerDirection: 10)
+        XCUIRemote.shared.press(.down)
+        let focusedSubscription = app.buttons.matching(NSPredicate(
+            format: "hasFocus == true AND (label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@)",
+            "Xbox Game Pass", "Ubisoft+ Premium", "Ubisoft+ Classics"
+        )).firstMatch
+        XCTAssertTrue(focusedSubscription.waitForExistence(timeout: 3))
+        focusAndSelect(gamePass, directions: [.left], pressesPerDirection: 2)
         XCUIRemote.shared.press(.right)
         attachScreenshot(of: app, named: "GFN subscription filters")
         XCUIRemote.shared.press(.menu)
