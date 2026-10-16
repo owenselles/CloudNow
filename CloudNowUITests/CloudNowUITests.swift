@@ -898,6 +898,48 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testGeForceNowStoreFootersDoNotRequireLibraryOrSubscription() {
+        let app = makeApp()
+        app.launch()
+
+        let store = app.buttons["Store"]
+        XCTAssertTrue(store.waitForExistence(timeout: 8))
+        selectTab(store, movingRight: 2)
+        XCTAssertTrue(element("store-screen", in: app).waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["catalog-filter-button"].waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.down)
+        XCUIRemote.shared.press(.down)
+        focusAndSelect(app.buttons["catalog-filter-button"], directions: [.right, .left], pressesPerDirection: 4)
+        XCTAssertTrue(filterOptionButton(labeled: "My Library", in: app).waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(waitForFocus(app.buttons["catalog-filter-button"]))
+
+        let racer = app.buttons["Fixture Racer"]
+        focus(racer, directions: [.down, .left, .right], pressesPerDirection: 12)
+        XCTAssertTrue((racer.value as? String)?.contains("Steam, Ubisoft Connect") == true)
+        XCTAssertTrue((racer.value as? String)?.contains("Ubisoft+ Classics") == true)
+        attachScreenshot(of: app, named: "GFN compact store and subscription rows")
+
+        let strategy = app.buttons["Fixture Strategy"]
+        focus(strategy, directions: [.right], pressesPerDirection: 2)
+        XCTAssertTrue((strategy.value as? String)?.contains("Epic Games, Xbox") == true)
+        XCTAssertFalse((strategy.value as? String)?.contains("Available with") == true)
+        attachScreenshot(of: app, named: "GFN owned store footer without subscriptions")
+
+        let unowned = app.buttons["Fixture Unowned"]
+        focus(unowned, directions: [.right], pressesPerDirection: 2)
+        XCTAssertTrue((unowned.value as? String)?.contains("Steam, Xbox, Ubisoft Connect, Epic Games") == true)
+        XCTAssertFalse((unowned.value as? String)?.contains("In Library") == true)
+        XCTAssertFalse((unowned.value as? String)?.contains("Available with") == true)
+        attachScreenshot(of: app, named: "GFN unowned store footer with overflow")
+
+        XCUIRemote.shared.press(.left)
+        XCTAssertTrue(waitForFocus(strategy))
+        XCTAssertFalse(unowned.hasFocus)
+        attachScreenshot(of: app, named: "GFN unowned store footer hidden after focus moves")
+    }
+
+    @MainActor
     func testGeForceNowSubscriptionLabelsFollowSelectedStore() {
         let app = makeApp()
         app.launch()

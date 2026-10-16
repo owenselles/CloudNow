@@ -414,7 +414,7 @@ private struct AuthRestorationView: View {
                 FullLibraryRefreshState()
             }
             let viewModel = GamesViewModel(
-                mainGames: Self.fixtureGames,
+                mainGames: Self.fixtureGames + [Self.unownedStoreGame],
                 libraryGames: Self.fixtureGames,
                 favoriteIds: ["fixture-racer"],
                 persistenceEnabled: false,
@@ -585,9 +585,37 @@ private struct AuthRestorationView: View {
                         appId: "fixture-app-2",
                         isOwned: true
                     ),
+                    GameVariant(
+                        id: "fixture-strategy-xbox",
+                        appStore: "XBOX",
+                        appId: "fixture-app-2-xbox",
+                        isOwned: true
+                    ),
                 ]
             ),
         ]
+
+        private static let unownedStoreGame = GameInfo(
+            id: "fixture-unowned",
+            title: "Fixture Unowned",
+            longDescription: "Unowned catalog game for store footer coverage.",
+            genres: ["ACTION"],
+            developer: "CloudNow",
+            publisher: "CloudNow",
+            contentRating: "Everyone",
+            boxArtUrl: nil,
+            heroBannerUrl: nil,
+            heroImageUrl: nil,
+            supportedFeatures: [],
+            screenshots: [],
+            isInLibrary: false,
+            variants: [
+                GameVariant(id: "fixture-unowned-steam", appStore: "STEAM"),
+                GameVariant(id: "fixture-unowned-xbox", appStore: "XBOX"),
+                GameVariant(id: "fixture-unowned-ubisoft", appStore: "UPLAY"),
+                GameVariant(id: "fixture-unowned-epic", appStore: "EPIC_GAMES_STORE"),
+            ]
+        )
 
         private static let freeMembershipSubscription = SubscriptionInfo(
             membershipTier: "FREE",

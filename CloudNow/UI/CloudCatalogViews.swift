@@ -5,6 +5,19 @@ struct CloudCatalogCardBadge {
     let systemImage: String?
     let foregroundColor: Color
     let backgroundColor: Color
+    var isProminent = false
+}
+
+struct CloudCatalogCardFooter {
+    let stores: [String]
+    let subscriptions: [String]
+
+    static func summary(_ items: [String], visibleCount: Int) -> String {
+        let visible = items.prefix(visibleCount)
+        let hiddenCount = items.count - visible.count
+        let names = visible.joined(separator: " · ")
+        return hiddenCount > 0 ? "\(names) +\(hiddenCount)" : names
+    }
 }
 
 /// Provider-neutral CloudNow card chrome. Providers supply only presentation
@@ -14,11 +27,12 @@ struct CloudCatalogCardLabel: View {
     let artworkURL: String?
     var heroArtworkURL: String?
     var badge: CloudCatalogCardBadge?
-    var focusedFooter: String?
+    var focusedFooter: CloudCatalogCardFooter?
     var networkCachePolicy: ArtworkNetworkCachePolicy = .shared
 
     @Environment(\.isFocused) private var isFocused
     @ScaledMetric(relativeTo: .caption2) private var badgeFontSize = 16
+    @ScaledMetric(relativeTo: .caption2) private var prominentBadgeFontSize = 20
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -44,10 +58,14 @@ struct CloudCatalogCardLabel: View {
                     .lineLimit(2)
 
                 if isFocused, let focusedFooter {
-                    Text(focusedFooter)
-                        .font(.system(size: badgeFontSize, weight: .medium))
-                        .foregroundStyle(.white)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if !focusedFooter.stores.isEmpty {
+                        footerRow(focusedFooter.stores, systemImage: "storefront", visibleCount: 2)
+                            .foregroundStyle(.white)
+                    }
+                    if !focusedFooter.subscriptions.isEmpty {
+                        footerRow(focusedFooter.subscriptions, systemImage: "ticket", visibleCount: 1)
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
                 }
             }
             .padding(10)
@@ -66,10 +84,10 @@ struct CloudCatalogCardLabel: View {
                         Image(systemName: systemImage)
                     }
                 }
-                .font(.system(size: badgeFontSize, weight: .semibold))
+                .font(.system(size: badge.isProminent ? prominentBadgeFontSize : badgeFontSize, weight: .semibold))
                 .foregroundStyle(badge.foregroundColor)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.horizontal, badge.isProminent ? 8 : 6)
+                .padding(.vertical, badge.isProminent ? 4 : 3)
                 .background(badge.backgroundColor, in: Capsule())
                 .padding(8)
                 .frame(
@@ -80,6 +98,21 @@ struct CloudCatalogCardLabel: View {
             }
         }
         .prefetchHeroArtOnFocus(heroArtworkURL)
+    }
+
+    private func footerRow(_ items: [String], systemImage: String, visibleCount: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: systemImage)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+            ViewThatFits(in: .horizontal) {
+                Text(CloudCatalogCardFooter.summary(items, visibleCount: visibleCount))
+                    .fixedSize()
+                Text(CloudCatalogCardFooter.summary(items, visibleCount: 1))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .font(.system(size: badgeFontSize, weight: .medium))
     }
 }
 

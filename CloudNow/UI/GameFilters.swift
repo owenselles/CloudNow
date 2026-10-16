@@ -231,7 +231,7 @@ enum GameFilterEngine {
     }
 }
 
-private enum GameStoreFilter {
+enum GameStoreFilter {
     private nonisolated static let internalCodes: Set<String> = ["", "UNKNOWN", "NONE", "GFN", "NVIDIA", "NV_BUNDLE"]
 
     nonisolated static func normalizedCode(_ value: String) -> String {

@@ -192,22 +192,42 @@ struct GameCardLabel: View {
                     title: L10n.text("in_library"),
                     systemImage: nil,
                     foregroundColor: .black,
-                    backgroundColor: .green.opacity(0.85)
+                    backgroundColor: .green.opacity(0.85),
+                    isProminent: true
                 )
                 : nil,
-            focusedFooter: game.subscriptions.isEmpty
-                ? nil
-                : game.subscriptions.map(\.label).joined(separator: "\n")
+            focusedFooter: focusedFooter
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(game.title)
         .accessibilityValue(accessibilityDetails)
     }
 
+    var focusedFooter: CloudCatalogCardFooter? {
+        let stores = storeNames
+        let subscriptions = game.subscriptions.map(\.label)
+        guard !stores.isEmpty || !subscriptions.isEmpty else { return nil }
+        return CloudCatalogCardFooter(stores: stores, subscriptions: subscriptions)
+    }
+
+    private var storeNames: [String] {
+        var seenStores = Set<String>()
+        return game.variants.compactMap { variant in
+            let code = GameStoreFilter.normalizedCode(variant.appStore)
+            guard GameStoreFilter.isDisplayable(code), seenStores.insert(code).inserted else {
+                return nil
+            }
+            return L10n.storeName(for: code)
+        }
+    }
+
     private var accessibilityDetails: String {
         var details: [String] = []
         if showLibraryBadge, game.isInLibrary {
             details.append(L10n.text("in_library"))
+        }
+        if !storeNames.isEmpty {
+            details.append(storeNames.joined(separator: ", "))
         }
         if !game.subscriptions.isEmpty {
             details.append(L10n.format(

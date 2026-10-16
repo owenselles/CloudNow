@@ -40,8 +40,13 @@ catalog data. Feature filters appear only when the current data supports them.
 Library and Store keep independent loading, error, search, sorting, and filter
 state.
 
-Focused game cards show Xbox Game Pass, Ubisoft+ Premium, and Ubisoft+ Classics
-in a compact text footer using NVIDIA's per-variant subscription metadata.
+Focused game cards show their available stores beside a storefront icon,
+including games outside the library and games without subscription metadata.
+Duplicate store names appear only once; up to two fit on the row, with `+N` for
+additional stores. A separate, secondary row beside a ticket icon shows the
+first subscription name and `+N` for additional subscriptions when NVIDIA
+supplies per-variant metadata. Full store and subscription lists remain in game
+details and accessibility descriptions.
 The footer hides when focus leaves; game titles and library status badges remain
 visible. Details show subscriptions for
 the selected launch store; games outside the library list the eligible stores.
