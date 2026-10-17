@@ -1188,7 +1188,7 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
-    func testStoreConnectionsUpReturnsToSettingsTab() {
+    func testStoreConnectionsUpReturnsToTopNavigation() {
         let app = makeApp()
         app.launch()
         openStoreConnections(in: app)
@@ -1208,17 +1208,29 @@ final class CloudNowUITests: XCTestCase {
         focus(refreshRow, directions: [.up], pressesPerDirection: 20)
 
         XCUIRemote.shared.press(.up)
+        // Native directional focus can choose either top control across tvOS versions.
+        XCTAssertTrue(waitForFocusLoss(refreshRow, timeout: 3))
         let settings = app.tabBars.buttons["Settings"]
-        XCTAssertTrue(waitForFocus(settings))
-        let settingsVisible = XCTNSPredicateExpectation(
+        let settingsFocused = waitForFocus(settings)
+        let topControl = settingsFocused ? settings : app.buttons["provider-switcher"]
+        let topNavigationVisible = XCTNSPredicateExpectation(
             predicate: NSPredicate { object, _ in
-                guard let tab = object as? XCUIElement else { return false }
-                return tab.frame.minY > 1
+                guard let control = object as? XCUIElement else { return false }
+                return control.exists && control.frame.minY > 1
             },
-            object: settings
+            object: topControl
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [settingsVisible], timeout: 3), .completed)
-        attachScreenshot(of: app, named: "Connected Stores - Up returns to Settings")
+        XCTAssertEqual(XCTWaiter.wait(for: [topNavigationVisible], timeout: 3), .completed)
+        if !settingsFocused {
+            // Native Menu does not reliably expose hasFocus; opening it proves focus.
+            XCUIRemote.shared.press(.select)
+            XCTAssertTrue(
+                element("provider-option.xbox-cloud-gaming", in: app)
+                    .waitForExistence(timeout: 3)
+            )
+            XCUIRemote.shared.press(.menu)
+        }
+        attachScreenshot(of: app, named: "Connected Stores - Up returns to top navigation")
 
         XCUIRemote.shared.press(.down)
         XCTAssertTrue(element("settings.store-connections.page", in: app).exists)
