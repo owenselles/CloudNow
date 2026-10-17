@@ -1188,6 +1188,44 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testStoreConnectionsUpReturnsToSettingsTab() {
+        let app = makeApp()
+        app.launch()
+        openStoreConnections(in: app)
+
+        let refresh = app.buttons["store-connections.refresh"]
+        let refreshEnabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: refresh
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [refreshEnabled], timeout: 5), .completed)
+        focus(
+            storeConnectionRow("store-connections.disconnect.XBOX", in: app),
+            directions: [.down],
+            pressesPerDirection: 20
+        )
+        let refreshRow = storeConnectionRow("store-connections.refresh", in: app)
+        focus(refreshRow, directions: [.up], pressesPerDirection: 20)
+
+        XCUIRemote.shared.press(.up)
+        let settings = app.tabBars.buttons["Settings"]
+        XCTAssertTrue(waitForFocus(settings))
+        let settingsVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { object, _ in
+                guard let tab = object as? XCUIElement else { return false }
+                return tab.frame.minY > 1
+            },
+            object: settings
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [settingsVisible], timeout: 3), .completed)
+        attachScreenshot(of: app, named: "Connected Stores - Up returns to Settings")
+
+        XCUIRemote.shared.press(.down)
+        XCTAssertTrue(element("settings.store-connections.page", in: app).exists)
+        XCTAssertTrue(waitForFocus(refreshRow))
+    }
+
+    @MainActor
     func testStoreDisconnectRequiresConfirmationAndCancelKeepsConnection() {
         let app = makeApp()
         app.launch()

@@ -18,8 +18,6 @@ struct StoreConnectionsView: View {
 
     var body: some View {
         Form {
-            title
-
             Section {
                 Button {
                     viewModel.refreshStoreConnections(authManager: authManager)
@@ -49,6 +47,8 @@ struct StoreConnectionsView: View {
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("store-connections.error")
                 }
+            } header: {
+                title
             }
 
             ForEach(connections.stores) { store in
@@ -106,6 +106,7 @@ struct StoreConnectionsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(L10n.text("connected_stores"))
                 .font(.title2.bold())
+                .foregroundStyle(.primary)
                 .accessibilityAddTraits(.isHeader)
             Text(L10n.text("store_linking_phone_description"))
                 .font(.body)
@@ -113,7 +114,7 @@ struct StoreConnectionsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
-        .listRowBackground(Color.clear)
+        .textCase(nil)
     }
 
     private func storeSection(_ store: StoreConnection) -> some View {

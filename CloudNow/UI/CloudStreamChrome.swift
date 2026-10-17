@@ -41,7 +41,6 @@ struct CloudStreamPauseMenu<ProviderActions: View, Footer: View>: View {
         VStack(alignment: .leading, spacing: 16) {
             Button(action: onResume) {
                 Label(L10n.text("resume"), systemImage: "play.fill")
-                    .foregroundStyle(Color.black.opacity(0.84))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.bordered)
@@ -80,7 +79,6 @@ struct CloudStreamPauseMenu<ProviderActions: View, Footer: View>: View {
                     L10n.text("end_session"),
                     systemImage: "xmark.circle"
                 )
-                .foregroundStyle(Color.black.opacity(0.84))
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.bordered)
