@@ -175,6 +175,8 @@ enum L10nZHHans {
         "max_bitrate": "最大比特率",
         "low_latency_mode": "低延迟模式 (L4S)",
         "low_latency_mode_description": "在支持 L4S 的网络上减少缓冲（需要兼容的路由器和 ISP）。",
+        "adaptive_frame_pacing": "自适应帧间隔",
+        "adaptive_frame_pacing_description": "通过短暂保留提前到达的帧，可能使不均匀的运动更流畅。这会增加输入延迟，因此操作可能感觉不那么灵敏。",
         "server_region": "服务器区域",
         "region": "地区",
         "preferred_zone": "首选区域",

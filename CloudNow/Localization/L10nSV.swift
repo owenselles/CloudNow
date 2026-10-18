@@ -178,6 +178,8 @@ enum L10nSV {
         "max_bitrate": "Maxbitrate",
         "low_latency_mode": "Låg latens-läge (L4S)",
         "low_latency_mode_description": "Minskar buffring på nätverk med L4S-stöd (kräver kompatibel router och ISP).",
+        "adaptive_frame_pacing": "Adaptiv bildrutetiming",
+        "adaptive_frame_pacing_description": "Kan jämna ut ojämna rörelser genom att kort hålla kvar bildrutor som kommer tidigt. Detta ökar inmatningsfördröjningen, så styrningen kan kännas mindre responsiv.",
         "server_region": "Serverregion",
         "region": "Region",
         "preferred_zone": "Föredragen zon",

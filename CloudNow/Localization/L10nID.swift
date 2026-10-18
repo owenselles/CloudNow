@@ -152,6 +152,8 @@ enum L10nID {
         "max_bitrate": "Bitrate maksimum",
         "low_latency_mode": "Mode latensi rendah (L4S)",
         "low_latency_mode_description": "Mengurangi buffering pada jaringan dengan dukungan L4S (memerlukan router dan ISP yang kompatibel).",
+        "adaptive_frame_pacing": "Pengaturan Waktu Bingkai Adaptif",
+        "adaptive_frame_pacing_description": "Dapat memperhalus gerakan yang tidak merata dengan menahan sebentar bingkai yang tiba lebih awal. Ini menambah latensi input, sehingga kontrol mungkin terasa kurang responsif.",
         "server_region": "Wilayah server",
         "region": "Wilayah",
         "preferred_zone": "Zona pilihan",

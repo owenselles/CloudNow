@@ -178,6 +178,8 @@ enum L10nTR {
         "max_bitrate": "Maks. bit hızı",
         "low_latency_mode": "Düşük gecikme modu (L4S)",
         "low_latency_mode_description": "L4S destekli ağlarda arabelleği azaltır (uyumlu yönlendirici ve ISS gerekir).",
+        "adaptive_frame_pacing": "Uyarlanabilir Kare Zamanlaması",
+        "adaptive_frame_pacing_description": "Erken gelen kareleri kısa süre bekleterek düzensiz hareketi yumuşatabilir. Bu, giriş gecikmesini artırır; dolayısıyla kontroller daha yavaş tepki veriyormuş gibi hissedilebilir.",
         "server_region": "Sunucu bölgesi",
         "region": "Bölge",
         "preferred_zone": "Tercih edilen bölge",

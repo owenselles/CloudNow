@@ -152,6 +152,8 @@ enum L10nHR {
         "max_bitrate": "Najveći bitrate",
         "low_latency_mode": "Način niske latencije (L4S)",
         "low_latency_mode_description": "Smanjuje buffering na mrežama s L4S podrškom (zahtijeva kompatibilan router i ISP).",
+        "adaptive_frame_pacing": "Prilagodljivo tempiranje sličica",
+        "adaptive_frame_pacing_description": "Može ublažiti neujednačeno kretanje kratkim zadržavanjem sličica koje stignu ranije. To povećava kašnjenje unosa pa kontrole mogu djelovati manje odzivno.",
         "server_region": "Regija poslužitelja",
         "region": "Regija",
         "preferred_zone": "Preferirana zona",

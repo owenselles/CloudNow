@@ -435,6 +435,7 @@ final class GFNStreamController: NSObject {
         self.sessionStartedAt = sessionStartedAt
         gameSupportsDualShock = GFNSonyGamepad.gameSupportsSonyInput(supportedControls)
         self.settings = settings
+        videoView?.setAdaptiveFramePacing(settings.adaptiveFramePacing, frameRate: settings.fps)
         self.accountAllowsHDR = accountAllowsHDR
         colorState = StreamColorState(
             preference: settings.colorPreference,
@@ -509,6 +510,7 @@ final class GFNStreamController: NSObject {
     /// Stores a reference so the inputHandler can be wired up when InputSender starts.
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
+        view.setAdaptiveFramePacing(settings.adaptiveFramePacing, frameRate: settings.fps)
         view.setDiagnosticsEnabled(diagnosticsEnabled)
         view.onDecodedVideoFormatChanged = { [weak self] format in
             Task { @MainActor [weak self] in

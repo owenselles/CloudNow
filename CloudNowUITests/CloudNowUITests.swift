@@ -1326,6 +1326,73 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdaptiveFramePacingIsOptionalAndCanBeToggled() {
+        let app = makeApp()
+        app.launch()
+        openSettings(in: app)
+
+        let pacing = app.switches["settings.stream-quality.adaptive-frame-pacing"]
+        focus(
+            labelContaining: "Adaptive Frame Pacing",
+            in: app,
+            directions: [.down],
+            pressesPerDirection: 40
+        )
+        XCTAssertTrue(pacing.waitForExistence(timeout: 3))
+        XCTAssertEqual(pacing.value as? String, "0")
+
+        XCUIRemote.shared.press(.select)
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "1"),
+            object: pacing
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 3), .completed)
+        attachScreenshot(of: app, named: "Adaptive Frame Pacing enabled")
+
+        XCUIRemote.shared.press(.select)
+        let disabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "0"),
+            object: pacing
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 3), .completed)
+    }
+
+    @MainActor
+    func testXboxAdaptiveFramePacingIsOptionalAndCanBeToggled() {
+        let app = makeApp(extraArguments: [
+            "--cloudnow-ui-service-chooser",
+            "--cloudnow-ui-xbox-configured",
+        ])
+        app.launch()
+        openConfiguredXboxSettings(in: app)
+
+        let pacing = app.switches["xbox.settings.stream-quality.adaptive-frame-pacing"]
+        focus(
+            labelContaining: "Adaptive Frame Pacing",
+            in: app,
+            directions: [.down],
+            pressesPerDirection: 20
+        )
+        XCTAssertTrue(pacing.waitForExistence(timeout: 3))
+        XCTAssertEqual(pacing.value as? String, "0")
+
+        XCUIRemote.shared.press(.select)
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "1"),
+            object: pacing
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 3), .completed)
+        attachScreenshot(of: app, named: "Xbox Adaptive Frame Pacing enabled")
+
+        XCUIRemote.shared.press(.select)
+        let disabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "0"),
+            object: pacing
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 3), .completed)
+    }
+
+    @MainActor
     func testSurround71SelectionCommitsAndRestoresSelectedValue() {
         let app = makeApp()
         app.launch()

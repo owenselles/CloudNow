@@ -32,6 +32,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
     var keyboardLayout: String = Self.defaultKeyboardLayout
     var gameLanguage: String = Self.defaultGameLanguage
     var enableL4S: Bool = true
+    var adaptiveFramePacing: Bool = false
     var micEnabled: Bool = false
     var rumbleEnabled: Bool = true
     /// Rumble power multiplier (0.0–2.0, 1.0 = default). Higher values stress controller motors.
@@ -153,6 +154,7 @@ extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorPreference, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, rumbleEnabled, rumbleIntensity, controllerDeadzone, overlayTriggerButton
+        case adaptiveFramePacing
         case textInputTriggerSequence, textInputTriggerDelayMs
         case defaultRemoteInputMode, preferredZoneUrl
         case serverRoutingMode, preferredRegionName, preferredRegionAddress
@@ -186,6 +188,7 @@ extension StreamSettings {
         keyboardLayout = try c.decodeIfPresent(String.self, forKey: .keyboardLayout) ?? d.keyboardLayout
         gameLanguage = try c.decodeIfPresent(String.self, forKey: .gameLanguage) ?? d.gameLanguage
         enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
+        adaptiveFramePacing = try c.decodeIfPresent(Bool.self, forKey: .adaptiveFramePacing) ?? d.adaptiveFramePacing
         micEnabled = try c.decodeIfPresent(Bool.self, forKey: .micEnabled) ?? d.micEnabled
         rumbleEnabled = try c.decodeIfPresent(Bool.self, forKey: .rumbleEnabled) ?? d.rumbleEnabled
         let storedRumbleIntensity = try c.decodeIfPresent(
@@ -270,6 +273,7 @@ extension StreamSettings {
         try c.encode(keyboardLayout, forKey: .keyboardLayout)
         try c.encode(gameLanguage, forKey: .gameLanguage)
         try c.encode(enableL4S, forKey: .enableL4S)
+        try c.encode(adaptiveFramePacing, forKey: .adaptiveFramePacing)
         try c.encode(micEnabled, forKey: .micEnabled)
         try c.encode(rumbleEnabled, forKey: .rumbleEnabled)
         try c.encode(rumbleIntensity, forKey: .rumbleIntensity)

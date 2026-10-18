@@ -1013,6 +1013,17 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
+
+                    Toggle(isOn: $vm.streamSettings.adaptiveFramePacing) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("adaptive_frame_pacing"))
+                            Text(L10n.text("adaptive_frame_pacing_description"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .accessibilityIdentifier("settings.stream-quality.adaptive-frame-pacing")
                 }
 
                 Section(L10n.text("server_location")) {

@@ -145,6 +145,8 @@ enum L10nDE {
         "max_bitrate": "Maximale Bitrate",
         "low_latency_mode": "Modus mit geringer Latenz (L4S)",
         "low_latency_mode_description": "Verringert Pufferung in Netzwerken mit L4S-Unterstützung (erfordert kompatiblen Router und ISP).",
+        "adaptive_frame_pacing": "Adaptive Frame-Taktung",
+        "adaptive_frame_pacing_description": "Kann ungleichmäßige Bewegungen durch kurzes Zurückhalten früh eintreffender Frames glätten. Dies erhöht die Eingabeverzögerung, wodurch die Steuerung träger wirken kann.",
         "server_region": "Serverregion",
         "region": "Region",
         "preferred_zone": "Bevorzugte Zone",

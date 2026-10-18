@@ -148,6 +148,8 @@ enum L10nCA {
         "max_bitrate": "Bitrate màxim",
         "low_latency_mode": "Mode de baixa latència (L4S)",
         "low_latency_mode_description": "Redueix la memòria intermèdia a les xarxes amb suport L4S (requereix un router i un ISP compatibles).",
+        "adaptive_frame_pacing": "Sincronització adaptativa dels fotogrames",
+        "adaptive_frame_pacing_description": "Pot suavitzar el moviment irregular retenint breument els fotogrames que arriben abans d’hora. Això afegeix latència d’entrada, de manera que els controls poden respondre més lentament.",
         "server_region": "Regió del servidor",
         "region": "Regió",
         "preferred_zone": "Zona preferida",

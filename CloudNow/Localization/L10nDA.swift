@@ -148,6 +148,8 @@ enum L10nDA {
         "max_bitrate": "Maks. bitrate",
         "low_latency_mode": "Lav latenstilstand (L4S)",
         "low_latency_mode_description": "Reducerer buffering på netværk med L4S-understøttelse (kræver en kompatibel router og ISP).",
+        "adaptive_frame_pacing": "Adaptiv billedtiming",
+        "adaptive_frame_pacing_description": "Kan gøre ujævn bevægelse mere flydende ved kortvarigt at holde billeder tilbage, der ankommer tidligt. Det øger inputforsinkelsen, så styringen kan føles mindre responsiv.",
         "server_region": "Serverregion",
         "region": "Område",
         "preferred_zone": "Foretrukken zone",

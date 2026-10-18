@@ -222,6 +222,7 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
 
     var displayResolution: XboxCloudDisplayResolution = .automatic
     var codecPreference: XboxCloudVideoCodecPreference = .automatic
+    var adaptiveFramePacing = false
     var gameLanguage = Self.automaticGameLanguage
     var statsMode: StreamStatsMode = .off
     var diagnosticsEnabled = false
@@ -257,6 +258,7 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
     init(
         displayResolution: XboxCloudDisplayResolution = .automatic,
         codecPreference: XboxCloudVideoCodecPreference = .automatic,
+        adaptiveFramePacing: Bool = false,
         gameLanguage: String = Self.automaticGameLanguage,
         statsMode: StreamStatsMode = .off,
         diagnosticsEnabled: Bool = false,
@@ -272,6 +274,7 @@ nonisolated struct XboxCloudStreamSettings: Codable, Equatable, Sendable {
     ) {
         self.displayResolution = displayResolution
         self.codecPreference = codecPreference
+        self.adaptiveFramePacing = adaptiveFramePacing
         self.gameLanguage = gameLanguage
         self.statsMode = statsMode
         self.diagnosticsEnabled = diagnosticsEnabled
@@ -335,6 +338,7 @@ extension XboxCloudStreamSettings {
         case bandwidthPreference
         case qualityProfile
         case codecPreference
+        case adaptiveFramePacing
         case gameLanguage
         case statsMode
         case diagnosticsEnabled
@@ -361,6 +365,10 @@ extension XboxCloudStreamSettings {
                 XboxCloudVideoCodecPreference.self,
                 forKey: .codecPreference
             )) ?? defaults.codecPreference,
+            adaptiveFramePacing: values.decodeIfPresent(
+                Bool.self,
+                forKey: .adaptiveFramePacing
+            ) ?? defaults.adaptiveFramePacing,
             gameLanguage: (try? values.decodeIfPresent(
                 String.self,
                 forKey: .gameLanguage
@@ -416,6 +424,7 @@ extension XboxCloudStreamSettings {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(displayResolution, forKey: .displayResolution)
         try values.encode(codecPreference, forKey: .codecPreference)
+        try values.encode(adaptiveFramePacing, forKey: .adaptiveFramePacing)
         try values.encode(gameLanguage, forKey: .gameLanguage)
         try values.encode(statsMode, forKey: .statsMode)
         try values.encode(diagnosticsEnabled, forKey: .diagnosticsEnabled)

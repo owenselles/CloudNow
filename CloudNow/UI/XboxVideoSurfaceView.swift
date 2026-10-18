@@ -7,6 +7,7 @@ import SwiftUI
 /// behavior remain owned by the Xbox provider mode.
 struct XboxVideoSurfaceView: UIViewControllerRepresentable {
     let videoTrack: LKRTCVideoTrack?
+    let adaptiveFramePacing: Bool
     let showsOverlay: Bool
     let hasGamepadController: Bool
     let onMenuPress: () -> Void
@@ -24,6 +25,8 @@ struct XboxVideoSurfaceView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> StreamingViewController {
         let controller = StreamingViewController()
+        // Xbox has no user-selected frame rate; limit extra holding to 1/60 second.
+        controller.videoSurface.setAdaptiveFramePacing(adaptiveFramePacing, frameRate: 60)
         controller.videoSurface.menuPressHandler = onMenuPress
         controller.videoSurface.inputHandler = context.coordinator.inputHandler
         controller.videoSurface.onDecodedVideoFormatChanged = onDecodedVideoFormatChanged
@@ -44,6 +47,7 @@ struct XboxVideoSurfaceView: UIViewControllerRepresentable {
             onKeyboardEvent: onKeyboardEvent,
             onMouseReport: onMouseReport
         )
+        controller.videoSurface.setAdaptiveFramePacing(adaptiveFramePacing, frameRate: 60)
         controller.videoSurface.videoTrack = videoTrack
         controller.videoSurface.menuPressHandler = onMenuPress
         controller.videoSurface.inputHandler = context.coordinator.inputHandler

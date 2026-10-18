@@ -4,6 +4,23 @@ import Testing
 
 @Suite("Application persistence")
 struct PersistenceStoreTests {
+    @Test("Frame pacing preferences remain separate for each provider", arguments: [true, false])
+    func framePacingPreferencesStaySeparate(geForceNowEnabled: Bool) async throws {
+        let harness = try PersistenceHarness()
+        defer { harness.cleanup() }
+        var geForceNowSettings = StreamSettings()
+        geForceNowSettings.adaptiveFramePacing = geForceNowEnabled
+        let xboxSettings = XboxCloudStreamSettings(adaptiveFramePacing: !geForceNowEnabled)
+
+        await harness.store.saveStreamSettings(geForceNowSettings)
+        await harness.store.saveXboxCloudStreamSettings(xboxSettings)
+
+        let geForceNow = await harness.store.loadGamesSnapshot(accountScope: nil)
+        let xbox = await harness.store.loadXboxCloudStreamSettings()
+        #expect(geForceNow.streamSettings?.adaptiveFramePacing == geForceNowEnabled)
+        #expect(xbox.adaptiveFramePacing == !geForceNowEnabled)
+    }
+
     @Test("Cloud gaming service selection round-trips and rejects stale writes")
     func cloudGamingProviderSelection() async throws {
         let harness = try PersistenceHarness()

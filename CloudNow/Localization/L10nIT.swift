@@ -149,6 +149,8 @@ enum L10nIT {
         "max_bitrate": "Bitrate massimo",
         "low_latency_mode": "Modalità bassa latenza (L4S)",
         "low_latency_mode_description": "Riduce il buffering nelle reti con supporto L4S (richiede router e ISP compatibili).",
+        "adaptive_frame_pacing": "Temporizzazione adattiva dei fotogrammi",
+        "adaptive_frame_pacing_description": "Può rendere più fluidi i movimenti irregolari trattenendo brevemente i fotogrammi che arrivano in anticipo. Questo aggiunge latenza di input, quindi i comandi potrebbero sembrare meno reattivi.",
         "server_region": "Regione server",
         "region": "Regione",
         "preferred_zone": "Zona preferita",

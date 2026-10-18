@@ -178,6 +178,8 @@ enum L10nMS {
         "max_bitrate": "Bitrate maksimum",
         "low_latency_mode": "Mod kependaman rendah (L4S)",
         "low_latency_mode_description": "Mengurangkan buffering pada rangkaian dengan sokongan L4S (memerlukan penghala dan ISP yang serasi).",
+        "adaptive_frame_pacing": "Pemasaan Bingkai Adaptif",
+        "adaptive_frame_pacing_description": "Boleh melicinkan pergerakan tidak sekata dengan menahan seketika bingkai yang tiba awal. Ini menambah kependaman input, jadi kawalan mungkin terasa kurang responsif.",
         "server_region": "Wilayah pelayan",
         "region": "Rantau",
         "preferred_zone": "Zon pilihan",

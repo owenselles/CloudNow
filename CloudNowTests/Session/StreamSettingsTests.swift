@@ -26,6 +26,7 @@ struct StreamSettingsTests {
         #expect(settings.keyboardLayout == StreamSettings.defaultKeyboardLayout)
         #expect(settings.gameLanguage == StreamSettings.automaticGameLanguage)
         #expect(settings.enableL4S)
+        #expect(!settings.adaptiveFramePacing)
         #expect(!settings.micEnabled)
         #expect(settings.rumbleEnabled)
         #expect(settings.rumbleIntensity == 1)
@@ -115,6 +116,7 @@ struct StreamSettingsTests {
         expected.keyboardLayout = "de-DE"
         expected.gameLanguage = "fr_FR"
         expected.enableL4S = true
+        expected.adaptiveFramePacing = true
         expected.micEnabled = true
         expected.rumbleEnabled = false
         expected.rumbleIntensity = 1.5
@@ -146,6 +148,18 @@ struct StreamSettingsTests {
         let decoded = try decodeFixture("minimal.json")
 
         #expect(decoded == StreamSettings())
+    }
+
+    @Test("Adaptive frame pacing survives settings persistence", arguments: [false, true])
+    func adaptiveFramePacingPersistence(enabled: Bool) throws {
+        var settings = StreamSettings()
+        settings.adaptiveFramePacing = enabled
+
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: encoded)
+
+        #expect(decoded.adaptiveFramePacing == enabled)
+        #expect(decoded.normalizedForClient.adaptiveFramePacing == enabled)
     }
 
     @Test("Audio preferences survive settings persistence", arguments: AudioFormatPreference.allCases)
@@ -183,6 +197,7 @@ struct StreamSettingsTests {
         #expect(decoded.maxBitrateKbps == 20000)
         #expect(decoded.codec == .h264)
         #expect(!decoded.enableL4S)
+        #expect(!decoded.adaptiveFramePacing)
     }
 
     @Test("Legacy color quality migrates and decoded values still clamp")

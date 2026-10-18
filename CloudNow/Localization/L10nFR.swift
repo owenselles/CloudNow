@@ -145,6 +145,8 @@ enum L10nFR {
         "max_bitrate": "Débit maximal",
         "low_latency_mode": "Mode faible latence (L4S)",
         "low_latency_mode_description": "Réduit la mise en mémoire tampon sur les réseaux compatibles L4S (nécessite un routeur et un FAI compatibles).",
+        "adaptive_frame_pacing": "Cadencement adaptatif des images",
+        "adaptive_frame_pacing_description": "Peut fluidifier les mouvements irréguliers en retenant brièvement les images arrivées en avance. Cela ajoute une latence d’entrée, ce qui peut rendre les commandes moins réactives.",
         "server_region": "Région du serveur",
         "region": "Région",
         "preferred_zone": "Zone préférée",

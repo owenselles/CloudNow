@@ -51,15 +51,21 @@ nonisolated struct LatestFrameMailbox<Element> {
 
 nonisolated struct VideoRendererDrainSchedule: Sendable {
     private(set) var isScheduled = false
+    private(set) var identifier: UInt64 = 0
 
     mutating func beginIfNeeded() -> Bool {
         guard !isScheduled else { return false }
+        identifier &+= 1
         isScheduled = true
         return true
     }
 
     mutating func finish() {
         isScheduled = false
+    }
+
+    func isCurrent(_ identifier: UInt64) -> Bool {
+        isScheduled && self.identifier == identifier
     }
 }
 
@@ -225,6 +231,10 @@ final class VideoSurfaceView: UIView {
 
     func setDiagnosticsEnabled(_ enabled: Bool) {
         pipelineDiagnostics.setEnabled(enabled)
+    }
+
+    func setAdaptiveFramePacing(_ enabled: Bool, frameRate: Int) {
+        renderer.setAdaptiveFramePacing(enabled, frameRate: frameRate)
     }
 
     /// Clears renderer and input ownership when SwiftUI dismantles the representable. The stream
@@ -462,6 +472,13 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
     private struct PendingFrame: @unchecked Sendable {
         let frame: LKRTCVideoFrame
         let trace: VideoFrameTrace?
+        let arrivalTime: TimeInterval
+    }
+
+    private enum DrainAction {
+        case idle
+        case wait(TimeInterval)
+        case process(PendingFrame, UInt64)
     }
 
     private struct State: @unchecked Sendable {
@@ -474,6 +491,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         var metricsRequestInFlight = false
         var activeEnqueues = 0
         var flushPlan = VideoRendererFlushPlan()
+        var pacer: AdaptiveFramePacer?
+        var pacingSize: CGSize?
+        var pendingDeadline: TimeInterval?
     }
 
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
@@ -492,6 +512,24 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
 
     func setSize(_: CGSize) {}
 
+    func setAdaptiveFramePacing(_ enabled: Bool, frameRate: Int) {
+        let pacer = enabled ? AdaptiveFramePacer(frameRate: frameRate) : nil
+        let identifier = state.withLock { state -> UInt64? in
+            guard state.pacer?.frameRate != pacer?.frameRate else { return nil }
+            state.pacer = pacer
+            state.pacingSize = nil
+            state.pendingDeadline = nil
+            state.generation &+= 1
+            state.drainSchedule.finish()
+            guard !state.isFlushing, state.mailbox.hasPending else { return nil }
+            _ = state.drainSchedule.beginIfNeeded()
+            return state.drainSchedule.identifier
+        }
+        if let identifier {
+            scheduleDrain(identifier)
+        }
+    }
+
     func renderFrame(_ frame: LKRTCVideoFrame?) {
         guard let frame, let sampleBufferRenderer else { return }
         let trace = diagnostics.beginFrame()
@@ -502,47 +540,100 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             return
         }
 
-        let pendingFrame = PendingFrame(frame: frame, trace: trace)
-        let submission = state.withLock { state -> (PendingFrame?, Bool) in
-            guard !state.isFlushing else { return (pendingFrame, false) }
+        let pendingFrame = PendingFrame(frame: frame, trace: trace, arrivalTime: Self.now)
+        let submission = state.withLock { state -> (PendingFrame?, UInt64?) in
+            guard !state.isFlushing else { return (pendingFrame, nil) }
+            if state.pacer?.observe(
+                timestamp: UInt32(bitPattern: frame.timeStamp),
+                arrivalTime: pendingFrame.arrivalTime
+            ) == true {
+                state.generation &+= 1
+                state.pendingDeadline = nil
+                state.drainSchedule.finish()
+            }
             switch state.mailbox.store(pendingFrame) {
             case let .stored(replacing: replaced):
                 let shouldSchedule = state.drainSchedule.beginIfNeeded()
-                return (replaced, shouldSchedule)
+                return (replaced, shouldSchedule ? state.drainSchedule.identifier : nil)
             case let .rejected(rejected):
-                return (rejected, false)
+                return (rejected, nil)
             }
         }
         if let dropped = submission.0 {
             diagnostics.recordDrop(dropped.trace)
         }
-        guard submission.1 else { return }
-        renderQueue.async { [weak self] in
-            self?.drainPendingFrames()
+        if let identifier = submission.1 {
+            scheduleDrain(identifier)
         }
     }
 
-    private func drainPendingFrames() {
+    private static var now: TimeInterval {
+        Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+    }
+
+    private func scheduleDrain(_ identifier: UInt64, deadline: TimeInterval? = nil) {
+        let work: @Sendable () -> Void = { [weak self] in
+            self?.drainPendingFrames(identifier: identifier)
+        }
+        if let deadline {
+            renderQueue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: UInt64(deadline * 1_000_000_000)), execute: work)
+        } else {
+            renderQueue.async(execute: work)
+        }
+    }
+
+    private func drainPendingFrames(identifier: UInt64) {
         while let sampleBufferRenderer {
+            guard state.withLock({ $0.drainSchedule.isCurrent(identifier) }) else { return }
             if sampleBufferRenderer.status == .failed || sampleBufferRenderer.requiresFlushToResumeDecoding {
                 recoverAfterFailure()
                 return
             }
-            let pending = state.withLock { state -> (PendingFrame, UInt64)? in
-                guard !state.isFlushing else {
-                    state.drainSchedule.finish()
-                    return nil
-                }
-                guard let frame = state.mailbox.take() else {
-                    state.drainSchedule.finish()
-                    return nil
-                }
-                return (frame, state.generation)
+            switch nextDrainAction(identifier: identifier) {
+            case .idle:
+                return
+            case let .wait(deadline):
+                scheduleDrain(identifier, deadline: deadline)
+                return
+            case let .process(frame, generation):
+                process(frame, generation: generation, renderer: sampleBufferRenderer)
             }
-            guard let pending else { return }
-            process(pending.0, generation: pending.1, renderer: sampleBufferRenderer)
         }
         dropPendingFrame()
+    }
+
+    private func nextDrainAction(identifier: UInt64) -> DrainAction {
+        state.withLock { state in
+            guard state.drainSchedule.isCurrent(identifier) else { return .idle }
+            guard !state.isFlushing, let pending = state.mailbox.take() else {
+                state.drainSchedule.finish()
+                return .idle
+            }
+            if var pacer = state.pacer {
+                let size = CGSize(width: Int(pending.frame.width), height: Int(pending.frame.height))
+                if state.pacingSize != size {
+                    pacer.reset()
+                    state.pacingSize = size
+                    state.pendingDeadline = nil
+                }
+                let now = Self.now
+                let timestamp = UInt32(bitPattern: pending.frame.timeStamp)
+                let deadline = state.pendingDeadline ?? pacer.deadline(
+                    timestamp: timestamp, arrivalTime: pending.arrivalTime, now: now
+                )
+                if deadline > now {
+                    // Keep this deadline when newer arrivals replace the mailbox, avoiding starvation.
+                    state.pendingDeadline = deadline
+                    state.pacer = pacer
+                    _ = state.mailbox.storeIfEmpty(pending)
+                    return .wait(deadline)
+                }
+                pacer.didSubmit(timestamp: timestamp, deadline: deadline)
+                state.pacer = pacer
+                state.pendingDeadline = nil
+            }
+            return .process(pending, state.generation)
+        }
     }
 
     private func process(
@@ -593,6 +684,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             }
             state.inspectionCache = updatedInspectionCache
             guard state.decodedFormatSignature != decodedSignature else { return (true, false) }
+            if state.decodedFormatSignature != nil {
+                state.pacer?.reset()
+            }
             state.decodedFormatSignature = decodedSignature
             return (true, true)
         }
@@ -672,6 +766,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             state.inspectionCache.reset()
             state.decodedFormatSignature = nil
             state.drainSchedule.finish()
+            state.pacer?.reset()
+            state.pendingDeadline = nil
+            state.pacingSize = nil
             let request = VideoRendererFlushRequest(
                 generation: state.generation,
                 removeDisplayedImage: true
@@ -741,6 +838,9 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
             state.inspectionCache.reset()
             state.decodedFormatSignature = nil
             state.drainSchedule.finish()
+            state.pacer?.reset()
+            state.pendingDeadline = nil
+            state.pacingSize = nil
             let dropped = state.mailbox.flush()
             let request = VideoRendererFlushRequest(
                 generation: state.generation,

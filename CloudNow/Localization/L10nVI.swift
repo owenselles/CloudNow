@@ -178,6 +178,8 @@ enum L10nVI {
         "max_bitrate": "Bitrate tối đa",
         "low_latency_mode": "Chế độ độ trễ thấp (L4S)",
         "low_latency_mode_description": "Giảm buffering trên mạng có hỗ trợ L4S (cần router và ISP tương thích).",
+        "adaptive_frame_pacing": "Điều chỉnh nhịp khung hình thích ứng",
+        "adaptive_frame_pacing_description": "Có thể làm mượt chuyển động không đều bằng cách giữ lại trong chốc lát các khung hình đến sớm. Điều này làm tăng độ trễ đầu vào nên thao tác điều khiển có thể kém nhạy hơn.",
         "server_region": "Khu vực máy chủ",
         "region": "Khu vực",
         "preferred_zone": "Khu vực ưu tiên",

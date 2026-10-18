@@ -101,6 +101,30 @@ struct VideoRendererDrainScheduleTests {
         #expect(!concurrentFrameUsesActiveDrain)
         #expect(laterFrameStartsAnotherDrain)
     }
+
+    @Test("Finishing a drain invalidates an already scheduled callback")
+    func completedDrainRejectsOldCallback() {
+        var schedule = VideoRendererDrainSchedule()
+        _ = schedule.beginIfNeeded()
+        let identifier = schedule.identifier
+        #expect(schedule.isCurrent(identifier))
+
+        schedule.finish()
+
+        #expect(!schedule.isCurrent(identifier))
+    }
+
+    @Test("A callback from an earlier drain cannot run in a newly armed drain")
+    func rearmedDrainRejectsOldCallback() {
+        var schedule = VideoRendererDrainSchedule()
+        _ = schedule.beginIfNeeded()
+        let oldIdentifier = schedule.identifier
+        schedule.finish()
+        _ = schedule.beginIfNeeded()
+
+        #expect(!schedule.isCurrent(oldIdentifier))
+        #expect(schedule.isCurrent(schedule.identifier))
+    }
 }
 
 @Suite("Video renderer flush sequencing")

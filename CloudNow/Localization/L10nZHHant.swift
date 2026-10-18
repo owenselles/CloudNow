@@ -175,6 +175,8 @@ enum L10nZHHant {
         "max_bitrate": "最大位元率",
         "low_latency_mode": "低延遲模式 (L4S)",
         "low_latency_mode_description": "在支援 L4S 的網路上減少緩衝（需要相容的路由器與 ISP）。",
+        "adaptive_frame_pacing": "自適應影格間隔",
+        "adaptive_frame_pacing_description": "透過短暫保留提早到達的影格，可能使不均勻的動作更流暢。這會增加輸入延遲，因此操作可能感覺不那麼靈敏。",
         "server_region": "伺服器區域",
         "region": "地區",
         "preferred_zone": "偏好區域",

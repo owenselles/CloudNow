@@ -52,6 +52,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Audio | Automatic | Service controlled |
 | Maximum bitrate | 100 Mbps | No client cap |
 | L4S | On | Not exposed |
+| Adaptive frame pacing | Off | Off |
 | Game language | Automatic | Automatic |
 | Microphone | Off | Off |
 | Controller rumble | On | On |
@@ -70,6 +71,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Audio layout | Automatic, Stereo, 5.1 Surround, 7.1 Surround | No manual control |
 | Maximum bitrate | 15 to 100 Mbps | No client bitrate cap |
 | L4S | Toggle | Not exposed |
+| Adaptive frame pacing | Toggle, off by default | Toggle, off by default |
 | Server location | NVIDIA automatic, region, or dedicated server | Service selected |
 | Keyboard layout | Selectable | Not exposed |
 | Game language | Selectable | Selectable |
@@ -78,6 +80,26 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Controller tuning | Rumble, intensity, deadzone, overlay, text-entry shortcut, input mode | Rumble, intensity, deadzone |
 | Save in-game settings | Plan dependent | Not exposed |
 | Xbox accessibility preferences | Not exposed | Text to speech, magnifier, high contrast |
+
+## Adaptive frame pacing
+
+GeForce NOW and Xbox each save this preference separately. It defaults to Off
+and applies to the next session. Off preserves the existing immediate video
+presentation. On briefly holds decoded frames to absorb short variations in
+arrival timing, reducing the hold when arrivals become steady.
+
+For GFN, the scheduled hold is capped at one configured frame interval, with a
+maximum of 33.3 ms (about 16.7 ms at 60 fps). Xbox uses a 16.7 ms cap. These caps
+limit the delay requested by CloudNow, not total end-to-end latency: frame
+conversion and operating-system scheduling can add time. The trade-off is
+additional input latency, so controls may feel less responsive. Pacing cannot
+fix sustained packet loss, server stalls, or slow decoding, and does not change
+the codec, stream request, or network buffering.
+
+Compare the same game with the setting off and on using a physical Apple TV.
+Check motion during camera movement, controller response, and audio/video
+synchronization in each provider. A smoothness improvement is not guaranteed,
+and simulator tests alone cannot establish the benefit on a real display.
 
 ## GeForce NOW settings
 
@@ -95,6 +117,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Game Launch Mode | Big Picture | Default or Big Picture | Big Picture requests the TV-oriented launcher mode. Default requests the desktop-style launcher mode. |
 | Max Bitrate | 100 Mbps | 15 to 100 Mbps in 5 Mbps steps | Sends a maximum bitrate preference. Network and service adaptation can remain below it. |
 | Low Latency Mode | On | Always shown | Requests L4S behavior. It is useful only with a compatible router and ISP. |
+| Adaptive Frame Pacing | Off | Always shown | Briefly holds decoded frames to smooth uneven arrival timing. Adds input latency. Applies to the next GFN session. See [Adaptive frame pacing](#adaptive-frame-pacing). |
 
 #### Frame-rate eligibility
 
@@ -219,6 +242,7 @@ adapt below them.
 | Setting or action | Default | Options and eligibility | Effect |
 |---|---|---|---|
 | Resolution | Automatic | Account-aware options described above. | Sends the selected resolution alias or Automatic ceiling. |
+| Adaptive Frame Pacing | Off | Always shown in Xbox Settings. Saved separately from GFN. | Briefly holds decoded frames to smooth uneven arrival timing. Adds input latency. Applies to the next Xbox session. See [Adaptive frame pacing](#adaptive-frame-pacing). |
 | Game Language | Automatic | Automatic plus the fixed language list documented in [Using CloudNow](UsingCloudNow.md#game-language). | Automatic uses the active CloudNow locale. The title and service remain authoritative. |
 | Controller Rumble | On | Always shown while Xbox Settings is available. | Enables Xbox haptic output for the next session. |
 | Rumble Intensity | 100% | Shown only while rumble is on. Range 0% to 100% in 5% steps. | Scales Xbox haptic output. |

@@ -178,6 +178,8 @@ enum L10nPL {
         "max_bitrate": "Maks. bitrate",
         "low_latency_mode": "Tryb niskiej latencji (L4S)",
         "low_latency_mode_description": "Zmniejsza buforowanie w sieciach z obsługą L4S (wymaga zgodnego routera i dostawcy internetu).",
+        "adaptive_frame_pacing": "Adaptacyjne tempo klatek",
+        "adaptive_frame_pacing_description": "Może wygładzić nierówny ruch, krótko wstrzymując klatki, które dotrą wcześniej. Zwiększa to opóźnienie wejścia, więc sterowanie może wydawać się mniej responsywne.",
         "server_region": "Region serwera",
         "region": "Region",
         "preferred_zone": "Preferowana strefa",

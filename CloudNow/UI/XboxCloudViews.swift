@@ -3996,8 +3996,8 @@ private struct XboxSettingsView: View {
                     onSelectProvider: switchProvider
                 )
 
-                if supportsManualResolution {
-                    CloudNowStreamQualitySection {
+                CloudNowStreamQualitySection {
+                    if supportsManualResolution {
                         CloudNowSettingSelectionRow(
                             L10n.text("resolution"),
                             selection: xboxResolutionSelection,
@@ -4010,8 +4010,19 @@ private struct XboxSettingsView: View {
                             }
                         )
                     }
-                    .disabled(isBusy)
+
+                    Toggle(isOn: $modeViewModel.streamSettings.adaptiveFramePacing) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("adaptive_frame_pacing"))
+                            Text(L10n.text("adaptive_frame_pacing_description"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .accessibilityIdentifier("xbox.settings.stream-quality.adaptive-frame-pacing")
                 }
+                .disabled(isBusy)
 
                 Section(L10n.text("game")) {
                     CloudNowGameLanguageSelectionRow(

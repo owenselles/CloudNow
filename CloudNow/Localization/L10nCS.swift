@@ -148,6 +148,8 @@ enum L10nCS {
         "max_bitrate": "Maximální bitrate",
         "low_latency_mode": "Režim nízké latence (L4S)",
         "low_latency_mode_description": "Snižuje vyrovnávací paměť v sítích s podporou L4S (vyžaduje kompatibilní router a ISP).",
+        "adaptive_frame_pacing": "Adaptivní časování snímků",
+        "adaptive_frame_pacing_description": "Může vyhladit nerovnoměrný pohyb krátkým pozdržením snímků, které dorazí dříve. Tím se zvyšuje zpoždění vstupu, takže ovládání může reagovat pomaleji.",
         "server_region": "Oblast serveru",
         "region": "Oblast",
         "preferred_zone": "Preferovaná zóna",

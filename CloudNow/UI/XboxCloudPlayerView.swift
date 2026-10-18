@@ -244,6 +244,7 @@ struct XboxCloudPlayerView: View {
     private var streamingView: some View {
         XboxVideoSurfaceView(
             videoTrack: controller.videoTrack,
+            adaptiveFramePacing: (controller.activeStreamSettings ?? settings).adaptiveFramePacing,
             showsOverlay: showsOverlay,
             hasGamepadController: inputDeviceMonitor.connectedDevices.contains(
                 .controller

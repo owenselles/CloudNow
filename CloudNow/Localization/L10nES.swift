@@ -145,6 +145,8 @@ enum L10nES {
         "max_bitrate": "Tasa de bits máxima",
         "low_latency_mode": "Modo de baja latencia (L4S)",
         "low_latency_mode_description": "Reduce el almacenamiento en búfer en redes con compatibilidad L4S (requiere router e ISP compatibles).",
+        "adaptive_frame_pacing": "Sincronización adaptativa de fotogramas",
+        "adaptive_frame_pacing_description": "Puede suavizar el movimiento irregular reteniendo brevemente los fotogramas que llegan antes de tiempo. Esto añade latencia de entrada, por lo que los controles pueden responder más lentamente.",
         "server_region": "Región del servidor",
         "region": "Región",
         "preferred_zone": "Zona preferida",

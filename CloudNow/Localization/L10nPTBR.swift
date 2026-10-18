@@ -175,6 +175,8 @@ enum L10nPTBR {
         "max_bitrate": "Taxa de bits máxima",
         "low_latency_mode": "Modo de baixa latência (L4S)",
         "low_latency_mode_description": "Reduz o buffering em redes com suporte a L4S (exige roteador e ISP compatíveis).",
+        "adaptive_frame_pacing": "Ritmo adaptativo de quadros",
+        "adaptive_frame_pacing_description": "Pode suavizar movimentos irregulares ao reter brevemente os quadros que chegam antes da hora. Isso aumenta a latência de entrada, então os controles podem parecer menos responsivos.",
         "server_region": "Região do servidor",
         "region": "Região",
         "preferred_zone": "Zona preferida",

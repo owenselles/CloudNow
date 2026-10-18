@@ -152,6 +152,8 @@ enum L10nHU {
         "max_bitrate": "Maximális bitráta",
         "low_latency_mode": "Alacsony késleltetésű mód (L4S)",
         "low_latency_mode_description": "Csökkenti a pufferelést L4S-t támogató hálózatokon (kompatibilis router és internetszolgáltató szükséges).",
+        "adaptive_frame_pacing": "Adaptív képkocka-időzítés",
+        "adaptive_frame_pacing_description": "A korán érkező képkockák rövid visszatartásával kisimíthatja az egyenetlen mozgást. Ez növeli a bemeneti késleltetést, ezért az irányítás kevésbé közvetlennek érződhet.",
         "server_region": "Szerverrégió",
         "region": "Régió",
         "preferred_zone": "Előnyben részesített zóna",

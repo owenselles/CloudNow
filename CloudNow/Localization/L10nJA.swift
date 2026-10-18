@@ -149,6 +149,8 @@ enum L10nJA {
         "max_bitrate": "最大ビットレート",
         "low_latency_mode": "低遅延モード (L4S)",
         "low_latency_mode_description": "L4S をサポートするネットワークでバッファリングを減らします（対応ルーターと ISP が必要です）。",
+        "adaptive_frame_pacing": "アダプティブフレームペーシング",
+        "adaptive_frame_pacing_description": "早く届いたフレームを短時間待機させることで、動きのばらつきが滑らかになる場合があります。入力遅延が増えるため、操作の反応が鈍く感じられる場合があります。",
         "server_region": "サーバー地域",
         "region": "リージョン",
         "preferred_zone": "優先ゾーン",

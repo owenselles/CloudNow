@@ -178,6 +178,8 @@ enum L10nEN {
         "max_bitrate": "Max Bitrate",
         "low_latency_mode": "Low Latency Mode (L4S)",
         "low_latency_mode_description": "Reduces buffering on networks with L4S support (requires a compatible router and ISP).",
+        "adaptive_frame_pacing": "Adaptive Frame Pacing",
+        "adaptive_frame_pacing_description": "May smooth uneven motion by briefly holding early frames. This adds input latency, so controls may feel less responsive.",
         "server_region": "Server Region",
         "region": "Region",
         "preferred_zone": "Preferred Zone",

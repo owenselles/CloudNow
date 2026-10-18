@@ -178,6 +178,8 @@ enum L10nNL {
         "max_bitrate": "Max. bitrate",
         "low_latency_mode": "Lage-latentiemodus (L4S)",
         "low_latency_mode_description": "Vermindert buffering op netwerken met L4S-ondersteuning (vereist een compatibele router en ISP).",
+        "adaptive_frame_pacing": "Adaptieve frametiming",
+        "adaptive_frame_pacing_description": "Kan ongelijkmatige beweging vloeiender maken door vroeg aankomende frames kort vast te houden. Dit voegt invoervertraging toe, waardoor de besturing minder responsief kan aanvoelen.",
         "server_region": "Serverregio",
         "region": "Regio",
         "preferred_zone": "Voorkeurszone",

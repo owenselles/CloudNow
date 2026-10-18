@@ -178,6 +178,8 @@ enum L10nSK {
         "max_bitrate": "Max. bitrate",
         "low_latency_mode": "Režim nízkej latencie (L4S)",
         "low_latency_mode_description": "Znižuje bufferovanie v sieťach s podporou L4S (vyžaduje kompatibilný router a ISP).",
+        "adaptive_frame_pacing": "Adaptívne časovanie snímok",
+        "adaptive_frame_pacing_description": "Môže vyhladiť nerovnomerný pohyb krátkym podržaním snímok, ktoré dorazia skôr. Tým sa zvyšuje oneskorenie vstupu, takže ovládanie môže pôsobiť menej pohotovo.",
         "server_region": "Región servera",
         "region": "Región",
         "preferred_zone": "Preferovaná zóna",

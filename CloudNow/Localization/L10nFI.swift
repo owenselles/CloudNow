@@ -148,6 +148,8 @@ enum L10nFI {
         "max_bitrate": "Suurin bitrate",
         "low_latency_mode": "Pienen viiveen tila (L4S)",
         "low_latency_mode_description": "Vähentää puskurointia verkoissa, joissa on L4S-tuki (edellyttää yhteensopivaa reititintä ja operaattoria).",
+        "adaptive_frame_pacing": "Mukautuva ruutujen ajoitus",
+        "adaptive_frame_pacing_description": "Voi tasoittaa epätasaista liikettä viivyttämällä aikaisin saapuvia ruutuja lyhyesti. Tämä lisää syöteviivettä, joten ohjaus voi tuntua hitaammin reagoivalta.",
         "server_region": "Palvelinalue",
         "region": "Alue",
         "preferred_zone": "Ensisijainen alue",

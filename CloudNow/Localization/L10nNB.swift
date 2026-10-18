@@ -178,6 +178,8 @@ enum L10nNB {
         "max_bitrate": "Maks bitrate",
         "low_latency_mode": "Lav latens-modus (L4S)",
         "low_latency_mode_description": "Reduserer buffering på nettverk med L4S-støtte (krever kompatibel ruter og ISP).",
+        "adaptive_frame_pacing": "Adaptiv bildetiming",
+        "adaptive_frame_pacing_description": "Kan jevne ut uregelmessige bevegelser ved å holde tilbake bilder som kommer tidlig, et kort øyeblikk. Dette øker inndataforsinkelsen, så styringen kan føles mindre responsiv.",
         "server_region": "Serverregion",
         "region": "Region",
         "preferred_zone": "Foretrukket sone",

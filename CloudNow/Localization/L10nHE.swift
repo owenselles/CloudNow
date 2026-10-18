@@ -148,6 +148,8 @@ enum L10nHE {
         "max_bitrate": "קצב סיביות מרבי",
         "low_latency_mode": "מצב שיהוי נמוך (L4S)",
         "low_latency_mode_description": "מפחית buffering ברשתות עם תמיכה ב-L4S (דורש נתב וספק אינטרנט תואמים).",
+        "adaptive_frame_pacing": "תזמון פריימים אדפטיבי",
+        "adaptive_frame_pacing_description": "עשוי להחליק תנועה לא אחידה על ידי עיכוב קצר של פריימים שמגיעים מוקדם. הדבר מוסיף השהיית קלט, ולכן הפקדים עשויים להרגיש פחות תגובתיים.",
         "server_region": "אזור שרת",
         "region": "אזור",
         "preferred_zone": "אזור מועדף",

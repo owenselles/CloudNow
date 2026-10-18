@@ -149,6 +149,8 @@ enum L10nKO {
         "max_bitrate": "최대 비트레이트",
         "low_latency_mode": "저지연 모드 (L4S)",
         "low_latency_mode_description": "L4S를 지원하는 네트워크에서 버퍼링을 줄입니다(호환되는 라우터와 ISP가 필요합니다).",
+        "adaptive_frame_pacing": "적응형 프레임 페이싱",
+        "adaptive_frame_pacing_description": "일찍 도착한 프레임을 잠시 대기시켜 불규칙한 움직임을 부드럽게 할 수 있습니다. 입력 지연이 추가되므로 조작 반응이 느리게 느껴질 수 있습니다.",
         "server_region": "서버 지역",
         "region": "지역",
         "preferred_zone": "선호 영역",

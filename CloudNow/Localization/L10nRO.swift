@@ -178,6 +178,8 @@ enum L10nRO {
         "max_bitrate": "Bitrate maxim",
         "low_latency_mode": "Mod latență redusă (L4S)",
         "low_latency_mode_description": "Reduce bufferingul pe rețele cu suport L4S (necesită router și ISP compatibile).",
+        "adaptive_frame_pacing": "Temporizare adaptivă a cadrelor",
+        "adaptive_frame_pacing_description": "Poate fluidiza mișcarea neregulată reținând pentru scurt timp cadrele care sosesc devreme. Aceasta adaugă latență la intrare, astfel încât comenzile pot părea mai puțin receptive.",
         "server_region": "Regiunea serverului",
         "region": "Regiune",
         "preferred_zone": "Zona preferată",

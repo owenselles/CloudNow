@@ -178,6 +178,8 @@ enum L10nPTPT {
         "max_bitrate": "Taxa de bits máxima",
         "low_latency_mode": "Modo de baixa latência (L4S)",
         "low_latency_mode_description": "Reduz o buffering em redes com suporte L4S (requer router e ISP compatíveis).",
+        "adaptive_frame_pacing": "Ritmo adaptativo de fotogramas",
+        "adaptive_frame_pacing_description": "Pode suavizar movimentos irregulares ao reter brevemente os fotogramas que chegam antes do tempo. Isto aumenta a latência de entrada, pelo que os controlos podem parecer menos reativos.",
         "server_region": "Região do servidor",
         "region": "Região",
         "preferred_zone": "Zona preferida",

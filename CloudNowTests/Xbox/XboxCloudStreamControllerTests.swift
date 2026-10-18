@@ -20,6 +20,7 @@ struct XboxCloudStreamControllerTests {
             from: Data("{}".utf8)
         )
         #expect(defaults == XboxCloudStreamSettings())
+        #expect(!defaults.adaptiveFramePacing)
         #expect(defaults.statsMode == .off)
         #expect(!defaults.diagnosticsEnabled)
         #expect(!defaults.enableRtcEventLog)
@@ -27,6 +28,7 @@ struct XboxCloudStreamControllerTests {
         let settings = XboxCloudStreamSettings(
             displayResolution: .qhd,
             codecPreference: .h265,
+            adaptiveFramePacing: true,
             gameLanguage: "fr_FR",
             statsMode: .standard,
             diagnosticsEnabled: true,
@@ -48,6 +50,8 @@ struct XboxCloudStreamControllerTests {
         #expect(roundTrip == settings)
         #expect(roundTrip.displayResolution == .qhd)
         #expect(roundTrip.codecPreference == .h265)
+        #expect(roundTrip.adaptiveFramePacing)
+        #expect(roundTrip.normalizedForClient.adaptiveFramePacing)
         #expect(roundTrip.statsMode == .standard)
         #expect(roundTrip.diagnosticsEnabled)
         #expect(roundTrip.enableRtcEventLog)
@@ -80,6 +84,19 @@ struct XboxCloudStreamControllerTests {
         )
         #expect(encoded["bandwidthPreference"] == nil)
         #expect(encoded["qualityProfile"] == nil)
+    }
+
+    @Test("Legacy Xbox preferences survive adding optional frame pacing")
+    func legacySettingsKeepPacingDisabled() throws {
+        let settings = try JSONDecoder().decode(
+            XboxCloudStreamSettings.self,
+            from: Data(#"{"displayResolution":"1080HQ","gameLanguage":"fr_FR","rumbleEnabled":false}"#.utf8)
+        )
+
+        #expect(settings.displayResolution == .fullHDHighQuality)
+        #expect(settings.gameLanguage == "fr_FR")
+        #expect(!settings.rumbleEnabled)
+        #expect(!settings.adaptiveFramePacing)
     }
 
     @Test(
