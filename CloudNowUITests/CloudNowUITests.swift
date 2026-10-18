@@ -1270,7 +1270,7 @@ final class CloudNowUITests: XCTestCase {
         openSettings(in: app)
         let codec = element("settings.stream-quality.codec", in: app)
         XCTAssertTrue(codec.waitForExistence(timeout: 3))
-        XCTAssertEqual(codec.value as? String, "H265")
+        XCTAssertEqual(codec.value as? String, "Automatic")
 
         let focusedCodec = focusedElement(labeled: "Codec", in: app)
         for _ in 0 ..< 30 {
@@ -1284,12 +1284,12 @@ final class CloudNowUITests: XCTestCase {
 
         let page = element("settings.stream-quality.codec.page", in: app)
         XCTAssertTrue(page.waitForExistence(timeout: 3))
-        let h265 = element(
-            "settings.stream-quality.codec.option.H265",
+        let automatic = element(
+            "settings.stream-quality.codec.option.automatic",
             in: app
         )
-        XCTAssertTrue(h265.waitForExistence(timeout: 3))
-        XCTAssertTrue(h265.isSelected)
+        XCTAssertTrue(automatic.waitForExistence(timeout: 3))
+        XCTAssertTrue(automatic.isSelected)
 
         let h264 = element(
             "settings.stream-quality.codec.option.H264",
@@ -1322,7 +1322,61 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertTrue(page.waitForExistence(timeout: 3))
         XCTAssertTrue(h264.waitForExistence(timeout: 3))
         XCTAssertTrue(h264.isSelected)
-        XCTAssertFalse(h265.isSelected)
+        XCTAssertFalse(automatic.isSelected)
+    }
+
+    @MainActor
+    func testChromaSamplingSelectionCommitsAndRestoresSelectedValue() {
+        let app = makeApp()
+        app.launch()
+        openSettings(in: app)
+
+        let chroma = element("settings.stream-quality.chroma-sampling", in: app)
+        XCTAssertTrue(chroma.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForAccessibilityText("4:4:4", in: chroma))
+        let focusedChroma = focusedElement(labeled: "Chroma Sampling", in: app)
+        for _ in 0 ..< 30 {
+            if focusedChroma.exists {
+                break
+            }
+            XCUIRemote.shared.press(.down)
+        }
+        XCTAssertTrue(focusedChroma.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+
+        let page = element("settings.stream-quality.chroma-sampling.page", in: app)
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        let yuv420 = element("settings.stream-quality.chroma-sampling.option.4:2:0", in: app)
+        let yuv444 = element("settings.stream-quality.chroma-sampling.option.4:4:4", in: app)
+        XCTAssertTrue(yuv444.waitForExistence(timeout: 3))
+        XCTAssertTrue(yuv444.isSelected)
+        attachScreenshot(of: app, named: "gfn-chroma-sampling-4-4-4-settings")
+        // Clamp to the final option, avoiding stale Form focus queries on CI.
+        for _ in 0 ..< 3 {
+            XCUIRemote.shared.press(.down)
+        }
+        XCUIRemote.shared.press(.up)
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(waitForAccessibilityText("4:2:0", in: chroma))
+
+        XCTAssertTrue(focusedChroma.waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        XCTAssertTrue(yuv420.isSelected)
+        XCTAssertFalse(yuv444.isSelected)
+
+        XCUIRemote.shared.press(.down)
+        XCUIRemote.shared.press(.menu)
+        XCTAssertTrue(focusedChroma.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForAccessibilityText("4:2:0", in: chroma))
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(page.waitForExistence(timeout: 3))
+        XCTAssertTrue(yuv420.isSelected)
+        for _ in 0 ..< 3 {
+            XCUIRemote.shared.press(.down)
+        }
+        XCUIRemote.shared.press(.select)
+        XCTAssertTrue(waitForAccessibilityText("4:4:4", in: chroma))
     }
 
     @MainActor
@@ -1863,6 +1917,7 @@ final class CloudNowUITests: XCTestCase {
             element("xbox-settings-screen", in: xboxApp)
                 .waitForExistence(timeout: 3)
         )
+        XCTAssertFalse(element("settings.stream-quality.chroma-sampling", in: xboxApp).exists)
 
         let xboxRumble = xboxApp.switches["settings.rumble-enabled"]
         let xboxIntensity = xboxApp.staticTexts["settings.rumble-intensity"]

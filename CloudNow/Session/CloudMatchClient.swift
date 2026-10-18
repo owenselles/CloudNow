@@ -366,8 +366,7 @@ private nonisolated func cloudMatchBitDepth(_ color: StreamColorRequest) -> Int 
 }
 
 private nonisolated func cloudMatchChromaFormat(_ color: StreamColorRequest) -> Int {
-    // Meaning is undocumented. Preserve the known-working 4:2:0 value for SDR8, SDR10, and HDR10.
-    color.chromaFormat ?? 1
+    color.chromaFormat ?? ChromaFormat.yuv420.cloudMatchValue
 }
 
 private nonisolated func cloudMatchDisplayData(_ color: StreamColorRequest) -> Any {

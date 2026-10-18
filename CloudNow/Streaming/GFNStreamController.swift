@@ -424,7 +424,7 @@ final class GFNStreamController: NSObject {
         connectionGeneration &+= 1
         let generation = connectionGeneration
         let settings = settings.normalizedForClient
-        let localCapabilities = LocalVideoCapabilities.detect(codec: settings.codec)
+        let localCapabilities = LocalVideoCapabilities.detect(codec: settings.codec.resolvedCodec)
         let colorRequest = settings.colorRequest(localCapabilities: localCapabilities, accountAllowsHDR: accountAllowsHDR)
         gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl)")
         videoColorLog.info("request preference=\(settings.colorPreference.rawValue) requested=\(colorRequest.mode.rawValue) bitDepth=\(colorRequest.bitDepth) hdr=\(colorRequest.hdrRequested) codec=\(settings.codec.rawValue) decoder10Bit=\(localCapabilities.supportsHardware10BitDecode) hdrPipeline=\(localCapabilities.supportsHDRRendering) displayHDR=\(localCapabilities.displaySupportsHDR)")
@@ -1157,7 +1157,7 @@ final class GFNStreamController: NSObject {
         microphoneEnabledForConnection = effectiveMicrophoneEnabled
 
         // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers)
-        if settings.codec == .av1 {
+        if settings.codec.resolvedCodec == .av1 {
             protocolVersion = 3
         }
 
@@ -1221,15 +1221,15 @@ final class GFNStreamController: NSObject {
             }
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
-            let answerColorRequest = settings.colorRequest(localCapabilities: .detect(codec: settings.codec), accountAllowsHDR: accountAllowsHDR)
+            let answerColorRequest = settings.colorRequest(localCapabilities: .detect(codec: settings.codec.resolvedCodec), accountAllowsHDR: accountAllowsHDR)
             let codecFilteredSdp = SDPMunger.preferCodec(
                 answer.sdp,
-                codec: settings.codec,
+                codec: settings.codec.resolvedCodec,
                 preferTenBit: answerColorRequest.bitDepth >= 10
             )
             // For H.265: rewrite tier-flag=1→0 and cap level-id to hardware-safe values.
             // Apple's decoder may reject High-tier or above-spec level-id advertisements.
-            let h265SafeSdp = settings.codec == .h265
+            let h265SafeSdp = settings.codec.resolvedCodec == .h265
                 ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(codecFilteredSdp))
                 : codecFilteredSdp
             // Audio: strip RED (jitter-buffer latency) or, for surround offers, rebuild the
@@ -1402,7 +1402,7 @@ final class GFNStreamController: NSObject {
             "a=vqos.bw.maximumBitrateKbps:\(settings.maxBitrateKbps)",
             "a=vqos.bw.minimumBitrateKbps:\(minBitrateKbps)",
             "a=vqos.bw.peakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=video.bitDepth:\(settings.colorRequest(localCapabilities: .detect(codec: settings.codec), accountAllowsHDR: accountAllowsHDR).bitDepth)",
+            "a=video.bitDepth:\(settings.colorRequest(localCapabilities: .detect(codec: settings.codec.resolvedCodec), accountAllowsHDR: accountAllowsHDR).bitDepth)",
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
         ]
@@ -1891,6 +1891,7 @@ final class GFNStreamController: NSObject {
             "decoded mode=\(format.mode.rawValue) path=\(format.decoderPath.rawValue) \(format.width)x\(format.height) pixelFormat=\(format.pixelFormatName) bitDepth=\(format.bitDepth ?? -1) transfer=\(format.transferFunction ?? "nil") primaries=\(format.colorPrimaries ?? "nil") matrix=\(format.yCbCrMatrix ?? "nil") range=\(format.colorRange ?? "nil")"
         )
         colorState.detectedMode = format.mode
+        colorState.decodedChromaFormat = format.chromaFormat
         colorState.fallbackReason = fallbackReason(for: format)
     }
 

@@ -41,21 +41,21 @@ struct SDPMungerTests {
         }
     }
 
-    @Test("Unavailable codecs fall back to H.264 without damaging the offer")
-    func unavailableCodecFallsBack() throws {
+    @Test("Unavailable codecs fall back to H.264 without damaging the offer", arguments: [VideoCodec.automatic, .h265])
+    func unavailableCodecFallsBack(codec: VideoCodec) throws {
         let source = try TestFixture.string("h264-only.sdp", subdirectory: "SDP")
 
-        let result = SDPMunger.preferCodec(source, codec: .h265, preferTenBit: true)
+        let result = SDPMunger.preferCodec(source, codec: codec, preferTenBit: true)
 
         #expect(result == source)
     }
 
-    @Test("H.265 Main and Main10 ordering follows bit-depth preference")
-    func h265ProfileOrdering() throws {
+    @Test("Automatic and H.265 retain HEVC Main and Main10 ordering", arguments: [VideoCodec.automatic, .h265])
+    func h265ProfileOrdering(codec: VideoCodec) throws {
         let source = try TestFixture.string("mixed-codecs.sdp", subdirectory: "SDP")
 
-        let main = SDPMunger.preferCodec(source, codec: .h265)
-        let main10 = SDPMunger.preferCodec(source, codec: .h265, preferTenBit: true)
+        let main = SDPMunger.preferCodec(source, codec: codec)
+        let main10 = SDPMunger.preferCodec(source, codec: codec, preferTenBit: true)
         let mainLine = try videoMediaLine(in: main)
         let main10Line = try videoMediaLine(in: main10)
 
@@ -63,6 +63,7 @@ struct SDPMungerTests {
         #expect(payloadIndex("100", in: main10Line) < payloadIndex("98", in: main10Line))
         #expect(main.contains("a=fmtp:99 apt=98"))
         #expect(main.contains("a=fmtp:101 apt=100"))
+        #expect(!main.contains("a=rtpmap:102 AV1"))
     }
 
     @Test("H.265 tier and level rewrites are profile-aware")

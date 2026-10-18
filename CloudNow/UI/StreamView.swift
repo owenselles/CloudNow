@@ -1299,7 +1299,7 @@ struct StreamView: View {
             streamingBaseUrl: routeSelection.base,
             routingZoneUrl: routeSelection.routingZoneUrl,
             settings: settings,
-            localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec),
+            localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec.resolvedCodec),
             accountLinked: true,
             accountAllowsHDR: viewModel.subscription?.allowsHDR,
             skipNvidiaFallback: !isNvidiaProvider

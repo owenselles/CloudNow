@@ -27,8 +27,9 @@ nonisolated struct StreamSettings: Codable, Equatable {
         didSet { maxBitrateKbps = min(maxBitrateKbps, Self.maxSelectableBitrateKbps) }
     }
 
-    var codec: VideoCodec = .h265
+    var codec: VideoCodec = .automatic
     var colorPreference: ColorModePreference = .automatic
+    var chromaFormat: ChromaFormat = .yuv444
     var keyboardLayout: String = Self.defaultKeyboardLayout
     var gameLanguage: String = Self.defaultGameLanguage
     var enableL4S: Bool = true
@@ -142,6 +143,10 @@ nonisolated struct StreamSettings: Codable, Equatable {
     var effectiveGameLanguage: String {
         gameLanguage == Self.automaticGameLanguage ? L10n.nvidiaLocaleCode() : gameLanguage
     }
+
+    var effectiveChromaFormat: ChromaFormat {
+        codec.resolvedCodec == .h265 ? chromaFormat : .yuv420
+    }
 }
 
 // MARK: - StreamSettings: resilient decoding
@@ -152,7 +157,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
 /// decodeIfPresent + default fallbacks keep existing settings intact across versions.
 extension StreamSettings {
     enum CodingKeys: String, CodingKey {
-        case resolution, fps, maxBitrateKbps, codec, colorPreference, keyboardLayout
+        case resolution, fps, maxBitrateKbps, codec, colorPreference, chromaFormat, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, rumbleEnabled, rumbleIntensity, controllerDeadzone, overlayTriggerButton
         case adaptiveFramePacing
         case textInputTriggerSequence, textInputTriggerDelayMs
@@ -185,6 +190,7 @@ extension StreamSettings {
         colorPreference = try c.decodeIfPresent(ColorModePreference.self, forKey: .colorPreference)
             ?? (c.decodeIfPresent(ColorQuality.self, forKey: .colorQuality))?.preference
             ?? d.colorPreference
+        chromaFormat = try c.decodeIfPresent(ChromaFormat.self, forKey: .chromaFormat) ?? d.chromaFormat
         keyboardLayout = try c.decodeIfPresent(String.self, forKey: .keyboardLayout) ?? d.keyboardLayout
         gameLanguage = try c.decodeIfPresent(String.self, forKey: .gameLanguage) ?? d.gameLanguage
         enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
@@ -270,6 +276,7 @@ extension StreamSettings {
         try c.encode(maxBitrateKbps, forKey: .maxBitrateKbps)
         try c.encode(codec, forKey: .codec)
         try c.encode(colorPreference, forKey: .colorPreference)
+        try c.encode(chromaFormat, forKey: .chromaFormat)
         try c.encode(keyboardLayout, forKey: .keyboardLayout)
         try c.encode(gameLanguage, forKey: .gameLanguage)
         try c.encode(enableL4S, forKey: .enableL4S)
@@ -496,9 +503,14 @@ nonisolated struct ControllerButtonSequence: Codable, Equatable, Sendable {
 }
 
 nonisolated enum VideoCodec: String, Codable, CaseIterable {
+    case automatic
     case h264 = "H264"
     case h265 = "H265"
     case av1 = "AV1"
+
+    var resolvedCodec: VideoCodec {
+        self == .automatic ? .h265 : self
+    }
 
     @MainActor var label: String {
         L10n.videoCodecLabel(self)
@@ -578,6 +590,28 @@ nonisolated enum ColorFallbackReason: String, Codable {
     case sessionNegotiationFailed
 }
 
+nonisolated enum ChromaFormat: String, Codable, CaseIterable {
+    case yuv420 = "4:2:0"
+    case yuv444 = "4:4:4"
+
+    var label: String {
+        rawValue
+    }
+
+    /// NVIDIA's requestedStreamingFeatures uses YUV420 = 0 and YUV444 = 1.
+    var cloudMatchValue: Int {
+        switch self {
+        case .yuv420: 0
+        case .yuv444: 1
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try? decoder.singleValueContainer().decode(String.self)
+        self = raw.flatMap(Self.init(rawValue:)) ?? .yuv444
+    }
+}
+
 nonisolated struct StreamColorState: Codable, Equatable {
     let preference: ColorModePreference
     var requestedMode: StreamColorMode
@@ -585,6 +619,7 @@ nonisolated struct StreamColorState: Codable, Equatable {
     var detectedMode: DetectedColorMode?
     var displayHDRSupport: HDRSupport
     var fallbackReason: ColorFallbackReason?
+    var decodedChromaFormat: ChromaFormat? = nil
 }
 
 nonisolated struct StreamColorCapabilities {
@@ -619,14 +654,15 @@ nonisolated struct StreamColorRequest: Codable, Equatable {
 
     static func resolve(
         preference: ColorModePreference,
-        capabilities: StreamColorCapabilities
+        capabilities: StreamColorCapabilities,
+        chromaFormat: ChromaFormat = .yuv420
     ) -> StreamColorRequest {
         let mode = resolveColorMode(preference: preference, capabilities: capabilities)
         return StreamColorRequest(
             mode: mode,
             bitDepth: mode.bitDepth,
             hdrRequested: mode == .hdr10,
-            chromaFormat: 1,
+            chromaFormat: chromaFormat.cloudMatchValue,
             displayCapabilities: mode == .hdr10 ? .conservativeHDR10 : nil
         )
     }
@@ -681,11 +717,15 @@ extension StreamSettings {
             serverAllowsHDR: serverAllowsHDR,
             // 10-bit (sdr10/hdr10) requires H.265 — H.264 is 8-bit only and AV1 is excluded
             // from the 10-bit decode path, so either forces an 8-bit SDR downgrade.
-            decoderSupports10Bit: localCapabilities.supportsHardware10BitDecode && codec == .h265,
+            decoderSupports10Bit: localCapabilities.supportsHardware10BitDecode && codec.resolvedCodec == .h265,
             hdrRenderPipelineAvailable: localCapabilities.supportsHDRRendering,
             displaySupportsHDR: localCapabilities.displaySupportsHDR
         )
-        return StreamColorRequest.resolve(preference: colorPreference, capabilities: capabilities)
+        return StreamColorRequest.resolve(
+            preference: colorPreference,
+            capabilities: capabilities,
+            chromaFormat: effectiveChromaFormat
+        )
     }
 }
 

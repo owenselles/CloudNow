@@ -21,8 +21,10 @@ struct StreamSettingsTests {
         #expect(settings.resolution == "1920x1080")
         #expect(settings.fps == 60)
         #expect(settings.maxBitrateKbps == 100_000)
-        #expect(settings.codec == .h265)
+        #expect(settings.codec == .automatic)
+        #expect(settings.codec.resolvedCodec == .h265)
         #expect(settings.colorPreference == .automatic)
+        #expect(settings.chromaFormat == .yuv444)
         #expect(settings.keyboardLayout == StreamSettings.defaultKeyboardLayout)
         #expect(settings.gameLanguage == StreamSettings.automaticGameLanguage)
         #expect(settings.enableL4S)
@@ -113,6 +115,7 @@ struct StreamSettingsTests {
         expected.maxBitrateKbps = 75000
         expected.codec = .h265
         expected.colorPreference = .preferSDR10
+        expected.chromaFormat = .yuv444
         expected.keyboardLayout = "de-DE"
         expected.gameLanguage = "fr_FR"
         expected.enableL4S = true
@@ -148,6 +151,60 @@ struct StreamSettingsTests {
         let decoded = try decodeFixture("minimal.json")
 
         #expect(decoded == StreamSettings())
+    }
+
+    @Test(
+        "Automatic resolves to HEVC and explicit codec choices survive persistence",
+        arguments: [
+            (VideoCodec.automatic, VideoCodec.h265),
+            (.h264, .h264),
+            (.h265, .h265),
+            (.av1, .av1),
+        ]
+    )
+    func codecPreferencePersistence(codec: VideoCodec, resolvedCodec: VideoCodec) throws {
+        var settings = StreamSettings()
+        settings.codec = codec
+
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: JSONEncoder().encode(settings))
+
+        #expect(decoded.codec == codec)
+        #expect(decoded.codec.resolvedCodec == resolvedCodec)
+    }
+
+    @Test("Chroma selection survives persistence", arguments: ChromaFormat.allCases)
+    func chromaPreferencePersistence(format: ChromaFormat) throws {
+        var settings = StreamSettings()
+        settings.chromaFormat = format
+
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: JSONEncoder().encode(settings))
+
+        #expect(decoded.chromaFormat == format)
+        #expect(decoded.effectiveChromaFormat == format)
+    }
+
+    @Test("Unknown chroma preferences preserve other saved settings")
+    func unknownChromaPreference() throws {
+        let data = Data(#"{"chromaFormat":"future-format","resolution":"3840x2160","maxBitrateKbps":50000}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(StreamSettings.self, from: data)
+
+        #expect(decoded.chromaFormat == .yuv444)
+        #expect(decoded.resolution == "3840x2160")
+        #expect(decoded.maxBitrateKbps == 50000)
+    }
+
+    @Test("Incompatible codecs use 4:2:0 without losing the HEVC preference", arguments: [VideoCodec.h264, .av1])
+    func chromaPreferenceAcrossCodecChanges(codec: VideoCodec) {
+        var settings = StreamSettings()
+        settings.chromaFormat = .yuv444
+        settings.codec = codec
+
+        #expect(settings.effectiveChromaFormat == .yuv420)
+        #expect(settings.chromaFormat == .yuv444)
+
+        settings.codec = .h265
+        #expect(settings.effectiveChromaFormat == .yuv444)
     }
 
     @Test("Adaptive frame pacing survives settings persistence", arguments: [false, true])

@@ -48,6 +48,7 @@ struct CloudMatchClientTests {
             #expect(features["enabledL4S"] as? Bool == true)
             #expect(features["reflex"] as? Bool == true)
             #expect(features["bitDepth"] as? Int == 0)
+            #expect(features["chromaFormat"] as? Int == 1)
             #expect(session["codec"] == nil)
             #expect(session["maxBitrateKbps"] == nil)
             #expect(features["codec"] == nil)
@@ -76,6 +77,43 @@ struct CloudMatchClientTests {
         #expect(session.mediaConnectionInfo?.ip == "203.0.113.11")
         #expect(session.mediaConnectionInfo?.port == 49005)
         #expect(session.iceServers.first?.urls == ["stun:stun.example.invalid:3478"])
+    }
+
+    @Test(
+        "Session chroma request respects selection and codec without changing color precision",
+        arguments: [
+            (VideoCodec.automatic, ChromaFormat.yuv420, 0),
+            (.automatic, .yuv444, 1),
+            (VideoCodec.h265, ChromaFormat.yuv420, 0),
+            (.h265, .yuv444, 1),
+            (.h264, .yuv444, 0),
+            (.av1, .yuv444, 0),
+        ],
+        [ColorModePreference.forceSDR8, .preferSDR10, .preferHDR]
+    )
+    func chromaSessionRequest(
+        configuration: (VideoCodec, ChromaFormat, Int),
+        color: ColorModePreference
+    ) async throws {
+        let (codec, chromaFormat, expectedChroma) = configuration
+        let usesHEVC = codec == .automatic || codec == .h265
+        let fixture = try NetworkingFixture.data("cloudmatch-session.json")
+        let transport = RecordingHTTPTransport { request, _ in
+            let root = try jsonObject(from: request)
+            let session = try #require(root["sessionRequestData"] as? [String: Any])
+            let features = try #require(session["requestedStreamingFeatures"] as? [String: Any])
+            #expect(features["chromaFormat"] as? Int == expectedChroma)
+            #expect(features["bitDepth"] as? Int == (usesHEVC && color != .forceSDR8 ? 1 : 0))
+            #expect(session["sdrHdrMode"] as? Int == (usesHEVC && color == .preferHDR ? 1 : 0))
+            return StubbedHTTPResponse(data: fixture)
+        }
+        let client = CloudMatchClient(transport: transport, deviceId: { "fixture-device" })
+
+        _ = try await client.createSession(makeSessionRequest(
+            codec: codec,
+            colorPreference: color,
+            chromaFormat: chromaFormat
+        ))
     }
 
     @Test("Failed preferred endpoint falls back to default routing endpoint")
@@ -429,6 +467,7 @@ struct CloudMatchClientTests {
         let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: fixture) }
         var settings = StreamSettings()
         settings.audioFormat = format
+        settings.chromaFormat = .yuv444
         settings.keyboardLayout = "en-US"
         settings.gameLanguage = "en-US"
         let client = CloudMatchClient(
@@ -515,13 +554,19 @@ struct CloudMatchClientTests {
         }
     }
 
-    private func makeSessionRequest(audioFormat: AudioFormatPreference = .stereo) -> SessionCreateRequest {
+    private func makeSessionRequest(
+        audioFormat: AudioFormatPreference = .stereo,
+        codec: VideoCodec = .h265,
+        colorPreference: ColorModePreference = .forceSDR8,
+        chromaFormat: ChromaFormat = .yuv444
+    ) -> SessionCreateRequest {
         var settings = StreamSettings()
         settings.resolution = "2560x1440"
         settings.fps = 120
         settings.maxBitrateKbps = 75000
-        settings.codec = .h265
-        settings.colorPreference = .forceSDR8
+        settings.codec = codec
+        settings.colorPreference = colorPreference
+        settings.chromaFormat = chromaFormat
         settings.keyboardLayout = "en-US"
         settings.gameLanguage = "en-US"
         settings.enableL4S = true

@@ -77,7 +77,8 @@ signing, dependency resolution, and local checks.
 
 - Browse the public catalog and cloud library, refresh linked stores, search,
   sort, filter, favorite games, and resume recent sessions.
-- Configure account-aware resolution and frame rate, H.264/H.265/AV1, color mode,
+- Configure account-aware resolution and frame rate, Automatic (H.265) or
+  H.264/H.265/AV1, color mode,
   audio, language, maximum bitrate, Low Latency Mode (L4S), and server location.
 - Use controller, keyboard, mouse, Siri Remote, controller-triggered Apple TV
   text entry, rumble, and an optional permission-gated microphone.
@@ -109,7 +110,7 @@ compatibility and protocol details.
 | Capability | GeForce NOW | Xbox Cloud Gaming |
 |---|---|---|
 | Maximum requested resolution | Up to 5K, subject to account and service eligibility | Automatic up to 1440p; service may adapt lower |
-| Video controls | Resolution, FPS, H.264/H.265/AV1, color mode | Resolution only; service selects the codec |
+| Video controls | Resolution, FPS, Automatic (H.265)/H.264/H.265/AV1, color mode | Resolution only; service selects the codec |
 | Color and HDR | Automatic, HDR, SDR10, and SDR8 fallback | Automatic only; current validated delivery is SDR8 |
 | Game audio | Automatic, Stereo, 5.1 Surround, and 7.1 Surround | Automatic; current service route is Opus stereo or mono |
 | Client bitrate control | Configurable maximum bitrate | None; service-managed bandwidth |

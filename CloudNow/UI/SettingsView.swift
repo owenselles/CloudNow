@@ -918,7 +918,7 @@ struct SettingsView: View {
                     CloudNowSettingSelectionRow(
                         L10n.text("color_mode"),
                         description: vm.streamSettings.codec == .av1
-                            ? L10n.text("av1_software_path_warning")
+                            ? L10n.text("av1_color_path_warning")
                             : vm.streamSettings.colorPreference.description,
                         descriptionIsWarning: vm.streamSettings.codec == .av1,
                         selection: $vm.streamSettings.colorPreference,
@@ -928,6 +928,28 @@ struct SettingsView: View {
                                 value: $0,
                                 title: $0.label,
                                 accessibilityIdentifier: $0.rawValue
+                            )
+                        }
+                    )
+
+                    CloudNowSettingSelectionRow(
+                        L10n.text("chroma_sampling"),
+                        description: L10n.text("chroma_sampling_description"),
+                        selection: Binding(
+                            get: { vm.streamSettings.effectiveChromaFormat },
+                            set: { vm.streamSettings.chromaFormat = $0 }
+                        ),
+                        accessibilityIdentifier: "settings.stream-quality.chroma-sampling",
+                        options: ChromaFormat.allCases.map {
+                            CloudNowSettingOption(
+                                value: $0,
+                                title: $0.label,
+                                accessibilityIdentifier: $0.rawValue,
+                                unavailability: $0 == .yuv444 && vm.streamSettings.codec.resolvedCodec != .h265
+                                    ? CloudNowSettingUnavailability(
+                                        reason: L10n.text("chroma_sampling_requires_h265")
+                                    )
+                                    : nil
                             )
                         }
                     )

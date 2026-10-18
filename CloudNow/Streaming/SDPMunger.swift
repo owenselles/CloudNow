@@ -9,6 +9,7 @@ enum SDPMunger {
     /// Apply to the remote offer before setRemoteDescription so the answer
     /// reflects the user's codec choice.
     static func preferCodec(_ sdp: String, codec: VideoCodec, preferTenBit: Bool = false) -> String {
+        let codec = codec.resolvedCodec
         let targetName = rtpName(for: codec)
         let sep = sdp.contains("\r\n") ? "\r\n" : "\n"
         let lines = sdp.components(separatedBy: sep)
@@ -420,7 +421,7 @@ enum SDPMunger {
     private static func rtpName(for codec: VideoCodec) -> String {
         switch codec {
         case .h264: "h264"
-        case .h265: "h265"
+        case .automatic, .h265: "h265"
         case .av1: "av1"
         }
     }

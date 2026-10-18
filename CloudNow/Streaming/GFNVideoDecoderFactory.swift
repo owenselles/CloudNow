@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import LiveKitWebRTC
+import VideoToolbox
 
 /// Decoder factory that advertises H.265 Main10 in addition to the LiveKit defaults.
 ///
@@ -11,11 +12,25 @@ import Foundation
 /// Main entry is cloned with profile-id=2 to keep the payload alive through negotiation.
 final class CloudVideoDecoderFactory: NSObject, LKRTCVideoDecoderFactory {
     private let base = LKRTCDefaultVideoDecoderFactory()
+    private let supportsAV1HardwareDecode: Bool
+
+    init(supportsAV1HardwareDecode: Bool = VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1)) {
+        self.supportsAV1HardwareDecode = supportsAV1HardwareDecode
+        super.init()
+    }
 
     func createDecoder(_ info: LKRTCVideoCodecInfo) -> LKRTCVideoDecoder? {
         // H.265 uses our own VideoToolbox decoder: the built-in one crushes Main10/HDR
         // to 8-bit BT.709 — see CloudVideoDecoderH265.
-        isH265(info) ? CloudVideoDecoderH265() : base.createDecoder(info)
+        if isH265(info) {
+            return CloudVideoDecoderH265()
+        }
+        if info.name.uppercased() == "AV1", supportsAV1HardwareDecode {
+            return CloudVideoDecoderAV1()
+        }
+        // Return LiveKit's AV1 software decoder directly: its native adapter cannot
+        // be driven independently from RTCPeerConnectionFactory by a Swift wrapper.
+        return base.createDecoder(info)
     }
 
     func supportedCodecs() -> [LKRTCVideoCodecInfo] {

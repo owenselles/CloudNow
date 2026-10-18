@@ -292,6 +292,7 @@ enum L10n {
 
     static func videoCodecLabel(_ codec: VideoCodec) -> String {
         switch codec {
+        case .automatic: text("automatic")
         case .h264: "H264"
         case .h265: "H265"
         case .av1: "AV1"

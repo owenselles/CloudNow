@@ -69,6 +69,11 @@ nonisolated struct DecodedVideoFormat: Codable, Equatable {
     let hasContentLightLevelMetadata: Bool
     let decoderPath: VideoDecoderPath
 
+    /// Sampling of the decoded buffer; independent of the requested stream format.
+    var chromaFormat: ChromaFormat? {
+        DecodedVideoFormatInspector.chromaFormat(for: pixelFormat)
+    }
+
     @MainActor var metadataDiagnosticSummary: String {
         L10n.metadataDiagnosticSummary(
             transferFunction: transferFunction,
@@ -274,14 +279,43 @@ nonisolated enum DecodedVideoFormatInspector {
     /// tvOS SDK, but VideoToolbox emits it as the native 10-bit HEVC output format.
     private static let packed10BitBiPlanarVideoRange: OSType = 0x7034_3230
 
+    static func chromaFormat(for pixelFormat: OSType) -> ChromaFormat? {
+        switch pixelFormat {
+        case kCVPixelFormatType_420YpCbCr8Planar,
+             kCVPixelFormatType_420YpCbCr8PlanarFullRange,
+             kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             packed10BitBiPlanarVideoRange:
+            .yuv420
+        case kCVPixelFormatType_444YpCbCr8,
+             kCVPixelFormatType_444YpCbCr10,
+             kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+            .yuv444
+        default:
+            nil
+        }
+    }
+
     private static func colorRange(for pixelFormat: OSType) -> String? {
         switch pixelFormat {
-        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+        case kCVPixelFormatType_420YpCbCr8Planar,
+             kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr8,
+             kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
              packed10BitBiPlanarVideoRange:
             "Video"
-        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+        case kCVPixelFormatType_420YpCbCr8PlanarFullRange,
+             kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
             "Full"
         default:
             nil
@@ -291,10 +325,16 @@ nonisolated enum DecodedVideoFormatInspector {
     private static func bitDepth(for pixelFormat: OSType) -> Int? {
         switch pixelFormat {
         case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-             kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+             kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr8,
+             kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr8BiPlanarFullRange:
             return 8
         case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_444YpCbCr10,
+             kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
              packed10BitBiPlanarVideoRange:
             return 10
         default:

@@ -509,6 +509,9 @@ private struct CoreStatsColumn: View {
             parts.append(stats.codec)
         }
         parts.append(colorModeValue)
+        if let chromaFormat = colorState.decodedChromaFormat {
+            parts.append(chromaFormat.label)
+        }
         if stats.powerEfficientDecoder == true {
             parts.append("HW")
         }

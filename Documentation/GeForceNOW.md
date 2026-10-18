@@ -168,13 +168,27 @@ proof of delivery. CloudNow keeps three facts separate:
 2. The settings negotiated for the session.
 3. The format and statistics observed from decoded media.
 
-The GFN media path supports H.264, H.265, and AV1 negotiation. Its VideoToolbox
-H.265 decoder advertises Main10 and preserves decoded bit depth and color metadata.
+The GFN media path supports H.264, H.265, and AV1 negotiation. The Automatic
+codec setting requests H.265. Its VideoToolbox H.265 decoder advertises Main10
+and preserves decoded bit depth and color metadata.
 HDR is reported only when the decoded pixel buffer proves it. A 10-bit stream, an
 HDR-capable display, or an HDR request is not enough on its own.
 
-The current AV1 implementation uses the software I420 conversion path. That path
-produces SDR 8-bit BT.709 output and does not preserve SDR10 or HDR metadata. If a
+Chroma Sampling defaults to experimental 4:4:4. This option requests full
+chroma resolution with H.265; it requires Ultimate and compatible decoding
+hardware. H.264 and AV1 always request 4:2:0, retaining the saved preference for
+a later H.265 session. Changes apply to new sessions, not resumed sessions.
+The HUD's chroma value describes the decoded pixel buffer, never the setting.
+GFN acceptance, the encoded 4:4:4 representation, and physical Apple TV playback
+still require verification; a 4:4:4 request or output buffer alone is not proof
+of an end-to-end 4:4:4 stream. The existing native decoder/rendering path is
+unchanged, and no unverified HEVC profiles are advertised.
+
+Selecting AV1 uses VideoToolbox hardware decoding when the runtime reports
+hardware AV1 support. Without that support, it uses the existing software AV1
+decoder; no device model list determines eligibility. AV1 requests remain SDR
+8-bit BT.709 with 4:2:0 chroma. AV1 SDR10 and HDR are not enabled by hardware
+decoder availability. Physical AV1 hardware playback remains unverified. If a
 decoder or conversion path omits color attachments, diagnostics report fallback
 or unknown instead of guessing.
 
@@ -242,7 +256,8 @@ or dedicated-server overrides to those sessions.
   state.
 - A selected HDR-capable mode does not guarantee HDR delivery. The full request,
   negotiation, decode, and display path must support it.
-- AV1 currently uses the SDR 8-bit software conversion path described above.
+- AV1 remains limited to SDR 8-bit BT.709 with hardware decoding when available
+  and software decoding otherwise. Physical hardware playback requires validation.
 - Local diagnostic export is unavailable on tvOS. Bounded diagnostics can be
   cleared but are not advertised as exportable.
 

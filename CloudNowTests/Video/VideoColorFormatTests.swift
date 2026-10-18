@@ -10,34 +10,67 @@ struct VideoColorFormatTests {
         let bitDepth: Int
         let range: String
         let expectedMode: DetectedColorMode
+        let chromaFormat: ChromaFormat
     }
 
     @Test(
-        "Bi-planar video and full-range formats report their bit depth and range",
+        "Bi-planar formats report decoded chroma, bit depth and range",
         arguments: [
             PixelFormatCase(
                 pixelFormat: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
                 bitDepth: 8,
                 range: "Video",
-                expectedMode: .sdr8
+                expectedMode: .sdr8,
+                chromaFormat: .yuv420
             ),
             PixelFormatCase(
                 pixelFormat: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
                 bitDepth: 8,
                 range: "Full",
-                expectedMode: .sdr8
+                expectedMode: .sdr8,
+                chromaFormat: .yuv420
             ),
             PixelFormatCase(
                 pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
                 bitDepth: 10,
                 range: "Video",
-                expectedMode: .sdr10
+                expectedMode: .sdr10,
+                chromaFormat: .yuv420
             ),
             PixelFormatCase(
                 pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
                 bitDepth: 10,
                 range: "Full",
-                expectedMode: .sdr10
+                expectedMode: .sdr10,
+                chromaFormat: .yuv420
+            ),
+            PixelFormatCase(
+                pixelFormat: kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+                bitDepth: 8,
+                range: "Video",
+                expectedMode: .sdr8,
+                chromaFormat: .yuv444
+            ),
+            PixelFormatCase(
+                pixelFormat: kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+                bitDepth: 8,
+                range: "Full",
+                expectedMode: .sdr8,
+                chromaFormat: .yuv444
+            ),
+            PixelFormatCase(
+                pixelFormat: kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+                bitDepth: 10,
+                range: "Video",
+                expectedMode: .sdr10,
+                chromaFormat: .yuv444
+            ),
+            PixelFormatCase(
+                pixelFormat: kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+                bitDepth: 10,
+                range: "Full",
+                expectedMode: .sdr10,
+                chromaFormat: .yuv444
             ),
         ]
     )
@@ -55,6 +88,7 @@ struct VideoColorFormatTests {
         )
 
         #expect(format.bitDepth == testCase.bitDepth)
+        #expect(format.chromaFormat == testCase.chromaFormat)
         #expect(format.colorRange == testCase.range)
         #expect(format.mode == testCase.expectedMode)
         #expect(format.width == 8)
@@ -74,6 +108,20 @@ struct VideoColorFormatTests {
         #expect(description.bitDepth == 10)
         #expect(description.colorRange == "Video")
         #expect(description.mode == .sdr10)
+        #expect(DecodedVideoFormatInspector.chromaFormat(for: packedP420) == .yuv420)
+    }
+
+    @Test(
+        "RGB, 4:2:2 and unknown formats are not reported as 4:2:0 or 4:4:4",
+        arguments: [
+            kCVPixelFormatType_32BGRA,
+            kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange,
+            kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
+            OSType(0x7A34_3434), // Unknown 'z444' must not be guessed from its name.
+        ]
+    )
+    func unsupportedChromaFormats(pixelFormat: OSType) {
+        #expect(DecodedVideoFormatInspector.chromaFormat(for: pixelFormat) == nil)
     }
 
     @Test("All known SDR transfer functions classify by bit depth")

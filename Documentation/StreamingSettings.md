@@ -47,8 +47,9 @@ preferences, so a newly changed default does not overwrite a previous choice.
 |---|---|---|
 | Resolution | 1920x1080 | Automatic |
 | Frame rate | 60 fps | Service controlled |
-| Codec | H265 | Service controlled |
+| Codec | Automatic (H265) | Service controlled |
 | Color | Automatic | Service controlled |
+| Chroma sampling | 4:4:4 (experimental, H265) | Service controlled |
 | Audio | Automatic | Service controlled |
 | Maximum bitrate | 100 Mbps | No client cap |
 | L4S | On | Not exposed |
@@ -66,8 +67,9 @@ preferences, so a newly changed default does not overwrite a previous choice.
 |---|---|---|
 | Resolution | Common choices remain visible; account entitlement decides availability | Automatic and all manual choices remain visible; membership decides availability |
 | Frame rate | Known choices remain visible; account, resolution, and display decide availability | No manual control |
-| Codec | H264, H265, AV1 | No manual control |
+| Codec | Automatic (H265), H264, H265, AV1 | No manual control |
 | Color and HDR | Automatic, Prefer HDR, Prefer 10-bit SDR, Compatibility SDR | No manual control |
+| Chroma sampling | 4:2:0, experimental 4:4:4 with H265 | No manual control |
 | Audio layout | Automatic, Stereo, 5.1 Surround, 7.1 Surround | No manual control |
 | Maximum bitrate | 15 to 100 Mbps | No client bitrate cap |
 | L4S | Toggle | Not exposed |
@@ -109,8 +111,9 @@ and simulator tests alone cannot establish the benefit on a real display.
 |---|---|---|---|
 | Resolution | 1920x1080 | After entitlement data loads, the common HD, Full HD, 2K, 4K, and 5K choices remain visible. Choices not included in the current membership are unavailable and explain that an account upgrade or different resolution is required. Account-specific resolutions outside that common list are also shown when entitled. Before entitlement data is available, CloudNow offers 1280x720 and 1920x1080. | Sets the requested stream size. The service can deliver a different size. |
 | Frame Rate | 60 fps | The page shows the 30 and 60 fps baselines plus frame rates reported anywhere in the account entitlements. Each choice is evaluated for the selected resolution and current Apple TV output refresh rate. See [Frame-rate eligibility](#frame-rate-eligibility). | Sets the requested frame rate. Delivered FPS can be lower. |
-| Codec | H265 | H264, H265, and AV1 are always selectable. The picker does not hide codecs based on account or device checks. | Sets the requested GFN codec path. H265 is required for the current 10-bit and HDR path. |
+| Codec | Automatic | Automatic, H264, H265, and AV1 are always selectable. The picker does not hide codecs based on account or device checks. | Automatic requests H265. Selecting AV1 uses hardware decoding when available, otherwise software. H265 is required for the current 10-bit and HDR path. |
 | Color Mode | Automatic | Automatic, Prefer HDR, Prefer 10-bit SDR, and Compatibility SDR are always selectable. Actual requests are capability checked. | Controls the preferred color request and safe fallback. See [Codec, color, and HDR](#codec-color-and-hdr). |
+| Chroma Sampling | 4:4:4 | 4:2:0 and experimental 4:4:4. The 4:4:4 option requires H265 and Ultimate; Apple TV compatibility remains unverified. Other codecs show and request 4:2:0 while preserving the H265 preference. | Requests chroma sampling for new sessions. The HUD reports decoded buffer sampling, which may differ. See [GFN media limitations](GeForceNOW.md). |
 | Audio Format | Automatic | Automatic, Stereo, 5.1 Surround, and 7.1 Surround are always selectable. 7.1 requires GeForce NOW Ultimate, a supporting game, and compatible audio equipment. | Automatic remains capped at 5.1, requested when the system maximum output-channel count is at least six. This is a heuristic rather than a reliable sink-capability check. Manual 7.1 requests eight channels; the server can negotiate fewer, and tvOS can downmix. |
 | Keyboard Layout | tvOS-derived locale | CloudNow's supported locale list. | Sends the selected keyboard layout to GFN. This is separate from game language. |
 | Game Language | Automatic | Automatic plus the fixed language list documented in [Using CloudNow](UsingCloudNow.md#game-language). | Automatic maps the tvOS language to an NVIDIA locale. Title support still decides the language delivered in game. |
@@ -154,6 +157,8 @@ appears for the new resolution.
 Selecting a color preference does not prove that the stream is using that
 format. CloudNow resolves the request from the codec and local video pipeline:
 
+- The Automatic codec setting requests H265. Explicit codec selections remain
+  saved across app updates.
 - The current 10-bit SDR and HDR paths require H265 and local 10-bit hardware
   decode support.
 - The current pre-session HDR request uses the codec, local decoder, render and
@@ -166,7 +171,10 @@ format. CloudNow resolves the request from the codec and local video pipeline:
 - **Prefer 10-bit SDR** falls back to 8-bit SDR when 10-bit decode is not
   available.
 - **Compatibility SDR** forces the 8-bit SDR request.
-- AV1 currently uses the software I420 path and falls back to 8-bit SDR BT.709.
+- AV1 uses VideoToolbox hardware decoding when the runtime reports hardware AV1
+  support, otherwise the existing software decoder. Both paths
+  request 8-bit SDR BT.709 and 4:2:0; AV1 HDR and 10-bit requests remain unsupported.
+  Physical AV1 hardware playback remains unverified.
 
 CloudNow reports color from negotiated state and decoded video metadata. A
 10-bit stream, HDR-capable display, or HDR preference alone is not reported as
