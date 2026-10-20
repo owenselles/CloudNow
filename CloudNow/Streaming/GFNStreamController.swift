@@ -428,6 +428,7 @@ final class GFNStreamController: NSObject {
         let colorRequest = settings.colorRequest(localCapabilities: localCapabilities, accountAllowsHDR: accountAllowsHDR)
         gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl)")
         videoColorLog.info("request preference=\(settings.colorPreference.rawValue) requested=\(colorRequest.mode.rawValue) bitDepth=\(colorRequest.bitDepth) hdr=\(colorRequest.hdrRequested) codec=\(settings.codec.rawValue) decoder10Bit=\(localCapabilities.supportsHardware10BitDecode) hdrPipeline=\(localCapabilities.supportsHDRRendering) displayHDR=\(localCapabilities.displaySupportsHDR)")
+        videoColorLog.info("chroma selected=\(settings.chromaFormat.rawValue, privacy: .public) requested=\(settings.effectiveChromaFormat.rawValue, privacy: .public) nvst=\(colorRequest.chromaFormat ?? 0)")
         state = .connecting
         serverStopped = false
         sessionInfo = session
@@ -1271,6 +1272,7 @@ final class GFNStreamController: NSObject {
             signalingClient.sendAnswer(
                 sdp: mangledAnswerSdp,
                 nvstSdp: buildNvstSdp(
+                    settings: settings,
                     iceUfrag: iceUfrag,
                     icePwd: icePwd,
                     dtlsFingerprint: dtlsFingerprint,
@@ -1361,7 +1363,8 @@ final class GFNStreamController: NSObject {
     /// Builds the NVIDIA streaming protocol capability descriptor sent alongside the WebRTC answer.
     /// Builds the NVST SDP capability descriptor — critically includes the client's ICE credentials so the
     /// GFN server can validate STUN MESSAGE-INTEGRITY on incoming binding requests.
-    private func buildNvstSdp(
+    func buildNvstSdp(
+        settings: StreamSettings,
         iceUfrag: String,
         icePwd: String,
         dtlsFingerprint: String,
@@ -1372,6 +1375,10 @@ final class GFNStreamController: NSObject {
         let height = Int(resolutionParts.last ?? "1080") ?? 1080
         let minBitrateKbps = max(5000, settings.maxBitrateKbps * 35 / 100)
         let initialBitrateKbps = max(minBitrateKbps, settings.maxBitrateKbps * 70 / 100)
+        let colorRequest = settings.colorRequest(
+            localCapabilities: .detect(codec: settings.codec.resolvedCodec),
+            accountAllowsHDR: accountAllowsHDR
+        )
 
         var lines: [String] = [
             "v=0",
@@ -1402,7 +1409,9 @@ final class GFNStreamController: NSObject {
             "a=vqos.bw.maximumBitrateKbps:\(settings.maxBitrateKbps)",
             "a=vqos.bw.minimumBitrateKbps:\(minBitrateKbps)",
             "a=vqos.bw.peakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=video.bitDepth:\(settings.colorRequest(localCapabilities: .detect(codec: settings.codec.resolvedCodec), accountAllowsHDR: accountAllowsHDR).bitDepth)",
+            "a=video.bitDepth:\(colorRequest.bitDepth)",
+            // NVST defaults to 4:2:0 unless the final encoder request includes chroma sampling.
+            "a=video.chromaFormat:\(colorRequest.chromaFormat ?? 0)",
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
         ]

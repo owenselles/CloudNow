@@ -178,6 +178,8 @@ Chroma Sampling defaults to experimental 4:4:4. This option requests full
 chroma resolution with H.265; it requires Ultimate and compatible decoding
 hardware. H.264 and AV1 always request 4:2:0, retaining the saved preference for
 a later H.265 session. Changes apply to new sessions, not resumed sessions.
+The request is included in both CloudMatch session creation and the final NVST
+video configuration sent alongside the WebRTC answer.
 The HUD's chroma value describes the decoded pixel buffer, never the setting.
 GFN acceptance, the encoded 4:4:4 representation, and physical Apple TV playback
 still require verification; a 4:4:4 request or output buffer alone is not proof
