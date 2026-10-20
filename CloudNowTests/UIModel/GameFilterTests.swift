@@ -15,15 +15,17 @@ struct GameFilterTests {
         state.genres = ["ACTION"]
         state.stores = ["STEAM"]
         state.subscriptions = [.xboxGamePass, .ubisoftPremium]
+        state.playTypes = [.installToPlay]
         state.features = [.hdr, .rtx]
 
         #expect(!state.isEmpty)
-        #expect(state.activeSelectionCount == 8)
+        #expect(state.activeSelectionCount == 9)
 
         state.clear()
         #expect(state.isEmpty)
         #expect(state.activeSelectionCount == 0)
         #expect(state.subscriptions.isEmpty)
+        #expect(state.playTypes.isEmpty)
     }
 
     @Test("Search is trimmed and case-insensitive")
@@ -309,6 +311,69 @@ struct GameFilterTests {
         #expect(apply(games, state: state).isEmpty)
     }
 
+    @Test("Play type options count games once and exclude unclassified games")
+    func playTypeOptions() {
+        let games = [
+            game(
+                id: "install", title: "Install", stores: [("STEAM", true), ("EPIC", false)],
+                playType: .installToPlay
+            ),
+            game(id: "install-second", title: "Install Second", playType: .installToPlay),
+            game(id: "ready", title: "Ready", playType: .readyToPlay),
+            game(id: "unknown", title: "Unknown", playType: .unknown),
+            game(id: "missing", title: "Missing"),
+        ]
+        let options = GameFilterOptions(games: games, favoriteIds: [], context: .store)
+
+        #expect(options.playTypes.map(\.id) == ["READY_TO_PLAY", "INSTALL_TO_PLAY"])
+        #expect(options.playTypes.map(\.label) == [L10n.text("ready_to_play"), L10n.text("install_to_play")])
+        #expect(options.playTypes.map(\.count) == [1, 2])
+    }
+
+    @Test("Play type uses OR selections and retains unclassified games when unfiltered")
+    func playTypeSelection() {
+        let games = [
+            game(id: "install", title: "Install", playType: .installToPlay),
+            game(id: "ready", title: "Ready", playType: .readyToPlay),
+            game(id: "unknown", title: "Unknown", playType: .unknown),
+            game(id: "missing", title: "Missing"),
+        ]
+        #expect(apply(games).map(\.id) == ["install", "ready", "unknown", "missing"])
+
+        var state = GameFilterState()
+        state.playTypes = [.installToPlay]
+        #expect(apply(games, state: state).map(\.id) == ["install"])
+
+        state.playTypes.insert(.readyToPlay)
+        #expect(apply(games, state: state).map(\.id) == ["install", "ready"])
+    }
+
+    @Test("App play type combines with existing store, subscription and ownership rules")
+    func playTypeCombinedWithVariantFilters() {
+        let games = [
+            game(
+                id: "install", title: "Install", stores: [("STEAM", true), ("EPIC", false)],
+                subscriptions: ["STEAM": [.xboxGamePass]], library: true, playType: .installToPlay
+            ),
+            game(
+                id: "ready", title: "Ready", stores: [("STEAM", true)],
+                subscriptions: ["STEAM": [.xboxGamePass]], library: true, playType: .readyToPlay
+            ),
+        ]
+        var state = GameFilterState()
+        state.playTypes = [.installToPlay]
+        state.stores = ["STEAM"]
+        state.subscriptions = [.xboxGamePass]
+        #expect(apply(games, context: .library, state: state).map(\.id) == ["install"])
+
+        state.stores = ["EPIC_GAMES_STORE"]
+        #expect(apply(games, context: .store, state: state).isEmpty)
+
+        state.subscriptions.removeAll()
+        #expect(apply(games, context: .store, state: state).map(\.id) == ["install"])
+        #expect(apply(games, context: .library, state: state).isEmpty)
+    }
+
     @Test("Library and favorite counts are independent")
     func collectionCounts() {
         let games = [
@@ -432,7 +497,8 @@ struct GameFilterTests {
         stores: [(String, Bool)] = [],
         subscriptions: [String: [GameSubscription]] = [:],
         features: [GameFeature] = [],
-        library: Bool = false
+        library: Bool = false,
+        playType: GamePlayType? = nil
     ) -> GameInfo {
         var result = TestGameFactory.make(
             id: id,
@@ -445,6 +511,7 @@ struct GameFilterTests {
         for index in result.variants.indices {
             result.variants[index].subscriptions = subscriptions[result.variants[index].appStore]
         }
+        result.playType = playType
         return result
     }
 

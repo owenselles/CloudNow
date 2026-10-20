@@ -846,6 +846,8 @@ nonisolated struct SubscriptionInfo: Codable {
     let remainingMinutes: Int?
     let totalMinutes: Int?
     let entitledResolutions: [EntitledResolution]
+    var cloudStorage: GFNCloudStorage? = nil
+    var installToPlayAccess: Bool? = nil
 
     /// HDR entitlement by tier: Ultimate and Performance (formerly Priority) stream HDR,
     /// Free is SDR-only. Unrecognized tiers stay undetermined (nil).
@@ -869,6 +871,18 @@ nonisolated struct SubscriptionInfo: Codable {
 }
 
 // MARK: - Games
+
+/// NVIDIA's catalog classification, independent of ownership and account eligibility.
+nonisolated enum GamePlayType: String, Codable, CaseIterable, Hashable {
+    case readyToPlay = "READY_TO_PLAY"
+    case installToPlay = "INSTALL_TO_PLAY"
+    case unknown = "UNKNOWN"
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: value) ?? .unknown
+    }
+}
 
 /// Catalog subscription availability; it does not describe the user's entitlements.
 nonisolated enum GameSubscription: String, Codable, CaseIterable, Hashable {
@@ -932,6 +946,14 @@ nonisolated struct GameInfo: Identifiable, Equatable, Codable {
     var variants: [GameVariant]
     /// Controller profiles advertised by the catalog. Older cached games omit this field.
     var supportedControls: [String]?
+    var playType: GamePlayType? = nil
+    /// Account-specific launch eligibility is refreshed independently and never cached.
+    var playabilityState: String? = nil
+    var minimumMembershipTierLabel: String? = nil
+
+    var isInstallToPlay: Bool {
+        playType == .installToPlay
+    }
 
     /// Whether this game belongs under a store filter. Owned games match only the store they're
     /// owned through; unowned catalog games match any store they're available on.
@@ -1006,7 +1028,7 @@ extension GameInfo {
     private enum CodingKeys: String, CodingKey {
         case id, title, longDescription, genres, developer, publisher, contentRating
         case boxArtUrl, heroBannerUrl, heroImageUrl, supportedFeatures, screenshots
-        case isInLibrary, variants, supportedControls
+        case isInLibrary, variants, supportedControls, playType
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1026,6 +1048,7 @@ extension GameInfo {
         isInLibrary = try c.decode(Bool.self, forKey: .isInLibrary)
         variants = try c.decode([GameVariant].self, forKey: .variants)
         supportedControls = try c.decodeIfPresent([String].self, forKey: .supportedControls)
+        playType = try c.decodeIfPresent(GamePlayType.self, forKey: .playType)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1045,6 +1068,7 @@ extension GameInfo {
         try c.encode(isInLibrary, forKey: .isInLibrary)
         try c.encode(variants, forKey: .variants)
         try c.encodeIfPresent(supportedControls, forKey: .supportedControls)
+        try c.encodeIfPresent(playType, forKey: .playType)
     }
 }
 
@@ -1058,6 +1082,12 @@ nonisolated struct GameVariant: Equatable, Codable {
     /// Current provider status; excluded from persistence because it changes independently of metadata.
     var availability: GFNGameAvailability? = nil
     var subscriptions: [GameSubscription]? = nil
+    var minimumSizeInBytes: Int64? = nil
+    var cloudSaveSupported: Bool? = nil
+    /// Installation and playability belong to the current account, not the catalog cache.
+    var isInstalled: Bool? = nil
+    var playStatus: String? = nil
+    var libraryStatus: String? = nil
 
     @MainActor var storeName: String {
         L10n.storeName(for: appStore)
@@ -1067,6 +1097,7 @@ nonisolated struct GameVariant: Equatable, Codable {
 extension GameVariant {
     private enum CodingKeys: String, CodingKey {
         case id, appStore, appId, isOwned, supportedControls, subscriptions
+        case minimumSizeInBytes, cloudSaveSupported
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1078,6 +1109,8 @@ extension GameVariant {
         supportedControls = try c.decodeIfPresent([String].self, forKey: .supportedControls)
         subscriptions = try c.decodeIfPresent([String].self, forKey: .subscriptions)?
             .compactMap { GameSubscription(rawValue: $0) }
+        minimumSizeInBytes = try c.decodeIfPresent(Int64.self, forKey: .minimumSizeInBytes)
+        cloudSaveSupported = try c.decodeIfPresent(Bool.self, forKey: .cloudSaveSupported)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1088,6 +1121,8 @@ extension GameVariant {
         try c.encode(isOwned, forKey: .isOwned)
         try c.encodeIfPresent(supportedControls, forKey: .supportedControls)
         try c.encodeIfPresent(subscriptions, forKey: .subscriptions)
+        try c.encodeIfPresent(minimumSizeInBytes, forKey: .minimumSizeInBytes)
+        try c.encodeIfPresent(cloudSaveSupported, forKey: .cloudSaveSupported)
     }
 }
 

@@ -1276,7 +1276,44 @@ struct StreamView: View {
     ) async throws -> SessionInfo {
         try requireCurrentSessionAttempt(generation)
         let isNvidiaProvider = authManager.session?.provider.isNvidiaDirect ?? true
-        let routeSelection: (base: String, routingZoneUrl: String?) = if isNvidiaProvider {
+        var storageRegion: GFNRegion?
+        var launchGame = game
+        if isNvidiaProvider {
+            do {
+                if let fresh = try await viewModel.fetchGameLaunchInfo(for: game, authManager: authManager) {
+                    if game.isInstallToPlay, fresh.playType == nil || fresh.playType == .unknown {
+                        throw GFNInstallToPlayError.statusUnavailable
+                    }
+                    launchGame = fresh
+                } else if game.isInstallToPlay {
+                    throw GFNInstallToPlayError.statusUnavailable
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if game.isInstallToPlay {
+                    throw error
+                }
+            }
+            try requireCurrentSessionAttempt(generation)
+        }
+        if launchGame.isInstallToPlay {
+            guard isNvidiaProvider else { throw GFNInstallToPlayError.unavailable }
+            let subscription = try await viewModel.refreshInstallToPlayStatus(authManager: authManager)
+            try requireCurrentSessionAttempt(generation)
+            if let storage = try GFNInstallToPlayLaunch.storage(
+                for: launchGame,
+                variantId: appId,
+                subscription: subscription
+            ), storage.isPersistent, let regionName = storage.regionName, !regionName.isEmpty {
+                let serverInfo = try? await ServerInfoClient.shared.fetch(baseUrl: base, token: token)
+                try requireCurrentSessionAttempt(generation)
+                storageRegion = GFNInstallToPlayLaunch.region(for: storage, regions: serverInfo?.regions ?? [])
+            }
+        }
+        let routeSelection: (base: String, routingZoneUrl: String?) = if let storageRegion {
+            (storageRegion.address, storageRegion.address)
+        } else if isNvidiaProvider {
             switch settings.serverRoutingMode {
             case .region:
                 settings.preferredRegionAddress.map { ($0, $0) } ?? (base, nil)
@@ -1302,7 +1339,7 @@ struct StreamView: View {
             localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec),
             accountLinked: true,
             accountAllowsHDR: viewModel.subscription?.allowsHDR,
-            skipNvidiaFallback: !isNvidiaProvider
+            skipNvidiaFallback: !isNvidiaProvider || storageRegion != nil
         )
 
         do {

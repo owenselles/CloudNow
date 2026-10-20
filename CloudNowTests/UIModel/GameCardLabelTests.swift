@@ -63,6 +63,50 @@ struct GameCardLabelTests {
         #expect(footer.subscriptions == ["Xbox Game Pass", "Ubisoft+ Premium", "Ubisoft+ Classics"])
     }
 
+    @Test("Install-to-Play keeps stores and subscriptions in separate footer rows", arguments: [false, true])
+    func installToPlayMetadata(isInLibrary: Bool) throws {
+        var game = TestGameFactory.make(
+            id: "install-to-play",
+            title: "Install-to-Play",
+            stores: [("STEAM", isInLibrary)],
+            isInLibrary: isInLibrary
+        )
+        game.variants[0].subscriptions = [.xboxGamePass]
+        game.playType = .installToPlay
+
+        let footer = try #require(GameCardLabel(game: game).focusedFooter)
+        #expect(footer.stores == ["Steam"])
+        #expect(footer.subscriptions == ["Xbox Game Pass"])
+        #expect(footer.isInstallToPlay)
+    }
+
+    @Test("Install-to-Play can supply a footer without other metadata")
+    func installToPlayOnly() throws {
+        var game = TestGameFactory.make(id: "install-only", title: "Install Only")
+        game.playType = .installToPlay
+
+        let footer = try #require(GameCardLabel(game: game).focusedFooter)
+        #expect(footer.stores.isEmpty)
+        #expect(footer.subscriptions.isEmpty)
+        #expect(footer.isInstallToPlay)
+    }
+
+    @Test("Only confirmed Install-to-Play games receive the extra row", arguments: [
+        GamePlayType?.none, .readyToPlay, .unknown,
+    ])
+    func ordinaryFooter(playType: GamePlayType?) throws {
+        var game = TestGameFactory.make(
+            id: "ordinary",
+            title: "Ordinary",
+            stores: [("STEAM", false)]
+        )
+        game.playType = playType
+
+        let footer = try #require(GameCardLabel(game: game).focusedFooter)
+        #expect(footer.stores == ["Steam"])
+        #expect(!footer.isInstallToPlay)
+    }
+
     @Test("No footer appears without displayable stores or subscriptions", arguments: [
         [String](),
         ["", "UNKNOWN", "NONE", "GFN", "NVIDIA", "NV_BUNDLE"],

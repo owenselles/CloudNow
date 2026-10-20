@@ -45,7 +45,8 @@ including games outside the library and games without subscription metadata.
 Duplicate store names appear only once; up to two fit on the row, with `+N` for
 additional stores. A separate, secondary row beside a ticket icon shows the
 first subscription name and `+N` for additional subscriptions when NVIDIA
-supplies per-variant metadata. Full store and subscription lists remain in game
+supplies per-variant metadata. Install-to-Play games add a third, conditional
+metadata row with a download icon. Full store and subscription lists remain in game
 details and accessibility descriptions.
 The footer hides when focus leaves; game titles and library status badges remain
 visible. Details show subscriptions for
@@ -68,6 +69,42 @@ The library synchronization route follows a provider web contract that may
 change. CloudNow validates the response and falls back to Reload Library when
 discovery or schema checks fail. Only connected accounts with provider-reported
 sync support are synchronized.
+
+### Install-to-Play
+
+NVIDIA's `gfn.playType` classifies games as Ready-to-Play or Install-to-Play.
+Library and Store provide a **Play Type** filter when the catalog reports these
+values. Unknown or missing values remain unclassified; public catalog optimization
+flags are not used to guess installation requirements.
+
+Game details show the selected store's minimum installation size and warn about
+single-session installations and games without Steam Cloud saves. The action
+reads **Install**, **Play**, or **Open in Steam**, according to fresh provider
+installation metadata. Installation happens in streamed Steam on the GFN cloud
+PC, using the existing controller, remote pointer and text input. Connecting Steam
+and syncing the library does not replace signing into streamed Steam.
+
+For direct NVIDIA accounts, **Settings > Library > Install-to-Play** refreshes
+membership access and cloud-storage information. Capacity, usage and storage
+location appear only when reported by the membership service. **Manage Cloud
+Storage** displays a QR code for NVIDIA's official account page; purchases and
+storage changes happen there. Refreshing the page reloads account status.
+
+New Install-to-Play sessions check current game playability, storage entitlement
+and known available capacity. Exhausted monthly playtime alone does not block
+installation. Capacity checks use healthy storage metadata; storage-status errors
+are left to the service to resolve. A resolved persistent-storage region takes
+precedence over ordinary server preferences without changing the saved preference.
+Single-session storage and unresolved regions retain ordinary routing, matching
+NVIDIA's client. Existing sessions resume on their saved route. Unconfirmed
+storage entitlement or insufficient capacity produces an actionable error.
+
+Account eligibility and installed-game state are excluded from the shared catalog
+cache. The integration uses NVIDIA's web contracts, including
+`addons[type=STORAGE]` and its `PERMANENT_STORAGE` / `EPHEMERAL_STORAGE` subtype;
+it does not infer access from membership names or store subscription labels.
+Unsupported catalog fields are omitted on retry for older regional schemas.
+Install-to-Play launching is limited to direct NVIDIA accounts.
 
 ### Connected stores
 

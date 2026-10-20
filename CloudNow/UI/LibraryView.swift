@@ -206,8 +206,12 @@ struct GameCardLabel: View {
     var focusedFooter: CloudCatalogCardFooter? {
         let stores = storeNames
         let subscriptions = game.subscriptions.map(\.label)
-        guard !stores.isEmpty || !subscriptions.isEmpty else { return nil }
-        return CloudCatalogCardFooter(stores: stores, subscriptions: subscriptions)
+        guard !stores.isEmpty || !subscriptions.isEmpty || game.isInstallToPlay else { return nil }
+        return CloudCatalogCardFooter(
+            stores: stores,
+            subscriptions: subscriptions,
+            isInstallToPlay: game.isInstallToPlay
+        )
     }
 
     private var storeNames: [String] {
@@ -234,6 +238,9 @@ struct GameCardLabel: View {
                 "available_with_subscription",
                 game.subscriptions.map(\.label).joined(separator: ", ")
             ))
+        }
+        if game.isInstallToPlay {
+            details.append(L10n.text("install_to_play"))
         }
         return details.joined(separator: ". ")
     }

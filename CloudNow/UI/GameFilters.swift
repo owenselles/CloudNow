@@ -5,6 +5,16 @@ enum GameFilterContext: Equatable {
     case library
 }
 
+private extension GamePlayType {
+    var filterLabel: String? {
+        switch self {
+        case .readyToPlay: L10n.text("ready_to_play")
+        case .installToPlay: L10n.text("install_to_play")
+        case .unknown: nil
+        }
+    }
+}
+
 enum GameCollectionFilter: String, CaseIterable, Hashable, Identifiable {
     case library
     case favorites
@@ -26,10 +36,11 @@ struct GameFilterState: Equatable {
     var genres: Set<String> = []
     var stores: Set<String> = []
     var subscriptions: Set<GameSubscription> = []
+    var playTypes: Set<GamePlayType> = []
     var features: Set<GameFeature> = []
 
     var activeSelectionCount: Int {
-        collections.count + genres.count + stores.count + subscriptions.count + features.count
+        collections.count + genres.count + stores.count + subscriptions.count + playTypes.count + features.count
     }
 
     var isEmpty: Bool {
@@ -41,6 +52,7 @@ struct GameFilterState: Equatable {
         genres.removeAll()
         stores.removeAll()
         subscriptions.removeAll()
+        playTypes.removeAll()
         features.removeAll()
     }
 }
@@ -55,6 +67,7 @@ struct GameFilterOptions: Equatable {
     let genres: [GameFilterValueOption]
     let stores: [GameFilterValueOption]
     let subscriptions: [GameFilterValueOption]
+    let playTypes: [GameFilterValueOption]
     let features: [GameFilterValueOption]
     let libraryCount: Int
     let favoriteCount: Int
@@ -63,6 +76,7 @@ struct GameFilterOptions: Equatable {
         var genreCounts: [String: Int] = [:]
         var storeCounts: [String: Int] = [:]
         var subscriptionCounts: [GameSubscription: Int] = [:]
+        var playTypeCounts: [GamePlayType: Int] = [:]
         var featureCounts: [GameFeature: Int] = [:]
 
         for game in games {
@@ -87,6 +101,10 @@ struct GameFilterOptions: Equatable {
                 subscriptionCounts[subscription, default: 0] += 1
             }
 
+            if let playType = game.playType, playType != .unknown {
+                playTypeCounts[playType, default: 0] += 1
+            }
+
             for feature in Set(game.supportedFeatures ?? []) {
                 featureCounts[feature, default: 0] += 1
             }
@@ -103,6 +121,13 @@ struct GameFilterOptions: Equatable {
         subscriptions = GameSubscription.allCases.compactMap { subscription in
             guard let count = subscriptionCounts[subscription], count > 0 else { return nil }
             return GameFilterValueOption(id: subscription.rawValue, label: subscription.label, count: count)
+        }
+
+        playTypes = GamePlayType.allCases.compactMap { playType in
+            guard let label = playType.filterLabel,
+                  let count = playTypeCounts[playType], count > 0
+            else { return nil }
+            return GameFilterValueOption(id: playType.rawValue, label: label, count: count)
         }
 
         features = GameFeature.allCases.compactMap { feature in
@@ -225,6 +250,13 @@ enum GameFilterEngine {
            state.features.isDisjoint(with: game.supportedFeatures ?? [])
         {
             return false
+        }
+
+        if !state.playTypes.isEmpty {
+            guard let playType = game.playType,
+                  playType != .unknown,
+                  state.playTypes.contains(playType)
+            else { return false }
         }
 
         return true
@@ -455,6 +487,13 @@ struct GameFilterBar: View {
                 filterState.subscriptions.remove(subscription)
             })
         }
+        for playType in GamePlayType.allCases where filterState.playTypes.contains(playType) {
+            if let label = playType.filterLabel {
+                chips.append(CloudCatalogActiveFilter(id: "play-type-\(playType.rawValue)", label: label) {
+                    filterState.playTypes.remove(playType)
+                })
+            }
+        }
         for feature in filterState.features.sorted(by: { $0.rawValue < $1.rawValue }) {
             chips.append(CloudCatalogActiveFilter(id: "feature-\(feature.rawValue)", label: feature.label) {
                 filterState.features.remove(feature)
@@ -502,6 +541,7 @@ private enum GameFilterSection: String, Hashable {
     case genres
     case stores
     case subscriptions
+    case playTypes
     case features
 }
 
@@ -594,6 +634,7 @@ private struct GameFilterSheet: View {
         .genres,
         .stores,
         .subscriptions,
+        .playTypes,
         .features,
     ]
 
@@ -643,6 +684,17 @@ private struct GameFilterSheet: View {
                                 options: options.subscriptions,
                                 selected: { id in state.subscriptions.contains(where: { $0.rawValue == id }) },
                                 toggle: toggleSubscription
+                            )
+                        }
+
+                        if !options.playTypes.isEmpty {
+                            valueSection(
+                                section: .playTypes,
+                                title: L10n.text("game_filter_play_type"),
+                                selectedCount: state.playTypes.count,
+                                options: options.playTypes,
+                                selected: { id in state.playTypes.contains(where: { $0.rawValue == id }) },
+                                toggle: togglePlayType
                             )
                         }
 
@@ -836,6 +888,15 @@ private struct GameFilterSheet: View {
             state.subscriptions.remove(subscription)
         } else {
             state.subscriptions.insert(subscription)
+        }
+    }
+
+    private func togglePlayType(_ rawValue: String) {
+        guard let playType = GamePlayType(rawValue: rawValue), playType != .unknown else { return }
+        if state.playTypes.contains(playType) {
+            state.playTypes.remove(playType)
+        } else {
+            state.playTypes.insert(playType)
         }
     }
 }

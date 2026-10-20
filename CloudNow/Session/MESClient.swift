@@ -107,12 +107,21 @@ actor MESClient {
                 )
             }
 
+        let storage = raw.addons?.first { $0.type == "STORAGE" }?.cloudStorage
+        let installToPlayAccess: Bool? = if let storage {
+            storage.kind == .unknown ? nil : true
+        } else {
+            raw.addons == nil ? nil : false
+        }
+
         return SubscriptionInfo(
             membershipTier: tier.uppercased() == "FREE" ? "Free" : tier,
             isUnlimited: isUnlimited,
             remainingMinutes: raw.remainingTimeInMinutes,
             totalMinutes: raw.totalTimeInMinutes,
-            entitledResolutions: resolutions
+            entitledResolutions: resolutions,
+            cloudStorage: storage,
+            installToPlayAccess: installToPlayAccess
         )
     }
 }
@@ -126,6 +135,39 @@ private nonisolated struct MESRawResponse: Decodable {
     let remainingTimeInMinutes: Int?
     let totalTimeInMinutes: Int?
     let features: Features?
+    let addons: [Addon]?
+
+    struct Addon: Decodable {
+        let type: String?
+        let subType: String?
+        let status: String?
+        let attributes: [Attribute]?
+
+        var cloudStorage: GFNCloudStorage {
+            GFNCloudStorage(
+                kind: subType.flatMap(GFNCloudStorage.Kind.init(rawValue:)) ?? .unknown,
+                status: status,
+                totalGB: nonnegativeInteger(for: "TOTAL_STORAGE_SIZE_IN_GB"),
+                usedGB: nonnegativeInteger(for: "USED_STORAGE_SIZE_IN_GB"),
+                regionCode: value(for: "STORAGE_METRO_REGION"),
+                regionName: value(for: "STORAGE_METRO_REGION_NAME")
+            )
+        }
+
+        private func value(for key: String) -> String? {
+            attributes?.first { $0.key == key }?.textValue
+        }
+
+        private func nonnegativeInteger(for key: String) -> Int? {
+            guard let value = value(for: key), let number = Int(value), number >= 0 else { return nil }
+            return number
+        }
+
+        struct Attribute: Decodable {
+            let key: String?
+            let textValue: String?
+        }
+    }
 
     struct Features: Decodable {
         let resolutions: [Resolution]?

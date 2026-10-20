@@ -853,6 +853,7 @@ enum CloudNowDataDialog: Equatable {
 private enum SettingsNavigationRoute: Hashable {
     case serverLocation
     case storeConnections
+    case installToPlay
 }
 
 struct SettingsView: View {
@@ -1316,6 +1317,16 @@ struct SettingsView: View {
                         }
                         .accessibilityIdentifier("settings.store-connections")
 
+                        if authManager.session?.provider.isNvidiaDirect == true {
+                            NavigationLink(value: SettingsNavigationRoute.installToPlay) {
+                                CloudNowSettingLabel(
+                                    title: L10n.text("install_to_play"),
+                                    description: L10n.text("install_to_play_settings_description")
+                                )
+                            }
+                            .accessibilityIdentifier("settings.install-to-play")
+                        }
+
                         Button {
                             viewModel.startFullLibraryRefresh(authManager: authManager)
                             showLibraryRefreshProgress = true
@@ -1403,6 +1414,8 @@ struct SettingsView: View {
                     }
                 case .storeConnections:
                     StoreConnectionsView()
+                case .installToPlay:
+                    InstallToPlaySettingsView()
                 }
             }
             .sheet(isPresented: $showNetworkTest) {

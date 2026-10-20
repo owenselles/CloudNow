@@ -913,7 +913,10 @@ class GamesViewModel {
                     : catalogGame.screenshots,
                 isInLibrary: libraryGame.isInLibrary,
                 variants: libraryGame.variants,
-                supportedControls: libraryGame.supportedControls ?? catalogGame.supportedControls
+                supportedControls: libraryGame.supportedControls ?? catalogGame.supportedControls,
+                playType: libraryGame.playType ?? catalogGame.playType,
+                playabilityState: libraryGame.playabilityState,
+                minimumMembershipTierLabel: libraryGame.minimumMembershipTierLabel
             )
         }
     }
@@ -1538,6 +1541,75 @@ class GamesViewModel {
     }
 
     // MARK: Preferred Store
+
+    /// Refresh account-specific storage without reloading the catalog or trusting cached eligibility.
+    func refreshInstallToPlayStatus(authManager: AuthManager) async throws -> SubscriptionInfo {
+        guard persistenceEnabled else { throw GFNInstallToPlayError.statusUnavailable }
+        guard let session = authManager.session else { throw AuthError.noSession }
+        guard session.provider.isNvidiaDirect else { throw GFNInstallToPlayError.unavailable }
+        let generation = cacheGeneration
+        let token = try await authManager.resolveToken()
+        try Task.checkCancellation()
+        guard cacheGeneration == generation,
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        let vpcId = if let currentVpcId {
+            currentVpcId
+        } else {
+            try await membershipClient.fetchVpcId(token: token, base: session.provider.streamingServiceUrl) ?? ""
+        }
+        let refreshed = try await membershipClient.fetchSubscription(
+            token: token,
+            vpcId: vpcId,
+            userId: session.user.userId
+        )
+        try Task.checkCancellation()
+        guard cacheGeneration == generation,
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        subscription = refreshed
+        return refreshed
+    }
+
+    /// Keep artwork and descriptive metadata while refreshing only provider launch state.
+    func fetchGameLaunchInfo(for game: GameInfo, authManager: AuthManager) async throws -> GameInfo? {
+        guard persistenceEnabled else { return nil }
+        guard let session = authManager.session else { throw AuthError.noSession }
+        let generation = cacheGeneration
+        let token = try await authManager.resolveToken()
+        try Task.checkCancellation()
+        guard cacheGeneration == generation,
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        let fresh = try await gamesClient.fetchLaunchGame(
+            token: token,
+            appId: game.id,
+            streamingBaseUrl: session.provider.streamingServiceUrl,
+            vpcId: currentVpcId
+        )
+        try Task.checkCancellation()
+        guard cacheGeneration == generation,
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        guard let fresh else { return nil }
+        var updated = game
+        updated.playType = fresh.playType
+        updated.playabilityState = fresh.playabilityState
+        updated.minimumMembershipTierLabel = fresh.minimumMembershipTierLabel
+        updated.isInLibrary = fresh.isInLibrary
+        updated.variants = fresh.variants.map { variant in
+            guard var existing = game.variants.first(where: { $0.id == variant.id }) else { return variant }
+            existing.isOwned = variant.isOwned
+            existing.availability = variant.availability
+            existing.isInstalled = variant.isInstalled
+            existing.playStatus = variant.playStatus
+            existing.libraryStatus = variant.libraryStatus
+            existing.minimumSizeInBytes = variant.minimumSizeInBytes
+            existing.cloudSaveSupported = variant.cloudSaveSupported
+            return existing
+        }
+        return updated
+    }
 
     /// Detail availability is fetched independently of the descriptive metadata cache.
     func fetchGameAvailability(

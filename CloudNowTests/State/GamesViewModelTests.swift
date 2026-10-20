@@ -5,6 +5,120 @@ import Testing
 @Suite("Games view-model state")
 struct GamesViewModelTests {
     @MainActor
+    @Test("Launch refresh preserves descriptive metadata while replacing account state")
+    func freshLaunchMetadataPreservesPresentation() async throws {
+        let game = GameInfo(
+            id: "game", title: "Original title", longDescription: "Description", genres: ["ACTION"],
+            developer: "Developer", publisher: "Publisher", contentRating: "Everyone",
+            boxArtUrl: "https://art.invalid/box", heroBannerUrl: "https://art.invalid/banner",
+            heroImageUrl: "https://art.invalid/hero", supportedFeatures: [.hdr], screenshots: ["screenshot"],
+            isInLibrary: true,
+            variants: [GameVariant(
+                id: "123", appStore: "STEAM", appId: "123", isOwned: true, supportedControls: ["GAMEPAD"],
+                subscriptions: [.xboxGamePass], minimumSizeInBytes: 1024, cloudSaveSupported: false,
+                isInstalled: true, playStatus: "PLAYABLE", libraryStatus: "PLATFORM_SYNC"
+            )],
+            supportedControls: ["GAMEPAD"], playType: .readyToPlay,
+            playabilityState: "PLAYABLE", minimumMembershipTierLabel: "Old tier"
+        )
+        var fresh = makeGame(id: "game", title: "Different title")
+        fresh.playType = .installToPlay
+        fresh.playabilityState = "UNPLAYABLE_DUE_TO_UPGRADE"
+        fresh.minimumMembershipTierLabel = "Performance"
+        fresh.variants = [GameVariant(
+            id: "123", appStore: "STEAM", isOwned: false,
+            availability: GFNGameAvailability(status: "AVAILABLE"), minimumSizeInBytes: 2048,
+            cloudSaveSupported: true, isInstalled: false, playStatus: "NOT_PLAYABLE", libraryStatus: "NOT_OWNED"
+        )]
+        let client = ScriptedGamesClient(launchGame: fresh)
+        let viewModel = GamesViewModel(mainGames: [game], gamesClient: client)
+        let auth = await makeAuthenticatedManager()
+        let result = try await viewModel.fetchGameLaunchInfo(for: game, authManager: auth)
+        let updated = try #require(result)
+        var expected = game
+        expected.playType = fresh.playType
+        expected.playabilityState = fresh.playabilityState
+        expected.minimumMembershipTierLabel = fresh.minimumMembershipTierLabel
+        expected.isInLibrary = false
+        expected.variants[0].isOwned = false
+        expected.variants[0].availability = fresh.variants[0].availability
+        expected.variants[0].minimumSizeInBytes = 2048
+        expected.variants[0].cloudSaveSupported = true
+        expected.variants[0].isInstalled = false
+        expected.variants[0].playStatus = "NOT_PLAYABLE"
+        expected.variants[0].libraryStatus = "NOT_OWNED"
+        #expect(updated == expected)
+        #expect(viewModel.mainGames == [game])
+    }
+
+    @MainActor
+    @Test("Launch refresh rejects responses after logout or generation invalidation", arguments: [false, true])
+    func staleLaunchMetadataIsDiscarded(logout: Bool) async throws {
+        let game = makeGame(id: "game", title: "Game")
+        let gate = InstallRefreshGate()
+        let client = ScriptedGamesClient(launchGame: game, launchGate: gate)
+        let viewModel = GamesViewModel(mainGames: [game], gamesClient: client)
+        let auth = await makeAuthenticatedManager()
+        let refresh = Task { try await viewModel.fetchGameLaunchInfo(for: game, authManager: auth) }
+        await gate.waitForRequest()
+        if logout {
+            try await auth.logout()
+        } else {
+            viewModel.prepareForCacheClear()
+        }
+        await gate.release()
+        await #expect(throws: CancellationError.self) { try await refresh.value }
+    }
+
+    @MainActor
+    @Test("Storage refresh publishes fresh account data without reloading games")
+    func freshInstallToPlayStatus() async throws {
+        let storage = GFNCloudStorage(
+            kind: .singleSession, status: "OK", totalGB: 100, usedGB: 0, regionCode: nil, regionName: nil
+        )
+        let membership = SubscriptionInfo(
+            membershipTier: "Performance", isUnlimited: false, remainingMinutes: 0, totalMinutes: 6000,
+            entitledResolutions: [], cloudStorage: storage, installToPlayAccess: true
+        )
+        let games = ScriptedGamesClient()
+        let viewModel = GamesViewModel(
+            gamesClient: games,
+            membershipClient: FakeMembershipClient(subscription: membership)
+        )
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        let result = try await viewModel.refreshInstallToPlayStatus(authManager: auth)
+        #expect(result.cloudStorage == storage)
+        #expect(viewModel.subscription?.cloudStorage == storage)
+        #expect(viewModel.subscription?.installToPlayAccess == true)
+        #expect(await games.mainCallCount == 0)
+        #expect(await games.libraryCallCount == 0)
+    }
+
+    @MainActor
+    @Test("Storage refresh rejects an old account response after logout or invalidation", arguments: [false, true])
+    func staleStorageRefreshIsDiscarded(logout: Bool) async throws {
+        let gate = InstallRefreshGate()
+        let membership = SubscriptionInfo(
+            membershipTier: "Performance", isUnlimited: false, remainingMinutes: 0,
+            totalMinutes: 6000, entitledResolutions: [], installToPlayAccess: true
+        )
+        let viewModel = GamesViewModel(
+            membershipClient: FakeMembershipClient(subscription: membership, subscriptionGate: gate)
+        )
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        let refresh = Task { try await viewModel.refreshInstallToPlayStatus(authManager: auth) }
+        await gate.waitForRequest()
+        if logout {
+            try await auth.logout()
+        } else {
+            viewModel.prepareForCacheClear()
+        }
+        await gate.release()
+        await #expect(throws: CancellationError.self) { try await refresh.value }
+        #expect(viewModel.subscription == nil)
+    }
+
+    @MainActor
     @Test("Detail availability is fresh and does not replace catalog ownership or metadata")
     func freshDetailAvailability() async throws {
         let game = makeGame(id: "maintenance", title: "Maintenance")
@@ -1882,6 +1996,8 @@ private actor ScriptedGamesClient: GamesCatalogClient {
     }
 
     private let availability: [String: GFNGameAvailability]
+    private let launchGame: GameInfo?
+    private let launchGate: InstallRefreshGate?
     private let mainOutcomes: [ScriptedGamesOutcome]
     private let libraryOutcomes: [ScriptedGamesOutcome]
     private let blockedMainRequestIndex: Int?
@@ -1910,14 +2026,25 @@ private actor ScriptedGamesClient: GamesCatalogClient {
         blocksFirstMainRequest: Bool = false,
         blockedMainRequestIndex: Int? = nil,
         blockedLibraryRequestIndex: Int? = nil,
-        availability: [String: GFNGameAvailability] = [:]
+        availability: [String: GFNGameAvailability] = [:],
+        launchGame: GameInfo? = nil,
+        launchGate: InstallRefreshGate? = nil
     ) {
         self.availability = availability
+        self.launchGame = launchGame
+        self.launchGate = launchGate
         self.mainOutcomes = mainOutcomes
         self.libraryOutcomes = libraryOutcomes
         self.blockedMainRequestIndex = blockedMainRequestIndex
             ?? (blocksFirstMainRequest ? 0 : nil)
         self.blockedLibraryRequestIndex = blockedLibraryRequestIndex
+    }
+
+    func fetchLaunchGame(
+        token _: String, appId _: String, streamingBaseUrl _: String, vpcId _: String?
+    ) async -> GameInfo? {
+        await launchGate?.arriveAndWait()
+        return launchGame
     }
 
     func fetchMainGames(
@@ -2175,9 +2302,11 @@ private actor ScriptedMembershipClient: MembershipClient {
 
 private actor FakeMembershipClient: MembershipClient {
     private let subscription: SubscriptionInfo?
+    private let subscriptionGate: InstallRefreshGate?
 
-    init(subscription: SubscriptionInfo? = nil) {
+    init(subscription: SubscriptionInfo? = nil, subscriptionGate: InstallRefreshGate? = nil) {
         self.subscription = subscription
+        self.subscriptionGate = subscriptionGate
     }
 
     func fetchVpcId(token _: String, base _: String) -> String? {
@@ -2188,7 +2317,8 @@ private actor FakeMembershipClient: MembershipClient {
         token _: String,
         vpcId _: String,
         userId _: String
-    ) throws -> SubscriptionInfo {
+    ) async throws -> SubscriptionInfo {
+        await subscriptionGate?.arriveAndWait()
         guard let subscription else {
             throw GamesViewModelTestError.unavailable
         }
@@ -2563,5 +2693,32 @@ private struct UnavailableAuthAPI: NVIDIAAuthAPIClient {
 
     func fetchUserInfo(tokens _: AuthTokens) async throws -> AuthUser {
         throw GamesViewModelTestError.unavailable
+    }
+}
+
+/// Coordinates request completion without sleeps or timing assumptions.
+private actor InstallRefreshGate {
+    private var arrived = false
+    private var released = false
+    private var arrivalWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func arriveAndWait() async {
+        arrived = true
+        arrivalWaiter?.resume()
+        arrivalWaiter = nil
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitForRequest() async {
+        guard !arrived else { return }
+        await withCheckedContinuation { arrivalWaiter = $0 }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }

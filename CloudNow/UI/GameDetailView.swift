@@ -32,6 +32,9 @@ struct GameDetailView: View {
     @State private var availabilityLoading = false
     @State private var availabilityRevision = 0
     @State private var availabilityRequestID: UUID?
+    @State private var installToPlayInfo: GameInfo?
+    @State private var installToPlayInfoFailed = false
+    @State private var installToPlayInfoLoading = false
 
     private struct AvailabilityRequest: Hashable {
         let gameId: String
@@ -39,13 +42,39 @@ struct GameDetailView: View {
         let active: Bool
     }
 
+    private var effectiveGame: GameInfo {
+        installToPlayInfo ?? game
+    }
+
     private var selectedAvailability: GFNGameAvailability? {
-        guard let variant = viewModel.gameWithPreferredStore(game).variants.first else { return nil }
+        guard let variant = viewModel.gameWithPreferredStore(effectiveGame).variants.first else { return nil }
         return availabilityByVariant[variant.id] ?? (didLoadAvailability ? nil : variant.availability)
     }
 
     private var isSelectedGameUnavailable: Bool {
         didLoadAvailability && !availabilityFailed && selectedAvailability?.isUnavailable == true
+    }
+
+    private var isInstallToPlay: Bool {
+        (installToPlayInfo?.playType ?? game.playType) == .installToPlay
+    }
+
+    private var selectedInstallVariant: GameVariant? {
+        guard var variant = viewModel.gameWithPreferredStore(effectiveGame).variants.first else { return nil }
+        if installToPlayInfo != nil, !installToPlayInfoLoading, !installToPlayInfoFailed {
+            return variant
+        }
+        variant.isInstalled = nil
+        return variant
+    }
+
+    private var playActionTitle: String {
+        guard isInstallToPlay else { return L10n.text("play") }
+        switch selectedInstallVariant?.isInstalled {
+        case true: return L10n.text("play")
+        case false: return L10n.text("install_game")
+        default: return L10n.text("open_in_steam")
+        }
     }
 
     private enum DetailFocus: Hashable {
@@ -67,7 +96,7 @@ struct GameDetailView: View {
     }
 
     private var preferredFocusTarget: DetailFocus {
-        if game.isInLibrary {
+        if effectiveGame.isInLibrary {
             return isSelectedGameUnavailable ? .favorite : .play
         }
         if let description = game.longDescription, !description.isEmpty {
@@ -86,7 +115,9 @@ struct GameDetailView: View {
             game.developer.map { ("Developer", $0) },
             game.publisher.flatMap { $0 != game.developer ? ("Publisher", $0) : nil },
             genres.isEmpty ? nil : ("Genres", genres.joined(separator: ", ")),
-            game.variants.isEmpty ? nil : ("Available on", game.variants.map(\.storeName).joined(separator: ", ")),
+            effectiveGame.variants.isEmpty
+                ? nil
+                : ("Available on", effectiveGame.variants.map(\.storeName).joined(separator: ", ")),
         ].compactMap { $0 }
     }
 
@@ -103,6 +134,9 @@ struct GameDetailView: View {
         .task(id: AvailabilityRequest(gameId: game.id, revision: availabilityRevision, active: scenePhase == .active)) {
             guard !isEmbeddedCarousel, scenePhase == .active else { return }
             await refreshAvailability()
+            if authManager.session?.provider.isNvidiaDirect == true {
+                await refreshInstallToPlayInfo()
+            }
         }
         .onChange(of: isSelectedGameUnavailable) { _, unavailable in
             if unavailable, focusedElement == .play {
@@ -131,6 +165,34 @@ struct GameDetailView: View {
         } catch {
             guard !Task.isCancelled else { return }
             availabilityFailed = true
+        }
+    }
+
+    private func refreshInstallToPlayInfo() async {
+        guard !Task.isCancelled else { return }
+        installToPlayInfoFailed = false
+        installToPlayInfoLoading = true
+        defer {
+            if !Task.isCancelled {
+                installToPlayInfoLoading = false
+            }
+        }
+        do {
+            let updated = try await viewModel.fetchGameLaunchInfo(for: game, authManager: authManager)
+            try Task.checkCancellation()
+            if var updated {
+                if updated.playType == nil || updated.playType == .unknown {
+                    updated.playType = effectiveGame.playType
+                }
+                installToPlayInfo = updated
+            } else {
+                installToPlayInfoFailed = isInstallToPlay
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            installToPlayInfoFailed = isInstallToPlay
         }
     }
 
@@ -314,6 +376,7 @@ struct GameDetailView: View {
 
                     genreLine
                     subscriptionLabels
+                    installToPlayNotice
 
                     if let desc = game.longDescription, !desc.isEmpty {
                         Text(desc)
@@ -323,7 +386,7 @@ struct GameDetailView: View {
                             .frame(maxWidth: 560, alignment: .leading)
                     }
 
-                    if game.isInLibrary {
+                    if effectiveGame.isInLibrary {
                         Label("In Library", systemImage: "checkmark.circle.fill")
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.green)
@@ -335,12 +398,17 @@ struct GameDetailView: View {
 
                     availabilityNotice
 
-                    if game.isInLibrary {
+                    if effectiveGame.isInLibrary {
                         HStack(spacing: 16) {
                             Button {
-                                onPlay(viewModel.gameWithPreferredStore(game))
+                                onPlay(viewModel.gameWithPreferredStore(effectiveGame))
                             } label: {
-                                Label("Play", systemImage: "play.fill")
+                                Label(
+                                    playActionTitle,
+                                    systemImage: isInstallToPlay && selectedInstallVariant?.isInstalled != true
+                                        ? "arrow.down.circle.fill"
+                                        : "play.fill"
+                                )
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.green)
@@ -385,13 +453,15 @@ struct GameDetailView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        if !isEmbeddedCarousel, selectedAvailability?.isUnavailable == true || availabilityFailed {
+        if !isEmbeddedCarousel,
+           selectedAvailability?.isUnavailable == true || availabilityFailed || installToPlayInfoFailed
+        {
             Button {
                 availabilityRevision += 1
             } label: {
                 Label(L10n.text("gfn_game_check_status"), systemImage: "arrow.clockwise")
             }
-            .disabled(availabilityLoading)
+            .disabled(availabilityLoading || installToPlayInfoLoading)
             .focused($focusedElement, equals: .availability)
         }
     }
@@ -510,10 +580,52 @@ struct GameDetailView: View {
 
     // MARK: Right column
 
+    @ViewBuilder
+    private var installToPlayNotice: some View {
+        if isInstallToPlay {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(L10n.text("install_to_play"), systemImage: "arrow.down.circle")
+                    .font(.callout.weight(.semibold))
+                if let size = selectedInstallVariant?.minimumSizeInBytes, size > 0 {
+                    Text(L10n.format(
+                        "install_to_play_minimum_size",
+                        ByteCountFormatter.string(fromByteCount: size, countStyle: .binary)
+                    ))
+                }
+                if !installToPlayInfoLoading, !installToPlayInfoFailed,
+                   installToPlayInfo?.playabilityState == "UNPLAYABLE_DUE_TO_UPGRADE"
+                {
+                    if let tier = installToPlayInfo?.minimumMembershipTierLabel, !tier.isEmpty {
+                        Text(L10n.format("install_to_play_requires_membership", tier))
+                    } else {
+                        Text(L10n.text("not_eligible"))
+                    }
+                }
+                if viewModel.subscription?.cloudStorage?.isPersistent != true {
+                    Text(L10n.text("install_to_play_session_warning"))
+                }
+                if selectedInstallVariant?.cloudSaveSupported == false {
+                    Text(L10n.text("install_to_play_save_warning"))
+                }
+                if installToPlayInfoLoading {
+                    Text(L10n.text("install_to_play_checking"))
+                } else if installToPlayInfoFailed {
+                    Text(L10n.text("install_to_play_status_failed"))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.85))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 560, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("game-install-to-play")
+        }
+    }
+
     private var subscriptionLabels: some View {
-        let variants = game.isInLibrary
-            ? Array(viewModel.gameWithPreferredStore(game).variants.prefix(1))
-            : game.variants
+        let variants = effectiveGame.isInLibrary
+            ? Array(viewModel.gameWithPreferredStore(effectiveGame).variants.prefix(1))
+            : effectiveGame.variants
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(variants, id: \.id) { variant in
                 if let subscriptions = variant.subscriptions, !subscriptions.isEmpty {
@@ -547,7 +659,7 @@ struct GameDetailView: View {
             if let rating = game.contentRating {
                 rightInfo("Rating", rating)
             }
-            if game.variants.count > 1, game.isInLibrary {
+            if effectiveGame.variants.count > 1, effectiveGame.isInLibrary {
                 Divider()
                     .overlay(Color.white.opacity(0.35))
                     .frame(width: 200)
@@ -575,8 +687,8 @@ struct GameDetailView: View {
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.6))
                 .kerning(1)
-            ForEach(game.variants, id: \.id) { variant in
-                let isSelected = viewModel.preferredVariantId(for: game) == variant.id
+            ForEach(effectiveGame.variants, id: \.id) { variant in
+                let isSelected = viewModel.gameWithPreferredStore(effectiveGame).variants.first?.id == variant.id
                 Button {
                     viewModel.setPreferredStore(gameId: game.id, variantId: variant.id)
                 } label: {

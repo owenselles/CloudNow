@@ -11,6 +11,7 @@ struct CloudCatalogCardBadge {
 struct CloudCatalogCardFooter {
     let stores: [String]
     let subscriptions: [String]
+    var isInstallToPlay = false
 
     static func summary(_ items: [String], visibleCount: Int) -> String {
         let visible = items.prefix(visibleCount)
@@ -64,6 +65,10 @@ struct CloudCatalogCardLabel: View {
                     }
                     if !focusedFooter.subscriptions.isEmpty {
                         footerRow(focusedFooter.subscriptions, systemImage: "ticket", visibleCount: 1)
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                    if focusedFooter.isInstallToPlay {
+                        footerRow([L10n.text("install_to_play")], systemImage: "arrow.down.circle", visibleCount: 1)
                             .foregroundStyle(.white.opacity(0.75))
                     }
                 }

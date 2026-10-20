@@ -68,7 +68,7 @@ struct CloudNowDeviceCodeView: View {
     }
 }
 
-private struct QRCodeView: View {
+struct QRCodeView: View {
     let payload: String
     @State private var renderState = QRCodeRenderState<Image>()
 

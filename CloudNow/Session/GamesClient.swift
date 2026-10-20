@@ -54,8 +54,8 @@ actor GamesClient {
             items {
                 id title genres supportedControls
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                variants { id appStore subscriptions supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
-                gfn { playabilityState minimumMembershipTierLabel }
+                variants { id appStore subscriptions supportedControls minimumSizeInBytes cloudSaveSupported gfn { status library { status selected installed playStatus } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
+                gfn { playabilityState minimumMembershipTierLabel playType }
             }
         }
     }
@@ -68,8 +68,23 @@ actor GamesClient {
             items {
                 id title genres supportedControls
                 images { GAME_BOX_ART TV_BANNER HERO_IMAGE }
-                variants { id appStore subscriptions supportedControls gfn { status library { status selected } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
-                gfn { playabilityState minimumMembershipTierLabel }
+                variants { id appStore subscriptions supportedControls minimumSizeInBytes cloudSaveSupported gfn { status library { status selected installed playStatus } features { __typename ... on GfnSubscriptionFeatureInterface { key } ... on GfnSubscriptionFeatureValue { value } ... on GfnSubscriptionFeatureValueList { values } } } }
+                gfn { playabilityState minimumMembershipTierLabel playType }
+            }
+        }
+    }
+    """
+
+    private static let launchGameQuery = """
+    query GetAppDataQueryForAppId($vpcId: String!, $locale: String!, $appIds: [String]!) {
+        apps(vpcId: $vpcId, language: $locale, appIds: $appIds) {
+            items {
+                id title
+                variants {
+                    id appStore minimumSizeInBytes cloudSaveSupported
+                    gfn { status library { status selected installed playStatus } }
+                }
+                gfn { playabilityState minimumMembershipTierLabel playType }
             }
         }
     }
@@ -153,6 +168,36 @@ actor GamesClient {
         )
     }
 
+    /// Refresh account-specific installation and eligibility immediately before launching.
+    /// Unlike the catalog, this request never uses public or persisted fallback data.
+    func fetchLaunchGame(
+        token: String,
+        appId: String,
+        streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl,
+        vpcId: String? = nil
+    ) async throws -> GameInfo? {
+        try Task.checkCancellation()
+        let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
+        try Task.checkCancellation()
+        let body: [String: Any] = [
+            "query": Self.launchGameQuery,
+            "variables": ["vpcId": vpcId, "locale": localeCode, "appIds": [appId]],
+        ]
+        var request = URLRequest(url: URL(string: Self.graphqlURL)!)
+        request.httpMethod = "POST"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        setGFNHeaders(on: &request, token: token)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await transport.data(for: request)
+        try Task.checkCancellation()
+        try validateHTTPResponse(response, data: data)
+        let payload = try JSONDecoder().decode(BrowseResponse.self, from: data)
+        try validateGraphQL(errors: payload.errors)
+        return payload.data?.apps?.items?.first { $0.id?.stringValue == appId }
+            .flatMap { browseItemToGame($0) }
+    }
+
     /// Availability is fetched on demand, independently of cached descriptive metadata.
     func fetchAvailability(
         token: String,
@@ -215,7 +260,8 @@ actor GamesClient {
         searchString: String? = nil,
         maxPages: Int = 3,
         includeGenres: Bool = true,
-        includeSubscriptions: Bool = true
+        includeSubscriptions: Bool = true,
+        includeInstallToPlay: Bool = true
     ) async throws -> [GameInfo] {
         do {
             do {
@@ -223,7 +269,7 @@ actor GamesClient {
                     token: token, vpcId: vpcId, localeCode: localeCode,
                     filters: filters, searchString: searchString,
                     pageSize: 500, maxPages: maxPages, includeGenres: includeGenres,
-                    includeSubscriptions: includeSubscriptions
+                    includeSubscriptions: includeSubscriptions, includeInstallToPlay: includeInstallToPlay
                 )
                 if !games.isEmpty {
                     return games
@@ -236,21 +282,30 @@ actor GamesClient {
                 token: token, vpcId: vpcId, localeCode: localeCode,
                 filters: filters, searchString: searchString,
                 pageSize: 200, maxPages: maxPages, includeGenres: includeGenres,
-                includeSubscriptions: includeSubscriptions
+                includeSubscriptions: includeSubscriptions, includeInstallToPlay: includeInstallToPlay
             )
         } catch let GamesError.graphql(message) where includeGenres && message.localizedCaseInsensitiveContains("genre") {
             gamesLog.warning("[GamesClient] browse genres unavailable; retrying compatible query")
             return try await browseCatalog(
                 token: token, vpcId: vpcId, localeCode: localeCode,
                 filters: filters, searchString: searchString,
-                maxPages: maxPages, includeGenres: false, includeSubscriptions: includeSubscriptions
+                maxPages: maxPages, includeGenres: false, includeSubscriptions: includeSubscriptions, includeInstallToPlay: includeInstallToPlay
             )
         } catch let GamesError.graphql(message) where includeSubscriptions && Self.isUnsupportedSubscriptionsField(message) {
             gamesLog.warning("[GamesClient] browse subscriptions unavailable; retrying compatible query")
             return try await browseCatalog(
                 token: token, vpcId: vpcId, localeCode: localeCode,
                 filters: filters, searchString: searchString,
-                maxPages: maxPages, includeGenres: includeGenres, includeSubscriptions: false
+                maxPages: maxPages, includeGenres: includeGenres, includeSubscriptions: false,
+                includeInstallToPlay: includeInstallToPlay
+            )
+        } catch let GamesError.graphql(message) where includeInstallToPlay && Self.isUnsupportedInstallToPlayField(message) {
+            gamesLog.warning("[GamesClient] Install-to-Play metadata unavailable; retrying compatible query")
+            return try await browseCatalog(
+                token: token, vpcId: vpcId, localeCode: localeCode,
+                filters: filters, searchString: searchString,
+                maxPages: maxPages, includeGenres: includeGenres,
+                includeSubscriptions: includeSubscriptions, includeInstallToPlay: false
             )
         }
     }
@@ -264,7 +319,8 @@ actor GamesClient {
         pageSize: Int,
         maxPages: Int,
         includeGenres: Bool,
-        includeSubscriptions: Bool
+        includeSubscriptions: Bool,
+        includeInstallToPlay: Bool
     ) async throws -> [GameInfo] {
         var allGames: [GameInfo] = []
         var seen = Set<String>()
@@ -291,6 +347,13 @@ actor GamesClient {
                 query = query.replacingOccurrences(of: "appStore subscriptions", with: "appStore")
             }
 
+            if !includeInstallToPlay {
+                query = query
+                    .replacingOccurrences(of: " minimumSizeInBytes cloudSaveSupported", with: "")
+                    .replacingOccurrences(of: " installed playStatus", with: "")
+                    .replacingOccurrences(of: " playType", with: "")
+            }
+
             let body: [String: Any] = ["query": query, "variables": variables]
             let bodyData = try JSONSerialization.data(withJSONObject: body)
 
@@ -310,6 +373,11 @@ actor GamesClient {
             }
 
             let payload = try JSONDecoder().decode(BrowseResponse.self, from: data)
+            if let installErrors = payload.errors?.filter({ Self.isUnsupportedInstallToPlayField($0.message) }),
+               !installErrors.isEmpty
+            {
+                throw GamesError.graphql(installErrors.map(\.message).joined(separator: "; "))
+            }
             if let subscriptionErrors = payload.errors?.filter({ Self.isUnsupportedSubscriptionsField($0.message) }),
                !subscriptionErrors.isEmpty
             {
@@ -353,7 +421,12 @@ actor GamesClient {
                 isOwned: v.gfn?.library?.isOwned == true,
                 supportedControls: v.supportedControls,
                 availability: v.gfn.map { GFNGameAvailability(status: $0.status) },
-                subscriptions: v.subscriptions?.compactMap { GameSubscription(rawValue: $0) }
+                subscriptions: v.subscriptions?.compactMap { GameSubscription(rawValue: $0) },
+                minimumSizeInBytes: v.minimumSizeInBytes?.bytes,
+                cloudSaveSupported: v.cloudSaveSupported,
+                isInstalled: v.gfn?.library?.installed,
+                playStatus: v.gfn?.library?.playStatus,
+                libraryStatus: v.gfn?.library?.status
             )
         } ?? []
 
@@ -381,7 +454,10 @@ actor GamesClient {
             screenshots: [],
             isInLibrary: item.variants?.contains { $0.gfn?.library?.isOwned == true } ?? false,
             variants: variants,
-            supportedControls: item.supportedControls
+            supportedControls: item.supportedControls,
+            playType: item.gfn?.playType,
+            playabilityState: item.gfn?.playabilityState,
+            minimumMembershipTierLabel: item.gfn?.minimumMembershipTierLabel
         )
     }
 
@@ -732,7 +808,10 @@ actor GamesClient {
             screenshots: screenshots.isEmpty ? game.screenshots : screenshots,
             isInLibrary: game.isInLibrary,
             variants: game.variants,
-            supportedControls: game.supportedControls
+            supportedControls: game.supportedControls,
+            playType: game.playType,
+            playabilityState: game.playabilityState,
+            minimumMembershipTierLabel: game.minimumMembershipTierLabel
         )
     }
 
@@ -930,6 +1009,12 @@ actor GamesClient {
 
     // MARK: - Helpers
 
+    private static func isUnsupportedInstallToPlayField(_ message: String) -> Bool {
+        ["playType", "minimumSizeInBytes", "cloudSaveSupported", "installed", "playStatus"].contains {
+            message.localizedCaseInsensitiveContains("Cannot query field \"\($0)\"")
+        }
+    }
+
     private static func isUnsupportedSubscriptionsField(_ message: String) -> Bool {
         message.localizedCaseInsensitiveContains("Cannot query field \"subscriptions\"")
     }
@@ -1106,6 +1191,13 @@ private nonisolated struct BrowseResponse: Decodable {
             let images: Images?
             let variants: [Variant]?
             let supportedControls: [String]?
+            let gfn: GFNMeta?
+
+            struct GFNMeta: Decodable {
+                let playType: GamePlayType?
+                let playabilityState: String?
+                let minimumMembershipTierLabel: String?
+            }
 
             struct Images: Decodable {
                 let GAME_BOX_ART: String?
@@ -1118,6 +1210,8 @@ private nonisolated struct BrowseResponse: Decodable {
                 let appStore: String?
                 let supportedControls: [String]?
                 let subscriptions: [String]?
+                let minimumSizeInBytes: GameDownloadSize?
+                let cloudSaveSupported: Bool?
                 let gfn: GFNMeta?
                 struct GFNMeta: Decodable {
                     let status: String?
@@ -1134,6 +1228,8 @@ private nonisolated struct BrowseResponse: Decodable {
                     struct LibraryMeta: Decodable {
                         let status: String?
                         let selected: Bool?
+                        let installed: Bool?
+                        let playStatus: String?
 
                         var isOwned: Bool {
                             guard let status else { return false }
@@ -1143,6 +1239,20 @@ private nonisolated struct BrowseResponse: Decodable {
                     }
                 }
             }
+        }
+    }
+}
+
+/// GraphQL represents large byte counts as strings on some deployments.
+private nonisolated struct GameDownloadSize: Decodable {
+    let bytes: Int64?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(Int64.self) {
+            bytes = value >= 0 ? value : nil
+        } else {
+            bytes = (try? container.decode(String.self)).flatMap(Int64.init).flatMap { $0 >= 0 ? $0 : nil }
         }
     }
 }
