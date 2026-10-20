@@ -1141,7 +1141,8 @@ final class CloudNowUITests: XCTestCase {
         XCUIRemote.shared.press(.select)
         let play = app.buttons["Play"]
         XCTAssertTrue(play.waitForExistence(timeout: 3))
-        XCTAssertTrue(waitForFocus(play))
+        // Offline fixtures can initially focus the metadata retry button above the action row.
+        focus(play, directions: [.down, .left], pressesPerDirection: 1)
 
         XCUIRemote.shared.press(.menu)
         let collapsedStrategy = focusedButton(
