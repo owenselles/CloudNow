@@ -61,15 +61,15 @@ struct CloudMatchJourneyBoundaryTests {
                     : StubbedHTTPResponse(statusCode: 204)
             case 2:
                 #expect(request.httpMethod == "GET")
-                #expect(request.url?.path == "/v2/session/target-a")
-                return StubbedHTTPResponse(
-                    json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"target-a","status":3}}"#
-                )
+                #expect(request.url?.host == "region.example.invalid")
+                #expect(request.url?.path == "/v2/session")
+                return StubbedHTTPResponse(json: activeSessionsJSON)
             case 3:
                 #expect(request.httpMethod == "GET")
-                #expect(request.url?.path == "/v2/session/target-a")
+                #expect(request.url?.host == "region.example.invalid")
+                #expect(request.url?.path == "/v2/session")
                 return StubbedHTTPResponse(
-                    json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"target-a","status":4}}"#
+                    json: #"{"requestStatus":{"statusCode":1},"sessions":[{"sessionId":"other-title","status":2},{"sessionId":"target-b","status":3}]}"#
                 )
             case 4:
                 #expect(request.httpMethod == "DELETE")
@@ -78,8 +78,11 @@ struct CloudMatchJourneyBoundaryTests {
                 return StubbedHTTPResponse(statusCode: 204)
             case 5:
                 #expect(request.httpMethod == "GET")
-                #expect(request.url?.path == "/v2/session/target-b")
-                return StubbedHTTPResponse(statusCode: 404)
+                #expect(request.url?.host == "region.example.invalid")
+                #expect(request.url?.path == "/v2/session")
+                return StubbedHTTPResponse(
+                    json: #"{"requestStatus":{"statusCode":1},"sessions":[{"sessionId":"other-title","status":2}]}"#
+                )
             default:
                 throw TestTransportError.unexpectedRequest(
                     "Unexpected cleanup request \(index)"

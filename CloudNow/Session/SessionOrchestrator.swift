@@ -323,11 +323,15 @@ final class SessionOrchestrator {
     }
 
     /// Registers a session created or reclaimed outside the coordinator.
-    func adopt(_ session: SessionInfo, token: String) {
+    /// Keep the provider listing endpoint when polling moves to a media host.
+    func adopt(_ session: SessionInfo, token: String, base: String? = nil) {
+        let previousBase = ownedSession.flatMap {
+            $0.handle.sessionID == session.sessionId ? $0.handle.base : nil
+        }
         adoptStopTarget(
             sessionID: session.sessionId,
             token: token,
-            base: session.streamingBaseUrl,
+            base: base ?? previousBase ?? session.streamingBaseUrl,
             serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
             clientID: session.clientId,
             deviceID: session.deviceId

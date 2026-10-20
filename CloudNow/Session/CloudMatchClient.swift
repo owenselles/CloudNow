@@ -661,8 +661,9 @@ actor CloudMatchClient {
             try validateAPIStatus(payload, context: "stopSession")
         }
 
-        // DELETE acknowledges the stop request; the rig may still be shutting down.
-        // Keep ownership until the same endpoint confirms that this session ended.
+        // Individual session records can linger after shutdown. Confirm against the
+        // provider's authoritative active list, not the media/control endpoint.
+        request.url = URL(string: "\(base)/v2/session")!
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 5
@@ -671,17 +672,14 @@ actor CloudMatchClient {
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else { break }
             let (data, response) = try await transport.data(for: request)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            if statusCode == 404 || statusCode == 410 {
-                return
-            }
             try validateHTTPStatus(response, data: data, context: "stopSession")
-            let payload = try JSONDecoder().decode(CloudMatchResponse.self, from: data)
+            let payload = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
             try validateAPIStatus(payload, context: "stopSession")
-            guard let session = payload.session, session.sessionId == sessionId else {
+            guard let sessions = payload.sessions else {
                 throw CloudMatchError.missingSession(context: "stopSession")
             }
-            if session.status == 4 {
+            if !sessions.contains(where: { $0.sessionId == sessionId }) {
+                cloudMatchLog.info("[CloudMatch] cleanup confirmed: session absent from active list")
                 return
             }
             if attempt < 14 {

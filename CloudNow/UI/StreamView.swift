@@ -1044,6 +1044,11 @@ struct StreamView: View {
         }
     }
 
+    private var providerStreamingBase: String {
+        let url = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+        return url.hasSuffix("/") ? String(url.dropLast()) : url
+    }
+
     private var currentMembershipTier: String? {
         viewModel.subscription?.membershipTier
             ?? authManager.session?.user.membershipTier
@@ -1186,6 +1191,9 @@ struct StreamView: View {
         {
             return true
         }
+        if let token = sessionToken {
+            sessionOrchestrator.adopt(session, token: token, base: providerStreamingBase)
+        }
         guard sessionToken != nil,
               let stopHandle = sessionOrchestrator.stopHandle(for: session.sessionId)
         else {
@@ -1265,7 +1273,7 @@ struct StreamView: View {
         sessionOrchestrator.adoptStopTarget(
             sessionID: session.sessionId,
             token: token,
-            base: session.base,
+            base: providerStreamingBase,
             serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
             clientID: session.clientId,
             deviceID: session.deviceId
@@ -1373,7 +1381,7 @@ struct StreamView: View {
             guard shouldForceStopExistingSession(error) else { throw error }
 
             streamLog.warning("[Session] active session conflict detected for appId=\(appId, privacy: .public), stopping matches and retrying once")
-            try await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: routeSelection.base)
+            try await cloudMatchClient.stopActiveSessions(matchingAppId: appId, token: token, base: base)
             try requireCurrentSessionAttempt(generation)
 
             let sessionInfo = try await sessionOrchestrator.createSession(

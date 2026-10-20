@@ -217,7 +217,10 @@ session. End closes playback immediately and confirms server termination in the
 background using the session-control endpoint, independently of the media host.
 A new launch shows cleanup progress and waits for that same operation before
 resuming or creating a session. Failed cleanup retains ownership for retry;
-confirmed cleanup clears only the ended session's resume metadata.
+confirmed cleanup clears only the ended session's resume metadata. Confirmation
+uses a successful, uncached provider active-session list with the ended session
+absent. Lingering individual session records do not delay a new launch or provider
+switch; failed or incomplete list responses keep cleanup pending.
 
 Reconnect work is cancellable and bound to the active connection generation.
 Callbacks from an older peer, signaling socket, renderer, input path, or

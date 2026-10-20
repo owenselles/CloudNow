@@ -308,6 +308,28 @@ struct SessionOrchestratorTests {
     }
 
     @MainActor
+    @Test(
+        "Polling preserves the provider listing endpoint in captured stop handles",
+        arguments: [nil, "https://provider.fixture.invalid"] as [String?]
+    )
+    func stopHandlePreservesProviderEndpoint(providerBase: String?) async throws {
+        let client = ScriptedSessionClient()
+        let orchestrator = SessionOrchestrator(client: client)
+        orchestrator.adopt(makeSession(id: "session", status: 1), token: "token", base: providerBase)
+        var ready = makeSession(id: "session", status: 2, streamingBaseUrl: "https://media.fixture.invalid")
+        ready.controlServerIp = "control.fixture.invalid"
+        orchestrator.adopt(ready, token: "token")
+        let handle = try #require(orchestrator.stopHandle(for: "session"))
+        orchestrator.detachOwnedSession()
+
+        #expect(await orchestrator.stopSession(using: handle))
+        let calls = await client.stopCalls
+        let call = try #require(calls.first)
+        #expect(call.base == (providerBase ?? "https://stream.fixture.invalid"))
+        #expect(call.serverIP == "control.fixture.invalid")
+    }
+
+    @MainActor
     @Test("A persisted session teardown retains every DELETE identity field")
     func persistedSessionStopTarget() async throws {
         let client = ScriptedSessionClient()
@@ -751,13 +773,14 @@ private func makeSession(
     id: String,
     status: Int,
     queuePosition: Int? = nil,
-    seatSetupStep: Int? = nil
+    seatSetupStep: Int? = nil,
+    streamingBaseUrl: String = "https://stream.fixture.invalid"
 ) -> SessionInfo {
     SessionInfo(
         sessionId: id,
         status: status,
         zone: "https://zone.fixture.invalid",
-        streamingBaseUrl: "https://stream.fixture.invalid",
+        streamingBaseUrl: streamingBaseUrl,
         serverIp: "192.0.2.10",
         signalingServer: "192.0.2.10:443",
         signalingUrl: "wss://192.0.2.10/nvst/",

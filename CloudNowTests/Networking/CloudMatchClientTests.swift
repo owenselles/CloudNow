@@ -238,12 +238,13 @@ struct CloudMatchClientTests {
                 #expect(request.httpMethod == "POST")
                 return StubbedHTTPResponse(data: data)
             }
-            #expect(request.url?.host == (expectedControlHost ?? "203.0.113.10"))
-            #expect(request.url?.path == "/v2/session/session-id")
+            #expect(request.url?.host == (index == 1 ? (expectedControlHost ?? "203.0.113.10") : "np-test.cloudmatchbeta.nvidiagrid.net"))
+            #expect(request.url?.path == (index == 1 ? "/v2/session/session-id" : "/v2/session"))
             #expect(request.httpMethod == (index == 1 ? "DELETE" : "GET"))
             #expect(request.timeoutInterval <= 5)
             #expect(request.value(forHTTPHeaderField: "x-device-id") == "device")
-            return StubbedHTTPResponse(statusCode: index == 1 ? 204 : 404)
+            return index == 1 ? StubbedHTTPResponse(statusCode: 204)
+                : StubbedHTTPResponse(json: #"{"requestStatus":{"statusCode":1},"sessions":[]}"#)
         }
         let client = CloudMatchClient(transport: transport, deviceId: { "device" })
         let session = try await client.createSession(makeSessionRequest())
@@ -272,10 +273,11 @@ struct CloudMatchClientTests {
                 }]}
                 """)
             }
-            #expect(request.url?.host == "control.example.invalid")
-            #expect(request.url?.path == "/v2/session/session-id")
+            #expect(request.url?.host == (index == 1 ? "control.example.invalid" : "region.example.invalid"))
+            #expect(request.url?.path == (index == 1 ? "/v2/session/session-id" : "/v2/session"))
             #expect(request.httpMethod == (index == 1 ? "DELETE" : "GET"))
-            return StubbedHTTPResponse(statusCode: index == 1 ? 204 : 404)
+            return index == 1 ? StubbedHTTPResponse(statusCode: 204)
+                : StubbedHTTPResponse(json: #"{"requestStatus":{"statusCode":1},"sessions":[]}"#)
         }
         try await CloudMatchClient(transport: transport).stopActiveSessions(
             matchingAppId: "12345", token: "token", base: "https://region.example.invalid"
@@ -328,10 +330,11 @@ struct CloudMatchClientTests {
         )
     }
 
-    @Test("Stop waits for confirmed termination using the same endpoint and identity")
+    @Test("Stop waits for absence from the provider active list using the same identity")
     func stopSessionWaitsForTermination() async throws {
         let transport = RecordingHTTPTransport { request, index in
-            #expect(request.url?.absoluteString == "https://203.0.113.10/v2/session/session-id")
+            #expect(request.url?.absoluteString == (index == 0
+                    ? "https://203.0.113.10/v2/session/session-id" : "https://region.example.invalid/v2/session"))
             #expect(request.value(forHTTPHeaderField: "Authorization") == "GFNJWT token")
             #expect(request.value(forHTTPHeaderField: "nv-client-id") == "client")
             #expect(request.value(forHTTPHeaderField: "x-device-id") == "device")
@@ -343,9 +346,8 @@ struct CloudMatchClientTests {
             #expect(request.httpMethod == "GET")
             #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
             #expect(request.timeoutInterval <= 5)
-            return StubbedHTTPResponse(
-                json: "{\"requestStatus\":{\"statusCode\":1},\"session\":{\"sessionId\":\"session-id\",\"status\":\(index == 1 ? 2 : 4)}}"
-            )
+            let sessions = index == 1 ? #"[{"sessionId":"session-id","status":2}]"# : "[]"
+            return StubbedHTTPResponse(json: "{\"requestStatus\":{\"statusCode\":1},\"sessions\":\(sessions)}")
         }
         let client = CloudMatchClient(transport: transport, sleep: { seconds in
             #expect(seconds == 2)
@@ -363,19 +365,49 @@ struct CloudMatchClientTests {
         #expect(await transport.requests().count == 3)
     }
 
-    @Test("Stop confirms termination when subsequent polling finds no session", arguments: [404, 410])
-    func stopSessionDisappears(statusCode: Int) async throws {
+    @Test("Stop immediately confirms absence of the exact session", arguments: [
+        "[]", #"[{"sessionId":"another-session","status":2}]"#,
+    ])
+    func stopSessionDisappears(sessions: String) async throws {
         let transport = RecordingHTTPTransport { request, index in
             #expect(request.httpMethod == (index == 0 ? "DELETE" : "GET"))
-            return StubbedHTTPResponse(statusCode: index == 0 ? 204 : statusCode)
+            return index == 0 ? StubbedHTTPResponse(statusCode: 204)
+                : StubbedHTTPResponse(json: "{\"requestStatus\":{\"statusCode\":1},\"sessions\":\(sessions)}")
         }
+        try await CloudMatchClient(transport: transport, sleep: { _ in
+            Issue.record("Confirmed absence must not incur a polling delay")
+        }).stopSession(sessionId: "session-id", token: "token", base: "https://region.example.invalid")
+        #expect(await transport.requests().count == 2)
+    }
 
-        try await CloudMatchClient(transport: transport, sleep: { _ in }).stopSession(
-            sessionId: "session-id",
-            token: "token",
-            base: "https://region.example.invalid"
-        )
+    @Test("Failed active-list requests cannot confirm termination", arguments: [401, 404, 410, 500])
+    func stopSessionListHTTPFailure(statusCode: Int) async {
+        let transport = RecordingHTTPTransport { _, index in
+            StubbedHTTPResponse(statusCode: index == 0 ? 204 : statusCode)
+        }
+        await #expect(throws: CloudMatchError.self) {
+            try await CloudMatchClient(transport: transport).stopSession(
+                sessionId: "session-id", token: "token", base: "https://region.example.invalid"
+            )
+        }
+        #expect(await transport.requests().count == 2)
+    }
 
+    @Test("Incomplete active lists cannot confirm termination", arguments: [
+        #"{"requestStatus":{"statusCode":1}}"#,
+        #"{"requestStatus":{"statusCode":1},"sessions":null}"#,
+        #"{"requestStatus":{"statusCode":1},"sessions":[{}]}"#,
+        #"{"sessions":[]}"#,
+    ])
+    func stopSessionListInvalid(body: String) async {
+        let transport = RecordingHTTPTransport { _, index in
+            index == 0 ? StubbedHTTPResponse(statusCode: 204) : StubbedHTTPResponse(json: body)
+        }
+        await #expect(throws: (any Error).self) {
+            try await CloudMatchClient(transport: transport).stopSession(
+                sessionId: "session-id", token: "token", base: "https://region.example.invalid"
+            )
+        }
         #expect(await transport.requests().count == 2)
     }
 
@@ -408,14 +440,14 @@ struct CloudMatchClientTests {
         #expect(await transport.requests().count == (failingMethod == "DELETE" ? 1 : 2))
     }
 
-    @Test("Stop fails after bounded confirmation attempts when the session stays active")
-    func stopSessionConfirmationTimeout() async {
+    @Test("Stop stays pending while the exact session is listed regardless of status", arguments: [2, 4, 99])
+    func stopSessionConfirmationTimeout(status: Int) async {
         let transport = RecordingHTTPTransport { _, index in
             if index == 0 {
                 return StubbedHTTPResponse(statusCode: 204)
             }
             return StubbedHTTPResponse(
-                json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"session-id","status":2}}"#
+                json: "{\"requestStatus\":{\"statusCode\":1},\"sessions\":[{\"sessionId\":\"session-id\",\"status\":\(status)}]}"
             )
         }
 
@@ -440,7 +472,7 @@ struct CloudMatchClientTests {
                 return StubbedHTTPResponse(statusCode: 204)
             }
             return StubbedHTTPResponse(
-                json: #"{"requestStatus":{"statusCode":1},"session":{"sessionId":"session-id","status":2}}"#
+                json: #"{"requestStatus":{"statusCode":1},"sessions":[{"sessionId":"session-id","status":2}]}"#
             )
         }
         let client = CloudMatchClient(transport: transport, sleep: { _ in throw CancellationError() })
