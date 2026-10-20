@@ -26,6 +26,8 @@ nonisolated protocol GamesCatalogClient: Sendable {
         streamingBaseUrl: String,
         vpcId: String?
     ) async throws -> GameInfo?
+
+    func setGameOwnership(token: String, variantId: String, owned: Bool) async throws -> String
 }
 
 extension GamesCatalogClient {
@@ -36,6 +38,10 @@ extension GamesCatalogClient {
         vpcId _: String?
     ) async throws -> GameInfo? {
         nil
+    }
+
+    func setGameOwnership(token _: String, variantId _: String, owned _: Bool) async throws -> String {
+        throw GamesError.fetchFailed("Library changes are unavailable")
     }
 }
 

@@ -5,6 +5,258 @@ import Testing
 @Suite("Games view-model state")
 struct GamesViewModelTests {
     @MainActor
+    @Test("Marking the selected store imports confirmed ownership and preserves presentation")
+    func markSelectedStoreAsOwned() async throws {
+        let game = GameInfo(
+            id: "game", title: "Original", longDescription: nil, genres: [], developer: nil,
+            publisher: nil, contentRating: nil, boxArtUrl: "https://art.invalid/box",
+            heroBannerUrl: nil, heroImageUrl: nil, supportedFeatures: [], screenshots: [],
+            isInLibrary: false,
+            variants: [
+                GameVariant(id: "steam", appStore: "STEAM"),
+                GameVariant(id: "epic", appStore: "EPIC"),
+            ]
+        )
+        var fresh = makeGame(id: "game", title: "Provider title", isInLibrary: true)
+        fresh.variants = [
+            GameVariant(id: "steam", appStore: "STEAM"),
+            GameVariant(id: "epic", appStore: "EPIC", isOwned: true, libraryStatus: "MANUAL"),
+        ]
+        let client = ScriptedGamesClient(
+            mainOutcomes: [.success([game])],
+            launchGame: fresh, ownershipOutcomes: [.success("game")]
+        )
+        let persistence = FakeGamesPersistence()
+        let viewModel = makeOwnershipViewModel(client: client, persistence: persistence)
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        await viewModel.load(authManager: auth)
+
+        let result = try await viewModel.setGameOwnership(for: game, variantId: "epic", owned: true, authManager: auth)
+
+        #expect(result.title == "Original")
+        #expect(result.boxArtUrl == game.boxArtUrl)
+        #expect(result.variants[0].isOwned == false)
+        #expect(result.variants[1].isManuallyOwned)
+        #expect(viewModel.mainGames == [result])
+        #expect(viewModel.libraryGames == [result])
+        #expect(await persistence.savedLibrary == [result])
+        #expect(await persistence.savedLibraryAccountScopes.last == accountCacheScope(idpId: NVIDIAAuth.defaultIdpId, userId: "fixture-user"))
+        #expect(await client.ownershipVariantIds == ["epic"])
+        #expect(await client.ownershipValues == [true])
+        #expect(!viewModel.isUpdatingGameOwnership)
+    }
+
+    @MainActor
+    @Test("Unmarking removes only the selected store and retains other owned variants", arguments: [false, true])
+    func unmarkSelectedStore(otherStoreOwned: Bool) async throws {
+        var game = makeGame(id: "game", title: "Game", isInLibrary: true)
+        game.variants = [
+            GameVariant(id: "steam", appStore: "STEAM", isOwned: true, libraryStatus: "MANUAL"),
+            GameVariant(id: "epic", appStore: "EPIC", isOwned: otherStoreOwned, libraryStatus: "PLATFORM_SYNC"),
+        ]
+        var fresh = game
+        fresh.isInLibrary = otherStoreOwned
+        fresh.variants[0].isOwned = false
+        fresh.variants[0].libraryStatus = "NOT_OWNED"
+        let client = ScriptedGamesClient(
+            mainOutcomes: [.success([game])], libraryOutcomes: [.success([game])],
+            launchGame: fresh, ownershipOutcomes: [.success("game")]
+        )
+        let persistence = FakeGamesPersistence()
+        let viewModel = makeOwnershipViewModel(client: client, persistence: persistence)
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        await viewModel.load(authManager: auth)
+
+        let result = try await viewModel.setGameOwnership(for: game, variantId: "steam", owned: false, authManager: auth)
+
+        let expectedLibrary = otherStoreOwned ? [result] : []
+        #expect(viewModel.libraryGames == expectedLibrary)
+        #expect(await persistence.savedLibrary == expectedLibrary)
+        #expect(viewModel.mainGames == [result])
+        #expect(result.variants[1].isOwned == otherStoreOwned)
+        #expect(await client.ownershipValues == [false])
+    }
+
+    @MainActor
+    @Test("Failed mutation, missing refresh, and failed persistence never invent ownership", arguments: ["mutation", "missing", "persistence", "wrongApp"])
+    func failedOwnershipChangePreservesState(failure: String) async {
+        let game = makeGame(id: "game", title: "Game")
+        var fresh = game
+        fresh.isInLibrary = true
+        fresh.variants[0].isOwned = true
+        let outcomes: [ScriptedOwnershipOutcome] = failure == "mutation" ? [.failure]
+            : [.success(failure == "wrongApp" ? "another-game" : "game")]
+        let client = ScriptedGamesClient(
+            mainOutcomes: [.success([game])],
+            launchGame: failure == "missing" ? nil : fresh, ownershipOutcomes: outcomes
+        )
+        let persistence = FakeGamesPersistence(failsRefreshedSnapshotSave: failure == "persistence")
+        let viewModel = makeOwnershipViewModel(client: client, persistence: persistence)
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        await viewModel.load(authManager: auth)
+
+        await #expect(throws: (any Error).self) {
+            try await viewModel.setGameOwnership(for: game, variantId: game.variants[0].id, owned: true, authManager: auth)
+        }
+
+        #expect(viewModel.mainGames == [game])
+        #expect(viewModel.libraryGames.isEmpty)
+        #expect(await persistence.savedLibrary == [])
+        #expect(!viewModel.isUpdatingGameOwnership)
+    }
+
+    @MainActor
+    @Test("Ownership changes reject stale mutation or refresh responses", arguments: [false, true], [false, true])
+    func staleOwnershipChangeIsDiscarded(logout: Bool, blockMutation: Bool) async throws {
+        let game = makeGame(id: "game", title: "Game")
+        var fresh = game
+        fresh.isInLibrary = true
+        fresh.variants[0].isOwned = true
+        let gate = InstallRefreshGate()
+        let client = ScriptedGamesClient(
+            mainOutcomes: [.success([game])],
+            launchGame: fresh, launchGate: blockMutation ? nil : gate,
+            ownershipOutcomes: [.success("game")], ownershipGate: blockMutation ? gate : nil
+        )
+        let persistence = FakeGamesPersistence()
+        let viewModel = makeOwnershipViewModel(client: client, persistence: persistence)
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        await viewModel.load(authManager: auth)
+        let mutation = Task {
+            try await viewModel.setGameOwnership(for: game, variantId: game.variants[0].id, owned: true, authManager: auth)
+        }
+        await gate.waitForRequest()
+        if logout {
+            viewModel.prepareForLogout()
+            try await auth.logout()
+        } else {
+            viewModel.prepareForCacheClear()
+        }
+        await gate.release()
+        await #expect(throws: CancellationError.self) { try await mutation.value }
+        #expect(viewModel.mainGames == [game])
+        #expect(viewModel.libraryGames.isEmpty)
+        #expect(await persistence.savedLibrary == [])
+        #expect(!viewModel.isUpdatingGameOwnership)
+    }
+
+    @MainActor
+    @Test("Unsupported providers, unknown variants, and synced removals never send mutations", arguments: ["provider", "variant", "synced"])
+    func ownershipChangeGuards(reason: String) async {
+        var game = makeGame(id: "game", title: "Game", isInLibrary: true)
+        game.variants[0].libraryStatus = "PLATFORM_SYNC"
+        let client = ScriptedGamesClient(
+            mainOutcomes: [.success([game])], libraryOutcomes: [.success([game])],
+            ownershipOutcomes: [.success("game")]
+        )
+        let viewModel = makeOwnershipViewModel(client: client, persistence: FakeGamesPersistence())
+        let auth = await makeAuthenticatedManager(idpId: reason == "provider" ? "partner" : NVIDIAAuth.defaultIdpId)
+        await viewModel.load(authManager: auth)
+        await #expect(throws: GamesError.self) {
+            try await viewModel.setGameOwnership(
+                for: game, variantId: reason == "variant" ? "missing" : game.variants[0].id,
+                owned: reason != "synced", authManager: auth
+            )
+        }
+        #expect(await client.ownershipVariantIds.isEmpty)
+        #expect(!viewModel.isUpdatingGameOwnership)
+    }
+
+    @MainActor
+    @Test("Ownership authorization retries once with a refreshed token")
+    func ownershipUnauthorizedRefreshesToken() async throws {
+        let game = makeGame(id: "game", title: "Game")
+        var fresh = game
+        fresh.isInLibrary = true
+        fresh.variants[0].isOwned = true
+        let client = ScriptedGamesClient(
+            mainOutcomes: [.success([game])],
+            launchGame: fresh, ownershipOutcomes: [.unauthorized, .success("game")]
+        )
+        let viewModel = makeOwnershipViewModel(client: client, persistence: FakeGamesPersistence())
+        let api = RotatingGamesAuthAPI()
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId, api: api)
+        await viewModel.load(authManager: auth)
+
+        _ = try await viewModel.setGameOwnership(for: game, variantId: game.variants[0].id, owned: true, authManager: auth)
+
+        #expect(await client.requestedOwnershipTokens == ["fixture-access-token", "rotated-token"])
+        #expect(await api.refreshCount == 1)
+        #expect(viewModel.libraryGames.first?.isInLibrary == true)
+    }
+
+    @MainActor
+    @Test("Checking status imports recovered ownership without repeating a mutation")
+    func ownershipRefreshRecoversWithoutMutation() async throws {
+        let game = makeGame(id: "game", title: "Game")
+        var fresh = game
+        fresh.isInLibrary = true
+        fresh.variants[0].isOwned = true
+        fresh.variants[0].libraryStatus = "MANUAL"
+        let client = ScriptedGamesClient(mainOutcomes: [.success([game])], launchGame: fresh)
+        let persistence = FakeGamesPersistence()
+        let viewModel = makeOwnershipViewModel(client: client, persistence: persistence)
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        await viewModel.load(authManager: auth)
+
+        let result = try await viewModel.refreshGameOwnership(for: game, authManager: auth)
+
+        #expect(result.variants[0].isManuallyOwned)
+        #expect(viewModel.mainGames == [result])
+        #expect(viewModel.libraryGames == [result])
+        #expect(await persistence.savedLibrary == [result])
+        #expect(await client.ownershipVariantIds.isEmpty)
+    }
+
+    @MainActor
+    @Test("An ownership recovery blocks overlapping mutations and library refreshes")
+    func ownershipRecoverySerializesChanges() async throws {
+        let game = makeGame(id: "game", title: "Game")
+        var fresh = game
+        fresh.isInLibrary = true
+        fresh.variants[0].isOwned = true
+        let gate = InstallRefreshGate()
+        let client = ScriptedGamesClient(
+            mainOutcomes: [.success([game])], launchGame: fresh, launchGate: gate,
+            ownershipOutcomes: [.success("game")]
+        )
+        let persistence = FakeGamesPersistence()
+        let viewModel = makeOwnershipViewModel(client: client, persistence: persistence)
+        let auth = await makeAuthenticatedManager(idpId: NVIDIAAuth.defaultIdpId)
+        await viewModel.load(authManager: auth)
+        let recovery = Task { try await viewModel.refreshGameOwnership(for: game, authManager: auth) }
+        await gate.waitForRequest()
+        #expect(viewModel.isUpdatingGameOwnership)
+
+        await #expect(throws: GamesError.self) {
+            try await viewModel.setGameOwnership(for: game, variantId: game.variants[0].id, owned: true, authManager: auth)
+        }
+        await #expect(throws: GamesError.self) {
+            try await viewModel.refreshGameOwnership(for: game, authManager: auth)
+        }
+        await viewModel.refreshLibrary(authManager: auth)
+        #expect(await client.ownershipVariantIds.isEmpty)
+        #expect(await client.launchCallCount == 1)
+        #expect(await client.libraryCallCount == 1)
+        #expect(viewModel.libraryGames.isEmpty)
+
+        await gate.release()
+        let result = try await recovery.value
+        #expect(viewModel.libraryGames == [result])
+        #expect(await persistence.savedLibrary == [result])
+        #expect(!viewModel.isUpdatingGameOwnership)
+    }
+
+    @MainActor
+    private func makeOwnershipViewModel(client: ScriptedGamesClient, persistence: FakeGamesPersistence) -> GamesViewModel {
+        GamesViewModel(
+            gamesClient: client, cloudMatchClient: FakeActiveSessionsClient(),
+            membershipClient: FakeMembershipClient(), persistence: persistence,
+            librarySyncClient: EmptyLibrarySyncClient()
+        )
+    }
+
+    @MainActor
     @Test("Launch refresh preserves descriptive metadata while replacing account state")
     func freshLaunchMetadataPreservesPresentation() async throws {
         let game = GameInfo(
@@ -1785,6 +2037,12 @@ private enum ScriptedGamesOutcome: Sendable {
     case unauthorized
 }
 
+private enum ScriptedOwnershipOutcome: Sendable {
+    case success(String)
+    case failure
+    case unauthorized
+}
+
 private enum GamesViewModelTestError: Error {
     case unavailable
 }
@@ -1998,6 +2256,8 @@ private actor ScriptedGamesClient: GamesCatalogClient {
     private let availability: [String: GFNGameAvailability]
     private let launchGame: GameInfo?
     private let launchGate: InstallRefreshGate?
+    private let ownershipOutcomes: [ScriptedOwnershipOutcome]
+    private let ownershipGate: InstallRefreshGate?
     private let mainOutcomes: [ScriptedGamesOutcome]
     private let libraryOutcomes: [ScriptedGamesOutcome]
     private let blockedMainRequestIndex: Int?
@@ -2008,6 +2268,10 @@ private actor ScriptedGamesClient: GamesCatalogClient {
     private var libraryIndex = 0
     private(set) var mainCallCount = 0
     private(set) var libraryCallCount = 0
+    private(set) var launchCallCount = 0
+    private(set) var ownershipVariantIds: [String] = []
+    private(set) var ownershipValues: [Bool] = []
+    private(set) var requestedOwnershipTokens: [String] = []
     private(set) var requestedMainTokens: [String] = []
     private(set) var requestedLibraryTokens: [String] = []
     private(set) var requestedMainVpcIds: [String?] = []
@@ -2028,11 +2292,15 @@ private actor ScriptedGamesClient: GamesCatalogClient {
         blockedLibraryRequestIndex: Int? = nil,
         availability: [String: GFNGameAvailability] = [:],
         launchGame: GameInfo? = nil,
-        launchGate: InstallRefreshGate? = nil
+        launchGate: InstallRefreshGate? = nil,
+        ownershipOutcomes: [ScriptedOwnershipOutcome] = [.failure],
+        ownershipGate: InstallRefreshGate? = nil
     ) {
         self.availability = availability
         self.launchGame = launchGame
         self.launchGate = launchGate
+        self.ownershipOutcomes = ownershipOutcomes
+        self.ownershipGate = ownershipGate
         self.mainOutcomes = mainOutcomes
         self.libraryOutcomes = libraryOutcomes
         self.blockedMainRequestIndex = blockedMainRequestIndex
@@ -2043,8 +2311,22 @@ private actor ScriptedGamesClient: GamesCatalogClient {
     func fetchLaunchGame(
         token _: String, appId _: String, streamingBaseUrl _: String, vpcId _: String?
     ) async -> GameInfo? {
+        launchCallCount += 1
         await launchGate?.arriveAndWait()
         return launchGame
+    }
+
+    func setGameOwnership(token: String, variantId: String, owned: Bool) async throws -> String {
+        let index = ownershipVariantIds.count
+        ownershipVariantIds.append(variantId)
+        ownershipValues.append(owned)
+        requestedOwnershipTokens.append(token)
+        await ownershipGate?.arriveAndWait()
+        switch ownershipOutcomes[min(index, ownershipOutcomes.count - 1)] {
+        case let .success(appId): return appId
+        case .failure: throw GamesViewModelTestError.unavailable
+        case .unauthorized: throw GamesError.unauthorized
+        }
     }
 
     func fetchMainGames(

@@ -171,6 +171,97 @@ struct GamesClientTests {
         #expect(await transport.requests().count == 1)
     }
 
+    @Test("Ownership mutations use the selected NVIDIA variant and validate the returned app", arguments: [false, true])
+    func changesSelectedVariantOwnership(owned: Bool) async throws {
+        let field = owned ? "addOwnedVariant" : "removeOwnedVariant"
+        let operation = owned ? "AddOwnedVariant" : "RemoveOwnedVariant"
+        let transport = RecordingHTTPTransport { request, _ in
+            #expect(request.url?.absoluteString == "https://games.geforce.com/graphql")
+            #expect(request.httpMethod == "POST")
+            #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "GFNJWT fixture-token")
+            #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+            let body = try jsonObject(from: request)
+            let query = try #require(body["query"] as? String)
+            #expect(query.contains("mutation \(operation)($cmsId: String!, $locale: String!)"))
+            #expect(query.contains("\(field)(language: $locale, variantId: $cmsId) { app { id } }"))
+            let variables = try #require(body["variables"] as? [String: String])
+            #expect(variables == ["cmsId": "123456", "locale": "de_DE"])
+            return StubbedHTTPResponse(json: """
+            {"data":{"\(field)":{"app":{"id":"parent-game"}}}}
+            """)
+        }
+        let client = GamesClient(transport: transport, localeCode: { "de_DE" })
+        let appId = try await client.setGameOwnership(token: "fixture-token", variantId: "123456", owned: owned)
+        #expect(appId == "parent-game")
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Ownership mutations reject HTTP and GraphQL failures without retry", arguments: [401, 500, 200])
+    func ownershipMutationFailure(statusCode: Int) async {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(
+                statusCode: statusCode,
+                json: #"{"errors":[{"message":"Library service unavailable"}],"data":{"addOwnedVariant":{"app":{"id":"game"}}}}"#
+            )
+        }
+        await #expect(throws: GamesError.self) {
+            try await GamesClient(transport: transport).setGameOwnership(token: "token", variantId: "123", owned: true)
+        }
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Ownership mutations require the matching operation's parent app", arguments: [
+        #"{"data":null}"#,
+        #"{"data":{"addOwnedVariant":null}}"#,
+        #"{"data":{"addOwnedVariant":{"app":null}}}"#,
+        #"{"data":{"addOwnedVariant":{"app":{"id":""}}}}"#,
+        #"{"data":{"removeOwnedVariant":{"app":{"id":"other"}}}}"#,
+    ])
+    func ownershipMutationMissingApp(json: String) async {
+        let transport = RecordingHTTPTransport { _, _ in
+            StubbedHTTPResponse(json: json)
+        }
+        await #expect(throws: GamesError.self) {
+            try await GamesClient(transport: transport).setGameOwnership(token: "token", variantId: "123", owned: true)
+        }
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Launch metadata uses provider store links and identifies manually marked variants")
+    func launchMetadataIncludesStoreLinks() async throws {
+        let transport = RecordingHTTPTransport { request, _ in
+            let query = try #require(jsonObject(from: request)["query"] as? String)
+            #expect(query.contains("storeUrl"))
+            return StubbedHTTPResponse(json: """
+            {"data":{"apps":{"items":[{"id":"game","variants":[
+                {"id":"123","appStore":"STEAM","storeUrl":"https://store.steampowered.com/app/456/","gfn":{"library":{"status":"MANUAL"}}},
+                {"id":"124","appStore":"XBOX","gfn":{"library":{"status":"PLATFORM_SYNC"}}},
+                {"id":"125","appStore":"EPIC","storeUrl":"http://example.com/game","gfn":{"library":{"status":"NOT_OWNED"}}}
+            ]}]}}}
+            """)
+        }
+        let game = try #require(await GamesClient(transport: transport).fetchLaunchGame(token: "token", appId: "game", vpcId: "vpc"))
+        #expect(game.variants[0].storeURL?.absoluteString == "https://store.steampowered.com/app/456/")
+        #expect(game.variants[0].appId == "123")
+        #expect(game.variants[0].isManuallyOwned)
+        #expect(!game.variants[1].isManuallyOwned)
+        #expect(game.variants[1].storeURL == nil)
+        #expect(game.variants[2].storeURL == nil)
+        let cached = try JSONDecoder().decode(GameInfo.self, from: JSONEncoder().encode(game))
+        #expect(cached.variants[0].storeURL == game.variants[0].storeURL)
+        #expect(!cached.variants[0].isManuallyOwned)
+    }
+
+    @Test("Store links reject unsafe or incomplete URLs", arguments: [
+        "", "/app/123", "http://store.steampowered.com/app/123/", "javascript:alert(1)",
+        "steam://store/123", "https://", "https://user:password@store.steampowered.com/app/123/",
+    ])
+    func rejectsInvalidStoreURL(value: String) {
+        let variant = GameVariant(id: "123", appStore: "STEAM", storeUrl: value)
+        #expect(variant.storeURL == nil)
+    }
+
     @Test("Browse and search retain explicit per-store subscription metadata", arguments: [false, true])
     func variantSubscriptions(isSearch: Bool) async throws {
         let transport = RecordingHTTPTransport { request, _ in

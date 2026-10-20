@@ -49,8 +49,8 @@ supplies per-variant metadata. Install-to-Play games add a third, conditional
 metadata row with a download icon. Full store and subscription lists remain in game
 details and accessibility descriptions.
 The footer hides when focus leaves; game titles and library status badges remain
-visible. Details show subscriptions for
-the selected launch store; games outside the library list the eligible stores.
+visible. Details show subscriptions for the selected store, including games
+outside the library.
 These labels describe catalog inclusion, not the account's active subscriptions
 or ownership. Library subscription filters consider owned variants. Combining a
 store and subscription filter requires both to match the same variant.
@@ -69,6 +69,35 @@ The library synchronization route follows a provider web contract that may
 change. CloudNow validates the response and falls back to Reload Library when
 discovery or schema checks fail. Only connected accounts with provider-reported
 sync support are synchronized.
+
+### Adding games to the library
+
+Game details offer **Mark as Owned** for an unowned store variant. The confirmation
+asks the user to confirm ownership on the selected store; it does not purchase a
+game license or bypass GeForce NOW membership and storage requirements. Actions
+follow the selected variant, so owning a game on one store does not imply owning
+it on another.
+
+**View in Steam** or the equivalent store action displays a QR code for the
+provider's game-store URL. Users buy or claim the game on their phone, then use
+**Connected Stores** to link their account or resync their library. If a game is
+still missing, including a free game or demo that store sync does not report,
+they can return and mark it as owned. The action does not infer pricing from
+catalog filters. A missing or invalid store URL is reported instead of generating
+a link from the NVIDIA variant ID.
+
+CloudNow submits ownership changes to NVIDIA and reloads authoritative library
+state before updating the game, library membership, and cached ownership. It does
+not treat a mutation acknowledgement alone as ownership confirmation. If the
+result cannot be confirmed, **Refresh Library Status** checks the current state
+before another attempt. Account changes invalidate pending results.
+
+**Unmark as Owned** removes a manual ownership mark after confirmation; it does
+not remove the game from the store account. Store-synced ownership continues to
+use the existing synchronization flow. Once ownership is confirmed, the selected
+variant offers its normal **Play**, **Install**, or **Open in Steam** action.
+These controls use NVIDIA's direct GeForce NOW service and do not change Xbox
+Cloud Gaming.
 
 ### Install-to-Play
 

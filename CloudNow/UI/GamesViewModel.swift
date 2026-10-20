@@ -138,6 +138,7 @@ class GamesViewModel {
     private(set) var catalogLoadPhase: DatasetLoadPhase = .loading
     private(set) var libraryLoadPhase: DatasetLoadPhase = .loading
     var libraryWarning: String?
+    private(set) var isUpdatingGameOwnership = false
 
     var isLoading: Bool {
         mainGames.isEmpty && catalogLoadPhase == .loading
@@ -165,6 +166,7 @@ class GamesViewModel {
             && libraryLoadPhase != .loading
             && catalogLoadPhase != .loading
             && !storeConnections.isBusy
+            && !isUpdatingGameOwnership
     }
 
     var canManageStoreConnections: Bool {
@@ -958,6 +960,7 @@ class GamesViewModel {
         guard libraryLoadPhase != .loading,
               hasCompletedInitialLoad,
               !storeConnections.isBusy,
+              !isUpdatingGameOwnership,
               !isFullLibraryRefreshRunning
         else { return }
         let identity = beginLoad()
@@ -1008,6 +1011,7 @@ class GamesViewModel {
               libraryLoadPhase != .loading,
               hasCompletedInitialLoad,
               !storeConnections.isBusy,
+              !isUpdatingGameOwnership,
               !isFullLibraryRefreshRunning
         else {
             return
@@ -1158,6 +1162,7 @@ class GamesViewModel {
               libraryLoadPhase != .loading,
               catalogLoadPhase != .loading,
               !storeConnections.isBusy,
+              !isUpdatingGameOwnership,
               !isFullLibraryRefreshRunning
         else { return }
         _ = beginLoad()
@@ -1604,11 +1609,125 @@ class GamesViewModel {
             existing.isInstalled = variant.isInstalled
             existing.playStatus = variant.playStatus
             existing.libraryStatus = variant.libraryStatus
+            existing.storeUrl = variant.storeUrl
             existing.minimumSizeInBytes = variant.minimumSizeInBytes
             existing.cloudSaveSupported = variant.cloudSaveSupported
             return existing
         }
         return updated
+    }
+
+    /// Mark the selected NVIDIA variant only; a library mark never grants a store license.
+    func setGameOwnership(
+        for game: GameInfo,
+        variantId: String,
+        owned: Bool,
+        authManager: AuthManager
+    ) async throws -> GameInfo {
+        guard canChangeGameOwnership,
+              let variant = game.variants.first(where: { $0.id == variantId }),
+              owned || variant.isManuallyOwned
+        else { throw GamesError.fetchFailed(L10n.text("ownership_update_failed")) }
+        guard let session = authManager.session else { throw AuthError.noSession }
+        guard session.provider.isNvidiaDirect else {
+            throw GamesError.fetchFailed(L10n.text("ownership_update_failed"))
+        }
+        cancelForegroundLibraryRefresh()
+        let identity = beginLoad()
+        isUpdatingGameOwnership = true
+        defer { isUpdatingGameOwnership = false }
+        var token = try await authManager.resolveToken()
+        try Task.checkCancellation()
+        guard isCurrent(identity),
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+
+        let appId: String
+        do {
+            appId = try await gamesClient.setGameOwnership(token: token, variantId: variantId, owned: owned)
+        } catch GamesError.unauthorized {
+            token = try await authManager.resolveToken(rejecting: token)
+            try Task.checkCancellation()
+            guard isCurrent(identity),
+                  authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+            else { throw CancellationError() }
+            appId = try await gamesClient.setGameOwnership(token: token, variantId: variantId, owned: owned)
+        }
+        try Task.checkCancellation()
+        guard isCurrent(identity),
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        guard appId == game.id else {
+            throw GamesError.fetchFailed(L10n.text("ownership_update_failed"))
+        }
+        let refreshed = try await importGameOwnership(for: game, authManager: authManager)
+        guard refreshed.variants.first(where: { $0.id == variantId })?.isOwned == owned else {
+            throw GamesError.fetchFailed(L10n.text("ownership_update_failed"))
+        }
+        return refreshed
+    }
+
+    /// Import confirmed state for one game, including recovery after a mutation's refresh failed.
+    func refreshGameOwnership(for game: GameInfo, authManager: AuthManager) async throws -> GameInfo {
+        guard canChangeGameOwnership else {
+            throw GamesError.fetchFailed(L10n.text("ownership_update_failed"))
+        }
+        cancelForegroundLibraryRefresh()
+        _ = beginLoad()
+        isUpdatingGameOwnership = true
+        defer { isUpdatingGameOwnership = false }
+        return try await importGameOwnership(for: game, authManager: authManager)
+    }
+
+    private var canChangeGameOwnership: Bool {
+        persistenceEnabled && hasCompletedInitialLoad
+            && libraryLoadPhase == .loaded && catalogLoadPhase != .loading
+            && !isUpdatingGameOwnership && !storeConnections.isBusy && !isFullLibraryRefreshRunning
+    }
+
+    private func importGameOwnership(for game: GameInfo, authManager: AuthManager) async throws -> GameInfo {
+        guard let session = authManager.session else { throw AuthError.noSession }
+        guard session.provider.isNvidiaDirect else {
+            throw GamesError.fetchFailed(L10n.text("ownership_update_failed"))
+        }
+        let identity = LoadIdentity(cacheGeneration: cacheGeneration, loadGeneration: loadGeneration)
+        let expectedOwnershipCacheGeneration = ownershipCacheGeneration
+        let accountScope = accountCacheScope(idpId: session.provider.idpId, userId: session.user.userId)
+        guard let fresh = try await fetchGameLaunchInfo(for: game, authManager: authManager) else {
+            throw GamesError.fetchFailed(L10n.text("ownership_update_failed"))
+        }
+        guard isCurrent(identity),
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        var updatedLibrary = libraryGames
+        if let index = updatedLibrary.firstIndex(where: { $0.id == game.id }) {
+            if fresh.isInLibrary {
+                updatedLibrary[index] = fresh
+            } else {
+                updatedLibrary.remove(at: index)
+            }
+        } else if fresh.isInLibrary {
+            updatedLibrary.append(fresh)
+        }
+        try await persistence.saveRefreshedLibrarySnapshot(
+            libraryGames: updatedLibrary,
+            catalogGames: nil,
+            localeCode: localeCodeProvider(),
+            vpcId: currentVpcId,
+            accountScope: accountScope,
+            expectedGeneration: expectedOwnershipCacheGeneration
+        )
+        try Task.checkCancellation()
+        guard isCurrent(identity),
+              authSessionMatches(authManager, idpId: session.provider.idpId, userId: session.user.userId)
+        else { throw CancellationError() }
+        libraryGames = updatedLibrary
+        if let index = mainGames.firstIndex(where: { $0.id == game.id }) {
+            mainGames[index] = fresh
+        }
+        libraryLoadPhase = .loaded
+        libraryWarning = nil
+        return fresh
     }
 
     /// Detail availability is fetched independently of the descriptive metadata cache.

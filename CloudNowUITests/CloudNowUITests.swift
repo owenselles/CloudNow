@@ -940,6 +940,72 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testGeForceNowUnownedGameOffersOwnershipConfirmationAndStoreQR() {
+        let app = makeApp()
+        app.launch()
+
+        let store = app.buttons["Store"]
+        XCTAssertTrue(store.waitForExistence(timeout: 8))
+        selectTab(store, movingRight: 2)
+        XCTAssertTrue(element("store-screen", in: app).waitForExistence(timeout: 3))
+        XCUIRemote.shared.press(.down)
+        XCUIRemote.shared.press(.down)
+
+        let unowned = app.buttons["Fixture Unowned"]
+        XCTAssertTrue(unowned.waitForExistence(timeout: 3))
+        let gridWidth = unowned.frame.width
+        focusAndSelect(unowned, directions: [.down, .right, .left], pressesPerDirection: 12)
+        let carouselUnowned = focusedButton(labeled: "Fixture Unowned", in: app)
+        let carouselReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                carouselUnowned.exists && carouselUnowned.frame.width > gridWidth * 2
+            },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [carouselReady], timeout: 3), .completed)
+        XCUIRemote.shared.press(.select)
+
+        let markAsOwned = app.buttons["game-mark-as-owned"]
+        XCTAssertTrue(markAsOwned.waitForExistence(timeout: 3))
+        XCTAssertTrue(markAsOwned.isEnabled)
+        XCTAssertFalse(app.buttons["Play"].exists)
+        XCTAssertTrue(app.buttons["Steam"].exists)
+        XCTAssertTrue(app.buttons["Xbox"].exists)
+        attachScreenshot(of: app, named: "GFN unowned game ownership and store actions")
+
+        focusAndSelect(markAsOwned, directions: [.down, .up, .left, .right], pressesPerDirection: 6)
+        let confirmation = app.alerts.firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
+        XCTAssertTrue(confirmation.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS %@", "does not purchase a game license"
+        )).firstMatch.exists)
+        focusAndSelect(
+            focusedButton(labeled: "Cancel", in: app),
+            directions: [.left, .right],
+            pressesPerDirection: 3
+        )
+        XCTAssertTrue(waitForFocus(markAsOwned))
+        XCTAssertFalse(app.buttons["Play"].exists)
+
+        let viewInStore = app.buttons["game-view-in-store"]
+        focusAndSelect(viewInStore, directions: [.down, .right, .left, .up], pressesPerDirection: 6)
+        XCTAssertTrue(element("game-store-qr", in: app).waitForExistence(timeout: 3))
+        XCTAssertEqual(
+            element("game-store-qr.code", in: app).value as? String,
+            "https://store.example.invalid/game"
+        )
+        attachScreenshot(of: app, named: "GFN game store QR and phone instructions")
+        focusAndSelect(
+            app.buttons["game-store-qr.close"],
+            directions: [.down, .up],
+            pressesPerDirection: 3
+        )
+        XCTAssertTrue(viewInStore.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitForFocus(viewInStore))
+        XCTAssertTrue(markAsOwned.isEnabled)
+    }
+
+    @MainActor
     func testGeForceNowSubscriptionLabelsFollowSelectedStore() {
         let app = makeApp()
         app.launch()
@@ -991,16 +1057,19 @@ final class CloudNowUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [carouselReady], timeout: 3), .completed)
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(app.buttons["Play"].waitForExistence(timeout: 3))
-        XCTAssertTrue(waitForFocus(app.buttons["Play"]))
+        if app.buttons["Check availability"].hasFocus {
+            XCUIRemote.shared.press(.down)
+        }
+        focus(app.buttons["Play"], directions: [.left, .up, .down], pressesPerDirection: 2)
         XCTAssertFalse(element("game-subscriptions-fixture-racer-steam", in: app).exists)
         XCTAssertFalse(element("game-subscriptions-fixture-racer-ubisoft", in: app).exists)
 
         let ubisoft = app.buttons["Ubisoft Connect"]
         XCTAssertTrue(ubisoft.waitForExistence(timeout: 3))
-        XCUIRemote.shared.press(.right)
-        XCUIRemote.shared.press(.right)
-        XCUIRemote.shared.press(.down)
-        XCTAssertTrue(waitForFocus(ubisoft))
+        // The store picker aligns with the secondary action row below Play.
+        focus(app.buttons["game-connected-stores"], directions: [.down], pressesPerDirection: 1)
+        focus(app.buttons["Steam"], directions: [.right], pressesPerDirection: 2)
+        focus(ubisoft, directions: [.down], pressesPerDirection: 1)
         attachScreenshot(of: app, named: "GFN unselected store focus contrast")
         XCUIRemote.shared.press(.select)
         let labels = element("game-subscriptions-fixture-racer-ubisoft", in: app)

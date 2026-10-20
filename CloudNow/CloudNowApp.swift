@@ -611,7 +611,11 @@ private struct AuthRestorationView: View {
             screenshots: [],
             isInLibrary: false,
             variants: [
-                GameVariant(id: "fixture-unowned-steam", appStore: "STEAM"),
+                GameVariant(
+                    id: "fixture-unowned-steam",
+                    appStore: "STEAM",
+                    storeUrl: "https://store.example.invalid/game"
+                ),
                 GameVariant(id: "fixture-unowned-xbox", appStore: "XBOX"),
                 GameVariant(id: "fixture-unowned-ubisoft", appStore: "UPLAY"),
                 GameVariant(id: "fixture-unowned-epic", appStore: "EPIC_GAMES_STORE"),

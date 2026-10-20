@@ -1088,6 +1088,18 @@ nonisolated struct GameVariant: Equatable, Codable {
     var isInstalled: Bool? = nil
     var playStatus: String? = nil
     var libraryStatus: String? = nil
+    var storeUrl: String? = nil
+
+    var storeURL: URL? {
+        guard let storeUrl, let url = URL(string: storeUrl),
+              url.scheme?.lowercased() == "https", let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        return url
+    }
+
+    var isManuallyOwned: Bool {
+        isOwned && libraryStatus?.uppercased() == "MANUAL"
+    }
 
     @MainActor var storeName: String {
         L10n.storeName(for: appStore)
@@ -1097,7 +1109,7 @@ nonisolated struct GameVariant: Equatable, Codable {
 extension GameVariant {
     private enum CodingKeys: String, CodingKey {
         case id, appStore, appId, isOwned, supportedControls, subscriptions
-        case minimumSizeInBytes, cloudSaveSupported
+        case minimumSizeInBytes, cloudSaveSupported, storeUrl
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1111,6 +1123,7 @@ extension GameVariant {
             .compactMap { GameSubscription(rawValue: $0) }
         minimumSizeInBytes = try c.decodeIfPresent(Int64.self, forKey: .minimumSizeInBytes)
         cloudSaveSupported = try c.decodeIfPresent(Bool.self, forKey: .cloudSaveSupported)
+        storeUrl = try c.decodeIfPresent(String.self, forKey: .storeUrl)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1123,6 +1136,7 @@ extension GameVariant {
         try c.encodeIfPresent(subscriptions, forKey: .subscriptions)
         try c.encodeIfPresent(minimumSizeInBytes, forKey: .minimumSizeInBytes)
         try c.encodeIfPresent(cloudSaveSupported, forKey: .cloudSaveSupported)
+        try c.encodeIfPresent(storeUrl, forKey: .storeUrl)
     }
 }
 

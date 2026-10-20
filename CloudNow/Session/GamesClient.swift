@@ -81,7 +81,7 @@ actor GamesClient {
             items {
                 id title
                 variants {
-                    id appStore minimumSizeInBytes cloudSaveSupported
+                    id appStore minimumSizeInBytes cloudSaveSupported storeUrl
                     gfn { status library { status selected installed playStatus } }
                 }
                 gfn { playabilityState minimumMembershipTierLabel playType }
@@ -196,6 +196,41 @@ actor GamesClient {
         try validateGraphQL(errors: payload.errors)
         return payload.data?.apps?.items?.first { $0.id?.stringValue == appId }
             .flatMap { browseItemToGame($0) }
+    }
+
+    /// This changes NVIDIA's library marker; it does not purchase a store license.
+    /// Callers must refresh account data before displaying the resulting ownership.
+    func setGameOwnership(token: String, variantId: String, owned: Bool) async throws -> String {
+        try Task.checkCancellation()
+        let operation = owned ? "AddOwnedVariant" : "RemoveOwnedVariant"
+        let field = owned ? "addOwnedVariant" : "removeOwnedVariant"
+        let query = """
+        mutation \(operation)($cmsId: String!, $locale: String!) {
+            \(field)(language: $locale, variantId: $cmsId) { app { id } }
+        }
+        """
+        let body: [String: Any] = [
+            "query": query,
+            "variables": ["cmsId": variantId, "locale": localeCode],
+        ]
+        var request = URLRequest(url: URL(string: Self.graphqlURL)!)
+        request.httpMethod = "POST"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        setGFNHeaders(on: &request, token: token)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await transport.data(for: request)
+        try Task.checkCancellation()
+        try validateHTTPResponse(response, data: data)
+        let payload = try JSONDecoder().decode(OwnershipResponse.self, from: data)
+        try validateGraphQL(errors: payload.errors)
+        let result = owned ? payload.data?.addOwnedVariant : payload.data?.removeOwnedVariant
+        guard let appId = result?.app?.id?.stringValue,
+              !appId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw GamesError.fetchFailed("Library change did not return an app")
+        }
+        return appId
     }
 
     /// Availability is fetched on demand, independently of cached descriptive metadata.
@@ -426,7 +461,8 @@ actor GamesClient {
                 cloudSaveSupported: v.cloudSaveSupported,
                 isInstalled: v.gfn?.library?.installed,
                 playStatus: v.gfn?.library?.playStatus,
-                libraryStatus: v.gfn?.library?.status
+                libraryStatus: v.gfn?.library?.status,
+                storeUrl: v.storeUrl
             )
         } ?? []
 
@@ -1168,6 +1204,24 @@ private nonisolated struct AvailabilityResponse: Decodable {
     }
 }
 
+private nonisolated struct OwnershipResponse: Decodable {
+    let data: OwnershipData?
+    let errors: [GQLError]?
+
+    struct OwnershipData: Decodable {
+        let addOwnedVariant: OwnedVariant?
+        let removeOwnedVariant: OwnedVariant?
+    }
+
+    struct OwnedVariant: Decodable {
+        let app: App?
+    }
+
+    struct App: Decodable {
+        let id: AnyCodableGameId?
+    }
+}
+
 private nonisolated struct BrowseResponse: Decodable {
     let data: BrowseData?
     let errors: [GQLError]?
@@ -1212,6 +1266,7 @@ private nonisolated struct BrowseResponse: Decodable {
                 let subscriptions: [String]?
                 let minimumSizeInBytes: GameDownloadSize?
                 let cloudSaveSupported: Bool?
+                let storeUrl: String?
                 let gfn: GFNMeta?
                 struct GFNMeta: Decodable {
                     let status: String?
