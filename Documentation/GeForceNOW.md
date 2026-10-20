@@ -181,10 +181,13 @@ a later H.265 session. Changes apply to new sessions, not resumed sessions.
 The request is included in both CloudMatch session creation and the final NVST
 video configuration sent alongside the WebRTC answer.
 The HUD's chroma value describes the decoded pixel buffer, never the setting.
-GFN acceptance, the encoded 4:4:4 representation, and physical Apple TV playback
-still require verification; a 4:4:4 request or output buffer alone is not proof
-of an end-to-end 4:4:4 stream. The existing native decoder/rendering path is
-unchanged, and no unverified HEVC profiles are advertised.
+Physical testing on Apple TV 4K (2nd generation), tvOS 27, observed H.265 SDR
+playback at 3840×2160 with native `p444` output: packed 10-bit 4:4:4, video range.
+The HUD recognizes this format. This confirms decoded buffer sampling in that
+configuration, not hardware acceleration, sustained performance, or the encoded
+stream's chroma representation. Other device and format combinations still need
+verification. The native decoder/rendering path is unchanged, and no unverified
+HEVC profiles are advertised.
 
 Selecting AV1 uses VideoToolbox hardware decoding when the runtime reports
 hardware AV1 support. Without that support, it uses the existing software AV1

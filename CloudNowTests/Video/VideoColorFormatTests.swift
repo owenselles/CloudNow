@@ -95,20 +95,25 @@ struct VideoColorFormatTests {
         #expect(format.height == 8)
     }
 
-    @Test("Packed p420 is recognized as ten-bit video range")
-    func packedTenBitFourCC() {
-        let packedP420: OSType = 0x7034_3230
+    @Test(
+        "Packed p420 and p444 report decoded chroma, ten-bit video range and SDR mode",
+        arguments: [
+            (OSType(0x7034_3230), "p420", ChromaFormat.yuv420),
+            (OSType(0x7034_3434), "p444", ChromaFormat.yuv444),
+        ]
+    )
+    func packedTenBitFourCC(pixelFormat: OSType, name: String, chromaFormat: ChromaFormat) {
         let description = DecodedVideoFormatInspector.describe(
-            pixelFormat: packedP420,
+            pixelFormat: pixelFormat,
             transferFunction: String(describing: kCVImageBufferTransferFunction_ITU_R_709_2),
             colorPrimaries: nil
         )
 
-        #expect(description.pixelFormatName == "p420")
+        #expect(description.pixelFormatName == name)
         #expect(description.bitDepth == 10)
         #expect(description.colorRange == "Video")
         #expect(description.mode == .sdr10)
-        #expect(DecodedVideoFormatInspector.chromaFormat(for: packedP420) == .yuv420)
+        #expect(DecodedVideoFormatInspector.chromaFormat(for: pixelFormat) == chromaFormat)
     }
 
     @Test(
@@ -118,6 +123,7 @@ struct VideoColorFormatTests {
             kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange,
             kCVPixelFormatType_422YpCbCr10BiPlanarFullRange,
             OSType(0x7A34_3434), // Unknown 'z444' must not be guessed from its name.
+            OSType(0x7034_3939), // Unknown 'p499' must not be treated as another packed format.
         ]
     )
     func unsupportedChromaFormats(pixelFormat: OSType) {

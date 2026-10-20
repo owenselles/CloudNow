@@ -279,6 +279,10 @@ nonisolated enum DecodedVideoFormatInspector {
     /// tvOS SDK, but VideoToolbox emits it as the native 10-bit HEVC output format.
     private static let packed10BitBiPlanarVideoRange: OSType = 0x7034_3230
 
+    /// 'p444' — packed 10-bit 4:4:4 video range, observed from VideoToolbox on Apple TV.
+    /// CoreVideo's format description confirms full-resolution chroma; no public SDK constant exists.
+    private static let packed44410BitBiPlanarVideoRange: OSType = 0x7034_3434
+
     static func chromaFormat(for pixelFormat: OSType) -> ChromaFormat? {
         switch pixelFormat {
         case kCVPixelFormatType_420YpCbCr8Planar,
@@ -294,7 +298,8 @@ nonisolated enum DecodedVideoFormatInspector {
              kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
              kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
-             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             packed44410BitBiPlanarVideoRange:
             .yuv444
         default:
             nil
@@ -309,7 +314,8 @@ nonisolated enum DecodedVideoFormatInspector {
              kCVPixelFormatType_444YpCbCr8,
              kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
-             packed10BitBiPlanarVideoRange:
+             packed10BitBiPlanarVideoRange,
+             packed44410BitBiPlanarVideoRange:
             "Video"
         case kCVPixelFormatType_420YpCbCr8PlanarFullRange,
              kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
@@ -335,7 +341,8 @@ nonisolated enum DecodedVideoFormatInspector {
              kCVPixelFormatType_444YpCbCr10,
              kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
-             packed10BitBiPlanarVideoRange:
+             packed10BitBiPlanarVideoRange,
+             packed44410BitBiPlanarVideoRange:
             return 10
         default:
             let name = fourCC(pixelFormat).lowercased()
