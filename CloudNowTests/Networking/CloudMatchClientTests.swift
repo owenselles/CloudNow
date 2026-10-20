@@ -211,6 +211,78 @@ struct CloudMatchClientTests {
         #expect(sessions[0].signalingUrl == "wss://signaling.example.invalid/nvst/")
     }
 
+    @MainActor
+    @Test(
+        "Created sessions stop through their control endpoint without changing signaling",
+        arguments: [
+            (nil, nil),
+            ("", nil),
+            (" \n", nil),
+            ("control.example.invalid", "control.example.invalid"),
+            (" control.example.invalid \n", "control.example.invalid"),
+        ] as [(String?, String?)]
+    )
+    func stopCreatedSessionUsesControlEndpoint(controlHost: String?, expectedControlHost: String?) async throws {
+        let response: [String: Any] = [
+            "requestStatus": ["statusCode": 1],
+            "session": [
+                "sessionId": "session-id",
+                "status": 2,
+                "connectionInfo": [["usage": 14, "ip": "203.0.113.10", "port": 443]],
+                "sessionControlInfo": ["ip": controlHost as Any? ?? NSNull()],
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: response)
+        let transport = RecordingHTTPTransport { request, index in
+            if index == 0 {
+                #expect(request.httpMethod == "POST")
+                return StubbedHTTPResponse(data: data)
+            }
+            #expect(request.url?.host == (expectedControlHost ?? "203.0.113.10"))
+            #expect(request.url?.path == "/v2/session/session-id")
+            #expect(request.httpMethod == (index == 1 ? "DELETE" : "GET"))
+            #expect(request.timeoutInterval <= 5)
+            #expect(request.value(forHTTPHeaderField: "x-device-id") == "device")
+            return StubbedHTTPResponse(statusCode: index == 1 ? 204 : 404)
+        }
+        let client = CloudMatchClient(transport: transport, deviceId: { "device" })
+        let session = try await client.createSession(makeSessionRequest())
+        #expect(session.serverIp == "203.0.113.10")
+        #expect(session.signalingServer == "203.0.113.10:443")
+        #expect(session.controlServerIp == expectedControlHost)
+        let orchestrator = SessionOrchestrator(client: client)
+        orchestrator.adopt(session, token: "token")
+
+        #expect(await orchestrator.stopOwnedSession())
+        #expect(await transport.requests().count == 3)
+    }
+
+    @Test("Active-session cleanup preserves its control endpoint")
+    func stopActiveSessionUsesControlEndpoint() async throws {
+        let transport = RecordingHTTPTransport { request, index in
+            if index == 0 {
+                #expect(request.url?.host == "region.example.invalid")
+                #expect(request.httpMethod == "GET")
+                return StubbedHTTPResponse(json: """
+                {"requestStatus":{"statusCode":1},"sessions":[{
+                    "sessionId":"session-id","status":2,
+                    "sessionRequestData":{"appId":"12345"},
+                    "connectionInfo":[{"usage":14,"ip":"203.0.113.10","port":443}],
+                    "sessionControlInfo":{"ip":"control.example.invalid"}
+                }]}
+                """)
+            }
+            #expect(request.url?.host == "control.example.invalid")
+            #expect(request.url?.path == "/v2/session/session-id")
+            #expect(request.httpMethod == (index == 1 ? "DELETE" : "GET"))
+            return StubbedHTTPResponse(statusCode: index == 1 ? 204 : 404)
+        }
+        try await CloudMatchClient(transport: transport).stopActiveSessions(
+            matchingAppId: "12345", token: "token", base: "https://region.example.invalid"
+        )
+        #expect(await transport.requests().count == 3)
+    }
+
     @Test("Stop sends DELETE and rejects non-success HTTP status")
     func stopSessionStatus() async {
         let transport = RecordingHTTPTransport { request, _ in

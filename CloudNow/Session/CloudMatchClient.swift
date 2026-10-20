@@ -634,6 +634,7 @@ actor CloudMatchClient {
         let url = URL(string: "\(effectiveBase)/v2/session/\(sessionId)")!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        request.timeoutInterval = 5
         let lifecycleClientId = clientId ?? uuid().uuidString
         let stableDeviceId = deviceId ?? self.deviceId()
         for (k, v) in gfnHeaders(
@@ -714,14 +715,15 @@ actor CloudMatchClient {
             let appId = entry.sessionRequestData?.appId?.value
             let sigConn = entry.connectionInfo?.first { $0.usage == 14 }
             let serverIp = sigConn.flatMap { $0.ip?.value ?? hostFromResourcePath($0.resourcePath) }
-                ?? entry.sessionControlInfo?.ip?.value
+                ?? normalizedControlServerIp(entry.sessionControlInfo?.ip?.value)
             let signalingUrl = serverIp.map { resolveSignalingUrl(serverIp: $0, resourcePath: sigConn?.resourcePath ?? "/nvst/") }
             return ActiveSessionInfo(
                 sessionId: entry.sessionId,
                 status: entry.status,
                 appId: appId,
                 serverIp: serverIp,
-                signalingUrl: signalingUrl
+                signalingUrl: signalingUrl,
+                controlServerIp: normalizedControlServerIp(entry.sessionControlInfo?.ip?.value)
             )
         }
     }
@@ -737,7 +739,7 @@ actor CloudMatchClient {
                 sessionId: session.sessionId,
                 token: token,
                 base: base,
-                serverIp: session.serverIp
+                serverIp: session.controlServerIp ?? session.serverIp
             )
         }
     }
@@ -864,7 +866,7 @@ actor CloudMatchClient {
         // Signaling server: usage=14
         let sigConn = connections.first { $0.usage == 14 }
         let serverIp = sigConn.flatMap { serverHost(from: $0) }
-            ?? s.sessionControlInfo?.ip?.value
+            ?? normalizedControlServerIp(s.sessionControlInfo?.ip?.value)
             ?? ""
         let resourcePath = sigConn?.resourcePath ?? "/nvst/"
         let signalingUrl = resolveSignalingUrl(serverIp: serverIp, resourcePath: resourcePath)
@@ -897,8 +899,15 @@ actor CloudMatchClient {
             mediaConnectionInfo: media,
             clientId: clientId,
             deviceId: deviceId,
-            adState: adState
+            adState: adState,
+            controlServerIp: normalizedControlServerIp(s.sessionControlInfo?.ip?.value)
         )
+    }
+
+    private func normalizedControlServerIp(_ value: String?) -> String? {
+        guard let host = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty else { return nil }
+        return host
     }
 
     /// Accepts dedicated zone hosts and official region addresses, while excluding

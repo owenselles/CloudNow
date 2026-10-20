@@ -36,6 +36,7 @@ struct ResumableSession {
 nonisolated struct LastSessionRecord: Codable {
     let sessionId: String
     let serverIp: String
+    let controlServerIp: String?
     let appId: String
     let base: String
     let routingZoneUrl: String?
@@ -55,12 +56,13 @@ nonisolated struct LastSessionRecord: Codable {
     let userId: String?
 
     enum CodingKeys: String, CodingKey {
-        case sessionId, serverIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, sessionStartedAt, idpId, userId
+        case sessionId, serverIp, controlServerIp, appId, base, routingZoneUrl, clientId, deviceId, createdAt, sessionStartedAt, idpId, userId
     }
 
     init(
         sessionId: String,
         serverIp: String,
+        controlServerIp: String? = nil,
         appId: String,
         base: String,
         routingZoneUrl: String?,
@@ -73,6 +75,7 @@ nonisolated struct LastSessionRecord: Codable {
     ) {
         self.sessionId = sessionId
         self.serverIp = serverIp
+        self.controlServerIp = controlServerIp
         self.appId = appId
         self.base = base
         self.routingZoneUrl = routingZoneUrl
@@ -88,6 +91,7 @@ nonisolated struct LastSessionRecord: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         sessionId = try c.decode(String.self, forKey: .sessionId)
         serverIp = try c.decode(String.self, forKey: .serverIp)
+        controlServerIp = try c.decodeIfPresent(String.self, forKey: .controlServerIp)
         appId = try c.decode(String.self, forKey: .appId)
         base = try c.decode(String.self, forKey: .base)
         routingZoneUrl = try c.decodeIfPresent(String.self, forKey: .routingZoneUrl)
@@ -103,6 +107,7 @@ nonisolated struct LastSessionRecord: Codable {
         Self(
             sessionId: sessionId,
             serverIp: serverIp,
+            controlServerIp: controlServerIp,
             appId: appId,
             base: base,
             routingZoneUrl: routingZoneUrl,
@@ -1409,11 +1414,15 @@ class GamesViewModel {
         activeSessions = filterStopped(outcome.sessions)
     }
 
-    /// Called when the user ends a session: removes it from the UI immediately
-    /// and keeps refreshes from re-adding it while the server catches up with
-    /// the stop. If the stop actually failed, the session reappears once the
-    /// grace window passes — which is the honest outcome.
+    /// Called after confirmed termination. A late cleanup must not clear a
+    /// newer session's resume metadata.
     func markSessionStopped(_ sessionId: String) {
+        if resumableSession?.session.sessionId == sessionId {
+            resumableSession = nil
+        }
+        if lastSession?.sessionId == sessionId {
+            clearLastSession()
+        }
         recentlyStoppedSessions[sessionId] = Date()
         activeSessions.removeAll { $0.sessionId == sessionId }
     }

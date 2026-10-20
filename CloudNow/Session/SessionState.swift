@@ -768,6 +768,8 @@ nonisolated struct SessionInfo {
     let clientId: String
     let deviceId: String
     let adState: SessionAdState?
+    /// CloudMatch lifecycle endpoint, independent of the signaling/media host.
+    var controlServerIp: String?
 
     /// True while the session is sitting in the GFN queue (no timeout applies).
     var isInQueue: Bool {
@@ -826,6 +828,7 @@ nonisolated struct ActiveSessionInfo {
     let appId: String?
     let serverIp: String?
     let signalingUrl: String?
+    var controlServerIp: String?
 }
 
 // MARK: - Subscription / Entitlements

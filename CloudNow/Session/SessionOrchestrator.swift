@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private nonisolated let sessionLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "SessionOrchestrator")
 
 /// Narrow CloudMatch boundary used by the session lifecycle coordinator.
 ///
@@ -325,7 +328,7 @@ final class SessionOrchestrator {
             sessionID: session.sessionId,
             token: token,
             base: session.streamingBaseUrl,
-            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
             clientID: session.clientId,
             deviceID: session.deviceId
         )
@@ -486,7 +489,7 @@ final class SessionOrchestrator {
             sessionID: session.sessionId,
             token: token,
             base: session.streamingBaseUrl,
-            serverIP: session.serverIp.isEmpty ? nil : session.serverIp,
+            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
             clientID: session.clientId,
             deviceID: session.deviceId
         ))
@@ -513,6 +516,8 @@ final class SessionOrchestrator {
                     )
                     return true
                 } catch {
+                    let failure = error as NSError
+                    sessionLog.error("Server cleanup failed: domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
                     return false
                 }
             }

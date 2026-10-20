@@ -785,8 +785,8 @@ struct CloudGamingCapabilitiesTests {
     }
 
     @MainActor
-    @Test("An in-flight provider End retains the global lease")
-    func inFlightEndRetainsLease() async throws {
+    @Test("Background End registers immediately and permits local peer release while retaining the server lease")
+    func backgroundEndRetainsLeaseAfterLocalPeerRelease() async throws {
         let coordinator = CloudSessionCoordinator()
         let entered = CapabilityAsyncGate()
         let release = CapabilityAsyncGate()
@@ -801,9 +801,14 @@ struct CloudGamingCapabilitiesTests {
                 }
             )
         )
-        let endTask = Task {
-            await coordinator.endServerSessionUsingProvider(lease)
-        }
+        let peer = try coordinator.attachLocalPeer(for: .geForceNow)
+        #expect(coordinator.sessionPendingEnd == nil)
+        let endTask = try #require(coordinator.endServerSessionInBackground(lease))
+
+        #expect(coordinator.sessionPendingEnd == lease)
+        coordinator.releaseLocalPeer(peer)
+        #expect(coordinator.localPeerLease == nil)
+        #expect(coordinator.serverSession == lease)
         await entered.wait()
 
         #expect(throws: CloudSessionConflict.self) {
@@ -819,6 +824,7 @@ struct CloudGamingCapabilitiesTests {
         await release.open()
         #expect(await endTask.value)
         #expect(coordinator.serverSession == nil)
+        #expect(coordinator.sessionPendingEnd == nil)
         #expect(
             try coordinator.reserveServerSession(
                 provider: .xboxCloudGaming,
@@ -846,14 +852,10 @@ struct CloudGamingCapabilitiesTests {
                 }
             )
         )
-        let first = Task {
-            await coordinator.endServerSessionUsingProvider(lease)
-        }
+        let first = try #require(coordinator.endServerSessionInBackground(lease))
+        let pending = try #require(coordinator.sessionPendingEnd)
+        let second = try #require(coordinator.endServerSessionInBackground(pending))
         await entered.wait()
-        let second = Task {
-            await coordinator.endServerSessionUsingProvider(lease)
-        }
-        await Task.yield()
 
         #expect(actions.endCount == 1)
         #expect(coordinator.serverSession == lease)
@@ -882,8 +884,12 @@ struct CloudGamingCapabilitiesTests {
             )
         )
 
-        #expect(await !(coordinator.endServerSessionUsingProvider(lease)))
+        let first = try #require(coordinator.endServerSessionInBackground(lease))
+        #expect(coordinator.sessionPendingEnd == lease)
+        #expect(await !first.value)
         #expect(coordinator.serverSession == lease)
+        let pending = try #require(coordinator.sessionPendingEnd)
+        #expect(pending == lease)
         #expect(throws: CloudSessionConflict.self) {
             _ = try coordinator.reserveServerSession(
                 provider: .xboxCloudGaming,
@@ -892,9 +898,10 @@ struct CloudGamingCapabilitiesTests {
         }
 
         actions.endShouldSucceed = true
-        #expect(await coordinator.endServerSessionUsingProvider(lease))
+        #expect(await coordinator.endServerSessionUsingProvider(pending))
         #expect(actions.endCount == 2)
         #expect(coordinator.serverSession == nil)
+        #expect(coordinator.sessionPendingEnd == nil)
     }
 
     @MainActor

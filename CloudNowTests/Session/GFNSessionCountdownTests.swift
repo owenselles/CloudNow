@@ -167,13 +167,17 @@ struct GFNSessionCountdownTests {
         )
     }
 
-    @Test("Persisted sessions retain their original countdown anchor on resume")
-    func persistedSessionAnchor() throws {
+    @Test(
+        "Persisted sessions retain their countdown and control endpoint on resume",
+        arguments: [nil, "control.example.invalid"] as [String?]
+    )
+    func persistedSessionAnchor(controlHost: String?) throws {
         let createdAt = Date(timeIntervalSince1970: 1000)
         let startedAt = Date(timeIntervalSince1970: 1100)
         let record = LastSessionRecord(
             sessionId: "session",
             serverIp: "192.0.2.1",
+            controlServerIp: controlHost,
             appId: "app",
             base: "https://stream.example.invalid",
             routingZoneUrl: nil,
@@ -191,6 +195,8 @@ struct GFNSessionCountdownTests {
 
         #expect(decoded.createdAt == createdAt)
         #expect(decoded.sessionStartedAt == startedAt)
+        #expect(decoded.controlServerIp == controlHost)
+        #expect(decoded.serverIp == "192.0.2.1")
     }
 
     @Test(

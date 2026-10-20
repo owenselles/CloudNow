@@ -213,7 +213,11 @@ stale, CloudNow stops the resulting server session instead of leaving it orphane
 Queue and provisioning states remain visible while the provider prepares a
 session. When the provider requires queue advertising, CloudNow plays the supplied
 media and reports its lifecycle to CloudMatch. Leave can retain a resumable server
-session. End explicitly stops the server session and clears local ownership.
+session. End closes playback immediately and confirms server termination in the
+background using the session-control endpoint, independently of the media host.
+A new launch shows cleanup progress and waits for that same operation before
+resuming or creating a session. Failed cleanup retains ownership for retry;
+confirmed cleanup clears only the ended session's resume metadata.
 
 Reconnect work is cancellable and bound to the active connection generation.
 Callbacks from an older peer, signaling socket, renderer, input path, or

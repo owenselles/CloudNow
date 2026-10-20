@@ -1655,6 +1655,41 @@ struct GamesViewModelTests {
     }
 
     @MainActor
+    @Test(
+        "Stopped sessions clear only matching resume metadata",
+        arguments: [true, false], [true, false]
+    )
+    func stoppedSessionPreservesNewerMetadata(matchingResumable: Bool, matchingLastSession: Bool) {
+        let viewModel = GamesViewModel(persistenceEnabled: false)
+        let game = makeGame(id: "game", title: "Game")
+        let resumableID = matchingResumable ? "ended-session" : "newer-session"
+        let lastSessionID = matchingLastSession ? "ended-session" : "newer-session"
+        let session = makeSession(id: resumableID)
+        viewModel.resumableSession = ResumableSession(game: game, session: session, leftAt: Date())
+        viewModel.lastSession = LastSessionRecord(
+            sessionId: lastSessionID,
+            serverIp: session.serverIp,
+            appId: "game-app",
+            base: session.streamingBaseUrl,
+            routingZoneUrl: session.zone,
+            clientId: session.clientId,
+            deviceId: session.deviceId,
+            createdAt: Date(),
+            idpId: "fixture",
+            userId: "fixture-user"
+        )
+        viewModel.activeSessions = ["ended-session", "newer-session"].map {
+            ActiveSessionInfo(sessionId: $0, status: 2, appId: "game-app", serverIp: session.serverIp, signalingUrl: nil)
+        }
+
+        viewModel.markSessionStopped("ended-session")
+
+        #expect(viewModel.resumableSession?.session.sessionId == (matchingResumable ? nil : "newer-session"))
+        #expect(viewModel.lastSession?.sessionId == (matchingLastSession ? nil : "newer-session"))
+        #expect(viewModel.activeSessions.map(\.sessionId) == ["newer-session"])
+    }
+
+    @MainActor
     @Test("Provider deactivation cancels requests but preserves parked resume metadata")
     func providerDeactivationPreservesParkedSession() async {
         let initial = makeGame(

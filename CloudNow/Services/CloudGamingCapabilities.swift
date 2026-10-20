@@ -311,6 +311,14 @@ final class CloudSessionCoordinator {
     }
 
     private(set) var serverSession: CloudServerSessionLease?
+    /// Cleanup remains pending after a failed End so a new launch can retry it.
+    var sessionPendingEnd: CloudServerSessionLease? {
+        guard let lease = serverSession,
+              endOperation?.leaseID == lease.id || expiryQuarantineLeaseID == lease.id
+        else { return nil }
+        return lease
+    }
+
     private(set) var localPeerLease: CloudLocalPeerLease?
     var localPeerProvider: CloudGamingProvider? {
         localPeerLease?.provider
@@ -525,6 +533,15 @@ final class CloudSessionCoordinator {
         parkServerSession(lease, expiresAt: expiresAt)
         return serverSession?.id == lease.id
             && serverSession?.phase == .parked(expiresAt: expiresAt)
+    }
+
+    /// Registers cleanup synchronously before the player dismisses. The task
+    /// outlives the player; subsequent launches join it through the same lease.
+    func endServerSessionInBackground(_ lease: CloudServerSessionLease) -> Task<Bool, Never>? {
+        guard let operation = beginEndOperation(for: lease) else { return nil }
+        return Task {
+            await finishEndOperation(operation, lease: lease)
+        }
     }
 
     /// Performs the provider's real End before releasing the global lease.
