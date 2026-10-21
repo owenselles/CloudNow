@@ -266,6 +266,7 @@ enum L10nUK {
         "preparing_game": "Підготовка гри… Це може тривати хвилину",
         "waiting_for_storage": "Підготовка сховища…",
         "previous_session_cleanup": "Очищення попереднього сеансу…",
+        "connecting_to_session": "Підключення до вашого сеансу…",
         "server_took_too_long": "Сервер відповідав занадто довго.",
         "end_session_title": "Завершити сеанс?",
         "end_session": "Завершити сеанс",

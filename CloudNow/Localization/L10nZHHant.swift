@@ -261,6 +261,7 @@ enum L10nZHHant {
         "preparing_game": "正在準備你的遊戲… 這可能需要一分鐘",
         "waiting_for_storage": "正在準備儲存空間…",
         "previous_session_cleanup": "正在清理上一個工作階段…",
+        "connecting_to_session": "正在連線至您的工作階段…",
         "server_took_too_long": "伺服器回應時間過長。",
         "end_session_title": "結束工作階段？",
         "end_session": "結束工作階段",

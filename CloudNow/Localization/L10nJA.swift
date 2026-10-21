@@ -235,6 +235,7 @@ enum L10nJA {
         "preparing_game": "ゲームを準備中… しばらくお待ちください",
         "waiting_for_storage": "ストレージを準備しています…",
         "previous_session_cleanup": "前のセッションをクリーンアップしています…",
+        "connecting_to_session": "セッションに接続しています…",
         "server_took_too_long": "サーバーの応答が遅すぎました。",
         "end_session_title": "セッションを終了しますか？",
         "end_session": "セッションを終了",

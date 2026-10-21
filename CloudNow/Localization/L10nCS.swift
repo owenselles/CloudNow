@@ -236,6 +236,7 @@ enum L10nCS {
         "preparing_game": "Připravuje se vaše hra… Může to trvat minutu",
         "waiting_for_storage": "Příprava úložiště…",
         "previous_session_cleanup": "Čištění předchozí relace…",
+        "connecting_to_session": "Připojování k vaší relaci…",
         "server_took_too_long": "Server odpovídal příliš dlouho.",
         "end_session_title": "Ukončit relaci?",
         "end_session": "Ukončit relaci",

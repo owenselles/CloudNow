@@ -266,6 +266,7 @@ enum L10nNB {
         "preparing_game": "Forbereder spillet ditt… Dette kan ta et minutt",
         "waiting_for_storage": "Forbereder lagring…",
         "previous_session_cleanup": "Rydder opp i en tidligere økt…",
+        "connecting_to_session": "Kobler til økten din…",
         "server_took_too_long": "Serveren brukte for lang tid på å svare.",
         "end_session_title": "Avslutte økt?",
         "end_session": "Avslutt økt",

@@ -221,6 +221,10 @@ confirmed cleanup clears only the ended session's resume metadata. Confirmation
 uses a successful, uncached provider active-session list with the ended session
 absent. Lingering individual session records do not delay a new launch or provider
 switch; failed or incomplete list responses keep cleanup pending.
+User-requested launches and resumes keep polling through queue and preparation
+until cancellation or a service error, without an overall setup deadline. The
+loading message follows the server setup stage, including previous-session
+cleanup, then changes to “Connecting to your session…” when readiness is confirmed.
 
 Reconnect work is cancellable and bound to the active connection generation.
 Callbacks from an older peer, signaling socket, renderer, input path, or

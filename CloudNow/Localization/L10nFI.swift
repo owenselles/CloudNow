@@ -236,6 +236,7 @@ enum L10nFI {
         "preparing_game": "Valmistellaan peliäsi… Tämä voi kestää minuutin",
         "waiting_for_storage": "Valmistellaan tallennustilaa…",
         "previous_session_cleanup": "Siivotaan aiempaa istuntoa…",
+        "connecting_to_session": "Yhdistetään istuntoosi…",
         "server_took_too_long": "Palvelimen vastaus kesti liian kauan.",
         "end_session_title": "Lopetetaanko istunto?",
         "end_session": "Lopeta istunto",

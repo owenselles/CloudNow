@@ -266,6 +266,7 @@ enum L10nSK {
         "preparing_game": "Pripravuje sa vaša hra… Môže to trvať minútu",
         "waiting_for_storage": "Príprava úložiska…",
         "previous_session_cleanup": "Čistenie predchádzajúcej relácie…",
+        "connecting_to_session": "Pripájanie k vašej relácii…",
         "server_took_too_long": "Server odpovedal príliš dlho.",
         "end_session_title": "Ukončiť reláciu?",
         "end_session": "Ukončiť reláciu",

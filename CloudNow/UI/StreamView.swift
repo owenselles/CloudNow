@@ -8,6 +8,7 @@ private enum LoadingPhase: Equatable {
     case cleaningUp
     case inQueue(Int?)
     case preparing
+    case connecting
     case timedOut
 }
 
@@ -372,17 +373,19 @@ struct StreamView: View {
             return L10n.text("in_queue")
         case .preparing:
             return (createdSession?.setupStage ?? .configuring).label
+        case .connecting:
+            return L10n.text("connecting_to_session")
         case .timedOut:
             return L10n.text("server_took_too_long")
         }
     }
 
     /// Determinate bar once the server gives us a queue position or setup stage; the earliest
-    /// "finding" moment (and the timed-out state) has no forward signal, so it stays a spinner —
-    /// matching the official client, which is indeterminate until an ETA arrives.
+    /// "finding" moment and final connection have no forward signal, so they use a spinner.
+    /// The timed-out state hides progress entirely.
     private var showDeterminateProgress: Bool {
         switch loadingPhase {
-        case .finding, .cleaningUp, .timedOut: false
+        case .finding, .cleaningUp, .connecting, .timedOut: false
         case .inQueue, .preparing: true
         }
     }
@@ -784,14 +787,14 @@ struct StreamView: View {
                     return
                 }
 
-                // A reclaimed media endpoint needs one ready response. Queue waiting remains
-                // unbounded; the 60-second deadline begins only after the queue clears.
+                // A reclaimed media endpoint needs one ready response. A user-requested resume
+                // waits through queue and setup until cancellation or a service error.
                 sessionInfo = try await sessionOrchestrator.waitUntilReady(
                     initialSession: sessionInfo,
                     token: token,
                     attempt: orchestrationAttempt,
                     requiredReadyResponses: 1,
-                    setupTimeout: 60
+                    setupTimeout: nil
                 ) { session, readiness in
                     applyOrchestrationUpdate(
                         session: session,
@@ -818,6 +821,10 @@ struct StreamView: View {
                 )
                 return
             } catch is CancellationError {
+                return
+            } catch SessionOrchestrationError.sessionEnded {
+                guard isCurrentSessionAttempt(generation) else { return }
+                streamController.fail(with: L10n.text("session_ended"))
                 return
             } catch SessionOrchestrationError.setupTimedOut {
                 guard isCurrentSessionAttempt(generation) else { return }
@@ -980,13 +987,13 @@ struct StreamView: View {
                 ))
             }
 
-            // Queue waiting is deliberately unbounded. Setup receives a monotonic
-            // 180-second deadline only after the queue clears, and readiness must
-            // be observed twice consecutively.
+            // A user-requested launch waits through queue and setup until cancellation
+            // or a service error. Readiness must be observed twice consecutively.
             sessionInfo = try await sessionOrchestrator.waitUntilReady(
                 initialSession: sessionInfo,
                 token: token,
-                attempt: orchestrationAttempt
+                attempt: orchestrationAttempt,
+                setupTimeout: nil
             ) { session, readiness in
                 applyOrchestrationUpdate(
                     session: session,
@@ -1014,6 +1021,9 @@ struct StreamView: View {
             )
         } catch is CancellationError {
             return
+        } catch SessionOrchestrationError.sessionEnded {
+            guard isCurrentSessionAttempt(generation) else { return }
+            streamController.fail(with: L10n.text("session_ended"))
         } catch SessionOrchestrationError.setupTimedOut {
             guard isCurrentSessionAttempt(generation) else { return }
             loadingPhase = .timedOut
@@ -1038,7 +1048,7 @@ struct StreamView: View {
         case .preparing:
             loadingPhase = .preparing
         case .ready:
-            break
+            loadingPhase = .connecting
         case .timedOut:
             loadingPhase = .timedOut
         }
@@ -1639,7 +1649,7 @@ private struct StreamLoadingProgressView: View {
             }
             let total = max(elapsed + liveRemaining, 4)
             target = 0.55 + 0.41 * min(elapsed / total, 1)
-        case .timedOut:
+        case .connecting, .timedOut:
             return
         }
 

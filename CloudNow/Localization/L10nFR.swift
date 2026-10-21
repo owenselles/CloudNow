@@ -231,6 +231,7 @@ enum L10nFR {
         "preparing_game": "Préparation de votre jeu… Cela peut prendre une minute",
         "waiting_for_storage": "Préparation du stockage…",
         "previous_session_cleanup": "Nettoyage d'une session précédente…",
+        "connecting_to_session": "Connexion à votre session…",
         "server_took_too_long": "Le serveur a mis trop de temps à répondre.",
         "end_session_title": "Terminer la session ?",
         "end_session": "Terminer la session",

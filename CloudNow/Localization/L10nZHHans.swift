@@ -261,6 +261,7 @@ enum L10nZHHans {
         "preparing_game": "正在准备你的游戏… 这可能需要一分钟",
         "waiting_for_storage": "正在准备存储…",
         "previous_session_cleanup": "正在清理上一个会话…",
+        "connecting_to_session": "正在连接到您的会话…",
         "server_took_too_long": "服务器响应时间过长。",
         "end_session_title": "结束会话？",
         "end_session": "结束会话",

@@ -266,6 +266,7 @@ enum L10nMS {
         "preparing_game": "Menyediakan permainan anda… Ini mungkin mengambil masa seminit",
         "waiting_for_storage": "Menyediakan storan…",
         "previous_session_cleanup": "Membersihkan sesi sebelumnya…",
+        "connecting_to_session": "Menyambung ke sesi anda…",
         "server_took_too_long": "Pelayan mengambil masa terlalu lama untuk bertindak balas.",
         "end_session_title": "Tamatkan sesi?",
         "end_session": "Tamatkan sesi",

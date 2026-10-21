@@ -240,6 +240,7 @@ enum L10nID {
         "preparing_game": "Menyiapkan game Anda… Ini bisa memakan waktu satu menit",
         "waiting_for_storage": "Menyiapkan penyimpanan…",
         "previous_session_cleanup": "Membersihkan sesi sebelumnya…",
+        "connecting_to_session": "Menghubungkan ke sesi Anda…",
         "server_took_too_long": "Server terlalu lama merespons.",
         "end_session_title": "Akhiri sesi?",
         "end_session": "Akhiri sesi",

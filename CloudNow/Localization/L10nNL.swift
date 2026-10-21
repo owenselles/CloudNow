@@ -266,6 +266,7 @@ enum L10nNL {
         "preparing_game": "Je spel wordt voorbereid… Dit kan een minuut duren",
         "waiting_for_storage": "Opslag voorbereiden…",
         "previous_session_cleanup": "Een vorige sessie opschonen…",
+        "connecting_to_session": "Verbinding maken met je sessie…",
         "server_took_too_long": "Server deed te lang over het antwoord.",
         "end_session_title": "Sessie beëindigen?",
         "end_session": "Sessie beëindigen",

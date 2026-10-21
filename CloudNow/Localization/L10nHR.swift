@@ -240,6 +240,7 @@ enum L10nHR {
         "preparing_game": "Priprema vaše igre… To može potrajati minutu",
         "waiting_for_storage": "Priprema pohrane…",
         "previous_session_cleanup": "Čišćenje prethodne sesije…",
+        "connecting_to_session": "Povezivanje s vašom sesijom…",
         "server_took_too_long": "Poslužitelju je trebalo previše dugo da odgovori.",
         "end_session_title": "Završiti sesiju?",
         "end_session": "Završi sesiju",

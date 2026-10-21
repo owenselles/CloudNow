@@ -109,6 +109,35 @@ struct SessionReadinessTrackerTests {
         #expect(afterDeadline == .timedOut)
     }
 
+    @Test("Setup can finish beyond the default deadline when no timeout is set")
+    func unboundedSetupReachesReadiness() {
+        var tracker = SessionReadinessTracker(setupTimeout: nil)
+
+        _ = tracker.observe(status: 1, isInQueue: false, queuePosition: nil, now: start)
+        let preparing = tracker.observe(
+            status: 1,
+            isInQueue: false,
+            queuePosition: nil,
+            now: start.addingTimeInterval(3600)
+        )
+        let firstReady = tracker.observe(
+            status: 2,
+            isInQueue: false,
+            queuePosition: nil,
+            now: start.addingTimeInterval(3602)
+        )
+        let confirmedReady = tracker.observe(
+            status: 3,
+            isInQueue: false,
+            queuePosition: nil,
+            now: start.addingTimeInterval(3604)
+        )
+
+        #expect(preparing == .preparing)
+        #expect(firstReady == .preparing)
+        #expect(confirmedReady == .ready)
+    }
+
     @Test("Returning to queue resets the setup deadline")
     func queueReturnResetsSetupDeadline() {
         var tracker = SessionReadinessTracker(setupTimeout: 10)

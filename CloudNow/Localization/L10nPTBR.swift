@@ -261,6 +261,7 @@ enum L10nPTBR {
         "preparing_game": "Preparando seu jogo… Isso pode levar um minuto",
         "waiting_for_storage": "Preparando o armazenamento…",
         "previous_session_cleanup": "Limpando uma sessão anterior…",
+        "connecting_to_session": "Conectando à sua sessão…",
         "server_took_too_long": "O servidor demorou demais para responder.",
         "end_session_title": "Encerrar sessão?",
         "end_session": "Encerrar sessão",

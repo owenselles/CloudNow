@@ -231,6 +231,7 @@ enum L10nDE {
         "preparing_game": "Ihr Spiel wird vorbereitet… Das kann eine Minute dauern",
         "waiting_for_storage": "Speicher wird vorbereitet…",
         "previous_session_cleanup": "Vorherige Sitzung wird bereinigt…",
+        "connecting_to_session": "Verbindung mit Ihrer Sitzung wird hergestellt…",
         "server_took_too_long": "Server hat zu lange geantwortet.",
         "end_session_title": "Sitzung beenden?",
         "end_session": "Sitzung beenden",

@@ -198,8 +198,91 @@ struct SessionOrchestratorTests {
     }
 
     @MainActor
-    @Test("Cancellation rejects a poll response that arrives late")
-    func cancellationBlocksLatePollMutation() async {
+    @Test("Unbounded setup waits through extended cleanup and connects when ready", arguments: [1, 2])
+    func unboundedSetupWaitsThroughCleanup(requiredReadyResponses: Int) async throws {
+        let initial = makeSession(id: "cleanup", status: 1, seatSetupStep: 5)
+        let client = ScriptedSessionClient(polls: [
+            makeSession(id: "cleanup", status: 1, seatSetupStep: 5),
+            makeSession(id: "cleanup", status: 1, seatSetupStep: 0),
+            makeSession(id: "cleanup", status: 2, seatSetupStep: 2),
+            makeSession(id: "cleanup", status: 3, seatSetupStep: 2),
+        ])
+        let clock = ManualSessionScheduler(advances: [181, 181, 2, 2])
+        let orchestrator = SessionOrchestrator(client: client, scheduler: clock.scheduler)
+        let attempt = orchestrator.beginAttempt()
+        var phases: [SessionReadinessState] = []
+        var setupSteps: [Int?] = []
+
+        let ready = try await orchestrator.waitUntilReady(
+            initialSession: initial,
+            token: "token",
+            attempt: attempt,
+            requiredReadyResponses: requiredReadyResponses,
+            setupTimeout: nil
+        ) { session, readiness in
+            setupSteps.append(session.seatSetupStep)
+            if let readiness {
+                phases.append(readiness)
+            }
+        }
+
+        let expectedSteps = requiredReadyResponses == 1 ? [5, 5, 0, 2] : [5, 5, 0, 2, 2]
+        #expect(ready.status == (requiredReadyResponses == 1 ? 2 : 3))
+        #expect(phases == Array(repeating: .preparing, count: expectedSteps.count - 1) + [.ready])
+        #expect(setupSteps == expectedSteps.map { Optional($0) })
+        #expect(await clock.currentTime == (requiredReadyResponses == 1 ? 364 : 366))
+        #expect(await client.stoppedSessionIds.isEmpty)
+    }
+
+    @MainActor
+    @Test("An ended session fails immediately instead of waiting", arguments: [true, false])
+    func endedSessionFailsWithoutWaiting(initiallyEnded: Bool) async {
+        let client = ScriptedSessionClient(polls: [
+            makeSession(id: "ended", status: 4),
+        ])
+        let clock = ManualSessionScheduler(advances: [181])
+        let orchestrator = SessionOrchestrator(client: client, scheduler: clock.scheduler)
+        let attempt = orchestrator.beginAttempt()
+        var phases: [SessionReadinessState] = []
+
+        await #expect(throws: SessionOrchestrationError.sessionEnded) {
+            try await orchestrator.waitUntilReady(
+                initialSession: makeSession(id: "ended", status: initiallyEnded ? 4 : 1),
+                token: "token",
+                attempt: attempt,
+                setupTimeout: nil
+            ) { _, readiness in
+                if let readiness {
+                    phases.append(readiness)
+                }
+            }
+        }
+
+        #expect(await client.pollCount == (initiallyEnded ? 0 : 1))
+        #expect(phases == (initiallyEnded ? [] : [.preparing]))
+    }
+
+    @MainActor
+    @Test("Unbounded setup still propagates polling errors")
+    func unboundedSetupPropagatesPollingErrors() async {
+        let client = ScriptedSessionClient()
+        let clock = ManualSessionScheduler(advances: [181])
+        let orchestrator = SessionOrchestrator(client: client, scheduler: clock.scheduler)
+        let attempt = orchestrator.beginAttempt()
+
+        await #expect(throws: SessionOrchestratorTestError.missingScriptedResponse) {
+            try await orchestrator.waitUntilReady(
+                initialSession: makeSession(id: "failed", status: 1, seatSetupStep: 5),
+                token: "token",
+                attempt: attempt,
+                setupTimeout: nil
+            )
+        }
+    }
+
+    @MainActor
+    @Test("Cancellation rejects a poll response that arrives late", arguments: [180, nil] as [TimeInterval?])
+    func cancellationBlocksLatePollMutation(setupTimeout: TimeInterval?) async {
         let client = ControlledSessionClient()
         let clock = ManualSessionScheduler()
         let orchestrator = SessionOrchestrator(
@@ -219,7 +302,8 @@ struct SessionOrchestratorTests {
             try await orchestrator.waitUntilReady(
                 initialSession: initial,
                 token: "token",
-                attempt: attempt
+                attempt: attempt,
+                setupTimeout: setupTimeout
             ) { _, readiness in
                 if let readiness {
                     phases.append(readiness)
@@ -741,7 +825,7 @@ private actor ManualSessionScheduler {
     }
 }
 
-private enum SessionOrchestratorTestError: Error {
+private enum SessionOrchestratorTestError: Error, Equatable {
     case missingContinuation
     case missingScriptedResponse
     case scriptedStopFailure

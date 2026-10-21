@@ -266,6 +266,7 @@ enum L10nRU {
         "preparing_game": "Подготовка игры… Это может занять минуту",
         "waiting_for_storage": "Подготовка хранилища…",
         "previous_session_cleanup": "Очистка предыдущего сеанса…",
+        "connecting_to_session": "Подключение к вашему сеансу…",
         "server_took_too_long": "Сервер слишком долго отвечал.",
         "end_session_title": "Завершить сеанс?",
         "end_session": "Завершить сеанс",

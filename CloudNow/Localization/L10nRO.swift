@@ -266,6 +266,7 @@ enum L10nRO {
         "preparing_game": "Se pregătește jocul dvs.… Poate dura un minut",
         "waiting_for_storage": "Se pregătește stocarea…",
         "previous_session_cleanup": "Se curăță o sesiune anterioară…",
+        "connecting_to_session": "Se conectează la sesiunea ta…",
         "server_took_too_long": "Serverul a răspuns prea târziu.",
         "end_session_title": "Terminați sesiunea?",
         "end_session": "Termină sesiunea",

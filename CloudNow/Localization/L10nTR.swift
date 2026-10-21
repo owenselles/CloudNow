@@ -266,6 +266,7 @@ enum L10nTR {
         "preparing_game": "Oyununuz hazırlanıyor… Bu bir dakika sürebilir",
         "waiting_for_storage": "Depolama hazırlanıyor…",
         "previous_session_cleanup": "Önceki oturum temizleniyor…",
+        "connecting_to_session": "Oturumunuza bağlanılıyor…",
         "server_took_too_long": "Sunucunun yanıt vermesi çok uzun sürdü.",
         "end_session_title": "Oturum sonlandırılsın mı?",
         "end_session": "Oturumu sonlandır",

@@ -235,6 +235,7 @@ enum L10nIT {
         "preparing_game": "Preparazione del gioco… Può richiedere un minuto",
         "waiting_for_storage": "Preparazione dello spazio di archiviazione…",
         "previous_session_cleanup": "Pulizia di una sessione precedente…",
+        "connecting_to_session": "Connessione alla tua sessione…",
         "server_took_too_long": "Il server ha impiegato troppo tempo a rispondere.",
         "end_session_title": "Terminare la sessione?",
         "end_session": "Termina sessione",

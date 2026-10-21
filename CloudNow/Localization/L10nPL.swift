@@ -266,6 +266,7 @@ enum L10nPL {
         "preparing_game": "Przygotowywanie gry… To może potrwać minutę",
         "waiting_for_storage": "Przygotowywanie pamięci…",
         "previous_session_cleanup": "Czyszczenie poprzedniej sesji…",
+        "connecting_to_session": "Łączenie z Twoją sesją…",
         "server_took_too_long": "Serwer zbyt długo odpowiadał.",
         "end_session_title": "Zakończyć sesję?",
         "end_session": "Zakończ sesję",

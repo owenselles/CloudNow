@@ -236,6 +236,7 @@ enum L10nAR {
         "preparing_game": "جارٍ تجهيز لعبتك… قد يستغرق ذلك دقيقة",
         "waiting_for_storage": "جارٍ تجهيز التخزين…",
         "previous_session_cleanup": "جارٍ تنظيف جلسة سابقة…",
+        "connecting_to_session": "جارٍ الاتصال بجلستك…",
         "server_took_too_long": "استغرق الخادم وقتًا طويلًا للرد.",
         "end_session_title": "إنهاء الجلسة؟",
         "end_session": "إنهاء الجلسة",

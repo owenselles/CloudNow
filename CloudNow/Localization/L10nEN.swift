@@ -264,6 +264,7 @@ enum L10nEN {
         "preparing_game": "Preparing your game… This can take a minute",
         "waiting_for_storage": "Preparing storage…",
         "previous_session_cleanup": "Cleaning up a previous session…",
+        "connecting_to_session": "Connecting to your session…",
         "server_took_too_long": "Server took too long to respond.",
         "end_session_title": "End Session?",
         "end_session": "End Session",

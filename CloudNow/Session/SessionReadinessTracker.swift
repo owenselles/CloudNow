@@ -11,16 +11,16 @@ nonisolated enum SessionReadinessState: Equatable, Sendable {
 /// post-queue setup deadlines can be tested without sleeping.
 nonisolated struct SessionReadinessTracker: Sendable {
     private let requiredReadyResponses: Int
-    private let setupTimeout: TimeInterval
+    private let setupTimeout: TimeInterval?
     private var consecutiveReadyResponses = 0
     private var setupStartedAt: Date?
 
     init(
         requiredReadyResponses: Int = 2,
-        setupTimeout: TimeInterval = 180
+        setupTimeout: TimeInterval? = 180
     ) {
         self.requiredReadyResponses = max(1, requiredReadyResponses)
-        self.setupTimeout = max(0, setupTimeout)
+        self.setupTimeout = setupTimeout.map { max(0, $0) }
     }
 
     mutating func observe(
@@ -37,7 +37,7 @@ nonisolated struct SessionReadinessTracker: Sendable {
             if setupStartedAt == nil {
                 setupStartedAt = now
             }
-            if let setupStartedAt,
+            if let setupStartedAt, let setupTimeout,
                now.timeIntervalSince(setupStartedAt) > setupTimeout
             {
                 return .timedOut

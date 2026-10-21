@@ -236,6 +236,7 @@ enum L10nDA {
         "preparing_game": "Forbereder dit spil… Det kan tage et minut",
         "waiting_for_storage": "Forbereder lagring…",
         "previous_session_cleanup": "Rydder op i en tidligere session…",
+        "connecting_to_session": "Opretter forbindelse til din session…",
         "server_took_too_long": "Serveren tog for lang tid om at svare.",
         "end_session_title": "Afslut session?",
         "end_session": "Afslut session",

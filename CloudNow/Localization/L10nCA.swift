@@ -236,6 +236,7 @@ enum L10nCA {
         "preparing_game": "S'està preparant el teu joc… Això pot trigar un minut",
         "waiting_for_storage": "Preparant l'emmagatzematge…",
         "previous_session_cleanup": "Netejant una sessió anterior…",
+        "connecting_to_session": "S'està connectant a la teva sessió…",
         "server_took_too_long": "El servidor ha trigat massa a respondre.",
         "end_session_title": "Finalitzar sessió?",
         "end_session": "Finalitza la sessió",

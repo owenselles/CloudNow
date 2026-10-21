@@ -89,6 +89,7 @@ nonisolated struct SessionReconnectPolicy: Sendable {
 
 nonisolated enum SessionOrchestrationError: Error, Equatable {
     case setupTimedOut
+    case sessionEnded
 }
 
 /// Coordinates the testable portion of CloudMatch session lifecycle work.
@@ -220,7 +221,8 @@ final class SessionOrchestrator {
         }
     }
 
-    /// Polls indefinitely while queued, then applies a bounded post-queue setup timeout.
+    /// Polls indefinitely while queued, then applies the optional post-queue setup timeout.
+    /// A nil timeout keeps waiting for readiness until cancellation or a service error.
     ///
     /// Consecutive ready responses are intentionally counted by the pure readiness
     /// reducer so a transient ready response cannot start WebRTC prematurely.
@@ -229,7 +231,7 @@ final class SessionOrchestrator {
         token: String,
         attempt: SessionAttemptToken,
         requiredReadyResponses: Int = 2,
-        setupTimeout: TimeInterval = 180,
+        setupTimeout: TimeInterval? = 180,
         onUpdate: UpdateHandler? = nil
     ) async throws -> SessionInfo {
         try requireAccepted(attempt)
@@ -258,6 +260,9 @@ final class SessionOrchestrator {
                     taskIsCancelled: Task.isCancelled
                 )
                 adopt(session, token: token)
+                guard session.status != 4 else {
+                    throw SessionOrchestrationError.sessionEnded
+                }
 
                 let state = await readiness.observe(
                     status: session.status,

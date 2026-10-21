@@ -266,6 +266,7 @@ enum L10nTH {
         "preparing_game": "กำลังเตรียมเกมของคุณ… อาจใช้เวลาหนึ่งนาที",
         "waiting_for_storage": "กำลังเตรียมพื้นที่จัดเก็บ…",
         "previous_session_cleanup": "กำลังล้างเซสชันก่อนหน้า…",
+        "connecting_to_session": "กำลังเชื่อมต่อกับเซสชันของคุณ…",
         "server_took_too_long": "เซิร์ฟเวอร์ตอบสนองช้าเกินไป",
         "end_session_title": "จบเซสชัน?",
         "end_session": "จบเซสชัน",

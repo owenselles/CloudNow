@@ -266,6 +266,7 @@ enum L10nSV {
         "preparing_game": "Förbereder ditt spel… Det kan ta en minut",
         "waiting_for_storage": "Förbereder lagring…",
         "previous_session_cleanup": "Rensar en tidigare session…",
+        "connecting_to_session": "Ansluter till din session…",
         "server_took_too_long": "Servern tog för lång tid på sig att svara.",
         "end_session_title": "Avsluta session?",
         "end_session": "Avsluta session",

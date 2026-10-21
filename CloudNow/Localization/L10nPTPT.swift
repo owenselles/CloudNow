@@ -266,6 +266,7 @@ enum L10nPTPT {
         "preparing_game": "A preparar o seu jogo… Isto pode demorar um minuto",
         "waiting_for_storage": "A preparar o armazenamento…",
         "previous_session_cleanup": "A limpar uma sessão anterior…",
+        "connecting_to_session": "A ligar à sua sessão…",
         "server_took_too_long": "O servidor demorou demasiado a responder.",
         "end_session_title": "Terminar sessão?",
         "end_session": "Terminar sessão",
