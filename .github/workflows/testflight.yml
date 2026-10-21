@@ -1,0 +1,200 @@
+name: Release to TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: TestFlight version
+        required: true
+        type: string
+      build_number:
+        description: New, unused build number
+        required: true
+        type: string
+
+run-name: Manual TestFlight release
+
+permissions: {}
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
+      archive_sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      # This must remain the first step, before checkout or any secrets.
+      - name: Authorize triggering user
+        env:
+          ACTOR_ID: ${{ github.actor_id }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_ACTOR" in
+            owenselles|aarikmudgal) ;;
+            *) echo "::error::Only owenselles and aarikmudgal may release to TestFlight."; exit 1 ;;
+          esac
+          case "$GITHUB_ACTOR:$ACTOR_ID" in
+            owenselles:16057141|aarikmudgal:29233905) ;;
+            *) echo "::error::GitHub account identity does not match."; exit 1 ;;
+          esac
+          test "$TRIGGERING_ACTOR" = "$GITHUB_ACTOR"
+          test "$GITHUB_REPOSITORY" = "owenselles/CloudNow"
+          test "$REPOSITORY_ID" = "1207891965"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+
+      - name: Validate version and build number
+        env:
+          VERSION: ${{ inputs.version }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]{1,4}\.[0-9]{1,2}(\.[0-9]{1,2})?$ ]] || exit 1
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}$ ]] || exit 1
+
+      - name: Checkout selected main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Build TestFlight archive without Apple credentials
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
+          VERSION: ${{ inputs.version }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || { echo "::error::Set the APPLE_TEAM_ID repository secret."; exit 1; }
+          [[ "$APPLE_BUNDLE_ID" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]] || { echo "::error::Set the APPLE_BUNDLE_ID repository secret."; exit 1; }
+          xcodebuild -resolvePackageDependencies \
+            -project CloudNow.xcodeproj -scheme CloudNow \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/packages" \
+            -onlyUsePackageVersionsFromResolvedFile
+          xcodebuild archive \
+            -project CloudNow.xcodeproj -scheme CloudNow -configuration Release \
+            -destination 'generic/platform=tvOS' \
+            -archivePath "$RUNNER_TEMP/CloudNow.xcarchive" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/packages" \
+            -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+            PRODUCT_BUNDLE_IDENTIFIER="$APPLE_BUNDLE_ID" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          COPYFILE_DISABLE=1 tar -czf "$RUNNER_TEMP/CloudNow.xcarchive.tar.gz" \
+            -C "$RUNNER_TEMP" CloudNow.xcarchive
+
+      - name: Record archive digest
+        id: digest
+        run: |
+          set -euo pipefail
+          echo "sha256=$(shasum -a 256 "$RUNNER_TEMP/CloudNow.xcarchive.tar.gz" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Transfer archive to signing runner
+        id: archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: testflight-archive
+          path: ${{ runner.temp }}/CloudNow.xcarchive.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # Repeat the guard here: rerunning only this job must not reuse authorization.
+    if: >-
+      ${{ github.repository == 'owenselles/CloudNow' &&
+          github.repository_id == '1207891965' &&
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main' && github.run_attempt == 1 &&
+          github.triggering_actor == github.actor &&
+          ((github.actor == 'owenselles' && github.actor_id == '16057141') ||
+           (github.actor == 'aarikmudgal' && github.actor_id == '29233905')) }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    environment: testflight
+    concurrency:
+      group: testflight-release
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release scripts only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: Scripts/Release
+
+      - name: Download this run's archive
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/testflight
+          merge-multiple: true
+
+      - name: Verify and extract archive before loading secrets
+        env:
+          ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          import tarfile
+
+          directory = Path(os.environ["RUNNER_TEMP"]) / "testflight"
+          path = directory / "CloudNow.xcarchive.tar.gz"
+          digest = hashlib.sha256()
+          with path.open("rb") as archive:
+              for block in iter(lambda: archive.read(1024 * 1024), b""):
+                  digest.update(block)
+          if digest.hexdigest() != os.environ["ARCHIVE_SHA256"]:
+              raise SystemExit("Archive digest mismatch")
+          with tarfile.open(path, "r:gz") as archive:
+              if any(member.name.split("/")[0] != "CloudNow.xcarchive" for member in archive):
+                  raise SystemExit("Unexpected archive path")
+              archive.extractall(directory, filter="data")
+          PY
+
+      - name: Install Apple Transporter
+        run: |
+          set -euo pipefail
+          pkg="$RUNNER_TEMP/Transporter.pkg"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            'https://itunesconnect.apple.com/WebObjects/iTunesConnect.woa/ra/resources/download/public/Transporter__OSX/bin/' \
+            --output "$pkg"
+          # Apple Transporter 4.2.0.16; review the new installer before updating this hash.
+          printf '%s  %s\n' c238022d959750edb0f3d35bbeea44844ca8781f69435b409e8f019d60e55b17 "$pkg" | shasum -a 256 --check
+          pkgutil --check-signature "$pkg"
+          sudo installer -pkg "$pkg" -target /
+
+      - name: Sign and export TestFlight IPA
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+        run: bash Scripts/Release/sign-testflight.sh
+
+      - name: Upload with Individual App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: bash Scripts/Release/upload-testflight.sh
+
+      - name: Clean up signing material
+        if: always()
+        run: bash Scripts/Release/sign-testflight.sh --cleanup

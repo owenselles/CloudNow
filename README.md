@@ -172,6 +172,8 @@ not copied between files.
 
 ### Maintain releases
 
+- [Manual TestFlight releases](Documentation/TestFlight.md): protected manual
+  uploads, signing secrets, and setup for release maintainers.
 - [Release validation](Documentation/ReleaseValidation.md): automated gates,
   physical Apple TV checks, provider smoke tests, and evidence recording.
 

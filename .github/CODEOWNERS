@@ -1,0 +1,5 @@
+# Release automation requires maintainer review.
+# Enable required code-owner approval in the main branch protection settings.
+/.github/workflows/ @owenselles @aarikmudgal
+/.github/CODEOWNERS @owenselles @aarikmudgal
+/Scripts/Release/ @owenselles @aarikmudgal
