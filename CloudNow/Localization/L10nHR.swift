@@ -158,6 +158,7 @@ enum L10nHR {
         "av1_color_path_warning": "AV1 koristi hardversko dekodiranje kada je dostupno, inače softversko. Trenutno je ograničen na SDR 8-bit BT.709.",
         "keyboard_layout": "Raspored tipkovnice",
         "game_language": "Jezik igre",
+        "game_language_description": "Neke igre za Xbox/Game Pass zahtijevaju i odgovarajući raspored tipkovnice. Odaberite raspored tipkovnice koji odgovara odabranom jeziku igre, a zatim pokrenite novu sesiju da bi promjena stupila na snagu.",
         "game_launch_mode": "Način pokretanja igre",
         "game_launch_mode_description": "Big Picture otvara pokretače igara poput Steama u njihovom TV sučelju. Zadano zadržava prikaz radne površine.",
         "launch_mode_big_picture": "Big Picture (TV)",

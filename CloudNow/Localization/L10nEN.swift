@@ -184,6 +184,7 @@ enum L10nEN {
         "av1_color_path_warning": "AV1 uses hardware decoding when available, otherwise software. Currently limited to SDR 8-bit BT.709.",
         "keyboard_layout": "Keyboard Layout",
         "game_language": "Game Language",
+        "game_language_description": "Some Xbox/Game Pass games also require a matching Keyboard Layout. Select a keyboard layout that matches your chosen game language, then start a new session for the change to take effect.",
         "game_launch_mode": "Game Launch Mode",
         "game_launch_mode_description": "Big Picture opens game launchers such as Steam in their TV interface. Default keeps the desktop view.",
         "launch_mode_big_picture": "Big Picture (TV)",

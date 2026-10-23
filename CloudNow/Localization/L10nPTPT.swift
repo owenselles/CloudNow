@@ -184,6 +184,7 @@ enum L10nPTPT {
         "av1_color_path_warning": "O AV1 usa descodificação por hardware quando disponível, caso contrário, por software. Atualmente limitado a SDR BT.709 de 8 bits.",
         "keyboard_layout": "Disposição do teclado",
         "game_language": "Idioma do jogo",
+        "game_language_description": "Alguns jogos Xbox/Game Pass também exigem uma disposição do teclado correspondente. Selecione uma disposição do teclado que corresponda ao idioma escolhido para o jogo e inicie uma nova sessão para que a alteração tenha efeito.",
         "game_launch_mode": "Modo de arranque do jogo",
         "game_launch_mode_description": "O Big Picture abre lançadores de jogos como a Steam na interface de TV. Predefinido mantém a vista de ambiente de trabalho.",
         "launch_mode_big_picture": "Big Picture (TV)",

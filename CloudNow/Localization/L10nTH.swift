@@ -184,6 +184,7 @@ enum L10nTH {
         "av1_color_path_warning": "AV1 ใช้การถอดรหัสด้วยฮาร์ดแวร์เมื่อรองรับ มิฉะนั้นจะใช้ซอฟต์แวร์ ปัจจุบันจำกัดที่ SDR 8-bit BT.709",
         "keyboard_layout": "รูปแบบแป้นพิมพ์",
         "game_language": "ภาษาเกม",
+        "game_language_description": "เกม Xbox/Game Pass บางเกมต้องใช้รูปแบบแป้นพิมพ์ที่ตรงกันด้วย เลือกรูปแบบแป้นพิมพ์ที่ตรงกับภาษาเกมที่คุณเลือก แล้วเริ่มเซสชันใหม่เพื่อให้การเปลี่ยนแปลงมีผล",
         "game_launch_mode": "โหมดเปิดเกม",
         "game_launch_mode_description": "Big Picture เปิดตัวเรียกใช้เกมเช่น Steam ในอินเทอร์เฟซทีวี ค่าเริ่มต้นจะคงมุมมองเดสก์ท็อป",
         "launch_mode_big_picture": "Big Picture (TV)",

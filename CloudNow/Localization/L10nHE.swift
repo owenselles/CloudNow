@@ -154,6 +154,7 @@ enum L10nHE {
         "av1_color_path_warning": "AV1 משתמש בפענוח חומרה כשזמין, ואחרת בפענוח תוכנה. מוגבל כרגע ל-SDR 8-bit BT.709.",
         "keyboard_layout": "פריסת מקלדת",
         "game_language": "שפת המשחק",
+        "game_language_description": "משחקי Xbox/Game Pass מסוימים דורשים גם פריסת מקלדת תואמת. יש לבחור פריסת מקלדת שתואמת לשפת המשחק שנבחרה, ולאחר מכן להתחיל הפעלה חדשה כדי שהשינוי ייכנס לתוקף.",
         "game_launch_mode": "מצב הפעלת משחק",
         "game_launch_mode_description": "Big Picture פותח משגרי משחקים כמו Steam בממשק הטלוויזיה. ברירת המחדל שומרת על תצוגת שולחן העבודה.",
         "launch_mode_big_picture": "Big Picture (TV)",

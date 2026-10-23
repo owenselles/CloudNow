@@ -154,6 +154,7 @@ enum L10nFI {
         "av1_color_path_warning": "AV1 käyttää laitteistopurkua, jos se on käytettävissä, muuten ohjelmistopurkua. Tällä hetkellä rajoitettu 8-bittiseen SDR BT.709 -muotoon.",
         "keyboard_layout": "Näppäimistöasettelu",
         "game_language": "Pelin kieli",
+        "game_language_description": "Jotkin Xbox/Game Pass -pelit edellyttävät myös vastaavaa näppäimistöasettelua. Valitse näppäimistöasettelu, joka vastaa valitsemaasi pelin kieltä, ja aloita sitten uusi istunto, jotta muutos tulee voimaan.",
         "game_launch_mode": "Pelin käynnistystila",
         "game_launch_mode_description": "Big Picture avaa pelikäynnistimet, kuten Steamin, TV-käyttöliittymässä. Oletus säilyttää työpöytänäkymän.",
         "launch_mode_big_picture": "Big Picture (TV)",

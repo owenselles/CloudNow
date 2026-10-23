@@ -154,6 +154,7 @@ enum L10nAR {
         "av1_color_path_warning": "يستخدم AV1 فك الترميز عبر العتاد عند توفره، وإلا يستخدم البرمجيات. يقتصر حاليًا على SDR 8-bit BT.709.",
         "keyboard_layout": "تخطيط لوحة المفاتيح",
         "game_language": "لغة اللعبة",
+        "game_language_description": "تتطلب بعض ألعاب Xbox/Game Pass أيضًا تخطيط لوحة مفاتيح مطابقًا. اختر تخطيط لوحة مفاتيح يتوافق مع لغة اللعبة التي اخترتها، ثم ابدأ جلسة جديدة ليصبح التغيير ساريًا.",
         "game_launch_mode": "وضع تشغيل اللعبة",
         "game_launch_mode_description": "يفتح Big Picture مشغّلات الألعاب مثل Steam بواجهة التلفزيون. الوضع الافتراضي يبقي عرض سطح المكتب.",
         "launch_mode_big_picture": "Big Picture (TV)",

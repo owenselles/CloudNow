@@ -151,6 +151,7 @@ enum L10nFR {
         "ice_path": "Chemin ICE",
         "keyboard_layout": "Disposition du clavier",
         "game_language": "Langue du jeu",
+        "game_language_description": "Certains jeux Xbox/Game Pass nécessitent aussi une disposition du clavier correspondant à la langue. Sélectionnez une disposition du clavier correspondant à la langue choisie pour le jeu, puis démarrez une nouvelle session pour que le changement prenne effet.",
         "game_launch_mode": "Mode de lancement du jeu",
         "game_launch_mode_description": "Big Picture ouvre les lanceurs de jeux comme Steam dans leur interface TV. Par défaut, la vue bureau est conservée.",
         "launch_mode_big_picture": "Big Picture (TV)",

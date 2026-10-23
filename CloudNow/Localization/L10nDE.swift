@@ -151,6 +151,7 @@ enum L10nDE {
         "ice_path": "ICE-Pfad",
         "keyboard_layout": "Tastaturlayout",
         "game_language": "Sprache des Spiels",
+        "game_language_description": "Einige Xbox/Game Pass-Spiele erfordern auch ein passendes Tastaturlayout. Wähle ein Tastaturlayout, das deiner gewählten Spielsprache entspricht, und starte dann eine neue Sitzung, damit die Änderung wirksam wird.",
         "game_launch_mode": "Spielstartmodus",
         "game_launch_mode_description": "Big Picture öffnet Spiele-Launcher wie Steam in ihrer TV-Oberfläche. Standard behält die Desktop-Ansicht.",
         "launch_mode_big_picture": "Big Picture (TV)",

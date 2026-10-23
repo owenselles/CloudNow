@@ -155,6 +155,7 @@ enum L10nJA {
         "ice_path": "ICE経路",
         "keyboard_layout": "キーボード配列",
         "game_language": "ゲーム言語",
+        "game_language_description": "一部の Xbox/Game Pass ゲームでは、言語に合ったキーボード配列も必要です。選択したゲーム言語に合ったキーボード配列を選び、新しいセッションを開始して変更を反映してください。",
         "game_launch_mode": "ゲーム起動モード",
         "game_launch_mode_description": "Big Picture は Steam などのゲームランチャーを TV インターフェースで開きます。デフォルトではデスクトップ表示のままです。",
         "launch_mode_big_picture": "Big Picture (TV)",

@@ -184,6 +184,7 @@ enum L10nSK {
         "av1_color_path_warning": "AV1 používa hardvérové dekódovanie, ak je dostupné, inak softvérové. Momentálne je obmedzené na 8-bitové SDR BT.709.",
         "keyboard_layout": "Rozloženie klávesnice",
         "game_language": "Jazyk hry",
+        "game_language_description": "Niektoré hry Xbox/Game Pass vyžadujú aj zodpovedajúce rozloženie klávesnice. Vyberte rozloženie klávesnice zodpovedajúce zvolenému jazyku hry a potom spustite novú reláciu, aby sa zmena prejavila.",
         "game_launch_mode": "Režim spustenia hry",
         "game_launch_mode_description": "Big Picture otvára herné launchery ako Steam v ich TV rozhraní. Predvolené zachováva zobrazenie plochy.",
         "launch_mode_big_picture": "Big Picture (TV)",

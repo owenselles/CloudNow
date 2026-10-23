@@ -158,6 +158,7 @@ enum L10nHU {
         "av1_color_path_warning": "Az AV1 hardveres dekódolást használ, ha elérhető, egyébként szoftvereset. Jelenleg 8 bites SDR BT.709-re korlátozott.",
         "keyboard_layout": "Billentyűzetkiosztás",
         "game_language": "Játék nyelve",
+        "game_language_description": "Egyes Xbox/Game Pass-játékokhoz megfelelő billentyűzetkiosztás is szükséges. Válassz a játék kiválasztott nyelvének megfelelő billentyűzetkiosztást, majd indíts új munkamenetet a módosítás érvényesítéséhez.",
         "game_launch_mode": "Játékindítási mód",
         "game_launch_mode_description": "A Big Picture a Steamhez hasonló játékindítókat TV-felületen nyitja meg. Az alapértelmezett megtartja az asztali nézetet.",
         "launch_mode_big_picture": "Big Picture (TV)",

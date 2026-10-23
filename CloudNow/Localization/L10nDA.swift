@@ -154,6 +154,7 @@ enum L10nDA {
         "av1_color_path_warning": "AV1 bruger hardwareafkodning, når den er tilgængelig, ellers software. Aktuelt begrænset til 8-bit SDR BT.709.",
         "keyboard_layout": "Tastaturlayout",
         "game_language": "Spilsprog",
+        "game_language_description": "Nogle Xbox/Game Pass-spil kræver også et tilsvarende tastaturlayout. Vælg et tastaturlayout, der matcher dit valgte spilsprog, og start derefter en ny session, så ændringen træder i kraft.",
         "game_launch_mode": "Spilstarttilstand",
         "game_launch_mode_description": "Big Picture åbner spillaunchere som Steam i deres tv-grænseflade. Standard bevarer skrivebordsvisningen.",
         "launch_mode_big_picture": "Big Picture (TV)",
