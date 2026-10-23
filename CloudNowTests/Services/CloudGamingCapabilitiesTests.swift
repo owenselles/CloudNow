@@ -837,6 +837,7 @@ struct CloudGamingCapabilitiesTests {
     @Test("Concurrent provider End calls share one operation")
     func concurrentEndIsSingleFlight() async throws {
         let coordinator = CloudSessionCoordinator()
+        #expect(!coordinator.isEndingServerSession)
         let actions = SessionActionFixture()
         let entered = CapabilityAsyncGate()
         let release = CapabilityAsyncGate()
@@ -853,16 +854,19 @@ struct CloudGamingCapabilitiesTests {
             )
         )
         let first = try #require(coordinator.endServerSessionInBackground(lease))
+        #expect(coordinator.isEndingServerSession)
         let pending = try #require(coordinator.sessionPendingEnd)
         let second = try #require(coordinator.endServerSessionInBackground(pending))
         await entered.wait()
 
+        #expect(coordinator.isEndingServerSession)
         #expect(actions.endCount == 1)
         #expect(coordinator.serverSession == lease)
 
         await release.open()
         #expect(await first.value)
         #expect(await second.value)
+        #expect(!coordinator.isEndingServerSession)
         #expect(actions.endCount == 1)
         #expect(coordinator.serverSession == nil)
     }
@@ -885,8 +889,10 @@ struct CloudGamingCapabilitiesTests {
         )
 
         let first = try #require(coordinator.endServerSessionInBackground(lease))
+        #expect(coordinator.isEndingServerSession)
         #expect(coordinator.sessionPendingEnd == lease)
         #expect(await !first.value)
+        #expect(!coordinator.isEndingServerSession)
         #expect(coordinator.serverSession == lease)
         let pending = try #require(coordinator.sessionPendingEnd)
         #expect(pending == lease)
@@ -899,6 +905,7 @@ struct CloudGamingCapabilitiesTests {
 
         actions.endShouldSucceed = true
         #expect(await coordinator.endServerSessionUsingProvider(pending))
+        #expect(!coordinator.isEndingServerSession)
         #expect(actions.endCount == 2)
         #expect(coordinator.serverSession == nil)
         #expect(coordinator.sessionPendingEnd == nil)

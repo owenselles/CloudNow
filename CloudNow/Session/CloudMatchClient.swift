@@ -708,7 +708,10 @@ actor CloudMatchClient {
         try validateHTTPStatus(resp, data: data, context: "getActiveSessions")
         let decoded = try JSONDecoder().decode(GetSessionsResponse.self, from: data)
         try validateAPIStatus(decoded, context: "getActiveSessions")
-        return (decoded.sessions ?? []).filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
+        guard let sessions = decoded.sessions else {
+            throw CloudMatchError.missingSession(context: "getActiveSessions")
+        }
+        return sessions.filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
             let appId = entry.sessionRequestData?.appId?.value
             let sigConn = entry.connectionInfo?.first { $0.usage == 14 }
             let serverIp = sigConn.flatMap { $0.ip?.value ?? hostFromResourcePath($0.resourcePath) }

@@ -126,27 +126,15 @@ struct CloudCatalogCardLabel: View {
 struct CloudResumableSessionBanner: View {
     let title: String
     let artworkURL: String?
-    let expiresAt: Date
+    let expiresAt: Date?
     var isResumeEnabled = true
+    var isEndEnabled = true
     let onResume: () -> Void
+    var onEnd: (() -> Void)?
+    var statusTitle: String?
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            SharedArtworkImage(
-                urlString: artworkURL,
-                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 420)
-            .clipped()
-            .overlay(
-                LinearGradient(
-                    colors: [.black.opacity(0.8), .clear, .black.opacity(0.4)],
-                    startPoint: .bottom,
-                    endPoint: .top
-                )
-            )
-
+        CloudHeroBannerSurface(artworkURL: artworkURL) {
             HStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 10) {
@@ -154,31 +142,84 @@ struct CloudResumableSessionBanner: View {
                             .font(.largeTitle.weight(.bold))
                             .foregroundStyle(.white)
                             .shadow(radius: 4)
-                        Text(L10n.text("session_active"))
+                            .lineLimit(2)
+                        Text(statusTitle ?? L10n.text("session_active"))
                             .font(.caption.weight(.bold))
                             .foregroundStyle(.black)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(.green, in: Capsule())
+                            .fixedSize()
                     }
-                    CloudSessionExpiryCountdownView(expiresAt: expiresAt)
-                    Button(action: onResume) {
-                        Label(
-                            L10n.text("rejoin_session"),
-                            systemImage: "arrow.counterclockwise"
-                        )
+                    if let expiresAt {
+                        CloudSessionExpiryCountdownView(expiresAt: expiresAt)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .disabled(!isResumeEnabled)
+                    HStack(spacing: 24) {
+                        Button(action: onResume) {
+                            Label(
+                                L10n.text("rejoin_session"),
+                                systemImage: "arrow.counterclockwise"
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .disabled(!isResumeEnabled)
+
+                        if let onEnd {
+                            Button(role: .destructive, action: onEnd) {
+                                Label(L10n.text("end_session"), systemImage: "xmark.circle")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!isEndEnabled)
+                            .accessibilityIdentifier("continue-playing.end-session")
+                        }
+                    }
                 }
                 Spacer()
             }
-            .padding(60)
         }
-        .focusSection()
         .accessibilityIdentifier("continue-playing")
     }
+}
+
+#Preview("Home Session Controls") {
+    ZStack {
+        Color.black.ignoresSafeArea()
+        CloudResumableSessionBanner(
+            title: "Forza Horizon 6",
+            artworkURL: nil,
+            expiresAt: Date().addingTimeInterval(ResumableSession.gracePeriod),
+            onResume: {},
+            onEnd: {}
+        )
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Hero Banner Consistency") {
+    ZStack {
+        Color.black.ignoresSafeArea()
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Normal hero")
+                .padding(.horizontal, 60)
+            CloudCatalogHeroBanner(
+                artworkURL: nil,
+                actionTitle: L10n.text("play"),
+                actionSystemImage: "play.fill",
+                action: {}
+            )
+            Text("Resume banner")
+                .padding(.horizontal, 60)
+            CloudResumableSessionBanner(
+                title: "Forza Horizon 6",
+                artworkURL: nil,
+                expiresAt: Date().addingTimeInterval(ResumableSession.gracePeriod),
+                onResume: {},
+                onEnd: {}
+            )
+        }
+    }
+    .preferredColorScheme(.dark)
 }
 
 /// Keeps the once-per-second expiry update inside the single text leaf.
@@ -372,6 +413,45 @@ struct CloudCatalogHeroBanner: View {
     let action: () -> Void
 
     var body: some View {
+        CloudHeroBannerSurface(
+            artworkURL: artworkURL,
+            networkCachePolicy: networkCachePolicy,
+            artworkContentMode: artworkContentMode,
+            artworkAlignment: artworkAlignment
+        ) {
+            HStack {
+                if let actionFocus {
+                    actionButton
+                        .focused(actionFocus)
+                } else {
+                    actionButton
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private var actionButton: some View {
+        Button(action: action) {
+            Label(actionTitle, systemImage: actionSystemImage)
+                .prefetchHeroArtOnFocus(
+                    prefetchArtworkURL ?? artworkURL
+                )
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(actionTint)
+        .disabled(!isActionEnabled)
+    }
+}
+
+private struct CloudHeroBannerSurface<Content: View>: View {
+    let artworkURL: String?
+    var networkCachePolicy: ArtworkNetworkCachePolicy = .shared
+    var artworkContentMode: ContentMode = .fill
+    var artworkAlignment: Alignment = .center
+    @ViewBuilder let content: Content
+
+    var body: some View {
         ZStack(alignment: .bottom) {
             SharedArtworkImage(
                 urlString: artworkURL,
@@ -389,34 +469,14 @@ struct CloudCatalogHeroBanner: View {
                 endPoint: UnitPoint(x: 0.5, y: 0.55)
             )
 
-            HStack {
-                if let actionFocus {
-                    actionButton
-                        .focused(actionFocus)
-                } else {
-                    actionButton
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 40)
-            .padding(.vertical, 28)
+            content
+                .padding(.horizontal, 40)
+                .padding(.vertical, 28)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 420)
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .padding(.horizontal, 60)
         .focusSection()
-    }
-
-    private var actionButton: some View {
-        Button(action: action) {
-            Label(actionTitle, systemImage: actionSystemImage)
-                .prefetchHeroArtOnFocus(
-                    prefetchArtworkURL ?? artworkURL
-                )
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(actionTint)
-        .disabled(!isActionEnabled)
     }
 }
