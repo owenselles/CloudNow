@@ -184,6 +184,7 @@ enum L10nSV {
         "av1_color_path_warning": "AV1 använder hårdvaruavkodning när det är tillgängligt, annars programvara. För närvarande begränsat till 8-bitars SDR BT.709.",
         "keyboard_layout": "Tangentbordslayout",
         "game_language": "Spelspråk",
+        "game_language_description": "Vissa Xbox/Game Pass-spel kräver också en matchande tangentbordslayout. Välj en tangentbordslayout som matchar ditt valda spelspråk och starta sedan en ny session för att ändringen ska träda i kraft.",
         "game_launch_mode": "Spelstartläge",
         "game_launch_mode_description": "Big Picture öppnar spelstartare som Steam i deras TV-gränssnitt. Standard behåller skrivbordsvyn.",
         "launch_mode_big_picture": "Big Picture (TV)",

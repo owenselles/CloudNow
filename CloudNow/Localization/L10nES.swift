@@ -151,6 +151,7 @@ enum L10nES {
         "ice_path": "Ruta ICE",
         "keyboard_layout": "Distribución del teclado",
         "game_language": "Idioma del juego",
+        "game_language_description": "Algunos juegos de Xbox/Game Pass también requieren una distribución del teclado que coincida con el idioma. Selecciona una distribución del teclado que coincida con el idioma elegido para el juego y luego inicia una nueva sesión para que el cambio surta efecto.",
         "game_launch_mode": "Modo de inicio del juego",
         "game_launch_mode_description": "Big Picture abre lanzadores de juegos como Steam en su interfaz de TV. Predeterminado mantiene la vista de escritorio.",
         "launch_mode_big_picture": "Big Picture (TV)",

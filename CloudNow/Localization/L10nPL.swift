@@ -184,6 +184,7 @@ enum L10nPL {
         "av1_color_path_warning": "AV1 używa dekodowania sprzętowego, jeśli jest dostępne, w przeciwnym razie programowego. Obecnie ograniczone do 8-bitowego SDR BT.709.",
         "keyboard_layout": "Układ klawiatury",
         "game_language": "Język gry",
+        "game_language_description": "Niektóre gry Xbox/Game Pass wymagają również zgodnego układu klawiatury. Wybierz układ klawiatury zgodny z wybranym językiem gry, a następnie rozpocznij nową sesję, aby zmiana zaczęła obowiązywać.",
         "game_launch_mode": "Tryb uruchamiania gry",
         "game_launch_mode_description": "Big Picture otwiera launchery gier, takie jak Steam, w interfejsie TV. Domyślnie zachowywany jest widok pulpitu.",
         "launch_mode_big_picture": "Big Picture (TV)",

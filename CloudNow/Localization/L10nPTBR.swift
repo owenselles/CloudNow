@@ -181,6 +181,7 @@ enum L10nPTBR {
         "ice_path": "Caminho ICE",
         "keyboard_layout": "Layout do teclado",
         "game_language": "Idioma do jogo",
+        "game_language_description": "Alguns jogos do Xbox/Game Pass também exigem um layout do teclado correspondente. Selecione um layout do teclado que corresponda ao idioma escolhido para o jogo e inicie uma nova sessão para que a alteração tenha efeito.",
         "game_launch_mode": "Modo de inicialização do jogo",
         "game_launch_mode_description": "Big Picture abre lançadores de jogos como a Steam na interface de TV. Padrão mantém a visualização de desktop.",
         "launch_mode_big_picture": "Big Picture (TV)",

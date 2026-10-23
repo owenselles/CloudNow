@@ -4027,7 +4027,8 @@ private struct XboxSettingsView: View {
                 Section(L10n.text("game")) {
                     CloudNowGameLanguageSelectionRow(
                         selection: $modeViewModel.streamSettings.gameLanguage,
-                        automaticValue: XboxCloudStreamSettings.automaticGameLanguage
+                        automaticValue: XboxCloudStreamSettings.automaticGameLanguage,
+                        languageCodes: CloudNowGameLanguageSelectionRow.xboxCloudGamingLanguageCodes
                     )
                 }
                 .disabled(isBusy)

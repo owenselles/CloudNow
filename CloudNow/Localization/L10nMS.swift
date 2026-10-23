@@ -184,6 +184,7 @@ enum L10nMS {
         "av1_color_path_warning": "AV1 menggunakan penyahkodan perkakasan apabila tersedia, jika tidak menggunakan perisian. Kini terhad kepada SDR 8-bit BT.709.",
         "keyboard_layout": "Susun atur papan kekunci",
         "game_language": "Bahasa permainan",
+        "game_language_description": "Sesetengah permainan Xbox/Game Pass juga memerlukan susun atur papan kekunci yang sepadan. Pilih susun atur papan kekunci yang sepadan dengan bahasa permainan pilihan anda, kemudian mulakan sesi baharu supaya perubahan berkuat kuasa.",
         "game_launch_mode": "Mod Pelancaran Permainan",
         "game_launch_mode_description": "Big Picture membuka pelancar permainan seperti Steam dalam antara muka TV. Lalai mengekalkan paparan desktop.",
         "launch_mode_big_picture": "Big Picture (TV)",

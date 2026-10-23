@@ -184,6 +184,7 @@ enum L10nTR {
         "av1_color_path_warning": "AV1, kullanılabiliyorsa donanım çözme, aksi halde yazılım çözme kullanır. Şu anda SDR 8 bit BT.709 ile sınırlıdır.",
         "keyboard_layout": "Klavye düzeni",
         "game_language": "Oyun dili",
+        "game_language_description": "Bazı Xbox/Game Pass oyunları için eşleşen bir klavye düzeni de gerekir. Seçtiğiniz oyun diliyle eşleşen bir klavye düzeni seçin, ardından değişikliğin geçerli olması için yeni bir oturum başlatın.",
         "game_launch_mode": "Oyun Başlatma Modu",
         "game_launch_mode_description": "Big Picture, Steam gibi oyun başlatıcılarını TV arayüzünde açar. Varsayılan, masaüstü görünümünü korur.",
         "launch_mode_big_picture": "Big Picture (TV)",

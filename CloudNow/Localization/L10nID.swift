@@ -158,6 +158,7 @@ enum L10nID {
         "av1_color_path_warning": "AV1 memakai dekode perangkat keras jika tersedia, jika tidak memakai perangkat lunak. Saat ini terbatas pada SDR 8-bit BT.709.",
         "keyboard_layout": "Tata letak keyboard",
         "game_language": "Bahasa game",
+        "game_language_description": "Beberapa game Xbox/Game Pass juga memerlukan tata letak keyboard yang sesuai. Pilih tata letak keyboard yang sesuai dengan bahasa game pilihan Anda, lalu mulai sesi baru agar perubahan diterapkan.",
         "game_launch_mode": "Mode Peluncuran Game",
         "game_launch_mode_description": "Big Picture membuka peluncur game seperti Steam dalam antarmuka TV. Default mempertahankan tampilan desktop.",
         "launch_mode_big_picture": "Big Picture (TV)",

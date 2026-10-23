@@ -155,6 +155,7 @@ enum L10nKO {
         "ice_path": "ICE 경로",
         "keyboard_layout": "키보드 레이아웃",
         "game_language": "게임 언어",
+        "game_language_description": "일부 Xbox/Game Pass 게임에서는 키보드 레이아웃도 게임 언어와 일치해야 합니다. 선택한 게임 언어에 맞는 키보드 레이아웃을 선택한 뒤 새 세션을 시작해야 변경 사항이 적용됩니다.",
         "game_launch_mode": "게임 실행 모드",
         "game_launch_mode_description": "Big Picture는 Steam과 같은 게임 런처를 TV 인터페이스로 엽니다. 기본값은 데스크톱 보기를 유지합니다.",
         "launch_mode_big_picture": "Big Picture (TV)",

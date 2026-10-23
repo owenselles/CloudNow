@@ -184,6 +184,7 @@ enum L10nRO {
         "av1_color_path_warning": "AV1 folosește decodarea hardware când este disponibilă, altfel pe cea software. Momentan este limitat la SDR BT.709 pe 8 biți.",
         "keyboard_layout": "Aspectul tastaturii",
         "game_language": "Limba jocului",
+        "game_language_description": "Unele jocuri Xbox/Game Pass necesită și un aspect al tastaturii corespunzător. Selectează un aspect al tastaturii care corespunde limbii alese pentru joc, apoi începe o sesiune nouă pentru ca modificarea să aibă efect.",
         "game_launch_mode": "Mod de lansare a jocului",
         "game_launch_mode_description": "Big Picture deschide lansatoare de jocuri precum Steam în interfața TV. Implicit păstrează vizualizarea desktop.",
         "launch_mode_big_picture": "Big Picture (TV)",

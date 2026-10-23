@@ -184,6 +184,7 @@ enum L10nVI {
         "av1_color_path_warning": "AV1 dùng giải mã phần cứng khi có hỗ trợ, nếu không sẽ dùng phần mềm. Hiện giới hạn ở SDR 8-bit BT.709.",
         "keyboard_layout": "Bố cục bàn phím",
         "game_language": "Ngôn ngữ trò chơi",
+        "game_language_description": "Một số trò chơi Xbox/Game Pass cũng yêu cầu bố cục bàn phím tương ứng. Chọn bố cục bàn phím phù hợp với ngôn ngữ trò chơi bạn đã chọn, rồi bắt đầu phiên mới để thay đổi có hiệu lực.",
         "game_launch_mode": "Chế độ khởi chạy trò chơi",
         "game_launch_mode_description": "Big Picture mở các trình khởi chạy game như Steam trong giao diện TV. Mặc định giữ chế độ xem máy tính.",
         "launch_mode_big_picture": "Big Picture (TV)",

@@ -181,6 +181,7 @@ enum L10nZHHant {
         "ice_path": "ICE 路徑",
         "keyboard_layout": "鍵盤配置",
         "game_language": "遊戲語言",
+        "game_language_description": "部分 Xbox/Game Pass 遊戲還需要相符的鍵盤配置。請選取與所選遊戲語言相符的鍵盤配置，然後開始新的工作階段，讓變更生效。",
         "game_launch_mode": "遊戲啟動模式",
         "game_launch_mode_description": "Big Picture 以電視介面開啟 Steam 等遊戲啟動器。預設保持桌面檢視。",
         "launch_mode_big_picture": "Big Picture (TV)",

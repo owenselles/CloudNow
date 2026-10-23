@@ -184,6 +184,7 @@ enum L10nNB {
         "av1_color_path_warning": "AV1 bruker maskinvaredekoding når tilgjengelig, ellers programvare. Foreløpig begrenset til 8-bits SDR BT.709.",
         "keyboard_layout": "Tastaturoppsett",
         "game_language": "Spillspråk",
+        "game_language_description": "Noen Xbox/Game Pass-spill krever også et samsvarende tastaturoppsett. Velg et tastaturoppsett som samsvarer med det valgte spillspråket, og start deretter en ny økt for at endringen skal tre i kraft.",
         "game_launch_mode": "Spillstartmodus",
         "game_launch_mode_description": "Big Picture åpner spillstartere som Steam i TV-grensesnittet. Standard beholder skrivebordsvisningen.",
         "launch_mode_big_picture": "Big Picture (TV)",

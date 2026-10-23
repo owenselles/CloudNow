@@ -184,6 +184,7 @@ enum L10nNL {
         "av1_color_path_warning": "AV1 gebruikt hardwaredecodering indien beschikbaar, anders software. Momenteel beperkt tot 8-bits SDR BT.709.",
         "keyboard_layout": "Toetsenbordindeling",
         "game_language": "Speltaal",
+        "game_language_description": "Sommige Xbox/Game Pass-games vereisen ook een bijpassende toetsenbordindeling. Kies een toetsenbordindeling die overeenkomt met je gekozen speltaal en start vervolgens een nieuwe sessie om de wijziging toe te passen.",
         "game_launch_mode": "Spelstartmodus",
         "game_launch_mode_description": "Big Picture opent gamelaunchers zoals Steam in hun tv-interface. Standaard behoudt de bureaubladweergave.",
         "launch_mode_big_picture": "Big Picture (TV)",

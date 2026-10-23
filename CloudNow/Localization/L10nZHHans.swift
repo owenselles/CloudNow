@@ -181,6 +181,7 @@ enum L10nZHHans {
         "ice_path": "ICE 路径",
         "keyboard_layout": "键盘布局",
         "game_language": "游戏语言",
+        "game_language_description": "部分 Xbox/Game Pass 游戏还需要匹配的键盘布局。请选择与所选游戏语言匹配的键盘布局，然后开始新会话，使更改生效。",
         "game_launch_mode": "游戏启动模式",
         "game_launch_mode_description": "Big Picture 以电视界面打开 Steam 等游戏启动器。默认保持桌面视图。",
         "launch_mode_big_picture": "Big Picture (TV)",

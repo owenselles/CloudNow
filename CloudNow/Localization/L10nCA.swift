@@ -154,6 +154,7 @@ enum L10nCA {
         "av1_color_path_warning": "AV1 utilitza descodificació per maquinari quan està disponible; si no, per programari. Actualment es limita a SDR BT.709 de 8 bits.",
         "keyboard_layout": "Disposició del teclat",
         "game_language": "Llengua del joc",
+        "game_language_description": "Alguns jocs d'Xbox/Game Pass també requereixen una disposició del teclat que coincideixi amb la llengua. Selecciona una disposició del teclat que coincideixi amb la llengua triada per al joc i inicia una sessió nova perquè el canvi tingui efecte.",
         "game_launch_mode": "Mode d'inici del joc",
         "game_launch_mode_description": "Big Picture obre llançadors de jocs com Steam en la seva interfície de TV. Per defecte es manté la vista d'escriptori.",
         "launch_mode_big_picture": "Big Picture (TV)",

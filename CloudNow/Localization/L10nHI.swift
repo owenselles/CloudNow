@@ -154,6 +154,7 @@ enum L10nHI {
         "av1_color_path_warning": "AV1 उपलब्ध होने पर हार्डवेयर डिकोडिंग का उपयोग करता है, अन्यथा सॉफ़्टवेयर का। फ़िलहाल SDR 8-bit BT.709 तक सीमित है।",
         "keyboard_layout": "कीबोर्ड लेआउट",
         "game_language": "गेम भाषा",
+        "game_language_description": "कुछ Xbox/Game Pass गेम के लिए मेल खाने वाला कीबोर्ड लेआउट भी ज़रूरी है। अपनी चुनी हुई गेम भाषा से मेल खाने वाला कीबोर्ड लेआउट चुनें, फिर बदलाव लागू करने के लिए नया सत्र शुरू करें।",
         "game_launch_mode": "गेम लॉन्च मोड",
         "game_launch_mode_description": "Big Picture, Steam जैसे गेम लॉन्चर को TV इंटरफ़ेस में खोलता है। डिफ़ॉल्ट डेस्कटॉप व्यू बनाए रखता है।",
         "launch_mode_big_picture": "Big Picture (TV)",

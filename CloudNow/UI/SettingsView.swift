@@ -655,8 +655,24 @@ private struct CloudNowSettingsPageTitle: View {
 struct CloudNowGameLanguageSelectionRow: View {
     @Binding var selection: String
     let automaticValue: String
+    let languageCodes: [String]
+    var description: String?
 
-    private static let languageCodes = [
+    static let geForceNowLanguageCodes = [
+        "en_US", "en_GB", "fr_FR", "de_DE", "es_ES", "it_IT", "pt_BR",
+        "hi_IN", "ja_JP", "ko_KR", "zh_CN", "zh_TW", "ru_RU", "ar_SA",
+        "nl_NL", "pl_PL", "sv_SE", "fi_FI", "tr_TR", "el_GR", "he_IL",
+        "cs_CZ", "da_DK", "hr_HR", "hu_HU", "id_ID", "ms_MY", "ro_RO",
+        "sk_SK", "vi_VN", "uk_UA",
+        "af_ZA", "sq_AL", "hy_AM", "be_BY", "bg_BG", "kn_IN", "ca_ES",
+        "zh_SG", "sl_SI", "es_MX", "et_EE", "eu_ES", "fo_FO", "fr_CA",
+        "gl_ES", "ka_GE", "gu_IN", "is_IS", "kk_KZ", "ky_KZ", "lv_LV",
+        "lt_LT", "mk_MK", "mr_IN", "mn_MN", "nb_NO", "fa_IR", "pt_PT",
+        "pa_IN", "sa_IN", "sr_RS", "sw_KE", "th_TH", "ta_IN", "tt_RU",
+        "te_IN", "ur_PK", "uz_UZ",
+    ]
+
+    static let xboxCloudGamingLanguageCodes = [
         "en_US", "en_GB", "fr_FR", "de_DE", "es_ES", "it_IT", "pt_BR",
         "hi_IN", "ja_JP", "ko_KR", "zh_CN", "zh_TW", "ru_RU", "ar_SA",
         "nl_NL", "pl_PL", "sv_SE", "fi_FI", "tr_TR", "el_GR", "he_IL",
@@ -667,6 +683,7 @@ struct CloudNowGameLanguageSelectionRow: View {
     var body: some View {
         CloudNowSettingSelectionRow(
             L10n.text("game_language"),
+            description: description,
             selection: $selection,
             accessibilityIdentifier: "settings.stream-quality.game-language",
             options: [
@@ -675,7 +692,7 @@ struct CloudNowGameLanguageSelectionRow: View {
                     title: L10n.text("automatic"),
                     accessibilityIdentifier: "automatic"
                 ),
-            ] + Self.languageCodes.map { code in
+            ] + languageCodes.map { code in
                 CloudNowSettingOption(
                     value: code,
                     title: L10n.localizedLanguageName(for: code),
@@ -984,7 +1001,9 @@ struct SettingsView: View {
 
                     CloudNowGameLanguageSelectionRow(
                         selection: $vm.streamSettings.gameLanguage,
-                        automaticValue: StreamSettings.automaticGameLanguage
+                        automaticValue: StreamSettings.automaticGameLanguage,
+                        languageCodes: CloudNowGameLanguageSelectionRow.geForceNowLanguageCodes,
+                        description: L10n.text("game_language_description")
                     )
 
                     CloudNowSettingSelectionRow(

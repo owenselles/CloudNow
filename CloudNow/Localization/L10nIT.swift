@@ -155,6 +155,7 @@ enum L10nIT {
         "ice_path": "Percorso ICE",
         "keyboard_layout": "Layout tastiera",
         "game_language": "Lingua del gioco",
+        "game_language_description": "Alcuni giochi Xbox/Game Pass richiedono anche un layout tastiera corrispondente. Seleziona un layout tastiera che corrisponda alla lingua scelta per il gioco, quindi avvia una nuova sessione per rendere effettiva la modifica.",
         "game_launch_mode": "Modalità di avvio del gioco",
         "game_launch_mode_description": "Big Picture apre i launcher di giochi come Steam nella loro interfaccia TV. Predefinito mantiene la vista desktop.",
         "launch_mode_big_picture": "Big Picture (TV)",
