@@ -319,6 +319,10 @@ final class CloudSessionCoordinator {
         return lease
     }
 
+    var isEndingServerSession: Bool {
+        endOperation != nil
+    }
+
     private(set) var localPeerLease: CloudLocalPeerLease?
     var localPeerProvider: CloudGamingProvider? {
         localPeerLease?.provider
@@ -328,8 +332,8 @@ final class CloudSessionCoordinator {
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let sleep: @Sendable (TimeInterval) async throws -> Void
     @ObservationIgnored private var expiryTask: Task<Void, Never>?
-    @ObservationIgnored private var endOperation: EndOperation?
-    @ObservationIgnored private var expiryQuarantineLeaseID: UUID?
+    private var endOperation: EndOperation?
+    private var expiryQuarantineLeaseID: UUID?
 
     init(now: @escaping @Sendable () -> Date = Date.init) {
         self.now = now

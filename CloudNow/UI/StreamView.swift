@@ -1211,9 +1211,21 @@ struct StreamView: View {
             return false
         }
         do {
+            let sessionID = session.sessionId
+            let idpId = authManager.session?.provider.idpId
+            let userId = authManager.session?.user.userId
             let actions = CloudServerSessionActions(
-                end: { [sessionOrchestrator, stopHandle] in
-                    await sessionOrchestrator.stopSession(using: stopHandle)
+                end: { [authManager, sessionOrchestrator, stopHandle, viewModel] in
+                    guard await sessionOrchestrator.stopSession(using: stopHandle) else {
+                        return false
+                    }
+                    guard let idpId,
+                          let userId,
+                          authManager.session?.provider.idpId == idpId,
+                          authManager.session?.user.userId == userId
+                    else { return true }
+                    viewModel.markSessionStopped(sessionID, idpId: idpId, userId: userId)
+                    return true
                 }
             )
             if adoptingParkedSession,

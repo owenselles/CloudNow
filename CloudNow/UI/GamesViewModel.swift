@@ -140,6 +140,7 @@ class GamesViewModel {
     }
 
     var activeSessions: [ActiveSessionInfo] = []
+    private(set) var activeSessionsLoadPhase: DatasetLoadPhase = .idle
     private(set) var catalogLoadPhase: DatasetLoadPhase = .loading
     private(set) var libraryLoadPhase: DatasetLoadPhase = .loading
     var libraryWarning: String?
@@ -274,7 +275,9 @@ class GamesViewModel {
     private struct ActiveSessionsRequest {
         let generation: Int
         let key: ServiceRequestKey
-        let task: Task<[ActiveSessionInfo], Never>
+        let accountScope: String?
+        let previousLoadPhase: DatasetLoadPhase
+        let task: Task<ActiveSessionsFetchResult, Never>
     }
 
     private struct VpcIdRequest {
@@ -283,9 +286,16 @@ class GamesViewModel {
         let task: Task<String?, Never>
     }
 
+    private nonisolated enum ActiveSessionsFetchResult {
+        case success([ActiveSessionInfo])
+        case failure
+        case cancelled
+    }
+
     private struct ActiveSessionsFetchOutcome {
-        let sessions: [ActiveSessionInfo]
+        let result: ActiveSessionsFetchResult
         let requestGeneration: Int
+        let previousLoadPhase: DatasetLoadPhase
     }
 
     private var activeSessionsRequest: ActiveSessionsRequest?
@@ -468,6 +478,7 @@ class GamesViewModel {
             mainGames = []
             libraryGames = []
             activeSessions = []
+            activeSessionsLoadPhase = .idle
             subscription = nil
             hasCompletedInitialLoad = false
         }
@@ -537,9 +548,11 @@ class GamesViewModel {
         catalogLoadPhase = .loading
         libraryLoadPhase = .loading
         libraryWarning = nil
+        let sessionsRequestGeneration = activeSessionsRequestGeneration
 
         do {
             let token = try await authManager.resolveToken()
+            try Task.checkCancellation()
             guard isCurrent(identity) else { return }
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
@@ -593,6 +606,11 @@ class GamesViewModel {
             guard isCurrent(identity) else { return }
             catalogLoadPhase = mainGames.isEmpty ? .failed(error.localizedDescription) : .loaded
             libraryLoadPhase = libraryGames.isEmpty ? .failed(error.localizedDescription) : .loaded
+            if !Task.isCancelled,
+               activeSessionsRequestGeneration == sessionsRequestGeneration
+            {
+                activeSessionsLoadPhase = .failed(L10n.text("session_status_unavailable"))
+            }
         }
         guard isCurrent(identity) else { return }
         hasCompletedInitialLoad = true
@@ -718,31 +736,77 @@ class GamesViewModel {
     ) async -> ActiveSessionsFetchOutcome {
         let key = ServiceRequestKey(token: token, base: base)
         let request: ActiveSessionsRequest
-        if let existing = activeSessionsRequest, existing.key == key {
+        if let existing = activeSessionsRequest,
+           existing.key == key,
+           existing.accountScope == currentAccountScope
+        {
             request = existing
         } else {
+            let previousLoadPhase = activeSessionsRequest.flatMap {
+                $0.accountScope == currentAccountScope ? $0.previousLoadPhase : nil
+            } ?? (activeSessionsLoadPhase == .loading ? .idle : activeSessionsLoadPhase)
             activeSessionsRequest?.task.cancel()
             activeSessionsRequestGeneration &+= 1
             let generation = activeSessionsRequestGeneration
-            let task = Task<[ActiveSessionInfo], Never> { [cloudMatchClient] in
-                await (try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+            activeSessionsLoadPhase = .loading
+            let task = Task<ActiveSessionsFetchResult, Never> { [cloudMatchClient] in
+                do {
+                    try Task.checkCancellation()
+                    let sessions = try await cloudMatchClient.getActiveSessions(token: token, base: base)
+                    try Task.checkCancellation()
+                    return .success(sessions)
+                } catch is CancellationError {
+                    return .cancelled
+                } catch {
+                    return Task.isCancelled ? .cancelled : .failure
+                }
             }
             request = ActiveSessionsRequest(
                 generation: generation,
                 key: key,
+                accountScope: currentAccountScope,
+                previousLoadPhase: previousLoadPhase,
                 task: task
             )
             activeSessionsRequest = request
         }
 
-        let sessions = await request.task.value
+        let result = await request.task.value
         if activeSessionsRequest?.generation == request.generation {
             activeSessionsRequest = nil
         }
         return ActiveSessionsFetchOutcome(
-            sessions: sessions,
-            requestGeneration: request.generation
+            result: result,
+            requestGeneration: request.generation,
+            previousLoadPhase: request.previousLoadPhase
         )
+    }
+
+    private func applyActiveSessionsOutcome(
+        _ outcome: ActiveSessionsFetchOutcome,
+        identity: LoadIdentity
+    ) {
+        guard outcome.requestGeneration == activeSessionsRequestGeneration else { return }
+        guard isCurrent(identity), !Task.isCancelled else {
+            if persistenceEnabled,
+               identity.cacheGeneration == cacheGeneration,
+               activeSessionsLoadPhase == .loading
+            {
+                activeSessionsLoadPhase = outcome.previousLoadPhase
+            }
+            return
+        }
+        switch outcome.result {
+        case let .success(sessions):
+            activeSessions = filterStopped(sessions)
+            activeSessionsLoadPhase = .loaded
+        case .failure:
+            activeSessionsLoadPhase = .failed(L10n.text("session_status_unavailable"))
+        case .cancelled:
+            if activeSessionsLoadPhase == .loading {
+                activeSessionsLoadPhase = outcome.previousLoadPhase
+            }
+        }
     }
 
     private func fetchSubscriptionSafe(authManager: AuthManager, token: String, vpcId: String) async -> SubscriptionInfo? {
@@ -860,10 +924,7 @@ class GamesViewModel {
         identity: LoadIdentity
     ) async {
         let outcome = await fetchActiveSessionsCoalesced(token: token, base: base)
-        guard isCurrent(identity),
-              outcome.requestGeneration == activeSessionsRequestGeneration
-        else { return }
-        activeSessions = filterStopped(outcome.sessions)
+        applyActiveSessionsOutcome(outcome, identity: identity)
     }
 
     private func loadSubscriptionFromNetwork(
@@ -1009,25 +1070,34 @@ class GamesViewModel {
         }
     }
 
-    /// Owns the scene-activation refresh so provider deactivation can cancel
-    /// the URLSession-backed request, not merely reject its eventual result.
+    /// Refreshes session status after eligible library work on scene activation.
+    /// Provider deactivation can cancel both requests through their owned tasks.
     func startForegroundLibraryRefresh(authManager: AuthManager) {
         guard foregroundLibraryRefreshTask == nil,
-              libraryLoadPhase != .loading,
-              hasCompletedInitialLoad,
-              !storeConnections.isBusy,
-              !isUpdatingGameOwnership,
-              !isFullLibraryRefreshRunning
+              hasCompletedInitialLoad
         else {
             return
         }
+        let shouldRefreshLibrary = libraryLoadPhase != .loading
+            && !storeConnections.isBusy
+            && !isUpdatingGameOwnership
+            && !isFullLibraryRefreshRunning
         foregroundLibraryRefreshGeneration &+= 1
         let generation = foregroundLibraryRefreshGeneration
         foregroundLibraryRefreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await refreshLibrary(authManager: authManager)
-            guard foregroundLibraryRefreshGeneration == generation else { return }
-            foregroundLibraryRefreshTask = nil
+            defer {
+                if foregroundLibraryRefreshGeneration == generation {
+                    foregroundLibraryRefreshTask = nil
+                }
+            }
+            if shouldRefreshLibrary {
+                await refreshLibrary(authManager: authManager)
+            }
+            guard !Task.isCancelled,
+                  foregroundLibraryRefreshGeneration == generation
+            else { return }
+            await refreshActiveSessions(authManager: authManager)
         }
     }
 
@@ -1403,15 +1473,126 @@ class GamesViewModel {
             cacheGeneration: cacheGeneration,
             loadGeneration: loadGeneration
         )
-        guard let token = try? await authManager.resolveToken() else { return }
-        guard isCurrent(identity) else { return }
-        let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
-        let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
-        let outcome = await fetchActiveSessionsCoalesced(token: token, base: base)
-        guard isCurrent(identity),
-              outcome.requestGeneration == activeSessionsRequestGeneration
-        else { return }
-        activeSessions = filterStopped(outcome.sessions)
+        let requestGeneration = activeSessionsRequestGeneration
+        do {
+            let token = try await authManager.resolveToken()
+            try Task.checkCancellation()
+            guard isCurrent(identity) else { return }
+            let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
+            let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
+            let outcome = await fetchActiveSessionsCoalesced(token: token, base: base)
+            applyActiveSessionsOutcome(outcome, identity: identity)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled,
+                  isCurrent(identity),
+                  activeSessionsRequestGeneration == requestGeneration
+            else { return }
+            activeSessionsLoadPhase = .failed(L10n.text("session_status_unavailable"))
+        }
+    }
+
+    func endActiveSession(
+        _ session: ActiveSessionInfo,
+        authManager: AuthManager,
+        coordinator: CloudSessionCoordinator
+    ) async -> Bool {
+        let identity = LoadIdentity(
+            cacheGeneration: cacheGeneration,
+            loadGeneration: loadGeneration
+        )
+        guard !Task.isCancelled,
+              isCurrent(identity),
+              !session.sessionId.isEmpty,
+              let account = authManager.session,
+              currentAccountScope == accountCacheScope(
+                  idpId: account.provider.idpId,
+                  userId: account.user.userId
+              )
+        else { return false }
+        let idpId = account.provider.idpId
+        let userId = account.user.userId
+        let sessionId = session.sessionId
+
+        do {
+            let lease: CloudServerSessionLease
+            if let existing = coordinator.serverSession {
+                guard existing.provider == .geForceNow,
+                      existing.serverSessionID == sessionId
+                else { return false }
+                lease = existing
+            } else {
+                guard let client = cloudMatchClient as? any SessionOrchestrationClient,
+                      let target = activeSessions.first(where: { $0.sessionId == sessionId })
+                else { return false }
+                _ = try await authManager.resolveToken()
+                try Task.checkCancellation()
+                guard isCurrent(identity),
+                      authSessionMatches(authManager, idpId: idpId, userId: userId)
+                else { return false }
+
+                if let existing = coordinator.serverSession {
+                    guard existing.provider == .geForceNow,
+                          existing.serverSessionID == sessionId
+                    else { return false }
+                    lease = existing
+                } else {
+                    guard activeSessions.contains(where: { $0.sessionId == sessionId }) else { return false }
+                    let streamingUrl = account.provider.streamingServiceUrl
+                    let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
+                    let serverIp = target.controlServerIp ?? target.serverIp
+                    let reservationId = UUID()
+                    let actions = CloudServerSessionActions(
+                        end: { [weak self, weak coordinator, authManager, client] in
+                            guard !Task.isCancelled,
+                                  coordinator?.serverSession?.id == reservationId,
+                                  authManager.session?.provider.idpId == idpId,
+                                  authManager.session?.user.userId == userId
+                            else { return false }
+                            do {
+                                let token = try await authManager.resolveToken()
+                                try Task.checkCancellation()
+                                guard coordinator?.serverSession?.id == reservationId,
+                                      authManager.session?.provider.idpId == idpId,
+                                      authManager.session?.user.userId == userId
+                                else { return false }
+                                try await client.stopSession(
+                                    sessionId: sessionId,
+                                    token: token,
+                                    base: base,
+                                    serverIp: serverIp,
+                                    clientId: nil,
+                                    deviceId: nil
+                                )
+                            } catch {
+                                return false
+                            }
+                            if authManager.session?.provider.idpId == idpId,
+                               authManager.session?.user.userId == userId
+                            {
+                                self?.markSessionStopped(sessionId, idpId: idpId, userId: userId)
+                            }
+                            return true
+                        }
+                    )
+                    lease = try coordinator.reserveServerSession(
+                        provider: .geForceNow,
+                        serverSessionID: sessionId,
+                        actions: actions,
+                        id: reservationId
+                    )
+                }
+            }
+
+            let didEnd = await coordinator.endServerSessionUsingProvider(lease)
+            if didEnd, authSessionMatches(authManager, idpId: idpId, userId: userId) {
+                markSessionStopped(sessionId, idpId: idpId, userId: userId)
+            }
+            return didEnd
+        } catch {
+            return false
+        }
     }
 
     /// Called after confirmed termination. A late cleanup must not clear a
@@ -1425,6 +1606,13 @@ class GamesViewModel {
         }
         recentlyStoppedSessions[sessionId] = Date()
         activeSessions.removeAll { $0.sessionId == sessionId }
+    }
+
+    func markSessionStopped(_ sessionId: String, idpId: String, userId: String) {
+        guard persistenceEnabled,
+              currentAccountScope == accountCacheScope(idpId: idpId, userId: userId)
+        else { return }
+        markSessionStopped(sessionId)
     }
 
     private func filterStopped(_ sessions: [ActiveSessionInfo]) -> [ActiveSessionInfo] {
@@ -1915,6 +2103,7 @@ class GamesViewModel {
         loadGeneration &+= 1
         libraryRefreshCoordinator.cancel()
         cancelCoalescedRequests()
+        activeSessionsLoadPhase = .idle
     }
 
     func prepareForLogout() {
@@ -1924,6 +2113,7 @@ class GamesViewModel {
         libraryRefreshCoordinator.cancel()
         cancelCoalescedRequests()
         currentAccountScope = nil
+        activeSessionsLoadPhase = .idle
     }
 
     func prepareForDataReset() {
@@ -1935,6 +2125,7 @@ class GamesViewModel {
         persistenceEnabled = false
         libraryRefreshCoordinator.cancel()
         cancelCoalescedRequests()
+        activeSessionsLoadPhase = .idle
     }
 
     func resetAllData() async {
@@ -1944,6 +2135,7 @@ class GamesViewModel {
         mainGames = []
         libraryGames = []
         activeSessions = []
+        activeSessionsLoadPhase = .idle
         catalogLoadPhase = .idle
         libraryLoadPhase = .idle
         libraryWarning = nil
