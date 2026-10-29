@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 import os.log
 
@@ -310,18 +311,17 @@ private nonisolated func buildResumeSessionRequestData(
     settings: StreamSettings,
     deviceId: String,
     subSessionId: String,
-    timezoneOffsetMilliseconds: Int
+    timezoneOffsetMilliseconds: Int,
+    acceptedSdrHdrMode: Int
 ) -> [String: Any] {
-    // A RESUME (action 2) must NOT renegotiate streaming parameters: the session is already
-    // configured server-side, and resending fps/resolution/codec/HDR/monitor settings makes
-    // the server reject the claim (INTERNAL_ERROR 8A8C0000). Mirror the official client /
-    // OpenNOW minimal resume body — identity, audio, timezone, launch mode only; no monitor
-    // settings, requestedStreamingFeatures, HDR capabilities, or physical-resolution metadata.
+    // RESUME attaches the existing allocation and preserves its accepted dynamic range.
+    // Resending monitor settings or requested features renegotiates quality and can be
+    // rejected with INTERNAL_ERROR 8A8C0000. Keep the existing minimal attachment body.
     let audioChannels = settings.audioFormat.resolvedChannelCount
     var requestData: [String: Any] = [
         "audioMode": audioChannels,
         "remoteControllersBitmap": 0,
-        "sdrHdrMode": 0,
+        "sdrHdrMode": acceptedSdrHdrMode,
         "networkTestSessionId": NSNull(),
         "availableSupportedControllers": [],
         "clientVersion": "30.0",
@@ -430,6 +430,18 @@ private nonisolated func rigHost(ip: String?, resourcePath: String?) -> String? 
     normalizedRigHost(ip) ?? normalizedRigHost(hostFromResourcePath(resourcePath))
 }
 
+private nonisolated func reportedSdrHdrMode(in data: Data) -> Int? {
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let session = root["session"] as? [String: Any],
+          let monitors = session["monitorSettings"] as? [Any],
+          let monitor = monitors.first as? [String: Any],
+          let number = monitor["sdrHdrMode"] as? NSNumber,
+          CFGetTypeID(number) != CFBooleanGetTypeID(),
+          let mode = Int(exactly: number.doubleValue), (0 ... 2).contains(mode)
+    else { return nil }
+    return mode
+}
+
 // MARK: - CloudMatchClient
 
 actor CloudMatchClient {
@@ -441,6 +453,8 @@ actor CloudMatchClient {
     private let now: @Sendable () -> Date
     private let timezoneOffsetMilliseconds: @Sendable () -> Int
     private let sleep: @Sendable (TimeInterval) async throws -> Void
+    private var lastAcceptedSdrHdrSessionId: String?
+    private var lastAcceptedSdrHdrMode: Int?
 
     init(
         transport: any HTTPTransport = URLSessionHTTPTransport(configuration: .ephemeral),
@@ -521,7 +535,10 @@ actor CloudMatchClient {
         let bodyData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         cloudMatchLog.debug("[CloudMatch] bodySize: \(bodyData.count, privacy: .public) bytes")
         cloudMatchLog.debug("[CloudMatch] createSession languageCode=\(input.settings.effectiveGameLanguage, privacy: .public) keyboardLayout=\(input.settings.keyboardLayout, privacy: .public)")
-        let headers = gfnHeaders(token: input.token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
+        var headers = gfnHeaders(token: input.token, clientId: clientId, deviceId: deviceId, includeOrigin: true)
+        // Allocate the native feature envelope, then claim the ready session with
+        // WebRTC before connecting. A WebRTC allocation drops native capabilities.
+        headers["nv-client-streamer"] = "NVIDIA-CLASSIC"
         let queryItems = [
             URLQueryItem(name: "keyboardLayout", value: input.settings.keyboardLayout),
             URLQueryItem(name: "languageCode", value: input.settings.effectiveGameLanguage),
@@ -815,7 +832,8 @@ actor CloudMatchClient {
                 settings: settings,
                 deviceId: deviceId,
                 subSessionId: uuid().uuidString,
-                timezoneOffsetMilliseconds: timezoneOffsetMilliseconds()
+                timezoneOffsetMilliseconds: timezoneOffsetMilliseconds(),
+                acceptedSdrHdrMode: preflight.acceptedSdrHdrMode ?? 0
             ),
             "metaData": [],
         ]
@@ -851,6 +869,13 @@ actor CloudMatchClient {
     ) throws -> SessionInfo {
         guard let s = payload.session else {
             throw CloudMatchError.missingSession(context: "CloudMatch response")
+        }
+        let reportedMode = reportedSdrHdrMode(in: rawData)
+        if lastAcceptedSdrHdrSessionId != s.sessionId {
+            lastAcceptedSdrHdrSessionId = s.sessionId
+            lastAcceptedSdrHdrMode = reportedMode
+        } else if let reportedMode {
+            lastAcceptedSdrHdrMode = reportedMode
         }
         let connections = s.connectionInfo ?? []
         if cloudMatchOSLog.isEnabled(type: .debug) {
@@ -916,7 +941,8 @@ actor CloudMatchClient {
             clientId: clientId,
             deviceId: deviceId,
             adState: adState,
-            controlServerIp: normalizedControlServerIp(s.sessionControlInfo?.ip?.value)
+            controlServerIp: normalizedControlServerIp(s.sessionControlInfo?.ip?.value),
+            acceptedSdrHdrMode: lastAcceptedSdrHdrMode
         )
     }
 

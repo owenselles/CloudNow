@@ -40,7 +40,7 @@ struct CloudMatchClientTests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "GFNJWT fixture-token")
             #expect(request.value(forHTTPHeaderField: "nv-client-id") == fixedUUID.uuidString)
             #expect(request.value(forHTTPHeaderField: "x-device-id") == "fixture-device")
-            #expect(request.value(forHTTPHeaderField: "nv-client-streamer") == "WEBRTC")
+            #expect(request.value(forHTTPHeaderField: "nv-client-streamer") == "NVIDIA-CLASSIC")
             #expect(request.value(forHTTPHeaderField: "nv-client-type") == "NATIVE")
             let requestURL = try #require(request.url)
             let query = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
@@ -691,13 +691,141 @@ struct CloudMatchClientTests {
 
         #expect(requests.count == 2)
         #expect(resume.httpMethod == "PUT")
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "nv-client-streamer") == "WEBRTC" })
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "nv-client-type") == "NATIVE" })
         #expect(root["action"] as? Int == 2)
         #expect(requestData["appId"] as? Int == 12345)
+        #expect(requestData["sdrHdrMode"] as? Int == 0)
         #expect(requestData["requestedStreamingFeatures"] == nil)
         #expect(requestData["clientRequestMonitorSettings"] == nil)
         #expect(requestData["audioMode"] as? Int == channels)
         #expect(requestData["surroundAudioInfo"] as? Int == surroundInfo)
         #expect(metadata.first { $0["key"] as? String == "surroundAudioInfo" }?["value"] as? String == "\(channels)")
+    }
+
+    @Test(
+        "Resume preserves allocated color instead of renegotiating from current preferences",
+        arguments: [
+            (ColorModePreference.forceSDR8, 1, 1),
+            (.preferHDR, 0, 0),
+            (.preferHDR, 99, 0),
+        ]
+    )
+    func claimPreservesAllocatedColor(preference: ColorModePreference, reportedMode: Int, expectedMode: Int) async throws {
+        let fixture = try NetworkingFixture.data("cloudmatch-session.json")
+        var response = try #require(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
+        var payload = try #require(response["session"] as? [String: Any])
+        payload["monitorSettings"] = [[
+            "widthInPixels": 3840,
+            "heightInPixels": 2160,
+            "framesPerSecond": 60,
+            "sdrHdrMode": reportedMode,
+        ]]
+        response["session"] = payload
+        let data = try JSONSerialization.data(withJSONObject: response)
+        let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: data) }
+        var settings = StreamSettings()
+        settings.colorPreference = preference
+        settings.audioFormat = .surround51
+        let client = CloudMatchClient(transport: transport)
+
+        let session = try await client.claimSession(
+            sessionId: "fixture-session",
+            serverIp: "203.0.113.10",
+            token: "token",
+            base: "https://region.example.invalid",
+            settings: settings
+        )
+        let requests = await transport.requests()
+        let resume = try #require(requests.last)
+        let body = try jsonObject(from: resume)
+        let requestData = try #require(body["sessionRequestData"] as? [String: Any])
+        let metadata = try #require(requestData["metaData"] as? [[String: Any]])
+
+        #expect(requests.count == 2)
+        #expect(resume.httpMethod == "PUT")
+        #expect(resume.value(forHTTPHeaderField: "nv-client-streamer") == "WEBRTC")
+        #expect(resume.value(forHTTPHeaderField: "nv-client-type") == "NATIVE")
+        #expect(requestData["sdrHdrMode"] as? Int == expectedMode)
+        #expect(session.acceptedSdrHdrMode == (reportedMode == 99 ? nil : reportedMode))
+        #expect(requestData["clientRequestMonitorSettings"] == nil)
+        #expect(requestData["requestedStreamingFeatures"] == nil)
+        #expect(requestData["clientDisplayHdrCapabilities"] is NSNull)
+        #expect(metadata.first { $0["key"] as? String == "clientPhysicalResolution" } == nil)
+        #expect(requestData["audioMode"] as? Int == 6)
+        #expect(requestData["surroundAudioInfo"] as? Int == 4_128_774)
+        #expect(metadata.first { $0["key"] as? String == "surroundAudioInfo" }?["value"] as? String == "6")
+    }
+
+    @Test(
+        "Sparse or malformed preflight retains accepted HDR only for the same server session",
+        arguments: ["missing", "true", "false", "1.5", #""1""#]
+    )
+    func sparsePreflightPreservesSessionScopedHDR(reportedModeJSON: String) async throws {
+        let fixture = try NetworkingFixture.data("cloudmatch-session.json")
+        var response = try #require(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
+        var payload = try #require(response["session"] as? [String: Any])
+        payload["monitorSettings"] = [["sdrHdrMode": 1]]
+        response["session"] = payload
+        let hdrData = try JSONSerialization.data(withJSONObject: response)
+        if reportedModeJSON == "missing" {
+            payload.removeValue(forKey: "monitorSettings")
+        } else {
+            let mode = try JSONSerialization.jsonObject(with: Data(reportedModeJSON.utf8), options: .fragmentsAllowed)
+            payload["monitorSettings"] = [["sdrHdrMode": mode]]
+        }
+        response["session"] = payload
+        let sparseData = try JSONSerialization.data(withJSONObject: response)
+        payload["sessionId"] = "different-session"
+        response["session"] = payload
+        let differentSessionData = try JSONSerialization.data(withJSONObject: response)
+        let transport = RecordingHTTPTransport { _, index in
+            switch index {
+            case 0: StubbedHTTPResponse(data: hdrData)
+            case 1, 2: StubbedHTTPResponse(data: sparseData)
+            case 3, 4: StubbedHTTPResponse(data: differentSessionData)
+            default: throw TestTransportError.unexpectedRequest("Unexpected session request \(index)")
+            }
+        }
+        let client = CloudMatchClient(transport: transport)
+        let polled = try await client.pollSession(
+            sessionId: "fixture-session",
+            token: "token",
+            base: "https://region.example.invalid",
+            serverIp: "203.0.113.10",
+            clientId: "client",
+            deviceId: "device"
+        )
+        var settings = StreamSettings()
+        settings.colorPreference = .forceSDR8
+        let resumed = try await client.claimSession(
+            sessionId: "fixture-session",
+            serverIp: "203.0.113.10",
+            token: "token",
+            base: "https://region.example.invalid",
+            settings: settings
+        )
+        settings.colorPreference = .preferHDR
+        let different = try await client.claimSession(
+            sessionId: "different-session",
+            serverIp: "203.0.113.10",
+            token: "token",
+            base: "https://region.example.invalid",
+            settings: settings
+        )
+        let requests = await transport.requests()
+        let resumes = try requests.filter { $0.httpMethod == "PUT" }.map { request in
+            let body = try jsonObject(from: request)
+            return try #require(body["sessionRequestData"] as? [String: Any])
+        }
+
+        #expect(requests.map(\.httpMethod) == ["GET", "GET", "PUT", "GET", "PUT"])
+        #expect(polled.acceptedSdrHdrMode == 1)
+        #expect(resumed.acceptedSdrHdrMode == 1)
+        #expect(different.acceptedSdrHdrMode == nil)
+        try #require(resumes.count == 2)
+        #expect(resumes[0]["sdrHdrMode"] as? Int == 1)
+        #expect(resumes[1]["sdrHdrMode"] as? Int == 0)
     }
 
     @Test("Ad event uses injected timestamp and clamps negative durations")

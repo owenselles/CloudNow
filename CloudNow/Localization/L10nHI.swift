@@ -354,7 +354,7 @@ enum L10nHI {
         "hdr10": "HDR10",
         "unknown_8_bit": "Unknown 8-bit",
         "unknown_10_bit": "Unknown 10-bit",
-        "unknown": "Unknown",
+        "unknown": "अज्ञात",
         "hardware": "Hardware",
         "no_transfer": "No transfer",
         "no_primaries": "No primaries",

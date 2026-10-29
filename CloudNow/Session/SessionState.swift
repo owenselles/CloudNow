@@ -540,10 +540,6 @@ nonisolated enum StreamColorMode: String, Codable, Equatable {
     var bitDepth: Int {
         self == .sdr8 ? 8 : 10
     }
-
-    @MainActor var diagnosticLabel: String {
-        L10n.streamColorModeLabel(self)
-    }
 }
 
 nonisolated enum DetectedColorMode: String, Codable, Equatable {
@@ -810,6 +806,8 @@ nonisolated struct SessionInfo {
     let adState: SessionAdState?
     /// CloudMatch lifecycle endpoint, independent of the signaling/media host.
     var controlServerIp: String?
+    /// Server-accepted dynamic range, preserved when attaching to an existing allocation.
+    var acceptedSdrHdrMode: Int?
 
     /// True while the session is sitting in the GFN queue (no timeout applies).
     var isInQueue: Bool {
