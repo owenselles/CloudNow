@@ -197,11 +197,11 @@ final class SessionOrchestrator {
             }
 
             guard acceptsAttempt(attempt, taskIsCancelled: Task.isCancelled) else {
-                _ = await stopOnce(session: session, token: request.token)
+                _ = await stopOnce(session: session, token: request.token, base: request.cleanupBase)
                 throw CancellationError()
             }
 
-            adopt(session, token: request.token)
+            adopt(session, token: request.token, base: request.cleanupBase)
             onUpdate?(session, nil)
             return session
         }
@@ -330,14 +330,16 @@ final class SessionOrchestrator {
     /// Registers a session created or reclaimed outside the coordinator.
     /// Keep the provider listing endpoint when polling moves to a media host.
     func adopt(_ session: SessionInfo, token: String, base: String? = nil) {
-        let previousBase = ownedSession.flatMap {
-            $0.handle.sessionID == session.sessionId ? $0.handle.base : nil
+        let previousHandle = ownedSession.flatMap {
+            $0.handle.sessionID == session.sessionId ? $0.handle : nil
         }
         adoptStopTarget(
             sessionID: session.sessionId,
             token: token,
-            base: base ?? previousBase ?? session.streamingBaseUrl,
-            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
+            base: base ?? previousHandle?.base ?? session.streamingBaseUrl,
+            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp)
+                ?? previousHandle?.serverIP
+                ?? base.flatMap { _ in URL(string: session.streamingBaseUrl)?.host },
             clientID: session.clientId,
             deviceID: session.deviceId
         )
@@ -492,13 +494,14 @@ final class SessionOrchestrator {
         activePolling = nil
     }
 
-    private func stopOnce(session: SessionInfo, token: String) async -> Bool {
+    private func stopOnce(session: SessionInfo, token: String, base: String? = nil) async -> Bool {
         await stopOnce(handle: SessionStopHandle(
             ownershipID: UUID(),
             sessionID: session.sessionId,
             token: token,
-            base: session.streamingBaseUrl,
-            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp),
+            base: base ?? session.streamingBaseUrl,
+            serverIP: session.controlServerIp ?? (session.serverIp.isEmpty ? nil : session.serverIp)
+                ?? base.flatMap { _ in URL(string: session.streamingBaseUrl)?.host },
             clientID: session.clientId,
             deviceID: session.deviceId
         ))

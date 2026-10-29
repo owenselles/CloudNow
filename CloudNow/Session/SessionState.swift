@@ -1198,4 +1198,6 @@ nonisolated struct SessionCreateRequest {
     /// When true, CloudMatchClient will not fall back to the NVIDIA global endpoint
     /// on failure — partner sessions must only reach their own streaming service.
     let skipNvidiaFallback: Bool
+    /// Authoritative service base when creation uses a separate regional host.
+    var cleanupBase: String?
 }

@@ -169,8 +169,11 @@ struct CloudMatchClientTests {
         #expect(await transport.requests().count == 2)
     }
 
-    @Test("Partner session failure never falls back to the NVIDIA endpoint")
-    func partnerFailureSkipsNvidiaFallback() async {
+    @Test(
+        "Partner session failure never falls back to the NVIDIA endpoint",
+        arguments: ["prod.dig.geforcenow.nvidiagrid.net", "af-south.ran.geforcenow.nvidiagrid.net"]
+    )
+    func partnerFailureSkipsNvidiaFallback(host: String) async {
         let transport = RecordingHTTPTransport { _, _ in
             StubbedHTTPResponse(statusCode: 503, json: #"{"error":"partner-unavailable"}"#)
         }
@@ -180,7 +183,7 @@ struct CloudMatchClientTests {
             appId: input.appId,
             internalTitle: input.internalTitle,
             token: input.token,
-            streamingBaseUrl: "https://prod.dig.geforcenow.nvidiagrid.net/",
+            streamingBaseUrl: "https://\(host)/",
             routingZoneUrl: nil,
             settings: input.settings,
             localVideoCapabilities: input.localVideoCapabilities,
@@ -200,8 +203,99 @@ struct CloudMatchClientTests {
         // Exactly one attempt, and it stayed on the partner's streaming service.
         let requests = await transport.requests()
         #expect(requests.count == 1)
-        #expect(requests.first?.url?.host == "prod.dig.geforcenow.nvidiagrid.net")
+        #expect(requests.first?.url?.host == host)
         #expect(!requests.contains { $0.url?.host == "prod.cloudmatchbeta.nvidiagrid.net" })
+    }
+
+    @Test("Rain creation, resume, and End keep their separate endpoint roles")
+    func rainSessionLifecycleEndpoints() async throws {
+        let response = """
+        {"requestStatus":{"statusCode":1},"session":{
+            "sessionId":"rain-session","status":2,
+            "connectionInfo":[{"usage":14,"ip":"npa-ran-jnb-01.ran.geforcenow.nvidiagrid.net","port":443}],
+            "sessionControlInfo":{"ip":"control.rain.fixture.invalid"}
+        }}
+        """
+        let transport = RecordingHTTPTransport { request, _ in
+            if request.httpMethod == "DELETE" {
+                return StubbedHTTPResponse(statusCode: 204)
+            }
+            if request.httpMethod == "GET", request.url?.path == "/v2/session" {
+                return StubbedHTTPResponse(json: #"{"requestStatus":{"statusCode":1},"sessions":[]}"#)
+            }
+            return StubbedHTTPResponse(json: response)
+        }
+        let client = CloudMatchClient(transport: transport, deviceId: { "device" })
+        let input = makeRainSessionRequest()
+
+        let created = try await client.createSession(input)
+        let resumed = try await client.claimSession(
+            sessionId: created.sessionId,
+            serverIp: created.serverIp,
+            token: input.token,
+            base: #require(input.cleanupBase),
+            routingZoneUrl: created.zone,
+            clientId: created.clientId,
+            deviceId: created.deviceId,
+            appId: input.appId,
+            settings: input.settings
+        )
+        try await client.stopSession(
+            sessionId: resumed.sessionId,
+            token: input.token,
+            base: #require(input.cleanupBase),
+            serverIp: resumed.controlServerIp ?? resumed.serverIp,
+            clientId: resumed.clientId,
+            deviceId: resumed.deviceId
+        )
+
+        let requests = await transport.requests()
+        #expect(requests.map(\.httpMethod) == ["POST", "GET", "PUT", "DELETE", "GET"])
+        #expect(requests.map { $0.url?.host?.lowercased() } == [
+            "af-south.ran.geforcenow.nvidiagrid.net",
+            "npa-ran-jnb-01.ran.geforcenow.nvidiagrid.net",
+            "npa-ran-jnb-01.ran.geforcenow.nvidiagrid.net",
+            "control.rain.fixture.invalid",
+            "prod.ran.geforcenow.nvidiagrid.net",
+        ])
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "GFNJWT fixture-token" })
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "nv-client-id") == created.clientId })
+        #expect(resumed.sessionId == created.sessionId)
+        #expect(resumed.zone == created.zone)
+    }
+
+    @Test("A failed Rain creation confirms phantom cleanup at the provider service", arguments: [false, true])
+    func rainFailedCreationCleanup(hasControlServer: Bool) async {
+        let control = hasControlServer
+            ? #", "sessionControlInfo":{"ip":"control.rain.fixture.invalid"}"#
+            : ""
+        let response = """
+        {"requestStatus":{"statusCode":4,"statusDescription":"rain-unavailable"},
+         "session":{"sessionId":"rain-phantom","status":1\(control)}}
+        """
+        let transport = RecordingHTTPTransport { request, index in
+            if index == 0 {
+                #expect(request.httpMethod == "POST")
+                return StubbedHTTPResponse(statusCode: 503, json: response)
+            }
+            if request.httpMethod == "DELETE" {
+                return StubbedHTTPResponse(statusCode: 204)
+            }
+            return StubbedHTTPResponse(json: #"{"requestStatus":{"statusCode":1},"sessions":[]}"#)
+        }
+        let client = CloudMatchClient(transport: transport, deviceId: { "device" })
+
+        await #expect(throws: CloudMatchError.self) {
+            try await client.createSession(makeRainSessionRequest())
+        }
+
+        let requests = await transport.requests()
+        #expect(requests.map(\.httpMethod) == ["POST", "DELETE", "GET"])
+        #expect(requests.map { $0.url?.host?.lowercased() } == [
+            "af-south.ran.geforcenow.nvidiagrid.net",
+            hasControlServer ? "control.rain.fixture.invalid" : "af-south.ran.geforcenow.nvidiagrid.net",
+            "prod.ran.geforcenow.nvidiagrid.net",
+        ])
     }
 
     @Test("CloudMatch API status errors retain structured context")
@@ -749,6 +843,27 @@ struct CloudMatchClientTests {
                 base: "https://region.example.invalid"
             )
         }
+    }
+
+    private func makeRainSessionRequest() -> SessionCreateRequest {
+        let provider = LoginProvider(
+            idpId: "rain", code: "RAN", displayName: "rain",
+            streamingServiceUrl: "https://prod.RAN.geforcenow.nvidiagrid.net/", priority: 0
+        )
+        let input = makeSessionRequest()
+        return SessionCreateRequest(
+            appId: input.appId,
+            internalTitle: input.internalTitle,
+            token: input.token,
+            streamingBaseUrl: "https://af-south.ran.geforcenow.nvidiagrid.net/",
+            routingZoneUrl: nil,
+            settings: input.settings,
+            localVideoCapabilities: input.localVideoCapabilities,
+            accountLinked: input.accountLinked,
+            accountAllowsHDR: input.accountAllowsHDR,
+            skipNvidiaFallback: true,
+            cleanupBase: String(provider.streamingServiceUrl.dropLast())
+        )
     }
 
     private func placeholderSessionResponse(controlHost: String?) throws -> Data {

@@ -578,7 +578,11 @@ actor CloudMatchClient {
                 try? await stopSession(
                     sessionId: sid,
                     token: input.token,
-                    base: base,
+                    base: input.cleanupBase ?? base,
+                    serverIp: input.cleanupBase.flatMap { _ in
+                        normalizedControlServerIp(session.sessionControlInfo?.ip?.value)
+                            ?? URL(string: base)?.host
+                    },
                     clientId: clientId,
                     deviceId: deviceId
                 )

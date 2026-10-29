@@ -1325,7 +1325,8 @@ struct StreamView: View {
         orchestrationAttempt: SessionAttemptToken
     ) async throws -> SessionInfo {
         try requireCurrentSessionAttempt(generation)
-        let isNvidiaProvider = authManager.session?.provider.isNvidiaDirect ?? true
+        let provider = authManager.session?.provider
+        let isNvidiaProvider = provider?.isNvidiaDirect ?? true
         var storageRegion: GFNRegion?
         var launchGame = game
         if isNvidiaProvider {
@@ -1361,6 +1362,13 @@ struct StreamView: View {
                 storageRegion = GFNInstallToPlayLaunch.region(for: storage, regions: serverInfo?.regions ?? [])
             }
         }
+        let partnerCreationBase: String
+        if !isNvidiaProvider, let provider {
+            partnerCreationBase = try await ServerInfoClient.shared.sessionCreationUrl(for: provider, token: token)
+            try requireCurrentSessionAttempt(generation)
+        } else {
+            partnerCreationBase = base
+        }
         let routeSelection: (base: String, routingZoneUrl: String?) = if let storageRegion {
             (storageRegion.address, storageRegion.address)
         } else if isNvidiaProvider {
@@ -1375,7 +1383,7 @@ struct StreamView: View {
             }
         } else {
             // Partner providers manage their own routing; skip NVIDIA zone/region selection.
-            (base, nil)
+            (partnerCreationBase, nil)
         }
         streamLog.info("[Session] creating new session, appId=\(appId, privacy: .public), sessionBase=\(routeSelection.base, privacy: .public), routingZoneUrl=\(routeSelection.routingZoneUrl ?? "nil", privacy: .public)")
 
@@ -1389,7 +1397,8 @@ struct StreamView: View {
             localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec.resolvedCodec),
             accountLinked: true,
             accountAllowsHDR: viewModel.subscription?.allowsHDR,
-            skipNvidiaFallback: !isNvidiaProvider || storageRegion != nil
+            skipNvidiaFallback: !isNvidiaProvider || storageRegion != nil,
+            cleanupBase: !isNvidiaProvider && provider?.code.uppercased() == "RAN" ? base : nil
         )
 
         do {

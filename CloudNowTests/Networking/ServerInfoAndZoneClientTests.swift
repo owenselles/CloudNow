@@ -118,6 +118,238 @@ struct ServerInfoHTTPClientTests {
         ])
     }
 
+    @Test("Rain session creation follows the advertised local or sole region", arguments: [false, true])
+    func rainRoutingUsesRegionMetadata(includesLocalRegion: Bool) async throws {
+        let fixture = try rainMetadata(
+            address: "https://future.rain.example.invalid",
+            includesLocalRegion: includesLocalRegion
+        )
+        let transport = RecordingHTTPTransport { request, _ in
+            #expect(request.url?.absoluteString == "https://service.rain.example.invalid/v2/serverInfo")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "GFNJWT token")
+            return StubbedHTTPResponse(data: fixture)
+        }
+        let client = ServerInfoClient(transport: transport, deviceId: { "fixture-device" })
+        let provider = rainProvider(code: includesLocalRegion ? "RAN" : "ran")
+
+        let target = try await client.sessionCreationUrl(for: provider, token: "token")
+
+        #expect(target == "https://future.rain.example.invalid/")
+        #expect(provider.streamingServiceUrl == "https://service.rain.example.invalid/")
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Rain metadata failure uses only the matching provider's cache", arguments: [false, true])
+    func rainRoutingFailureScopesCachedMetadata(cacheMatchesProvider: Bool) async throws {
+        let fixture = try rainMetadata(address: "https://cached.rain.example.invalid/")
+        let transport = RecordingHTTPTransport { _, index in
+            index == 0
+                ? StubbedHTTPResponse(data: fixture)
+                : StubbedHTTPResponse(statusCode: 503, json: #"{"error":"unavailable"}"#)
+        }
+        let clock = DateStepper(start: Date(timeIntervalSince1970: 1_700_000_000), step: 61)
+        let client = ServerInfoClient(
+            transport: transport,
+            deviceId: { "fixture-device" },
+            now: { clock.next() },
+            cacheTTL: 60
+        )
+        let provider = rainProvider()
+        let cachedBase = cacheMatchesProvider ? provider.streamingServiceUrl : "https://other.example.invalid/"
+        _ = try await client.fetch(baseUrl: cachedBase, token: "token")
+
+        if cacheMatchesProvider {
+            let target = try await client.sessionCreationUrl(for: provider, token: "token")
+            #expect(target == "https://cached.rain.example.invalid/")
+        } else {
+            await #expect(throws: URLError.self) {
+                try await client.sessionCreationUrl(for: provider, token: "token")
+            }
+        }
+        #expect(await transport.requests().count == 2)
+    }
+
+    @Test("Rain metadata failure without a matching cache preserves the original error")
+    func rainRoutingFailureWithoutCacheThrows() async {
+        let transport = RecordingHTTPTransport { _, _ in throw URLError(.timedOut) }
+        let client = ServerInfoClient(transport: transport, deviceId: { "fixture-device" })
+
+        do {
+            _ = try await client.sessionCreationUrl(for: rainProvider(), token: "token")
+            Issue.record("Expected unavailable metadata to fail session routing")
+        } catch let error as URLError {
+            #expect(error.code == .timedOut)
+        } catch {
+            Issue.record("Unexpected metadata error: \(error)")
+        }
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Previously saved Rain providers use discovery without changing their persisted service URL")
+    func savedRainProviderUsesDiscoveredRoute() async throws {
+        let saved = Data("""
+        {
+            "idpId":"rain-idp",
+            "code":"RAN",
+            "displayName":"Rain",
+            "streamingServiceUrl":"https://service.rain.example.invalid/",
+            "priority":1
+        }
+        """.utf8)
+        let provider = try JSONDecoder().decode(LoginProvider.self, from: saved)
+        let fixture = try rainMetadata(address: "https://future.rain.example.invalid/")
+        let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: fixture) }
+        let client = ServerInfoClient(transport: transport, deviceId: { "fixture-device" })
+
+        let target = try await client.sessionCreationUrl(for: provider, token: "token")
+
+        #expect(target == "https://future.rain.example.invalid/")
+        let encoded = try JSONEncoder().encode(provider)
+        let fields = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(fields["streamingServiceUrl"] as? String == "https://service.rain.example.invalid/")
+        #expect(fields["sessionCreationUrl"] == nil)
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Rain providers with a regional service URL still read the advertised route")
+    func regionalRainProviderUsesDiscovery() async throws {
+        let provider = rainProvider(baseURL: "https://existing.rain.example.invalid/")
+        let fixture = try rainMetadata(address: provider.streamingServiceUrl)
+        let transport = RecordingHTTPTransport { request, _ in
+            #expect(request.url?.absoluteString == "https://existing.rain.example.invalid/v2/serverInfo")
+            return StubbedHTTPResponse(data: fixture)
+        }
+        let client = ServerInfoClient(transport: transport, deviceId: { "fixture-device" })
+
+        let target = try await client.sessionCreationUrl(for: provider, token: "token")
+
+        #expect(target == provider.streamingServiceUrl)
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test(
+        "Unsafe Rain metadata cannot create a session route",
+        arguments: [
+            "http://future.rain.example.invalid/",
+            "https://future.rain.example.invalid/custom/",
+            "https://future.rain.example.invalid:443/",
+            "https://future.rain.example.invalid/?route=custom",
+            "https://future.rain.example.invalid/#custom",
+            "https://user:password@future.rain.example.invalid/",
+            "https://future.rain.example.invalid.example/",
+            "https://unrelated.example.invalid/",
+        ]
+    )
+    func rainRoutingRejectsUnsafeMetadata(address: String) async throws {
+        let fixture = try rainMetadata(address: address)
+        let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: fixture) }
+        let client = ServerInfoClient(transport: transport, deviceId: { "fixture-device" })
+
+        await #expect(throws: URLError.self) {
+            try await client.sessionCreationUrl(for: rainProvider(), token: "token")
+        }
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Rain routing requires an advertised local or unambiguous region", arguments: [false, true])
+    func rainRoutingRejectsMissingRegion(hasAmbiguousRegions: Bool) async throws {
+        let entries = hasAmbiguousRegions ? [
+            ["key": "gfn-regions", "value": "One,Two"],
+            ["key": "One", "value": "https://one.rain.example.invalid/"],
+            ["key": "Two", "value": "https://two.rain.example.invalid/"],
+        ] : []
+        let fixture = try JSONSerialization.data(withJSONObject: ["metaData": entries])
+        let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: fixture) }
+        let client = ServerInfoClient(transport: transport, deviceId: { "fixture-device" })
+
+        do {
+            _ = try await client.sessionCreationUrl(for: rainProvider(), token: "token")
+            Issue.record("Expected missing regional metadata to fail session routing")
+        } catch let error as URLError {
+            #expect(error.code == .badServerResponse)
+        } catch {
+            Issue.record("Unexpected metadata error: \(error)")
+        }
+        #expect(await transport.requests().count == 1)
+    }
+
+    @Test("Non-Rain and NVIDIA-direct providers skip Rain metadata discovery", arguments: ["OTHER", "NVIDIA", "RAN"])
+    func unrelatedProviderRoutingStaysOffline(code: String) async throws {
+        let transport = RecordingHTTPTransport { _, _ in throw URLError(.notConnectedToInternet) }
+        let client = ServerInfoClient(transport: transport, deviceId: { "fixture-device" })
+        let provider = LoginProvider(
+            idpId: code == "OTHER" ? "partner-idp" : NVIDIAAuth.defaultIdpId,
+            code: code,
+            displayName: "Fixture provider",
+            streamingServiceUrl: "https://service.rain.example.invalid/",
+            priority: 1
+        )
+
+        let target = try await client.sessionCreationUrl(for: provider, token: "token")
+
+        #expect(target == provider.streamingServiceUrl)
+        #expect(await transport.requests().isEmpty)
+    }
+
+    @Test("Cancelled Rain discovery never falls back to a stale cached route", arguments: [false, true])
+    func cancelledRainRoutingDoesNotFallback(usesURLCancellation: Bool) async throws {
+        let fixture = try rainMetadata(address: "https://cached.rain.example.invalid/")
+        let transport = RecordingHTTPTransport { _, index in
+            if index == 0 {
+                return StubbedHTTPResponse(data: fixture)
+            }
+            if usesURLCancellation {
+                throw URLError(.cancelled)
+            }
+            throw CancellationError()
+        }
+        let clock = DateStepper(start: Date(timeIntervalSince1970: 1_700_000_000), step: 61)
+        let client = ServerInfoClient(
+            transport: transport,
+            deviceId: { "fixture-device" },
+            now: { clock.next() },
+            cacheTTL: 60
+        )
+        let provider = rainProvider()
+        _ = try await client.fetch(baseUrl: provider.streamingServiceUrl, token: "token")
+
+        if usesURLCancellation {
+            await #expect(throws: URLError.self) {
+                try await client.sessionCreationUrl(for: provider, token: "token")
+            }
+        } else {
+            await #expect(throws: CancellationError.self) {
+                try await client.sessionCreationUrl(for: provider, token: "token")
+            }
+        }
+        #expect(await transport.requests().count == 2)
+    }
+
+    private func rainProvider(
+        code: String = "RAN",
+        baseURL: String = "https://service.rain.example.invalid/"
+    ) -> LoginProvider {
+        LoginProvider(
+            idpId: "rain-idp",
+            code: code,
+            displayName: "Rain",
+            streamingServiceUrl: baseURL,
+            priority: 1
+        )
+    }
+
+    private func rainMetadata(address: String, includesLocalRegion: Bool = true) throws -> Data {
+        var entries = [
+            ["key": "gfn-regions", "value": includesLocalRegion ? "OtherRegion,LocalRegion" : "LocalRegion"],
+            ["key": "LocalRegion", "value": address],
+        ]
+        if includesLocalRegion {
+            entries.append(["key": "OtherRegion", "value": "https://other.rain.example.invalid/"])
+            entries.append(["key": "local-region", "value": "LocalRegion"])
+        }
+        return try JSONSerialization.data(withJSONObject: ["metaData": entries])
+    }
+
     @Test("Cancellation propagates from transport")
     func cancellation() async throws {
         let fixedUUID = try #require(UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"))

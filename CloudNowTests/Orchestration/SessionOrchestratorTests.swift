@@ -93,6 +93,149 @@ struct SessionOrchestratorTests {
     }
 
     @MainActor
+    @Test(
+        "Regional creation retains the provider cleanup endpoint through readiness polling",
+        arguments: [false, true]
+    )
+    func regionalCreationPreservesCleanupEndpoint(pollOmitsServerAddress: Bool) async throws {
+        let regionalBase = "https://af-south.rain.fixture.invalid"
+        let cleanupBase = "https://prod.rain.fixture.invalid"
+        var allocated = makeSession(id: "regional", status: 1, streamingBaseUrl: regionalBase)
+        allocated.controlServerIp = "allocated-control.fixture.invalid"
+        var ready = makeSession(
+            id: "regional", status: 2, streamingBaseUrl: "https://media.fixture.invalid",
+            serverIp: pollOmitsServerAddress ? "" : "192.0.2.10"
+        )
+        if !pollOmitsServerAddress {
+            ready.controlServerIp = "control.fixture.invalid"
+        }
+        let client = ScriptedSessionClient(creates: [allocated], polls: [ready])
+        let clock = ManualSessionScheduler()
+        let orchestrator = SessionOrchestrator(client: client, scheduler: clock.scheduler)
+        let attempt = orchestrator.beginAttempt()
+        let request = makeRequest(streamingBaseUrl: regionalBase, cleanupBase: cleanupBase)
+
+        let created = try await orchestrator.createSession(request, attempt: attempt)
+        let connected = try await orchestrator.waitUntilReady(
+            initialSession: created,
+            token: request.token,
+            attempt: attempt,
+            requiredReadyResponses: 1
+        )
+
+        #expect(connected.streamingBaseUrl == ready.streamingBaseUrl)
+        #expect(await client.pollCount == 1)
+        #expect(await orchestrator.teardown())
+        #expect(await orchestrator.teardown())
+
+        let createRequests = await client.createRequests
+        #expect(createRequests.count == 1)
+        let createRequest = try #require(createRequests.first)
+        #expect(createRequest.streamingBaseUrl == regionalBase)
+        #expect(createRequest.cleanupBase == cleanupBase)
+        #expect(await client.stopCalls == [RecordedStopCall(
+            sessionID: "regional",
+            token: request.token,
+            base: cleanupBase,
+            serverIP: pollOmitsServerAddress ? "allocated-control.fixture.invalid" : "control.fixture.invalid",
+            clientID: ready.clientId,
+            deviceID: ready.deviceId
+        )])
+    }
+
+    @MainActor
+    @Test("A queued regional allocation without server addresses ends at its regional host")
+    func queuedRegionalAllocationUsesRegionalHostForCleanup() async throws {
+        let regionalBase = "https://af-south.rain.fixture.invalid"
+        let cleanupBase = "https://prod.rain.fixture.invalid"
+        let allocated = makeSession(
+            id: "queued-regional", status: 1, queuePosition: 20,
+            streamingBaseUrl: regionalBase, serverIp: ""
+        )
+        let client = ScriptedSessionClient(creates: [allocated])
+        let orchestrator = SessionOrchestrator(client: client)
+        let attempt = orchestrator.beginAttempt()
+        let request = makeRequest(streamingBaseUrl: regionalBase, cleanupBase: cleanupBase)
+
+        _ = try await orchestrator.createSession(request, attempt: attempt)
+
+        #expect(await orchestrator.teardown())
+        #expect(await orchestrator.teardown())
+        #expect(await client.pollCount == 0)
+        let createRequests = await client.createRequests
+        #expect(createRequests.count == 1)
+        let createRequest = try #require(createRequests.first)
+        #expect(createRequest.streamingBaseUrl == regionalBase)
+        #expect(createRequest.cleanupBase == cleanupBase)
+        #expect(await client.stopCalls == [RecordedStopCall(
+            sessionID: allocated.sessionId,
+            token: request.token,
+            base: cleanupBase,
+            serverIP: "af-south.rain.fixture.invalid",
+            clientID: allocated.clientId,
+            deviceID: allocated.deviceId
+        )])
+    }
+
+    @MainActor
+    @Test(
+        "A late regional allocation uses its captured provider cleanup endpoint",
+        arguments: [false, true], [false, true]
+    )
+    func lateRegionalAllocationPreservesCleanupEndpoint(invalidatedByRetry: Bool, hasControlServer: Bool) async throws {
+        let regionalBase = "https://af-south.rain.fixture.invalid"
+        let cleanupBase = "https://prod.rain.fixture.invalid"
+        let client = ControlledSessionClient()
+        let orchestrator = SessionOrchestrator(client: client)
+        let attempt = orchestrator.beginAttempt()
+        let request = makeRequest(streamingBaseUrl: regionalBase, cleanupBase: cleanupBase)
+        var published: [String] = []
+        let creation = Task { @MainActor in
+            try await orchestrator.createSession(
+                request,
+                attempt: attempt
+            ) { session, _ in
+                published.append(session.sessionId)
+            }
+        }
+        await client.waitForCreateCount(1)
+
+        if invalidatedByRetry {
+            _ = orchestrator.beginAttempt()
+        } else {
+            orchestrator.cancelAttempt()
+        }
+        var allocated = makeSession(
+            id: "late-regional", status: 1, streamingBaseUrl: regionalBase,
+            serverIp: hasControlServer ? "192.0.2.10" : ""
+        )
+        if hasControlServer {
+            allocated.controlServerIp = "allocated-control.fixture.invalid"
+        }
+        try await client.resolveCreate(call: 1, with: allocated)
+
+        await #expect(throws: CancellationError.self) {
+            try await creation.value
+        }
+        #expect(published.isEmpty)
+        #expect(orchestrator.stopHandle(for: allocated.sessionId) == nil)
+        #expect(await orchestrator.teardown())
+        let createRequests = await client.createRequests
+        #expect(createRequests.count == 1)
+        let createRequest = try #require(createRequests.first)
+        #expect(createRequest.streamingBaseUrl == regionalBase)
+        #expect(createRequest.cleanupBase == cleanupBase)
+        #expect(await client.stopCalls == [RecordedStopCall(
+            sessionID: allocated.sessionId,
+            token: request.token,
+            base: cleanupBase,
+            serverIP: hasControlServer ? "allocated-control.fixture.invalid" : "af-south.rain.fixture.invalid",
+            clientID: allocated.clientId,
+            deviceID: allocated.deviceId
+        )])
+    }
+
+    @MainActor
     @Test("Queue duration is unbounded and readiness must be consecutive")
     func queueAndReadinessRules() async throws {
         let initial = makeSession(
@@ -544,13 +687,16 @@ private actor ControlledSessionClient: SessionOrchestrationClient {
     private var pollContinuations: [Int: CheckedContinuation<SessionInfo, Error>] = [:]
     private var createWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private var pollWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private(set) var createRequests: [SessionCreateRequest] = []
     private(set) var stoppedSessionIds: [String] = []
+    private(set) var stopCalls: [RecordedStopCall] = []
 
     var createCount: Int {
         createCalls
     }
 
-    func createSession(_: SessionCreateRequest) async throws -> SessionInfo {
+    func createSession(_ request: SessionCreateRequest) async throws -> SessionInfo {
+        createRequests.append(request)
         createCalls += 1
         notifyCreateWaiters()
         let call = createCalls
@@ -578,13 +724,21 @@ private actor ControlledSessionClient: SessionOrchestrationClient {
 
     func stopSession(
         sessionId: String,
-        token _: String,
-        base _: String,
-        serverIp _: String?,
-        clientId _: String?,
-        deviceId _: String?
+        token: String,
+        base: String,
+        serverIp: String?,
+        clientId: String?,
+        deviceId: String?
     ) {
         stoppedSessionIds.append(sessionId)
+        stopCalls.append(RecordedStopCall(
+            sessionID: sessionId,
+            token: token,
+            base: base,
+            serverIP: serverIp,
+            clientID: clientId,
+            deviceID: deviceId
+        ))
     }
 
     func waitForCreateCount(_ expected: Int) async {
@@ -643,6 +797,7 @@ private actor ControlledSessionClient: SessionOrchestrationClient {
 private actor ScriptedSessionClient: SessionOrchestrationClient {
     private var creates: [SessionInfo]
     private var polls: [SessionInfo]
+    private(set) var createRequests: [SessionCreateRequest] = []
     private(set) var pollCount = 0
     private(set) var stoppedSessionIds: [String] = []
     private(set) var stopCalls: [RecordedStopCall] = []
@@ -655,7 +810,8 @@ private actor ScriptedSessionClient: SessionOrchestrationClient {
         self.polls = polls
     }
 
-    func createSession(_: SessionCreateRequest) throws -> SessionInfo {
+    func createSession(_ request: SessionCreateRequest) throws -> SessionInfo {
+        createRequests.append(request)
         guard !creates.isEmpty else {
             throw SessionOrchestratorTestError.missingScriptedResponse
         }
@@ -831,12 +987,15 @@ private enum SessionOrchestratorTestError: Error, Equatable {
     case scriptedStopFailure
 }
 
-private func makeRequest() -> SessionCreateRequest {
+private func makeRequest(
+    streamingBaseUrl: String = "https://fixture.invalid",
+    cleanupBase: String? = nil
+) -> SessionCreateRequest {
     SessionCreateRequest(
         appId: "fixture-app",
         internalTitle: "Fixture Game",
         token: "fixture-token",
-        streamingBaseUrl: "https://fixture.invalid",
+        streamingBaseUrl: streamingBaseUrl,
         routingZoneUrl: nil,
         settings: .init(),
         localVideoCapabilities: LocalVideoCapabilities(
@@ -849,7 +1008,8 @@ private func makeRequest() -> SessionCreateRequest {
         ),
         accountLinked: true,
         accountAllowsHDR: false,
-        skipNvidiaFallback: false
+        skipNvidiaFallback: false,
+        cleanupBase: cleanupBase
     )
 }
 
@@ -858,14 +1018,15 @@ private func makeSession(
     status: Int,
     queuePosition: Int? = nil,
     seatSetupStep: Int? = nil,
-    streamingBaseUrl: String = "https://stream.fixture.invalid"
+    streamingBaseUrl: String = "https://stream.fixture.invalid",
+    serverIp: String = "192.0.2.10"
 ) -> SessionInfo {
     SessionInfo(
         sessionId: id,
         status: status,
         zone: "https://zone.fixture.invalid",
         streamingBaseUrl: streamingBaseUrl,
-        serverIp: "192.0.2.10",
+        serverIp: serverIp,
         signalingServer: "192.0.2.10:443",
         signalingUrl: "wss://192.0.2.10/nvst/",
         gpuType: "fixture",
