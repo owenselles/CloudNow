@@ -778,7 +778,7 @@ struct CloudMatchClientTests {
         var settings = StreamSettings()
         settings.resolution = "3840x2160"
         settings.fps = 120
-        settings.maxBitrateKbps = 75000
+        settings.maxBitrateKbps = 100_000
         settings.codec = codec
         settings.colorPreference = colorPreference
         settings.chromaFormat = chromaFormat

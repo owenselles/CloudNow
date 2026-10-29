@@ -20,7 +20,7 @@ struct GFNStreamControllerTests {
         var settings = StreamSettings()
         settings.resolution = "3840x2160"
         settings.fps = 120
-        settings.maxBitrateKbps = 75000
+        settings.maxBitrateKbps = 100_000
         settings.codec = codec
         settings.chromaFormat = chroma
         settings.colorPreference = .forceSDR8
@@ -42,7 +42,7 @@ struct GFNStreamControllerTests {
         #expect(video.contains("a=video.clientViewportWd:3840\r\n"))
         #expect(video.contains("a=video.clientViewportHt:2160\r\n"))
         #expect(video.contains("a=video.maxFPS:120\r\n"))
-        #expect(video.contains("a=vqos.bw.maximumBitrateKbps:75000\r\n"))
+        #expect(video.contains("a=vqos.bw.maximumBitrateKbps:100000\r\n"))
         #expect(video.contains("a=video.bitDepth:8\r\n"))
         #expect(sdp.contains("a=general.iceUserNameFragment:fixture-user\r\n"))
         #expect(sdp.contains("a=general.icePassword:fixture-password\r\n"))
