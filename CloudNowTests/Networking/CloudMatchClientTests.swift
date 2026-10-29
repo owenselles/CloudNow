@@ -4,6 +4,24 @@ import Testing
 
 @Suite("CloudMatch session HTTP client")
 struct CloudMatchClientTests {
+    @Test("Shared GFN headers retain native capabilities with WebRTC transport", arguments: [true, false])
+    func nativeWebRTCHeaders(includeOrigin: Bool) {
+        let headers = gfnHeaders(
+            token: "fixture-token",
+            clientId: "fixture-client",
+            deviceId: "fixture-device",
+            includeOrigin: includeOrigin
+        )
+
+        #expect(headers["nv-client-streamer"] == "WEBRTC")
+        #expect(headers["nv-client-type"] == "NATIVE")
+        #expect(headers["Authorization"] == "GFNJWT fixture-token")
+        #expect(headers["nv-client-id"] == "fixture-client")
+        #expect(headers["x-device-id"] == "fixture-device")
+        #expect(headers["Origin"] == (includeOrigin ? NVIDIAAuth.webOrigin : nil))
+        #expect(headers["Referer"] == (includeOrigin ? NVIDIAAuth.webReferer : nil))
+    }
+
     @Test(
         "Session creation maps stream settings into deterministic request fields",
         arguments: [
@@ -23,7 +41,7 @@ struct CloudMatchClientTests {
             #expect(request.value(forHTTPHeaderField: "nv-client-id") == fixedUUID.uuidString)
             #expect(request.value(forHTTPHeaderField: "x-device-id") == "fixture-device")
             #expect(request.value(forHTTPHeaderField: "nv-client-streamer") == "WEBRTC")
-            #expect(request.value(forHTTPHeaderField: "nv-client-type") == "BROWSER")
+            #expect(request.value(forHTTPHeaderField: "nv-client-type") == "NATIVE")
             let requestURL = try #require(request.url)
             let query = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
             #expect(query.queryItems?.first { $0.name == "keyboardLayout" }?.value == "en-US")
@@ -43,9 +61,10 @@ struct CloudMatchClientTests {
             #expect(session["clientTimezoneOffset"] as? Int == 3_600_000)
             #expect(session["appLaunchMode"] as? Int == 1)
             #expect(session["enablePersistingInGameSettings"] as? Bool == false)
-            #expect(monitor["widthInPixels"] as? Int == 2560)
-            #expect(monitor["heightInPixels"] as? Int == 1440)
+            #expect(monitor["widthInPixels"] as? Int == 3840)
+            #expect(monitor["heightInPixels"] as? Int == 2160)
             #expect(monitor["framesPerSecond"] as? Int == 120)
+            #expect(metadata.first { $0["key"] as? String == "clientPhysicalResolution" }?["value"] as? String == "{\"horizontalPixels\":3840,\"verticalPixels\":2160}")
             #expect(monitor["sdrHdrMode"] as? Int == 0)
             #expect(features["enabledL4S"] as? Bool == true)
             #expect(features["reflex"] as? Bool == true)
@@ -757,9 +776,9 @@ struct CloudMatchClientTests {
         chromaFormat: ChromaFormat = .yuv444
     ) -> SessionCreateRequest {
         var settings = StreamSettings()
-        settings.resolution = "2560x1440"
+        settings.resolution = "3840x2160"
         settings.fps = 120
-        settings.maxBitrateKbps = 75000
+        settings.maxBitrateKbps = 100_000
         settings.codec = codec
         settings.colorPreference = colorPreference
         settings.chromaFormat = chromaFormat
