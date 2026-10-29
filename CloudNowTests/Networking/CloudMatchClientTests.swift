@@ -4,6 +4,24 @@ import Testing
 
 @Suite("CloudMatch session HTTP client")
 struct CloudMatchClientTests {
+    @Test("Shared GFN headers retain native capabilities with WebRTC transport", arguments: [true, false])
+    func nativeWebRTCHeaders(includeOrigin: Bool) {
+        let headers = gfnHeaders(
+            token: "fixture-token",
+            clientId: "fixture-client",
+            deviceId: "fixture-device",
+            includeOrigin: includeOrigin
+        )
+
+        #expect(headers["nv-client-streamer"] == "WEBRTC")
+        #expect(headers["nv-client-type"] == "NATIVE")
+        #expect(headers["Authorization"] == "GFNJWT fixture-token")
+        #expect(headers["nv-client-id"] == "fixture-client")
+        #expect(headers["x-device-id"] == "fixture-device")
+        #expect(headers["Origin"] == (includeOrigin ? NVIDIAAuth.webOrigin : nil))
+        #expect(headers["Referer"] == (includeOrigin ? NVIDIAAuth.webReferer : nil))
+    }
+
     @Test(
         "Session creation maps stream settings into deterministic request fields",
         arguments: [
@@ -22,6 +40,8 @@ struct CloudMatchClientTests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "GFNJWT fixture-token")
             #expect(request.value(forHTTPHeaderField: "nv-client-id") == fixedUUID.uuidString)
             #expect(request.value(forHTTPHeaderField: "x-device-id") == "fixture-device")
+            #expect(request.value(forHTTPHeaderField: "nv-client-streamer") == "WEBRTC")
+            #expect(request.value(forHTTPHeaderField: "nv-client-type") == "NATIVE")
             let requestURL = try #require(request.url)
             let query = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: false))
             #expect(query.queryItems?.first { $0.name == "keyboardLayout" }?.value == "en-US")
@@ -41,9 +61,10 @@ struct CloudMatchClientTests {
             #expect(session["clientTimezoneOffset"] as? Int == 3_600_000)
             #expect(session["appLaunchMode"] as? Int == 1)
             #expect(session["enablePersistingInGameSettings"] as? Bool == false)
-            #expect(monitor["widthInPixels"] as? Int == 2560)
-            #expect(monitor["heightInPixels"] as? Int == 1440)
+            #expect(monitor["widthInPixels"] as? Int == 3840)
+            #expect(monitor["heightInPixels"] as? Int == 2160)
             #expect(monitor["framesPerSecond"] as? Int == 120)
+            #expect(metadata.first { $0["key"] as? String == "clientPhysicalResolution" }?["value"] as? String == "{\"horizontalPixels\":3840,\"verticalPixels\":2160}")
             #expect(monitor["sdrHdrMode"] as? Int == 0)
             #expect(features["enabledL4S"] as? Bool == true)
             #expect(features["reflex"] as? Bool == true)
@@ -321,6 +342,78 @@ struct CloudMatchClientTests {
         #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Origin") == nil })
         #expect(session.streamingBaseUrl == "https://203.0.113.10")
         #expect(session.zone == "https://np-test.cloudmatchbeta.nvidiagrid.net/")
+    }
+
+    @Test(
+        "Queued WebRTC sessions ignore the unassigned rig placeholder host",
+        arguments: [
+            ("control.example.invalid", "control.example.invalid"),
+            (" control.example.invalid \n", "control.example.invalid"),
+            (nil, ""),
+        ] as [(String?, String)]
+    )
+    func queuedSessionIgnoresPlaceholderHost(controlHost: String?, expectedServerIp: String) async throws {
+        let data = try placeholderSessionResponse(controlHost: controlHost)
+        let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: data) }
+        let client = CloudMatchClient(transport: transport, deviceId: { "device" })
+
+        let session = try await client.createSession(makeSessionRequest())
+
+        #expect(session.serverIp == expectedServerIp)
+        #expect(session.controlServerIp == (expectedServerIp.isEmpty ? nil : expectedServerIp))
+        #expect(session.mediaConnectionInfo?.ip.hasPrefix(".") != true)
+        if !expectedServerIp.isEmpty {
+            #expect(session.signalingUrl == "wss://\(expectedServerIp):443/nvst/")
+            #expect(session.mediaConnectionInfo?.ip == expectedServerIp)
+        }
+    }
+
+    @Test("Polling a queued WebRTC session stays on the routing endpoint")
+    func pollQueuedPlaceholderSession() async throws {
+        let data = try placeholderSessionResponse(controlHost: "control.example.invalid")
+        let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: data) }
+        let client = CloudMatchClient(transport: transport, deviceId: { "device" })
+
+        let session = try await client.pollSession(
+            sessionId: "session-id",
+            token: "token",
+            base: "https://region.example.invalid",
+            serverIp: nil,
+            clientId: "client",
+            deviceId: "device"
+        )
+
+        #expect(await transport.requests().map { $0.url?.host } == ["region.example.invalid"])
+        #expect(session.serverIp == "control.example.invalid")
+    }
+
+    @Test("Active-session discovery ignores the unassigned rig placeholder host")
+    func activeSessionsIgnorePlaceholderHost() async throws {
+        let response: [String: Any] = [
+            "requestStatus": ["statusCode": 1],
+            "sessions": [[
+                "sessionId": "queued-session",
+                "status": 1,
+                "sessionRequestData": ["appId": 12345],
+                "connectionInfo": [[
+                    "usage": 14,
+                    "ip": ".cloudmatchbeta.nvidiagrid.net",
+                    "port": 443,
+                    "resourcePath": "/nvst/",
+                ]],
+                "sessionControlInfo": ["ip": "control.example.invalid"],
+            ]],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: response)
+        let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: data) }
+
+        let sessions = try await CloudMatchClient(
+            transport: transport,
+            deviceId: { "device" }
+        ).getActiveSessions(token: "token", base: "https://region.example.invalid")
+
+        #expect(sessions.map(\.serverIp) == ["control.example.invalid"])
+        #expect(sessions.map(\.signalingUrl) == ["wss://control.example.invalid:443/nvst/"])
     }
 
     @Test("Active-session decoding filters ended sessions and resolves signaling host")
@@ -773,6 +866,24 @@ struct CloudMatchClientTests {
         )
     }
 
+    private func placeholderSessionResponse(controlHost: String?) throws -> Data {
+        let response: [String: Any] = [
+            "requestStatus": ["statusCode": 1],
+            "session": [
+                "sessionId": "session-id",
+                "status": 1,
+                "connectionInfo": [[
+                    "usage": 14,
+                    "ip": ".cloudmatchbeta.nvidiagrid.net",
+                    "port": 443,
+                    "resourcePath": "/nvst/",
+                ]],
+                "sessionControlInfo": ["ip": controlHost as Any? ?? NSNull()],
+            ],
+        ]
+        return try JSONSerialization.data(withJSONObject: response)
+    }
+
     private func makeSessionRequest(
         audioFormat: AudioFormatPreference = .stereo,
         codec: VideoCodec = .h265,
@@ -780,9 +891,9 @@ struct CloudMatchClientTests {
         chromaFormat: ChromaFormat = .yuv444
     ) -> SessionCreateRequest {
         var settings = StreamSettings()
-        settings.resolution = "2560x1440"
+        settings.resolution = "3840x2160"
         settings.fps = 120
-        settings.maxBitrateKbps = 75000
+        settings.maxBitrateKbps = 100_000
         settings.codec = codec
         settings.colorPreference = colorPreference
         settings.chromaFormat = chromaFormat
