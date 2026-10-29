@@ -754,9 +754,19 @@ struct StreamView: View {
         if let direct = directSession {
             streamLog.info("startSession: direct reconnect path, sessionId=\(direct.sessionId)")
             loadingPhase = .preparing
+            let token: String
             do {
-                let token = try await authManager.resolveToken()
+                token = try await authManager.resolveToken()
                 try requireCurrentSessionAttempt(generation)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard isCurrentSessionAttempt(generation) else { return }
+                streamLog.error("startSession: resume authentication failed: \(error, privacy: .private)")
+                streamController.fail(with: error.localizedDescription)
+                return
+            }
+            do {
                 streamLog.info("startSession: token resolved")
                 sessionToken = token
                 let provider = authManager.session?.provider

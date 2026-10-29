@@ -1,5 +1,6 @@
 @testable import CloudNow
 import Foundation
+import Synchronization
 import Testing
 
 @Suite("Authentication state")
@@ -314,6 +315,243 @@ struct AuthManagerTests {
         #expect(manager.isAuthenticated)
         #expect(manager.session?.tokens.accessToken == "access")
         #expect(await persistence.deleteCount == 0)
+    }
+
+    @MainActor
+    @Test(
+        "A failed early refresh returns the still-valid access token",
+        arguments: [60.0, 300.0, 540.0]
+    )
+    func earlyRefreshFailureUsesValidAccessToken(remainingLifetime: TimeInterval) async throws {
+        let now = Date()
+        let saved = makeSession(expiresAt: now.addingTimeInterval(remainingLifetime))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI()
+        let manager = makeManager(
+            api: api,
+            persistence: persistence,
+            initialSession: saved,
+            now: { now }
+        )
+
+        let token = try await manager.resolveToken()
+
+        #expect(token == "access")
+        #expect(manager.session?.tokens.accessToken == "access")
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(await persistence.saveGenerations.isEmpty)
+        #expect(await persistence.deleteCount == 0)
+    }
+
+    @MainActor
+    @Test(
+        "A failed refresh never returns an expired access token",
+        arguments: [0.0, -1.0]
+    )
+    func refreshFailureRejectsExpiredAccessToken(remainingLifetime: TimeInterval) async {
+        let now = Date()
+        let saved = makeSession(expiresAt: now.addingTimeInterval(remainingLifetime))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI()
+        let manager = makeManager(
+            api: api,
+            persistence: persistence,
+            initialSession: saved,
+            now: { now }
+        )
+
+        await #expect(throws: FakeAuthAPIError.self) {
+            try await manager.resolveToken()
+        }
+
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(await persistence.saveGenerations.isEmpty)
+    }
+
+    @MainActor
+    @Test(
+        "ID-token fallback requires its own valid expiry",
+        arguments: ["valid", "expired", "missing-expiry", "malformed"]
+    )
+    func refreshFailureValidatesIDTokenExpiry(tokenKind: String) async throws {
+        let now = Date()
+        var saved = makeSession(expiresAt: now.addingTimeInterval(300))
+        switch tokenKind {
+        case "valid":
+            saved.tokens.idToken = try makeIDToken(expiresAt: now.addingTimeInterval(3600))
+        case "expired":
+            saved.tokens.idToken = try makeIDToken(expiresAt: now.addingTimeInterval(-1))
+        case "missing-expiry":
+            saved.tokens.idToken = try makeIDToken(expiresAt: nil)
+        default:
+            saved.tokens.idToken = "malformed-id-token"
+        }
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI()
+        let manager = makeManager(
+            api: api,
+            persistence: persistence,
+            initialSession: saved,
+            now: { now }
+        )
+
+        if tokenKind == "valid" {
+            let token = try await manager.resolveToken()
+            #expect(token == saved.tokens.idToken)
+        } else {
+            await #expect(throws: FakeAuthAPIError.self) {
+                try await manager.resolveToken()
+            }
+        }
+
+        #expect(manager.session?.tokens.idToken == saved.tokens.idToken)
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(await persistence.saveGenerations.isEmpty)
+    }
+
+    @MainActor
+    @Test(
+        "Fallback checks expiry after the failed refresh completes",
+        arguments: [false, true]
+    )
+    func refreshFailureRechecksExpiryAfterWaiting(idTokenExpiresFirst: Bool) async throws {
+        let now = Date()
+        let clock = AuthTestClock(now)
+        var saved = makeSession(expiresAt: now.addingTimeInterval(idTokenExpiresFirst ? 300 : 60))
+        if idTokenExpiresFirst {
+            saved.tokens.idToken = try makeIDToken(expiresAt: now.addingTimeInterval(60))
+        }
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(blockRefresh: true)
+        let manager = makeManager(
+            api: api,
+            persistence: persistence,
+            initialSession: saved,
+            now: { clock.now }
+        )
+        let resolution = Task { @MainActor in
+            try await manager.resolveToken()
+        }
+        await api.waitForRefreshRequest()
+
+        clock.advance(by: 61)
+        await api.releaseRefresh()
+
+        await #expect(throws: FakeAuthAPIError.self) {
+            try await resolution.value
+        }
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(await persistence.saveGenerations.isEmpty)
+    }
+
+    @MainActor
+    @Test("Failed shared refresh preserves strict and cancelled waiter semantics")
+    func failedRefreshFallbackIsPerWaiter() async throws {
+        let now = Date()
+        let saved = makeSession(expiresAt: now.addingTimeInterval(300))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(blockRefresh: true)
+        let manager = makeManager(
+            api: api,
+            persistence: persistence,
+            initialSession: saved,
+            now: { now }
+        )
+        let normal = Task { @MainActor in
+            try await manager.resolveToken()
+        }
+        await api.waitForRefreshRequest()
+
+        var startedWaiters = 0
+        let strict = Task { @MainActor in
+            startedWaiters += 1
+            return try await manager.resolveToken(rejecting: "access")
+        }
+        let cancelled = Task { @MainActor in
+            startedWaiters += 1
+            return try await manager.resolveToken()
+        }
+        while startedWaiters < 2 {
+            await Task.yield()
+        }
+        cancelled.cancel()
+        await api.releaseRefresh()
+
+        #expect(try await normal.value == "access")
+        await #expect(throws: FakeAuthAPIError.self) {
+            try await strict.value
+        }
+        await #expect(throws: CancellationError.self) {
+            try await cancelled.value
+        }
+        #expect(await api.refreshTokenCallCount == 1)
+        #expect(await persistence.saveGenerations.isEmpty)
+        #expect(manager.session?.tokens.accessToken == "access")
+    }
+
+    @MainActor
+    @Test("A storage failure after rotation propagates without returning the old token")
+    func refreshedCredentialStorageFailureDoesNotFallback() async {
+        let now = Date()
+        let saved = makeSession(expiresAt: now.addingTimeInterval(300))
+        let persistence = FakeAuthPersistence(session: saved, failsSave: true)
+        let api = FakeAuthAPI(
+            refreshTokensResponse: makeTokens(
+                accessToken: "rotated-access",
+                expiresAt: now.addingTimeInterval(7200)
+            )
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence,
+            initialSession: saved,
+            now: { now }
+        )
+
+        await #expect(throws: FakeAuthPersistenceError.self) {
+            try await manager.resolveToken()
+        }
+
+        #expect(manager.session?.tokens.accessToken == "rotated-access")
+        #expect(await persistence.savedSession?.tokens.accessToken == "access")
+        #expect(await persistence.saveGenerations == [0])
+        #expect(await api.refreshTokenCallCount == 1)
+    }
+
+    @MainActor
+    @Test("A failed old resolution cannot return credentials after a newer login")
+    func refreshFallbackCannotOutliveNewLogin() async {
+        let now = Date()
+        let saved = makeSession(expiresAt: now.addingTimeInterval(300))
+        let persistence = FakeAuthPersistence(session: saved)
+        let api = FakeAuthAPI(
+            devicePollResponse: makeTokens(
+                accessToken: "new-login",
+                expiresAt: now.addingTimeInterval(7200)
+            ),
+            blockRefresh: true
+        )
+        let manager = makeManager(
+            api: api,
+            persistence: persistence,
+            initialSession: saved,
+            now: { now }
+        )
+        let resolution = Task { @MainActor in
+            try await manager.resolveToken()
+        }
+        await api.waitForRefreshRequest()
+
+        await manager.login().value
+        await api.releaseRefresh()
+
+        await #expect(throws: CancellationError.self) {
+            try await resolution.value
+        }
+        #expect(manager.session?.tokens.accessToken == "new-login")
+        #expect(await persistence.savedSession?.tokens.accessToken == "new-login")
+        #expect(await persistence.saveGenerations == [1])
+        #expect(await persistence.deleteGenerations.isEmpty)
     }
 
     @MainActor
@@ -822,14 +1060,28 @@ struct AuthManagerTests {
     @MainActor
     private func makeManager(
         api: FakeAuthAPI,
-        persistence: FakeAuthPersistence
+        persistence: FakeAuthPersistence,
+        initialSession: AuthSession? = nil,
+        now: @escaping @Sendable () -> Date = Date.init
     ) -> AuthManager {
         AuthManager(
             api: api,
             persistence: persistence,
             backgroundScheduler: .disabled,
-            schedulesAutomaticRefresh: false
+            schedulesAutomaticRefresh: false,
+            initialSession: initialSession,
+            now: now
         )
+    }
+
+    private func makeIDToken(expiresAt: Date?) throws -> String {
+        let claims = expiresAt.map { ["exp": $0.timeIntervalSince1970] } ?? [:]
+        let payload = try JSONEncoder().encode(claims)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "e30.\(payload).signature"
     }
 
     private func makeSession(expiresAt: Date) -> AuthSession {
@@ -930,6 +1182,22 @@ private final class AuthAPIFactoryProbe: @unchecked Sendable {
         defer { lock.unlock() }
         createdAPICount += 1
         return api
+    }
+}
+
+private final class AuthTestClock: Sendable {
+    private let value: Mutex<Date>
+
+    init(_ date: Date) {
+        value = Mutex(date)
+    }
+
+    var now: Date {
+        value.withLock { $0 }
+    }
+
+    func advance(by interval: TimeInterval) {
+        value.withLock { $0 = $0.addingTimeInterval(interval) }
     }
 }
 
@@ -1158,6 +1426,10 @@ private actor FakeAuthAPI: NVIDIAAuthAPIClient {
     }
 }
 
+private enum FakeAuthPersistenceError: Error {
+    case unavailable
+}
+
 private actor FakeAuthPersistence: AuthSessionPersistence {
     private(set) var savedSession: AuthSession?
     private(set) var deleteCount = 0
@@ -1170,6 +1442,7 @@ private actor FakeAuthPersistence: AuthSessionPersistence {
     private let blocksSecondSave: Bool
     private let blocksFirstDelete: Bool
     private let failsDelete: Bool
+    private let failsSave: Bool
     private var didBlockLoad = false
     private var didBlockDelete = false
     private var credentialGeneration: UInt64 = 0
@@ -1194,7 +1467,8 @@ private actor FakeAuthPersistence: AuthSessionPersistence {
         blocksFirstSave: Bool = false,
         blocksSecondSave: Bool = false,
         blocksFirstDelete: Bool = false,
-        failsDelete: Bool = false
+        failsDelete: Bool = false,
+        failsSave: Bool = false
     ) {
         savedSession = session
         self.blocksFirstLoad = blocksFirstLoad
@@ -1202,6 +1476,7 @@ private actor FakeAuthPersistence: AuthSessionPersistence {
         self.blocksSecondSave = blocksSecondSave
         self.blocksFirstDelete = blocksFirstDelete
         self.failsDelete = failsDelete
+        self.failsSave = failsSave
     }
 
     func loadAuthSession() async throws -> AuthSession {
@@ -1239,6 +1514,9 @@ private actor FakeAuthPersistence: AuthSessionPersistence {
             await withCheckedContinuation { continuation in
                 saveContinuations[requestCount] = continuation
             }
+        }
+        if failsSave {
+            throw FakeAuthPersistenceError.unavailable
         }
         guard generation >= credentialGeneration else {
             return

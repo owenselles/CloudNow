@@ -118,6 +118,10 @@ enum AuthStartupPhase: Equatable {
 @Observable
 @MainActor
 final class AuthManager {
+    private struct RefreshPersistenceError: Error {
+        let underlying: any Error
+    }
+
     private struct ActiveLogin {
         let generation: UInt64
         let priorSession: AuthSession?
@@ -137,6 +141,7 @@ final class AuthManager {
     private let persistence: any AuthSessionPersistence
     private let backgroundScheduler: AuthBackgroundScheduler
     private let schedulesAutomaticRefresh: Bool
+    @ObservationIgnored private let now: @Sendable () -> Date
     private var loginTask: Task<Void, Never>?
     private var activeLogin: ActiveLogin?
     private var activeRefreshTask: Task<AuthSession, Error>?
@@ -156,7 +161,8 @@ final class AuthManager {
         persistence: any AuthSessionPersistence = AppPersistenceStore.shared,
         backgroundScheduler: AuthBackgroundScheduler = .live,
         schedulesAutomaticRefresh: Bool = true,
-        initialSession: AuthSession? = nil
+        initialSession: AuthSession? = nil,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.api = api
         self.makeAPI = makeAPI
@@ -164,6 +170,7 @@ final class AuthManager {
         self.persistence = persistence
         self.backgroundScheduler = backgroundScheduler
         self.schedulesAutomaticRefresh = schedulesAutomaticRefresh
+        self.now = now
         session = initialSession
         if initialSession != nil {
             startupPhase = .ready
@@ -485,7 +492,7 @@ final class AuthManager {
         }
         guard var s = session else { throw AuthError.noSession }
         if s.tokens.isNearExpiry {
-            s = try await refresh(session: s)
+            s = try await refresh(session: s, allowsUnexpiredFallback: true)
         }
         return preferredToken(in: s)
     }
@@ -569,29 +576,76 @@ final class AuthManager {
         }
     }
 
-    private func refresh(session s: AuthSession) async throws -> AuthSession {
-        guard !isCredentialMutationInProgress else {
-            throw CancellationError()
-        }
+    private func refresh(
+        session s: AuthSession,
+        allowsUnexpiredFallback: Bool = false
+    ) async throws -> AuthSession {
+        let generation = credentialGeneration
+        try ensureAuthenticationWorkIsCurrent(generation)
         // Coalesce: if a refresh is already in-flight, wait for it instead of
         // starting a second one (which would try to use an already-rotated token).
+        let task: Task<AuthSession, Error>
         if let existing = activeRefreshTask {
-            return try await existing.value
-        }
-        let generation = credentialGeneration
-        refreshTaskGeneration &+= 1
-        let taskGeneration = refreshTaskGeneration
-        let task = Task<AuthSession, Error> { @MainActor [weak self] in
-            guard let self else { throw AuthError.noSession }
-            defer {
-                if self.refreshTaskGeneration == taskGeneration {
-                    self.activeRefreshTask = nil
+            task = existing
+        } else {
+            refreshTaskGeneration &+= 1
+            let taskGeneration = refreshTaskGeneration
+            task = Task<AuthSession, Error> { @MainActor [weak self] in
+                guard let self else { throw AuthError.noSession }
+                defer {
+                    if self.refreshTaskGeneration == taskGeneration {
+                        self.activeRefreshTask = nil
+                    }
                 }
+                return try await performRefresh(session: s, generation: generation)
             }
-            return try await performRefresh(session: s, generation: generation)
+            activeRefreshTask = task
         }
-        activeRefreshTask = task
-        return try await task.value
+
+        do {
+            let updated = try await task.value
+            try ensureAuthenticationWorkIsCurrent(generation)
+            return updated
+        } catch let failure as RefreshPersistenceError {
+            try ensureAuthenticationWorkIsCurrent(generation)
+            throw failure.underlying
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch {
+            try ensureAuthenticationWorkIsCurrent(generation)
+            guard allowsUnexpiredFallback,
+                  let current = session,
+                  current.provider.idpId == s.provider.idpId,
+                  current.user.userId == s.user.userId,
+                  canUseUnexpiredToken(in: current)
+            else { throw error }
+            authLog.warning("[Auth] Refresh failed; using the current unexpired credential")
+            return current
+        }
+    }
+
+    private func canUseUnexpiredToken(in session: AuthSession) -> Bool {
+        let currentTime = now()
+        guard session.tokens.expiresAt > currentTime else { return false }
+        guard let idToken = session.tokens.idToken else {
+            return !session.tokens.accessToken.isEmpty
+        }
+
+        // ID tokens can be preserved across refreshes; their lifetime differs
+        // from the access token's recorded expiry.
+        let parts = idToken.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return false }
+        var payload = parts[1]
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+        guard let data = Data(base64Encoded: payload),
+              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let expiry = claims["exp"] as? TimeInterval
+        else { return false }
+        return expiry > currentTime.timeIntervalSince1970
     }
 
     private func performRefresh(
@@ -696,13 +750,13 @@ final class AuthManager {
         session = updated
         scheduleProactiveRefresh()
         scheduleBackgroundRefresh()
-        try await persist(
-            updated,
-            generation: generation
-        )
-        guard credentialGeneration == generation else {
-            throw CancellationError()
+        do {
+            try await persist(updated, generation: generation)
+        } catch {
+            try ensureAuthenticationWorkIsCurrent(generation)
+            throw RefreshPersistenceError(underlying: error)
         }
+        try ensureAuthenticationWorkIsCurrent(generation)
         return updated
     }
 
