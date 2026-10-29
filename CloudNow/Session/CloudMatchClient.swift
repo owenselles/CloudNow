@@ -17,8 +17,10 @@ nonisolated func gfnHeaders(token: String, clientId: String, deviceId: String, i
         "Content-Type": "application/json",
         "nv-browser-type": "CHROME",
         "nv-client-id": clientId,
-        "nv-client-streamer": "NVIDIA-CLASSIC",
-        "nv-client-type": "NATIVE",
+        // CloudMatch picks the rig streamer from these. CLASSIC/NATIVE now provisions an
+        // RTSP-only NVST host that never joins WebRTC signaling (no offer is ever sent).
+        "nv-client-streamer": "WEBRTC",
+        "nv-client-type": "BROWSER",
         "nv-client-version": NVIDIAAuth.gfnClientVersion,
         "nv-device-make": "UNKNOWN",
         "nv-device-model": "UNKNOWN",
@@ -395,8 +397,8 @@ private nonisolated func resolveSignalingUrl(serverIp: String, resourcePath: Str
             ? String(resourcePath.dropFirst("rtsps://".count))
             : String(resourcePath.dropFirst("rtsp://".count))
         let host = withoutScheme.components(separatedBy: ":").first?
-            .components(separatedBy: "/").first ?? ""
-        if !host.isEmpty, !host.hasPrefix(".") {
+            .components(separatedBy: "/").first
+        if let host = normalizedRigHost(host) {
             return "wss://\(host)/nvst/"
         }
     }
@@ -412,6 +414,20 @@ private nonisolated func resolveSignalingUrl(serverIp: String, resourcePath: Str
 private nonisolated func hostFromResourcePath(_ resourcePath: String?) -> String? {
     guard let resourcePath, !resourcePath.isEmpty, !resourcePath.hasPrefix("/") else { return nil }
     return URL(string: resourcePath)?.host
+}
+
+/// Returns a usable rig host, or nil for blanks and the ".cloudmatchbeta.nvidiagrid.net"
+/// placeholder WebRTC sessions report until a rig is assigned.
+private nonisolated func normalizedRigHost(_ value: String?) -> String? {
+    guard let host = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !host.isEmpty, !host.hasPrefix(".")
+    else { return nil }
+    return host
+}
+
+/// Resolves a connection entry's host from its explicit IP, then its resource path.
+private nonisolated func rigHost(ip: String?, resourcePath: String?) -> String? {
+    normalizedRigHost(ip) ?? normalizedRigHost(hostFromResourcePath(resourcePath))
 }
 
 // MARK: - CloudMatchClient
@@ -714,7 +730,7 @@ actor CloudMatchClient {
         return sessions.filter { $0.status == 1 || $0.status == 2 || $0.status == 3 }.map { entry in
             let appId = entry.sessionRequestData?.appId?.value
             let sigConn = entry.connectionInfo?.first { $0.usage == 14 }
-            let serverIp = sigConn.flatMap { $0.ip?.value ?? hostFromResourcePath($0.resourcePath) }
+            let serverIp = sigConn.flatMap { rigHost(ip: $0.ip?.value, resourcePath: $0.resourcePath) }
                 ?? normalizedControlServerIp(entry.sessionControlInfo?.ip?.value)
             let signalingUrl = serverIp.map { resolveSignalingUrl(serverIp: $0, resourcePath: sigConn?.resourcePath ?? "/nvst/") }
             return ActiveSessionInfo(
@@ -1056,7 +1072,7 @@ actor CloudMatchClient {
     }
 
     private func serverHost(from conn: CloudMatchResponse.SessionPayload.ConnectionInfo) -> String? {
-        conn.ip?.value ?? hostFromResourcePath(conn.resourcePath)
+        rigHost(ip: conn.ip?.value, resourcePath: conn.resourcePath)
     }
 
     private func mediaConnectionInfo(
@@ -1085,10 +1101,8 @@ actor CloudMatchClient {
         fallbackServerIp: String?
     ) -> MediaConnectionInfo? {
         guard conn.port > 0 else { return nil }
-        guard let host = conn.ip?.value
-            ?? hostFromResourcePath(conn.resourcePath)
-            ?? (conn.usage == 14 ? fallbackServerIp : nil),
-            !host.isEmpty
+        guard let host = rigHost(ip: conn.ip?.value, resourcePath: conn.resourcePath)
+            ?? normalizedRigHost(conn.usage == 14 ? fallbackServerIp : nil)
         else {
             return nil
         }
