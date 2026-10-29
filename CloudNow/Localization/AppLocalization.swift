@@ -227,14 +227,6 @@ enum L10n {
         }
     }
 
-    static func streamColorModeLabel(_ mode: StreamColorMode) -> String {
-        switch mode {
-        case .sdr8: text("sdr_8_bit")
-        case .sdr10: text("sdr_10_bit")
-        case .hdr10: text("hdr10")
-        }
-    }
-
     static func detectedColorModeLabel(_ mode: DetectedColorMode) -> String {
         switch mode {
         case .sdr8: text("sdr_8_bit")

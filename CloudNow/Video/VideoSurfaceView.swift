@@ -952,9 +952,7 @@ struct VideoSurfaceViewRepresentable: UIViewControllerRepresentable {
 
     func makeUIViewController(context _: Context) -> StreamingViewController {
         let vc = StreamingViewController()
-        Task { @MainActor in
-            streamController.bindVideoView(vc.videoSurface)
-        }
+        streamController.bindVideoView(vc.videoSurface)
         return vc
     }
 

@@ -500,7 +500,7 @@ private struct CoreStatsColumn: View {
         if let detected = colorState.detectedMode {
             return L10n.detectedColorModeLabel(detected)
         }
-        return L10n.streamColorModeLabel(colorState.requestedMode)
+        return L10n.text("unknown")
     }
 
     private var videoFormatValue: String {

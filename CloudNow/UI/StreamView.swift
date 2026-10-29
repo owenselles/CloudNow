@@ -999,6 +999,7 @@ struct StreamView: View {
 
             // A user-requested launch waits through queue and setup until cancellation
             // or a service error. Readiness must be observed twice consecutively.
+            let requiresWebRTCClaim = !isContinuingExistingSession || sessionInfo.status == 1 || sessionInfo.isInQueue
             sessionInfo = try await sessionOrchestrator.waitUntilReady(
                 initialSession: sessionInfo,
                 token: token,
@@ -1012,6 +1013,43 @@ struct StreamView: View {
                 )
             }
             try requireCurrentSessionAttempt(generation)
+
+            if requiresWebRTCClaim {
+                // Keep the allocation's capabilities while claiming its WebRTC transport.
+                var needsWebRTCClaim = true
+                while needsWebRTCClaim {
+                    let readySession = sessionInfo
+                    sessionInfo = try await cloudMatchClient.claimSession(
+                        sessionId: readySession.sessionId,
+                        serverIp: readySession.serverIp,
+                        token: token,
+                        base: readySession.streamingBaseUrl,
+                        routingZoneUrl: readySession.zone,
+                        clientId: readySession.clientId,
+                        deviceId: readySession.deviceId,
+                        appId: connectedAppId,
+                        settings: settings,
+                        accountAllowsHDR: viewModel.subscription?.allowsHDR
+                    )
+                    try requireCurrentSessionAttempt(generation)
+                    needsWebRTCClaim = sessionInfo.status == 1 || sessionInfo.isInQueue
+                    createdSession = sessionInfo
+                    sessionOrchestrator.adopt(sessionInfo, token: token)
+                    sessionInfo = try await sessionOrchestrator.waitUntilReady(
+                        initialSession: sessionInfo,
+                        token: token,
+                        attempt: orchestrationAttempt,
+                        setupTimeout: nil
+                    ) { session, readiness in
+                        applyOrchestrationUpdate(
+                            session: session,
+                            readiness: readiness,
+                            generation: generation
+                        )
+                    }
+                    try requireCurrentSessionAttempt(generation)
+                }
+            }
 
             streamLog.info("startSession: queue cleared after confirmed ready responses, connecting WebRTC")
             streamLog.info("startSession: serverIp=\(sessionInfo.serverIp), signalingUrl=\(sessionInfo.signalingUrl)")
