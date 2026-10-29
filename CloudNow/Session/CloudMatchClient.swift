@@ -17,10 +17,10 @@ nonisolated func gfnHeaders(token: String, clientId: String, deviceId: String, i
         "Content-Type": "application/json",
         "nv-browser-type": "CHROME",
         "nv-client-id": clientId,
-        // CloudMatch picks the rig streamer from these. CLASSIC/NATIVE now provisions an
-        // RTSP-only NVST host that never joins WebRTC signaling (no offer is ever sent).
+        // Select WebRTC transport while preserving the native client identity used
+        // by session payloads and membership capability requests.
         "nv-client-streamer": "WEBRTC",
-        "nv-client-type": "BROWSER",
+        "nv-client-type": "NATIVE",
         "nv-client-version": NVIDIAAuth.gfnClientVersion,
         "nv-device-make": "UNKNOWN",
         "nv-device-model": "UNKNOWN",
