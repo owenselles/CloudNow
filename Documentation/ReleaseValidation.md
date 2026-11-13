@@ -47,6 +47,18 @@ fails. Never capture or share provider access tokens, refresh tokens, device cod
 QR codes, session identifiers, SDP, ICE candidates, transfer tokens, or raw
 channel payloads.
 
+## Apple TV profile sign-in
+
+1. Install a build signed with User Management. Sign into both providers on
+   Apple TV profile A.
+2. Switch to a fresh profile B through Control Center. Confirm CloudNow opens
+   signed out. Sign into both providers with different accounts.
+3. Switch A → B → A and verify each profile restores its own Xbox and GeForce NOW
+   sign-ins. Sign out of both providers in B and confirm A stays signed in.
+4. Upgrade a signed-in installation from a build without User Management. Record
+   whether the default profile keeps its sign-ins. Verify the other profile
+   cannot see those accounts.
+
 ## Xbox 1440p comparison
 
 Validate the production profile before the general cross-provider checklist:

@@ -59,6 +59,11 @@ Select an Apple TV run destination and run the `CloudNow` scheme. Package
 resolution and signing happen through the shared project configuration and your
 selected team.
 
+To test Apple TV profiles on a device, use a paid development team with User
+Management enabled for the app ID. In the CloudNow target's build settings, set
+**Code Signing Entitlements** to `Scripts/Release/CloudNowProfiles.entitlements`
+for your local device build.
+
 ## Linting and formatting
 
 The [README linting section](../README.md#linting) is the source of truth for
