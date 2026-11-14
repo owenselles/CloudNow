@@ -11,8 +11,12 @@ on:
         description: New, unused build number
         required: true
         type: string
+      include_external_testers:
+        description: Include external testers
+        type: boolean
+        default: true
       what_to_test:
-        description: Optional notes shown to TestFlight testers
+        description: Optional TestFlight notes for external distribution
         required: false
         type: string
 
@@ -201,6 +205,7 @@ jobs:
         run: bash Scripts/Release/sign-testflight.sh --cleanup
 
       - name: Distribute to external TestFlight testers
+        if: ${{ inputs.include_external_testers }}
         env:
           APPLE_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}

@@ -63,14 +63,19 @@ as text. Never commit or upload private signing files as workflow artifacts.
    commit to pass. Complete applicable [release validation](ReleaseValidation.md).
 2. Open **Actions > Release to TestFlight > Run workflow** and select `main`.
 3. Enter the intended version and a new, unused build number after checking
-   App Store Connect. Optionally enter **What to Test** notes for this build;
-   those notes are visible to testers and in the workflow run metadata. No
-   app-specific version or build defaults are stored.
+   App Store Connect. **Include external testers** is checked by default. Clear
+   it to skip external distribution for this run. You can still add the build
+   to an external group later in App Store Connect. Enter optional **What to
+   Test** notes when distributing externally. The notes are visible to testers
+   and in the workflow run metadata. No app-specific version or build defaults
+   are stored.
 4. Once the unsigned build succeeds, approve its `testflight` environment job.
    Either `owenselles` or `aarikmudgal` can dispatch and self-approve.
-5. After upload, the workflow waits for Apple to process the build, assigns it
-   to the existing external **Testers** group, submits it for TestFlight beta
-   review, and waits for Apple's decision. Once Apple approves it, the workflow
+5. After upload, App Store Connect makes the processed build available to
+   internal groups with automatic distribution enabled. With **Include external
+   testers** checked, the workflow also waits for processing, assigns the build
+   to the external **Testers** group, submits it for TestFlight beta review, and
+   waits for Apple's decision. Once Apple approves it, the workflow
    sends the available-build notification to eligible testers in that group.
    Apple controls processing and review, so this can take several hours. The
    workflow waits up to five hours after upload; if review is still pending,
