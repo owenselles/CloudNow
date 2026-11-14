@@ -66,6 +66,10 @@ if not (
     and not profile.get("ProvisionsAllDevices", False)
 ):
     raise SystemExit("Expected a matching tvOS App Store distribution profile")
+if "runs-as-current-user-with-user-independent-keychain" not in entitlements.get(
+    "com.apple.developer.user-management", []
+):
+    raise SystemExit("Enable User Management for the App ID and replace the TestFlight provisioning profile")
 identifier = profile.get("UUID", "")
 if not re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", identifier):
     raise SystemExit("Invalid provisioning profile UUID")
@@ -87,8 +91,14 @@ mkdir -p "$profiles_dir"
 test ! -e "$profiles_dir/$profile_id.mobileprovision"
 touch "$signing_dir/profile.installed"
 cp "$signing_dir/profile.mobileprovision" "$profiles_dir/$profile_id.mobileprovision"
+
+archive="$RUNNER_TEMP/testflight/CloudNow.xcarchive"
+# Seed the unsigned archive's app signature so Xcode can carry its entitlement into export.
+codesign --force --sign - --generate-entitlement-der \
+    --entitlements "$(dirname "$0")/CloudNowProfiles.entitlements" \
+    "$archive/Products/Applications/CloudNow.app"
 xcodebuild -exportArchive \
-    -archivePath "$RUNNER_TEMP/testflight/CloudNow.xcarchive" \
+    -archivePath "$archive" \
     -exportPath "$RUNNER_TEMP/testflight-export" \
     -exportOptionsPlist "$signing_dir/ExportOptions.plist"
 
@@ -110,4 +120,8 @@ if not (
     and entitlements.get("get-task-allow", False) is False
 ):
     raise SystemExit("Exported IPA has unexpected signing entitlements")
+if entitlements.get("com.apple.developer.user-management") != [
+    "runs-as-current-user-with-user-independent-keychain"
+]:
+    raise SystemExit("Exported IPA is missing the CloudNow profile entitlement")
 PY

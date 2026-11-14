@@ -38,6 +38,12 @@ The repository owner must configure these settings before adding credentials:
 | `APPLE_TEAM_ID` | Confirmed Apple Developer Team ID |
 | `APPLE_BUNDLE_ID` | Exact Bundle ID of the existing App Store Connect app |
 
+Enable **User Management** for the TestFlight App ID, then generate a new tvOS
+App Store distribution profile and replace `APPLE_PROVISIONING_PROFILE_BASE64`.
+The signing step checks that the profile authorizes
+`runs-as-current-user-with-user-independent-keychain` and that the exported app
+carries that entitlement. Free-account sideload builds use single-user storage.
+
 These identifiers are needed by the unsigned build and signing jobs. Keep them
 only at repository scope; do not duplicate them in the environment. This keeps
 their values out of the workflow source without giving the build job access to
