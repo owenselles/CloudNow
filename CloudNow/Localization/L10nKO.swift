@@ -183,6 +183,8 @@ enum L10nKO {
         "controller_rumble_intensity_description": "진동 강도를 높입니다. 너무 높게 설정하지 마세요. 매우 강한 진동이 계속되면 컨트롤러 모터가 마모되거나 손상될 수 있습니다. 다음 세션부터 적용됩니다.",
         "overlay_button": "오버레이 버튼",
         "overlay_button_description": "게임 중 이 버튼을 길게 눌러 앱 오버레이를 엽니다. 게임 내 동작과 충돌하면 변경하세요.",
+        "controller_type": "컨트롤러 유형",
+        "controller_type_description": "게임이 DualSense 또는 DualShock 컨트롤러를 인식하는 방식입니다. 자동은 게임이 지원하면 PlayStation을 사용합니다. 다음 세션부터 적용됩니다.",
         "text_input_buttons": "텍스트 입력 버튼",
         "text_input_buttons_description": "스트리밍 중 Apple TV 키보드를 여는 컨트롤러 버튼 조합을 선택합니다.",
         "text_input_hold_delay": "텍스트 입력 길게 누르기 시간",

@@ -209,6 +209,8 @@ enum L10nZHHans {
         "controller_rumble_intensity_description": "增强振动强度。请勿设置得过高——持续的强烈振动可能会磨损或损坏控制器的马达。下一次会话生效。",
         "overlay_button": "覆盖按钮",
         "overlay_button_description": "在游戏中长按此按钮可打开应用覆盖层。如果与游戏内操作冲突，请更改。",
+        "controller_type": "控制器类型",
+        "controller_type_description": "游戏识别 DualSense 或 DualShock 控制器的方式。自动模式会在游戏支持时使用 PlayStation。下次会话生效。",
         "text_input_buttons": "文本输入按钮",
         "text_input_buttons_description": "选择在串流过程中打开 Apple TV 键盘的控制器按钮组合。",
         "text_input_hold_delay": "文本输入长按延迟",

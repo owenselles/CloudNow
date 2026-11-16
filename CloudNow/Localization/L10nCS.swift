@@ -182,6 +182,8 @@ enum L10nCS {
         "controller_rumble_intensity_description": "Zvyšuje sílu vibrací. Nenastavujte příliš vysokou hodnotu – velmi silné nepřetržité vibrace mohou opotřebit nebo poškodit motory ovladače. Platí od příští relace.",
         "overlay_button": "Tlačítko překryvu",
         "overlay_button_description": "Dlouze podržte během hraní pro otevření překryvu aplikace. Změňte, pokud koliduje s akcí ve hře.",
+        "controller_type": "Typ ovladače",
+        "controller_type_description": "Jak hry vidí ovladač DualSense nebo DualShock. Automaticky použije PlayStation, pokud to hra podporuje. Platí od další relace.",
         "text_input_buttons": "Tlačítka pro zadávání textu",
         "text_input_buttons_description": "Vyberte kombinaci tlačítek ovladače, která během streamování otevře klávesnici Apple TV.",
         "text_input_hold_delay": "Prodleva zadávání textu",

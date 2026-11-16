@@ -212,6 +212,8 @@ enum L10nPTPT {
         "controller_rumble_intensity_description": "Aumenta a intensidade da vibração. Não defina um valor demasiado alto — uma vibração contínua muito forte pode desgastar ou danificar os motores do comando. Aplica-se à sessão seguinte.",
         "overlay_button": "Botão de sobreposição",
         "overlay_button_description": "Prima longamente este botão durante o jogo para abrir a sobreposição da app. Altere se entrar em conflito com uma ação no jogo.",
+        "controller_type": "Tipo de comando",
+        "controller_type_description": "Como os jogos veem um comando DualSense ou DualShock. Automático usa PlayStation quando o jogo é compatível. Aplica-se na próxima sessão.",
         "text_input_buttons": "Botões de introdução de texto",
         "text_input_buttons_description": "Escolha a combinação de botões do comando que abre o teclado da Apple TV durante a transmissão.",
         "text_input_hold_delay": "Atraso da introdução de texto",

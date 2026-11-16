@@ -147,6 +147,29 @@ struct GFNSonyGamepadTests {
     }
 
     @Test(
+        "Controller type preference overrides the catalog's gamepad support",
+        arguments: [
+            (ControllerTypePreference.automatic, [String]?.none, false),
+            (.automatic, ["KEYBOARD", "MOUSE"], false),
+            (.automatic, ["GAMEPAD"], true),
+            (.automatic, ["DUALSHOCK4_GAMEPAD"], true),
+            (.xbox, ["DUALSHOCK4_GAMEPAD"], false),
+            (.playStation, ["KEYBOARD", "MOUSE"], true),
+            (.playStation, nil, true),
+        ]
+    )
+    func controllerTypePreference(
+        preference: ControllerTypePreference,
+        supportedControls: [String]?,
+        expected: Bool
+    ) {
+        #expect(GFNSonyGamepad.allowsSonyInput(
+            preference: preference,
+            supportedControls: supportedControls
+        ) == expected)
+    }
+
+    @Test(
         "Sony admission requires protocol 3, game permission, and the server DS4 bit",
         arguments: [
             (2, true, UInt32(4), false),

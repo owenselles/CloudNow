@@ -212,6 +212,8 @@ enum L10nSV {
         "controller_rumble_intensity_description": "Ökar vibrationsstyrkan. Ställ inte in den för högt – mycket kraftig ihållande vibration kan slita ut eller skada handkontrollens motorer. Gäller från nästa session.",
         "overlay_button": "Overlay-knapp",
         "overlay_button_description": "Håll ned denna knapp under spel för att öppna appens overlay. Byt om den krockar med en åtgärd i spelet.",
+        "controller_type": "Kontrolltyp",
+        "controller_type_description": "Hur spel ser en DualSense- eller DualShock-kontroll. Automatiskt använder PlayStation när spelet stöder det. Gäller från nästa session.",
         "text_input_buttons": "Knappar för textinmatning",
         "text_input_buttons_description": "Välj kombinationen av handkontrollsknappar som öppnar Apple TV-tangentbordet under strömning.",
         "text_input_hold_delay": "Fördröjning för textinmatning",

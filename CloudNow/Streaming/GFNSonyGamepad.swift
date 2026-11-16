@@ -9,6 +9,19 @@ nonisolated enum GFNSonyGamepad {
         supportedControls?.contains { $0 == "GAMEPAD" || $0 == "DUALSHOCK4_GAMEPAD" } == true
     }
 
+    /// Whether this session may present a PlayStation controller. The server's DS4 bit is
+    /// still required on top (see `isSupported`).
+    static func allowsSonyInput(
+        preference: ControllerTypePreference,
+        supportedControls: [String]?
+    ) -> Bool {
+        switch preference {
+        case .automatic: gameSupportsSonyInput(supportedControls)
+        case .xbox: false
+        case .playStation: true
+        }
+    }
+
     static func serverHidMask(in sdp: String?) -> UInt32 {
         guard let sdp else { return 0 }
         for line in sdp.split(whereSeparator: \.isNewline) {

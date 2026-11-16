@@ -209,6 +209,8 @@ enum L10nZHHant {
         "controller_rumble_intensity_description": "提高震動強度。請勿設定得過高——持續的強烈震動可能會磨損或損壞控制器的馬達。下次工作階段生效。",
         "overlay_button": "覆蓋按鈕",
         "overlay_button_description": "在遊戲中長按此按鈕即可開啟應用程式覆蓋層。如果與遊戲內動作衝突，請變更。",
+        "controller_type": "控制器類型",
+        "controller_type_description": "遊戲辨識 DualSense 或 DualShock 控制器的方式。自動模式會在遊戲支援時使用 PlayStation。下次工作階段生效。",
         "text_input_buttons": "文字輸入按鈕",
         "text_input_buttons_description": "選擇在串流期間開啟 Apple TV 鍵盤的控制器按鈕組合。",
         "text_input_hold_delay": "文字輸入長按延遲",

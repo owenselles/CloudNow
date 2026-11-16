@@ -212,6 +212,8 @@ enum L10nNB {
         "controller_rumble_intensity_description": "Øker vibrasjonsstyrken. Ikke sett den for høyt – svært kraftig vedvarende vibrasjon kan slite ut eller skade motorene i kontrolleren. Gjelder fra neste økt.",
         "overlay_button": "Overlay-knapp",
         "overlay_button_description": "Hold denne knappen inne under spilling for å åpne app-overlayet. Bytt hvis det kolliderer med en handling i spillet.",
+        "controller_type": "Kontrollertype",
+        "controller_type_description": "Hvordan spill ser en DualSense- eller DualShock-kontroller. Automatisk bruker PlayStation når spillet støtter det. Gjelder fra neste økt.",
         "text_input_buttons": "Knapper for tekstinntasting",
         "text_input_buttons_description": "Velg kombinasjonen av kontrollerknapper som åpner Apple TV-tastaturet under strømming.",
         "text_input_hold_delay": "Forsinkelse for tekstinntasting",
