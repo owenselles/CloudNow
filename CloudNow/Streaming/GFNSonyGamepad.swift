@@ -36,6 +36,12 @@ nonisolated enum GFNSonyGamepad {
         return 0
     }
 
+    /// The DS4 bit the NVST answer advertises. The answer is sent before the input handshake,
+    /// so it can't depend on the protocol version that `isSupported` also requires.
+    static func answerHidMask(allowsSonyInput: Bool, serverHidMask: UInt32) -> UInt32 {
+        allowsSonyInput ? serverHidMask & 4 : 0
+    }
+
     static func isSupported(protocolVersion: Int, gameSupportsDualShock: Bool, serverHidMask: UInt32) -> Bool {
         protocolVersion >= 3 && gameSupportsDualShock && serverHidMask & 4 != 0
     }

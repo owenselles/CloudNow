@@ -1425,11 +1425,15 @@ final class GFNStreamController: NSObject {
                 "a=rtpmap:0 PCMU/8000",
             ]
         }
+        let hidDeviceMask = GFNSonyGamepad.answerHidMask(
+            allowsSonyInput: allowsSonyInput,
+            serverHidMask: serverHidMask
+        )
         lines += [
             "m=application 0 RTP/AVP",
             "a=msid:input_1",
             "a=ri.partialReliableThresholdMs:\(partialReliableThresholdMs)",
-            "a=ri.hidDeviceMask:\(allowsSonyInput ? serverHidMask & 4 : 0)",
+            "a=ri.hidDeviceMask:\(hidDeviceMask)",
             "a=ri.enablePartiallyReliableTransferGamepad:\(protocolVersion == 3 ? 65535 : 0)",
             "a=ri.enablePartiallyReliableTransferHid:0",
             "",

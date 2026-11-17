@@ -170,6 +170,41 @@ struct GFNSonyGamepadTests {
     }
 
     @Test(
+        "Answer mask and packet type follow the preference and the handshake version for a DS4 offer",
+        arguments: [
+            (ControllerTypePreference.xbox, 3, UInt32(0), false),
+            (.xbox, 2, 0, false),
+            (.playStation, 3, 4, true),
+            // The answer goes out before the v2 handshake, so it still advertises DS4.
+            (.playStation, 2, 4, false),
+            (.automatic, 3, 4, true),
+            (.automatic, 2, 4, false),
+        ]
+    )
+    func answerAndPacketType(
+        preference: ControllerTypePreference,
+        protocolVersion: Int,
+        expectedMask: UInt32,
+        expectedSonyPackets: Bool
+    ) {
+        let serverOffer = GFNSonyGamepad.serverHidMask(in: "a=ri.hidDeviceMask:4\r\n")
+        let allowsSonyInput = GFNSonyGamepad.allowsSonyInput(
+            preference: preference,
+            supportedControls: ["GAMEPAD"]
+        )
+
+        #expect(GFNSonyGamepad.answerHidMask(
+            allowsSonyInput: allowsSonyInput,
+            serverHidMask: serverOffer
+        ) == expectedMask)
+        #expect(GFNSonyGamepad.isSupported(
+            protocolVersion: protocolVersion,
+            gameSupportsDualShock: allowsSonyInput,
+            serverHidMask: serverOffer
+        ) == expectedSonyPackets)
+    }
+
+    @Test(
         "Sony admission requires protocol 3, game permission, and the server DS4 bit",
         arguments: [
             (2, true, UInt32(4), false),
