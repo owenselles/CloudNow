@@ -183,7 +183,7 @@ enum L10nFI {
         "overlay_button": "Peittopainike",
         "overlay_button_description": "Paina pitkään pelin aikana avataksesi sovelluksen peiton. Vaihda, jos se on ristiriidassa pelinsisäisen toiminnon kanssa.",
         "controller_type": "Ohjaimen tyyppi",
-        "controller_type_description": "Miten pelit näkevät DualSense- tai DualShock-ohjaimen. Automaattinen käyttää PlayStationia, kun peli tukee sitä. Koskee seuraavaa istuntoa.",
+        "controller_type_description": "Miten pelit näkevät DualSense- tai DualShock-ohjaimen. Automaattinen käyttää PlayStationia, kun peli tukee sitä. PlayStation vaatii istunnon tuen, muuten käytetään Xboxia. Koskee seuraavaa istuntoa.",
         "text_input_buttons": "Tekstinsyöttöpainikkeet",
         "text_input_buttons_description": "Valitse ohjaimen painikeyhdistelmä, joka avaa Apple TV:n näppäimistön suoratoiston aikana.",
         "text_input_hold_delay": "Tekstinsyötön viive",

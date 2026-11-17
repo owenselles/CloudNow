@@ -210,7 +210,7 @@ enum L10nPTBR {
         "overlay_button": "Botão de sobreposição",
         "overlay_button_description": "Pressione e segure este botão durante o jogo para abrir a sobreposição do app. Troque se isso conflitar com uma ação do jogo.",
         "controller_type": "Tipo de controle",
-        "controller_type_description": "Como os jogos veem um controle DualSense ou DualShock. Automático usa PlayStation quando o jogo é compatível. Vale a partir da próxima sessão.",
+        "controller_type_description": "Como os jogos veem um controle DualSense ou DualShock. Automático usa PlayStation quando o jogo é compatível. PlayStation exige suporte da sessão; caso contrário, volta para Xbox. Vale a partir da próxima sessão.",
         "text_input_buttons": "Botões de entrada de texto",
         "text_input_buttons_description": "Escolha a combinação de botões do controle que abre o teclado da Apple TV durante a transmissão.",
         "text_input_hold_delay": "Atraso da entrada de texto",

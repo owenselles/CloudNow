@@ -183,7 +183,7 @@ enum L10nCS {
         "overlay_button": "Tlačítko překryvu",
         "overlay_button_description": "Dlouze podržte během hraní pro otevření překryvu aplikace. Změňte, pokud koliduje s akcí ve hře.",
         "controller_type": "Typ ovladače",
-        "controller_type_description": "Jak hry vidí ovladač DualSense nebo DualShock. Automaticky použije PlayStation, pokud to hra podporuje. Platí od další relace.",
+        "controller_type_description": "Jak hry vidí ovladač DualSense nebo DualShock. Automaticky použije PlayStation, pokud to hra podporuje. PlayStation vyžaduje podporu relace, jinak se použije Xbox. Platí od další relace.",
         "text_input_buttons": "Tlačítka pro zadávání textu",
         "text_input_buttons_description": "Vyberte kombinaci tlačítek ovladače, která během streamování otevře klávesnici Apple TV.",
         "text_input_hold_delay": "Prodleva zadávání textu",

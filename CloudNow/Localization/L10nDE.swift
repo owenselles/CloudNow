@@ -180,7 +180,7 @@ enum L10nDE {
         "overlay_button": "Overlay-Taste",
         "overlay_button_description": "Lange drücken während des Spiels, um das App-Overlay zu öffnen. Ändern, wenn es mit einer In-Game-Aktion kollidiert.",
         "controller_type": "Controller-Typ",
-        "controller_type_description": "Wie Spiele einen DualSense- oder DualShock-Controller erkennen. Automatisch verwendet PlayStation, wenn das Spiel es unterstützt. Gilt ab der nächsten Sitzung.",
+        "controller_type_description": "Wie Spiele einen DualSense- oder DualShock-Controller erkennen. Automatisch verwendet PlayStation, wenn das Spiel es unterstützt. PlayStation setzt Unterstützung durch die Sitzung voraus und fällt sonst auf Xbox zurück. Gilt ab der nächsten Sitzung.",
         "text_input_buttons": "Tasten für Texteingabe",
         "text_input_buttons_description": "Wähle die Controller-Tastenkombination, die während des Streamings die Apple TV-Tastatur öffnet.",
         "text_input_hold_delay": "Halteverzögerung für Texteingabe",

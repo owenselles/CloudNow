@@ -213,7 +213,7 @@ enum L10nNB {
         "overlay_button": "Overlay-knapp",
         "overlay_button_description": "Hold denne knappen inne under spilling for å åpne app-overlayet. Bytt hvis det kolliderer med en handling i spillet.",
         "controller_type": "Kontrollertype",
-        "controller_type_description": "Hvordan spill ser en DualSense- eller DualShock-kontroller. Automatisk bruker PlayStation når spillet støtter det. Gjelder fra neste økt.",
+        "controller_type_description": "Hvordan spill ser en DualSense- eller DualShock-kontroller. Automatisk bruker PlayStation når spillet støtter det. PlayStation krever støtte i økten og faller ellers tilbake til Xbox. Gjelder fra neste økt.",
         "text_input_buttons": "Knapper for tekstinntasting",
         "text_input_buttons_description": "Velg kombinasjonen av kontrollerknapper som åpner Apple TV-tastaturet under strømming.",
         "text_input_hold_delay": "Forsinkelse for tekstinntasting",

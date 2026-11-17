@@ -183,7 +183,7 @@ enum L10nDA {
         "overlay_button": "Overlay-knap",
         "overlay_button_description": "Hold denne knap nede under spil for at åbne app-overlayet. Skift den, hvis den konflikter med en handling i spillet.",
         "controller_type": "Controllertype",
-        "controller_type_description": "Hvordan spil ser en DualSense- eller DualShock-controller. Automatisk bruger PlayStation, når spillet understøtter det. Gælder fra næste session.",
+        "controller_type_description": "Hvordan spil ser en DualSense- eller DualShock-controller. Automatisk bruger PlayStation, når spillet understøtter det. PlayStation kræver understøttelse i sessionen og falder ellers tilbage til Xbox. Gælder fra næste session.",
         "text_input_buttons": "Knapper til tekstindtastning",
         "text_input_buttons_description": "Vælg den kombination af controllerknapper, der åbner Apple TV-tastaturet under streaming.",
         "text_input_hold_delay": "Forsinkelse for tekstindtastning",

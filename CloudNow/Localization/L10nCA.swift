@@ -183,7 +183,7 @@ enum L10nCA {
         "overlay_button": "Botó de superposició",
         "overlay_button_description": "Mantén-lo premut durant el joc per obrir la superposició de l'app. Canvia'l si entra en conflicte amb una acció del joc.",
         "controller_type": "Tipus de comandament",
-        "controller_type_description": "Com veuen els jocs un comandament DualSense o DualShock. Automàtic fa servir PlayStation quan el joc ho admet. S'aplica a la sessió següent.",
+        "controller_type_description": "Com veuen els jocs un comandament DualSense o DualShock. Automàtic fa servir PlayStation quan el joc ho admet. PlayStation requereix compatibilitat de la sessió; si no, torna a Xbox. S'aplica a la sessió següent.",
         "text_input_buttons": "Botons d’introducció de text",
         "text_input_buttons_description": "Tria la combinació de botons del comandament que obre el teclat de l’Apple TV durant la transmissió.",
         "text_input_hold_delay": "Retard d’introducció de text",

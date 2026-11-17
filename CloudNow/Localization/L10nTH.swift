@@ -213,7 +213,7 @@ enum L10nTH {
         "overlay_button": "ปุ่มโอเวอร์เลย์",
         "overlay_button_description": "กดปุ่มนี้ค้างระหว่างเล่นเพื่อเปิดโอเวอร์เลย์ของแอป เปลี่ยนหากชนกับการกระทำในเกม",
         "controller_type": "ประเภทคอนโทรลเลอร์",
-        "controller_type_description": "วิธีที่เกมมองเห็นคอนโทรลเลอร์ DualSense หรือ DualShock โหมดอัตโนมัติจะใช้ PlayStation เมื่อเกมรองรับ มีผลในเซสชันถัดไป",
+        "controller_type_description": "วิธีที่เกมมองเห็นคอนโทรลเลอร์ DualSense หรือ DualShock โหมดอัตโนมัติจะใช้ PlayStation เมื่อเกมรองรับ PlayStation ต้องได้รับการรองรับจากเซสชัน มิฉะนั้นจะใช้ Xbox มีผลในเซสชันถัดไป",
         "text_input_buttons": "ปุ่มป้อนข้อความ",
         "text_input_buttons_description": "เลือกชุดปุ่มคอนโทรลเลอร์ที่จะใช้เปิดแป้นพิมพ์ Apple TV ระหว่างการสตรีม",
         "text_input_hold_delay": "ระยะเวลากดปุ่มป้อนข้อความค้าง",

@@ -183,7 +183,7 @@ enum L10nAR {
         "overlay_button": "زر التراكب",
         "overlay_button_description": "اضغط مطولًا على هذا الزر أثناء اللعب لفتح تراكب التطبيق. غيّره إذا كان يتعارض مع إجراء داخل اللعبة.",
         "controller_type": "نوع وحدة التحكم",
-        "controller_type_description": "كيف ترى الألعاب وحدة تحكم DualSense أو DualShock. يستخدم الوضع التلقائي PlayStation عندما تدعمه اللعبة. يُطبَّق في الجلسة التالية.",
+        "controller_type_description": "كيف ترى الألعاب وحدة تحكم DualSense أو DualShock. يستخدم الوضع التلقائي PlayStation عندما تدعمه اللعبة. يتطلب PlayStation دعم الجلسة، وإلا يتم الرجوع إلى Xbox. يُطبَّق في الجلسة التالية.",
         "text_input_buttons": "أزرار إدخال النص",
         "text_input_buttons_description": "اختر توليفة أزرار وحدة التحكم التي تفتح لوحة مفاتيح Apple TV أثناء البث.",
         "text_input_hold_delay": "تأخير إدخال النص",

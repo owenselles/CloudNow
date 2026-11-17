@@ -213,7 +213,7 @@ enum L10nMS {
         "overlay_button": "Butang tindanan",
         "overlay_button_description": "Tekan lama butang ini semasa bermain untuk membuka tindanan aplikasi. Tukar jika ia bercanggah dengan tindakan dalam permainan.",
         "controller_type": "Jenis pengawal",
-        "controller_type_description": "Cara permainan mengenali pengawal DualSense atau DualShock. Automatik menggunakan PlayStation apabila permainan menyokongnya. Berkuat kuasa pada sesi seterusnya.",
+        "controller_type_description": "Cara permainan mengenali pengawal DualSense atau DualShock. Automatik menggunakan PlayStation apabila permainan menyokongnya. PlayStation memerlukan sokongan sesi; jika tidak, ia kembali kepada Xbox. Berkuat kuasa pada sesi seterusnya.",
         "text_input_buttons": "Butang Input Teks",
         "text_input_buttons_description": "Pilih gabungan butang pengawal yang membuka papan kekunci Apple TV semasa penstriman.",
         "text_input_hold_delay": "Tempoh Tekan Lama Input Teks",

@@ -213,7 +213,7 @@ enum L10nVI {
         "overlay_button": "Nút overlay",
         "overlay_button_description": "Nhấn giữ nút này trong khi chơi để mở overlay của ứng dụng. Thay đổi nếu nó xung đột với hành động trong game.",
         "controller_type": "Loại tay cầm",
-        "controller_type_description": "Cách trò chơi nhận diện tay cầm DualSense hoặc DualShock. Tự động sẽ dùng PlayStation khi trò chơi hỗ trợ. Áp dụng từ phiên tiếp theo.",
+        "controller_type_description": "Cách trò chơi nhận diện tay cầm DualSense hoặc DualShock. Tự động sẽ dùng PlayStation khi trò chơi hỗ trợ. PlayStation cần phiên hỗ trợ, nếu không sẽ chuyển về Xbox. Áp dụng từ phiên tiếp theo.",
         "text_input_buttons": "Nút nhập văn bản",
         "text_input_buttons_description": "Chọn tổ hợp nút trên bộ điều khiển để mở bàn phím Apple TV trong khi phát trực tuyến.",
         "text_input_hold_delay": "Thời gian giữ nút nhập văn bản",

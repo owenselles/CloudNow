@@ -213,7 +213,7 @@ enum L10nNL {
         "overlay_button": "Overlayknop",
         "overlay_button_description": "Houd deze knop tijdens het spelen lang ingedrukt om de app-overlay te openen. Verander dit als het botst met een actie in de game.",
         "controller_type": "Controllertype",
-        "controller_type_description": "Hoe games een DualSense- of DualShock-controller zien. Automatisch gebruikt PlayStation als de game dat ondersteunt. Geldt vanaf de volgende sessie.",
+        "controller_type_description": "Hoe games een DualSense- of DualShock-controller zien. Automatisch gebruikt PlayStation als de game dat ondersteunt. PlayStation vereist ondersteuning van de sessie en valt anders terug op Xbox. Geldt vanaf de volgende sessie.",
         "text_input_buttons": "Knoppen voor tekstinvoer",
         "text_input_buttons_description": "Kies de combinatie van controllerknoppen waarmee het Apple TV-toetsenbord tijdens het streamen wordt geopend.",
         "text_input_hold_delay": "Vertraging voor tekstinvoer",
