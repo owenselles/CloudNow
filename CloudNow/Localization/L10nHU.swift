@@ -186,6 +186,8 @@ enum L10nHU {
         "controller_rumble_intensity_description": "Növeli a rezgés erősségét. Ne állítsd túl magasra — a nagyon erős, tartós rezgés elkoptathatja vagy károsíthatja a kontroller motorjait. A következő munkamenettől érvényes.",
         "overlay_button": "Átfedés gomb",
         "overlay_button_description": "Tartsa lenyomva ezt a gombot játék közben az alkalmazás átfedésének megnyitásához. Módosítsa, ha ütközik egy játékbeli művelettel.",
+        "controller_type": "Kontroller típusa",
+        "controller_type_description": "Hogyan látják a játékok a DualSense vagy DualShock kontrollert. Az Automatikus PlayStationt használ, ha a játék támogatja. A PlayStationhöz a munkamenet támogatása szükséges, ellenkező esetben Xbox lesz használva. A következő munkamenettől érvényes.",
         "text_input_buttons": "Szövegbeviteli gombok",
         "text_input_buttons_description": "Válassza ki a vezérlő azon gombkombinációját, amely streamelés közben megnyitja az Apple TV billentyűzetét.",
         "text_input_hold_delay": "Szövegbevitel késleltetése",

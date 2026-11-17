@@ -1151,6 +1151,19 @@ struct SettingsView: View {
                             )
                         }
                     )
+                    CloudNowSettingSelectionRow(
+                        L10n.text("controller_type"),
+                        description: L10n.text("controller_type_description"),
+                        selection: $vm.streamSettings.controllerType,
+                        accessibilityIdentifier: "settings.controller.controller-type",
+                        options: ControllerTypePreference.allCases.map {
+                            CloudNowSettingOption(
+                                value: $0,
+                                title: $0.label,
+                                accessibilityIdentifier: $0.rawValue
+                            )
+                        }
+                    )
                     NavigationLink {
                         TextInputTriggerSequenceCaptureView(
                             sequence: $vm.streamSettings.textInputTriggerSequence,

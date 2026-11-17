@@ -182,6 +182,8 @@ enum L10nDA {
         "controller_rumble_intensity_description": "Forstærker vibrationens styrke. Indstil den ikke for højt – meget kraftig vedvarende vibration kan slide på eller beskadige controllerens motorer. Gælder fra næste session.",
         "overlay_button": "Overlay-knap",
         "overlay_button_description": "Hold denne knap nede under spil for at åbne app-overlayet. Skift den, hvis den konflikter med en handling i spillet.",
+        "controller_type": "Controllertype",
+        "controller_type_description": "Hvordan spil ser en DualSense- eller DualShock-controller. Automatisk bruger PlayStation, når spillet understøtter det. PlayStation kræver understøttelse i sessionen og falder ellers tilbage til Xbox. Gælder fra næste session.",
         "text_input_buttons": "Knapper til tekstindtastning",
         "text_input_buttons_description": "Vælg den kombination af controllerknapper, der åbner Apple TV-tastaturet under streaming.",
         "text_input_hold_delay": "Forsinkelse for tekstindtastning",

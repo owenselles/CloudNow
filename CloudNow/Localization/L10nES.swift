@@ -179,6 +179,8 @@ enum L10nES {
         "controller_rumble_intensity_description": "Aumenta la intensidad de la vibración. No la configures demasiado alta: una vibración continua muy fuerte puede desgastar o dañar los motores del mando. Se aplica a la siguiente sesión.",
         "overlay_button": "Botón de superposición",
         "overlay_button_description": "Mantén pulsado este botón durante el juego para abrir la superposición de la app. Cámbialo si entra en conflicto con una acción del juego.",
+        "controller_type": "Tipo de mando",
+        "controller_type_description": "Cómo ven los juegos un mando DualSense o DualShock. Automático usa PlayStation cuando el juego lo admite. PlayStation requiere compatibilidad de la sesión; si no, vuelve a Xbox. Se aplica en la siguiente sesión.",
         "text_input_buttons": "Botones de entrada de texto",
         "text_input_buttons_description": "Elige la combinación de botones del mando que abre el teclado del Apple TV durante la transmisión.",
         "text_input_hold_delay": "Retardo de entrada de texto",

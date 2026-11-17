@@ -9,6 +9,19 @@ nonisolated enum GFNSonyGamepad {
         supportedControls?.contains { $0 == "GAMEPAD" || $0 == "DUALSHOCK4_GAMEPAD" } == true
     }
 
+    /// Whether this session may present a PlayStation controller. The server's DS4 bit is
+    /// still required on top (see `isSupported`).
+    static func allowsSonyInput(
+        preference: ControllerTypePreference,
+        supportedControls: [String]?
+    ) -> Bool {
+        switch preference {
+        case .automatic: gameSupportsSonyInput(supportedControls)
+        case .xbox: false
+        case .playStation: true
+        }
+    }
+
     static func serverHidMask(in sdp: String?) -> UInt32 {
         guard let sdp else { return 0 }
         for line in sdp.split(whereSeparator: \.isNewline) {
@@ -21,6 +34,12 @@ nonisolated enum GFNSonyGamepad {
             return UInt32(value) ?? 0
         }
         return 0
+    }
+
+    /// The DS4 bit the NVST answer advertises. The answer is sent before the input handshake,
+    /// so it can't depend on the protocol version that `isSupported` also requires.
+    static func answerHidMask(allowsSonyInput: Bool, serverHidMask: UInt32) -> UInt32 {
+        allowsSonyInput ? serverHidMask & 4 : 0
     }
 
     static func isSupported(protocolVersion: Int, gameSupportsDualShock: Bool, serverHidMask: UInt32) -> Bool {
