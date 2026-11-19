@@ -293,7 +293,7 @@ enum L10n {
 
     static func appLaunchModeLabel(_ mode: AppLaunchMode) -> String {
         switch mode {
-        case .default: text("default")
+        case .default: text("launch_mode_desktop")
         case .bigPicture: text("launch_mode_big_picture")
         }
     }

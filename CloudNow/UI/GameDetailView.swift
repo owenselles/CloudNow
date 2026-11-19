@@ -39,6 +39,7 @@ struct GameDetailView: View {
     @State private var ownershipUpdateFailed = false
     @State private var showStore = false
     @State private var showStoreConnections = false
+    @State private var showLaunchOptions = false
 
     private struct AvailabilityRequest: Hashable {
         let gameId: String
@@ -105,6 +106,7 @@ struct GameDetailView: View {
         case ownership
         case store
         case connections
+        case launchOptions
         case about
         case details
         case availability
@@ -176,6 +178,16 @@ struct GameDetailView: View {
                 GameStoreView(gameTitle: game.title, storeName: variant.storeName, url: url)
             }
         }
+        .fullScreenCover(
+            isPresented: $showLaunchOptions,
+            onDismiss: { focusedElement = .launchOptions },
+            content: {
+                NavigationStack {
+                    GameLaunchOptionsView(gameID: game.id, gameTitle: game.title)
+                        .environment(viewModel)
+                }
+            }
+        )
         .fullScreenCover(
             isPresented: $showStoreConnections,
             onDismiss: { availabilityRevision += 1 },
@@ -394,7 +406,7 @@ struct GameDetailView: View {
 
     private func handleFocusChange(_ focus: DetailFocus?, proxy: ScrollViewProxy) {
         switch focus {
-        case .play, .favorite, .ownership, .store, .connections, .availability, .variant:
+        case .play, .favorite, .ownership, .store, .connections, .launchOptions, .availability, .variant:
             backgroundBlurred = false
             withAnimation(reduceMotion ? nil : .smooth) {
                 proxy.scrollTo("hero", anchor: .top)
@@ -560,6 +572,16 @@ struct GameDetailView: View {
 
             if supportsOwnershipManagement {
                 ownershipActions
+            }
+            if selectedGameIsOwned, !isEmbeddedCarousel {
+                Button {
+                    showLaunchOptions = true
+                } label: {
+                    Label(L10n.text("game_preferences"), systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.bordered)
+                .focused($focusedElement, equals: .launchOptions)
+                .accessibilityIdentifier("game.preferences.open")
             }
         }
         .allowsHitTesting(!isEmbeddedCarousel)
