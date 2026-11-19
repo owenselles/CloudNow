@@ -636,7 +636,7 @@ private struct CloudNowSettingSelectionPage<Value: Hashable>: View {
     }
 }
 
-private struct CloudNowSettingsPageTitle: View {
+struct CloudNowSettingsPageTitle: View {
     let title: String
     let accessibilityIdentifier: String
 
@@ -906,6 +906,7 @@ struct SettingsView: View {
 
                     CloudNowSettingSelectionRow(
                         L10n.text("frame_rate"),
+                        description: L10n.format("frame_rate_display_limit", viewModel.maximumDisplayFramesPerSecond),
                         selection: $vm.streamSettings.fps,
                         accessibilityIdentifier: "settings.stream-quality.frame-rate",
                         options: viewModel.frameRateEligibility.map { eligibility in

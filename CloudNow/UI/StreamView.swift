@@ -109,7 +109,7 @@ struct StreamView: View {
         sessionScheduler: SessionOrchestrationScheduler = .continuous
     ) {
         self.game = game
-        self.settings = settings
+        self.settings = settings.applyingGamePreferences(for: game.id)
         self.existingSession = existingSession
         self.directSession = directSession
         self.onDismiss = onDismiss

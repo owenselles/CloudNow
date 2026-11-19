@@ -380,6 +380,7 @@ private struct AuthRestorationView: View {
         private let showsServiceChooser: Bool
         private let showsLoginProviderPicker: Bool
         private let showsXboxQualityHUD: Bool
+        private let showsGamePreferences: Bool
         private let xboxServiceConfiguration: XboxCloudServiceConfiguration?
         private let xboxStreamFixtureState: CloudStreamPresentationState?
 
@@ -389,6 +390,7 @@ private struct AuthRestorationView: View {
             let arguments = ProcessInfo.processInfo.arguments
             self.xboxServiceConfiguration = xboxServiceConfiguration
             showsServiceChooser = arguments.contains("--cloudnow-ui-service-chooser")
+            showsGamePreferences = arguments.contains("--cloudnow-ui-game-preferences")
             showsLoginProviderPicker = arguments.contains(
                 "--cloudnow-ui-login-provider-picker"
             )
@@ -442,7 +444,9 @@ private struct AuthRestorationView: View {
 
         var body: some View {
             Group {
-                if showsLoginProviderPicker {
+                if showsGamePreferences {
+                    GamePreferencesUITestFixtureView().environment(viewModel)
+                } else if showsLoginProviderPicker {
                     LoginProviderPickerFixtureView()
                 } else if showsXboxQualityHUD {
                     CloudStreamQualityHUDFixtureView()
