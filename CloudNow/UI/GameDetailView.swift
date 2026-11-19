@@ -568,20 +568,21 @@ struct GameDetailView: View {
                 if viewModel.isUpdatingGameOwnership {
                     ProgressView()
                 }
+
+                if selectedGameIsOwned, !isEmbeddedCarousel {
+                    Button {
+                        showLaunchOptions = true
+                    } label: {
+                        Label(L10n.text("game_preferences"), systemImage: "slider.horizontal.3")
+                    }
+                    .buttonStyle(.bordered)
+                    .focused($focusedElement, equals: .launchOptions)
+                    .accessibilityIdentifier("game.preferences.open")
+                }
             }
 
             if supportsOwnershipManagement {
                 ownershipActions
-            }
-            if selectedGameIsOwned, !isEmbeddedCarousel {
-                Button {
-                    showLaunchOptions = true
-                } label: {
-                    Label(L10n.text("game_preferences"), systemImage: "slider.horizontal.3")
-                }
-                .buttonStyle(.bordered)
-                .focused($focusedElement, equals: .launchOptions)
-                .accessibilityIdentifier("game.preferences.open")
             }
         }
         .allowsHitTesting(!isEmbeddedCarousel)
