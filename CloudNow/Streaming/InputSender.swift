@@ -86,10 +86,17 @@ extension RemoteInputMode {
 
 /// Implemented by InputSender; adopted by VideoSurfaceView to forward keyboard/mouse events.
 nonisolated protocol InputEventHandler: AnyObject {
+    var prefersHardwareKeyboardPresses: Bool { get }
     func sendKeyEvent(down: Bool, keyCode: UIKeyboardHIDUsage, modifiers: UIKeyModifierFlags)
     func sendMouseMove(dx: Int16, dy: Int16)
     func sendMouseButton(down: Bool, button: UInt8)
     func sendMouseWheel(delta: Int16)
+}
+
+extension InputEventHandler {
+    nonisolated var prefersHardwareKeyboardPresses: Bool {
+        false
+    }
 }
 
 /// Provider-neutral translation used by responder-chain keyboard adapters.
@@ -670,6 +677,10 @@ nonisolated protocol DataChannelSender: AnyObject {
 
 /// Owns all mutable input state on one latency-sensitive serial queue.
 final nonisolated class InputSender: @unchecked Sendable {
+    var prefersHardwareKeyboardPresses: Bool {
+        true
+    }
+
     static let remoteSensitivity: Float = 250
 
     private struct OverlayPressState {

@@ -177,6 +177,7 @@ final class VideoSurfaceView: UIView {
     /// GFNStreamController sets this to toggle the overlay rather than letting
     /// the press bubble up to the system (which opens the Apple TV control center).
     var menuPressHandler: (() -> Void)?
+    private var localOverlayKeys = Set<UIKeyboardHIDUsage>()
 
     var onDecodedVideoFormatChanged: (@Sendable (DecodedVideoFormat) -> Void)? {
         didSet {
@@ -316,27 +317,28 @@ final class VideoSurfaceView: UIView {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if press.type == .menu {
+            let action = CloudStreamPressRouting.action(
+                type: press.type, keyCode: press.key?.keyCode,
+                overlayVisible: overlayVisible, remoteMouseEnabled: remoteMouseInputEnabled,
+                prefersHardwareKeyboard: inputHandler?.prefersHardwareKeyboardPresses ?? false
+            )
+            if action == .keyboard, let key = press.key {
+                // A fresh game-owned press supersedes any cancelled local overlay press.
+                localOverlayKeys.remove(key.keyCode)
+                inputHandler?.sendKeyEvent(down: true, keyCode: key.keyCode, modifiers: key.modifierFlags)
+                handled = true
+            } else if action == .overlay {
+                if let key = press.key {
+                    localOverlayKeys.insert(key.keyCode)
+                }
                 // Always consume .menu — never let it bubble to the system as a back/dismiss
                 // gesture. Use it as the universal overlay toggle so the user can both open
                 // and close the diagnostics overlay from Siri Remote or a controller.
                 menuPressHandler?()
                 handled = true
-            } else if press.type == .playPause {
-                // Play/Pause also toggles the overlay so Siri Remote users always have a
-                // direct way to open diagnostics, even when a controller is connected.
-                menuPressHandler?()
-                handled = true
-            } else if press.type == .select, remoteMouseInputEnabled {
+            } else if action == .remoteClick {
                 inputHandler?.sendMouseButton(down: true, button: 1)
                 remoteSelectMouseDown = true
-                handled = true
-            } else if let key = press.key {
-                inputHandler?.sendKeyEvent(
-                    down: true,
-                    keyCode: key.keyCode,
-                    modifiers: key.modifierFlags
-                )
                 handled = true
             }
         }
@@ -348,16 +350,15 @@ final class VideoSurfaceView: UIView {
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
-            if press.type == .select, remoteSelectMouseDown {
+            if let key = press.key, inputHandler?.prefersHardwareKeyboardPresses == true {
+                releaseKeyboardPress(key)
+                handled = true
+            } else if press.type == .select, remoteSelectMouseDown {
                 inputHandler?.sendMouseButton(down: false, button: 1)
                 remoteSelectMouseDown = false
                 handled = true
             } else if let key = press.key {
-                inputHandler?.sendKeyEvent(
-                    down: false,
-                    keyCode: key.keyCode,
-                    modifiers: key.modifierFlags
-                )
+                releaseKeyboardPress(key)
                 handled = true
             }
         }
@@ -368,6 +369,12 @@ final class VideoSurfaceView: UIView {
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         pressesEnded(presses, with: event)
+    }
+
+    private func releaseKeyboardPress(_ key: UIKey) {
+        if localOverlayKeys.remove(key.keyCode) == nil {
+            inputHandler?.sendKeyEvent(down: false, keyCode: key.keyCode, modifiers: key.modifierFlags)
+        }
     }
 
     // MARK: - Siri Remote Touch Surface
