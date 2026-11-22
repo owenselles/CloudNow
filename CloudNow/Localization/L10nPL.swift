@@ -212,6 +212,8 @@ enum L10nPL {
         "controller_rumble_intensity_description": "Zwiększa siłę wibracji. Nie ustawiaj jej zbyt wysoko — bardzo silne, ciągłe wibracje mogą zużyć lub uszkodzić silniki kontrolera. Zmiana obowiązuje od następnej sesji.",
         "overlay_button": "Przycisk nakładki",
         "overlay_button_description": "Przytrzymaj ten przycisk podczas gry, aby otworzyć nakładkę aplikacji. Zmień, jeśli koliduje z akcją w grze.",
+        "controller_type": "Typ kontrolera",
+        "controller_type_description": "Jak gry widzą kontroler DualSense lub DualShock. Automatycznie używa PlayStation, gdy gra to obsługuje. PlayStation wymaga obsługi przez sesję, w przeciwnym razie używany jest Xbox. Obowiązuje od następnej sesji.",
         "text_input_buttons": "Przyciski wprowadzania tekstu",
         "text_input_buttons_description": "Wybierz kombinację przycisków kontrolera, która otwiera klawiaturę Apple TV podczas strumieniowania.",
         "text_input_hold_delay": "Opóźnienie wprowadzania tekstu",

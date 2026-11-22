@@ -186,6 +186,8 @@ enum L10nHR {
         "controller_rumble_intensity_description": "Pojačava vibraciju. Nemojte postaviti previsoko — vrlo snažna neprekidna vibracija može istrošiti ili oštetiti motore kontrolera. Primjenjuje se od sljedeće sesije.",
         "overlay_button": "Tipka prekrivanja",
         "overlay_button_description": "Dugo pritisnite ovu tipku tijekom igre da biste otvorili prekrivanje aplikacije. Promijenite ako je u sukobu s nekom radnjom u igri.",
+        "controller_type": "Vrsta kontrolera",
+        "controller_type_description": "Kako igre vide kontroler DualSense ili DualShock. Automatski koristi PlayStation kada ga igra podržava. PlayStation zahtijeva podršku sesije, inače se vraća na Xbox. Primjenjuje se od sljedeće sesije.",
         "text_input_buttons": "Gumbi za unos teksta",
         "text_input_buttons_description": "Odaberite kombinaciju gumba kontrolera koja otvara tipkovnicu Apple TV-a tijekom streaminga.",
         "text_input_hold_delay": "Odgoda unosa teksta",

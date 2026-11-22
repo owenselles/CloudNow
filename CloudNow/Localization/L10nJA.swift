@@ -183,6 +183,8 @@ enum L10nJA {
         "controller_rumble_intensity_description": "振動を強くします。強くしすぎないでください。非常に強い振動が続くと、コントローラーのモーターが摩耗または損傷する可能性があります。次回のセッションから適用されます。",
         "overlay_button": "オーバーレイボタン",
         "overlay_button_description": "プレイ中にこのボタンを長押しするとアプリのオーバーレイが開きます。ゲーム内操作と競合する場合は変更してください。",
+        "controller_type": "コントローラーの種類",
+        "controller_type_description": "ゲームが DualSense または DualShock コントローラーをどう認識するかを選びます。自動では、ゲームが対応している場合に PlayStation を使用します。PlayStation にはセッションの対応が必要で、対応していない場合は Xbox になります。次のセッションから適用されます。",
         "text_input_buttons": "テキスト入力ボタン",
         "text_input_buttons_description": "ストリーミング中にApple TVのキーボードを開くコントローラのボタンの組み合わせを選択します。",
         "text_input_hold_delay": "テキスト入力の長押し時間",

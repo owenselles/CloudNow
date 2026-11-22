@@ -305,6 +305,15 @@ enum L10n {
         }
     }
 
+    static func controllerTypeLabel(_ type: ControllerTypePreference) -> String {
+        switch type {
+        case .automatic: text("automatic")
+        // Brand names stay untranslated.
+        case .xbox: "Xbox"
+        case .playStation: "PlayStation"
+        }
+    }
+
     static func controllerSequenceButtonLabel(_ button: ControllerSequenceButton) -> String {
         switch button {
         case .dpadUp: text("d_pad_up")
