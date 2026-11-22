@@ -746,8 +746,6 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var heldMouseButtons = Set<UInt8>()
 
     private var overlayPresses: [Int: OverlayPressState] = [:]
-    /// Presses withheld for a local gesture and forwarded late. Composed into every
-    /// gamepad snapshot so each one stays down long enough for a game to see it.
     private var replayedTaps = ReplayedTapSlots()
     private var keyboardShortcutResolvers: [Int: ControllerKeyboardShortcutResolver] = [:]
     private var steamHoldTicks: [Int: Int] = [:]
@@ -1292,9 +1290,6 @@ final nonisolated class InputSender: @unchecked Sendable {
         return true
     }
 
-    /// Replays a short overlay-button press that was withheld for the long-press
-    /// gesture. The next composed snapshot carries its down edge, and the sampler
-    /// releases it after the minimum hold.
     private func beginOverlayTap(slot: Int, now: UInt64) {
         replayedTaps.beginReplayedPress(overlayButtonMask, slot: slot, now: now)
     }
@@ -1340,9 +1335,8 @@ final nonisolated class InputSender: @unchecked Sendable {
             onto: baseButtons,
             excluding: excludedButtons
         )
-        // Only down edges are replayed, in their original order. The scheduler keeps
-        // each replayed press down for its minimum hold, so a buffered release in this
-        // same sample cannot collapse it, and repeated presses of one button stay distinct.
+        // Only down edges are replayed, in order. The scheduler times each release, so a
+        // buffered release in this same sample cannot collapse the press.
         var previousButtons = baseButtons
         var lastSentButtons = lastSnapshots[slot]?.buttons
         for index in 0 ..< replayButtons.count {

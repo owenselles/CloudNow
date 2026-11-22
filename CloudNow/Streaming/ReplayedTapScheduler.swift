@@ -1,18 +1,9 @@
 import Foundation
 
 /// Keeps gamepad presses that were withheld for a local gesture and forwarded late
-/// down long enough for a game that polls once per frame to see them.
-///
-/// Ordinary input passes through `compose` unchanged and without delay. A button is
-/// managed only after `beginReplayedPress`, when its down edge reaches the remote after
-/// the physical press began: a deferred overlay tap or a failed text-input chord
-/// candidate. From that first forwarded down edge the button stays down for at least
-/// `minimumHold`. It is then released for at least `minimumGap` before a queued repeat
-/// press starts, so repeated taps stay distinct. Each button is tracked independently,
-/// and at most `maximumQueuedPresses` repeats wait per button.
-///
-/// The scheduler is advanced by the caller's existing sampling path. It owns no timers
-/// and does not allocate while composing.
+/// down for `minimumHold`, with `minimumGap` between repeats of one button, so a game
+/// that polls once per frame sees each one. Ordinary input passes through unchanged.
+/// The caller's sampling path advances it; it owns no timers.
 nonisolated struct ReplayedTapScheduler: Equatable, Sendable {
     static let defaultMinimumHold: UInt64 = 80_000_000
     static let defaultMinimumGap: UInt64 = 50_000_000
@@ -44,9 +35,6 @@ nonisolated struct ReplayedTapScheduler: Equatable, Sendable {
         self.minimumGap = minimumGap
     }
 
-    /// Records a forwarded down edge for each button in `mask`. An idle button goes
-    /// down now. A button that is still held or released from an earlier replay queues
-    /// one more press, up to `maximumQueuedPresses`.
     mutating func beginReplayedPress(_ mask: UInt16, now: UInt64) {
         var remaining = mask
         while remaining != 0 {
@@ -68,9 +56,6 @@ nonisolated struct ReplayedTapScheduler: Equatable, Sendable {
         }
     }
 
-    /// Applies managed buttons to the buttons the ordinary path would forward and
-    /// advances their phases to `now`. A rising forwarded edge of a managed button
-    /// queues a distinct press instead of merging into the current one.
     mutating func compose(forwarded: UInt16, now: UInt64) -> UInt16 {
         guard managedButtons != 0 else { return forwarded }
         var output = forwarded
@@ -88,8 +73,7 @@ nonisolated struct ReplayedTapScheduler: Equatable, Sendable {
         return output
     }
 
-    /// Applies managed buttons to `base` without advancing phases or observing edges.
-    /// Used to emit replayed down edges in order within one sample.
+    /// Applies managed buttons to `base` without advancing phases.
     func overlay(onto base: UInt16) -> UInt16 {
         var output = base
         var remaining = managedButtons
@@ -106,8 +90,6 @@ nonisolated struct ReplayedTapScheduler: Equatable, Sendable {
         return output
     }
 
-    /// Returns whether the button is down on the remote after advancing it to `now`.
-    /// An idle result defers to the forwarded value.
     private mutating func advance(index: Int, isForwarded: Bool, now: UInt64) -> Bool {
         var state = buttons[index]
         if isForwarded, !state.lastForwarded {

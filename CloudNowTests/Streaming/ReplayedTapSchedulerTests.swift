@@ -66,8 +66,6 @@ struct ReplayedTapSchedulerTests {
         var scheduler = makeScheduler()
         var recorder = EdgeRecorder()
 
-        // The candidate timed out while Y was held, so Y was forwarded late at 0 and is
-        // still physically down; the player lets go 10 later.
         scheduler.beginReplayedPress(buttonY, now: 0)
         for now in stride(from: UInt64(0), through: 200, by: 10) {
             let forwarded = now < 10 ? buttonY : 0
@@ -99,7 +97,6 @@ struct ReplayedTapSchedulerTests {
 
         scheduler.beginReplayedPress(buttonY, now: 0)
         for now in stride(from: UInt64(0), through: 400, by: 10) {
-            // Y passes through directly from 40 to 60, for example while A is held.
             let forwarded = (40 ..< 60).contains(now) ? buttonY | buttonA : 0
             recorder.record(scheduler.compose(forwarded: forwarded, now: now), at: now)
         }
