@@ -46,4 +46,30 @@ struct GFNGamePreferencesTests {
         #expect(restored == settings)
         #expect(restored.applyingGamePreferences(for: "anno").appLaunchMode == .default)
     }
+
+    @Test("Future or malformed preferences preserve valid titles, fields, and stream quality")
+    func lossyTitleDecoding() throws {
+        let data = Data(#"{"fps":30,"maxBitrateKbps":42000,"gamePreferences":{"good":{"launchMode":"default","remoteMode":"gamepadMouse"},"future":{"launchMode":"futureLauncher","remoteMode":"dualsense"},"broken":7}}"#.utf8)
+        let settings = try JSONDecoder().decode(StreamSettings.self, from: data)
+        #expect(settings.fps == 30)
+        #expect(settings.maxBitrateKbps == 42000)
+        #expect(settings.gamePreferences["good"]?.launchMode == .default)
+        #expect(settings.gamePreferences["future"]?.launchMode == nil)
+        #expect(settings.gamePreferences["future"]?.remoteMode == .dualsense)
+        #expect(settings.gamePreferences["broken"] == nil)
+        let malformed = try JSONDecoder().decode(StreamSettings.self, from: Data(#"{"fps":30,"gamePreferences":false}"#.utf8))
+        #expect(malformed.fps == 30)
+        #expect(malformed.gamePreferences.isEmpty)
+    }
+
+    @Test("Connecting an existing session applies remote input without replacing the launcher")
+    func connectingPreservesAllocation() {
+        var settings = StreamSettings()
+        settings.appLaunchMode = .bigPicture
+        settings.setGamePreferences(.init(launchMode: .default, remoteMode: .gamepadMouse), for: "anno")
+        let connecting = settings.applyingGamePreferences(for: "anno", forNewSession: false)
+        #expect(connecting.appLaunchMode == .bigPicture)
+        #expect(connecting.defaultRemoteInputMode == .gamepadMouse)
+        #expect(settings.applyingGamePreferences(for: "anno").appLaunchMode == .default)
+    }
 }

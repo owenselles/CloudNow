@@ -314,7 +314,8 @@ private nonisolated func buildResumeSessionRequestData(
     timezoneOffsetMilliseconds: Int,
     acceptedSdrHdrMode: Int
 ) -> [String: Any] {
-    // RESUME attaches the existing allocation and preserves its accepted dynamic range.
+    // RESUME preserves the existing launcher and accepted dynamic range.
+    // Do not send appLaunchMode: a changed preference applies only to a new allocation.
     // Resending monitor settings or requested features renegotiates quality and can be
     // rejected with INTERNAL_ERROR 8A8C0000. Keep the existing minimal attachment body.
     let audioChannels = settings.audioFormat.resolvedChannelCount
@@ -341,7 +342,6 @@ private nonisolated func buildResumeSessionRequestData(
         "clientIdentification": "GFN-PC",
         "parentSessionId": NSNull(),
         "streamerVersion": 1,
-        "appLaunchMode": settings.appLaunchMode.cloudMatchValue,
         "sdkVersion": "1.0",
         "enhancedStreamMode": 1,
         "useOps": true,

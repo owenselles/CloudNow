@@ -376,3 +376,9 @@ This is expected. Provider settings are persisted and decoded with fallback
 values for newly added fields. Use the picker or toggle to change a saved value.
 Use **Reset All Data** only if you intend to remove the active provider's
 account, preferences, favorites, history, and cache.
+
+Per-game launcher preferences are resolved only for a new allocation. Resume and
+reconnect requests omit `appLaunchMode` so a preference changed while a session
+is parked cannot replace that allocation's launcher. The per-game Siri Remote
+preference is applied locally on connection. Unknown or malformed per-title
+values are decoded independently and do not discard other stream settings.

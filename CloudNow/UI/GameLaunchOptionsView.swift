@@ -39,9 +39,9 @@ struct GameLaunchOptionsView: View {
                     selection: binding(for: \.launchMode),
                     accessibilityIdentifier: "game.preferences.launch",
                     options: [
-                        CloudNowSettingOption(value: nil, title: L10n.text("use_app_settings"), accessibilityIdentifier: "inherit"),
-                        CloudNowSettingOption(value: AppLaunchMode.default, title: L10n.text("launch_mode_desktop"), accessibilityIdentifier: "desktop"),
-                        CloudNowSettingOption(value: AppLaunchMode.bigPicture, title: L10n.appLaunchModeLabel(.bigPicture), accessibilityIdentifier: "tv"),
+                        CloudNowSettingOption<AppLaunchMode?>(value: nil, title: L10n.text("use_app_settings"), accessibilityIdentifier: "inherit"),
+                        CloudNowSettingOption<AppLaunchMode?>(value: AppLaunchMode.default, title: L10n.text("launch_mode_desktop"), accessibilityIdentifier: "desktop"),
+                        CloudNowSettingOption<AppLaunchMode?>(value: AppLaunchMode.bigPicture, title: L10n.appLaunchModeLabel(.bigPicture), accessibilityIdentifier: "tv"),
                     ]
                 )
                 .focused($focusedRow, equals: .launch)
@@ -51,10 +51,10 @@ struct GameLaunchOptionsView: View {
                     selection: binding(for: \.remoteMode),
                     accessibilityIdentifier: "game.preferences.remote",
                     options: [
-                        CloudNowSettingOption(value: nil, title: L10n.text("use_app_settings"), accessibilityIdentifier: "inherit"),
-                        CloudNowSettingOption(value: RemoteInputMode.gamepadMouse, title: L10n.remoteInputModeLabel(.gamepadMouse), accessibilityIdentifier: "mouse"),
-                        CloudNowSettingOption(value: RemoteInputMode.gamepad, title: L10n.remoteInputModeLabel(.gamepad), accessibilityIdentifier: "gamepad"),
-                        CloudNowSettingOption(value: RemoteInputMode.dualsense, title: L10n.remoteInputModeLabel(.dualsense), accessibilityIdentifier: "touchpad"),
+                        CloudNowSettingOption<RemoteInputMode?>(value: nil, title: L10n.text("use_app_settings"), accessibilityIdentifier: "inherit"),
+                        CloudNowSettingOption<RemoteInputMode?>(value: RemoteInputMode.gamepadMouse, title: L10n.remoteInputModeLabel(.gamepadMouse), accessibilityIdentifier: "mouse"),
+                        CloudNowSettingOption<RemoteInputMode?>(value: RemoteInputMode.gamepad, title: L10n.remoteInputModeLabel(.gamepad), accessibilityIdentifier: "gamepad"),
+                        CloudNowSettingOption<RemoteInputMode?>(value: RemoteInputMode.dualsense, title: L10n.remoteInputModeLabel(.dualsense), accessibilityIdentifier: "touchpad"),
                     ]
                 )
                 .focused($focusedRow, equals: .remote)

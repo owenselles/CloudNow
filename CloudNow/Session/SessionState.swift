@@ -261,7 +261,7 @@ extension StreamSettings {
         diagnosticsEnabled = rawStatsMode == "diagnostic" || (storedDiagnostics ?? d.diagnosticsEnabled)
         enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
         appLaunchMode = try c.decodeIfPresent(AppLaunchMode.self, forKey: .appLaunchMode) ?? d.appLaunchMode
-        gamePreferences = try c.decodeIfPresent([String: GFNGamePreferences].self, forKey: .gamePreferences) ?? [:]
+        gamePreferences = GFNGamePreferences.decodeEntries(from: try? c.superDecoder(forKey: .gamePreferences))
         persistInGameSettings = try c.decodeIfPresent(Bool.self, forKey: .persistInGameSettings) ?? d.persistInGameSettings
         let storedSessionEndWarningMinutes = try c.decodeIfPresent(
             Int.self,

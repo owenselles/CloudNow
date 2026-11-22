@@ -109,7 +109,7 @@ struct StreamView: View {
         sessionScheduler: SessionOrchestrationScheduler = .continuous
     ) {
         self.game = game
-        self.settings = settings.applyingGamePreferences(for: game.id)
+        self.settings = settings.applyingGamePreferences(for: game.id, forNewSession: false)
         self.existingSession = existingSession
         self.directSession = directSession
         self.onDismiss = onDismiss
@@ -1423,7 +1423,7 @@ struct StreamView: View {
             token: token,
             streamingBaseUrl: routeSelection.base,
             routingZoneUrl: routeSelection.routingZoneUrl,
-            settings: settings,
+            settings: settings.applyingGamePreferences(for: game.id).normalizedForClient,
             localVideoCapabilities: LocalVideoCapabilities.detect(codec: settings.codec.resolvedCodec),
             accountLinked: true,
             accountAllowsHDR: viewModel.subscription?.allowsHDR,
