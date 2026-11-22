@@ -150,10 +150,15 @@ nonisolated struct ControllerKeyboardShortcutResolver: Sendable {
 
         switch phase {
         case .idle:
-            guard targetMask != 0,
-                  targetButtons != 0,
-                  eligibleButtons & ~targetMask == 0
-            else {
+            guard targetMask != 0, targetButtons != 0 else {
+                return passthrough(buttons)
+            }
+            guard eligibleButtons & ~targetMask == 0 else {
+                // A target pressed alongside an unrelated button is forwarded as an
+                // ordinary press. Keep forwarding it until release so it is not
+                // withheld, and later replayed as a second press, once the unrelated
+                // button lifts first.
+                phase = .passthroughUntilRelease(bypassesLocalGestures: false)
                 return passthrough(buttons)
             }
 
