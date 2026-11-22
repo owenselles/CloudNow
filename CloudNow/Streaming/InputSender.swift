@@ -747,6 +747,10 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private var overlayPresses: [Int: OverlayPressState] = [:]
     private var overlayReplaySlots = Set<Int>()
+    /// Buttons whose press was withheld and replayed after the physical release.
+    /// They stay down on the remote side for `replayedTapHold` so the game's
+    /// once-per-frame poll can see them.
+    private var replayedTapHolds: [Int: (mask: UInt16, until: UInt64)] = [:]
     private var keyboardShortcutResolvers: [Int: ControllerKeyboardShortcutResolver] = [:]
     private var steamHoldTicks: [Int: Int] = [:]
     private var steamTriggeredSlots = Set<Int>()
@@ -756,6 +760,10 @@ final nonisolated class InputSender: @unchecked Sendable {
     private static let gamepadKeepAlive = UInt64(33_333_333)
     private static let heartbeatInterval = UInt64(2_000_000_000)
     private static let overlayLongPressThreshold = 216
+    /// Minimum time a replayed tap stays pressed on the remote. 17 ms (or 0 ms for
+    /// a failed shortcut chord) is shorter than one frame at 60 fps, so games that
+    /// poll XInput once per frame often miss the press entirely.
+    private static let replayedTapHold = UInt64(80_000_000)
     private static let steamLongPressThreshold = 120
     private static let microGamepadSuppressionWindow = UInt64(100_000_000)
     private static let replayEventIntervalMs: Int = 18
@@ -875,6 +883,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             if paused {
                 overlayPresses.removeAll()
                 overlayReplaySlots.removeAll()
+                replayedTapHolds.removeAll()
                 keyboardShortcutResolvers.removeAll()
                 steamHoldTicks.removeAll()
                 steamTriggeredSlots.removeAll()
@@ -921,6 +930,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         releaseHeldMouseButtons()
         overlayPresses.removeAll()
         overlayReplaySlots.removeAll()
+        replayedTapHolds.removeAll()
         keyboardShortcutResolvers.removeAll()
         cancelKeyboardReplay()
         steamHoldTicks.removeAll()
@@ -1132,14 +1142,26 @@ final nonisolated class InputSender: @unchecked Sendable {
         state.buttons = shortcutResolution.forwardedButtons
         if shortcutResolution.replayTransitions.count > 0 {
             let preservesLocalGestures = !shortcutResolution.bypassesLocalGestureHandling
+            let excludedButtons = preservesLocalGestures ? overlayButtonMask : 0
+            // A quick tap of a chord button (e.g. Y with the default View+Y text-input
+            // shortcut) fails the chord on release, so its down and up edges would both
+            // be replayed in this sample. Keep it down for a few frames instead.
+            let releasedTargets = ControllerKeyboardShortcutOverlayPolicy.releasedReplayTargets(
+                resolution: shortcutResolution,
+                targetMask: textInputTriggerMask,
+                excludedButtons: excludedButtons,
+                physicalButtons: physicalState.buttons
+            )
+            if releasedTargets != 0 {
+                replayedTapHolds[slot] = (releasedTargets, now &+ Self.replayedTapHold)
+            }
             sendKeyboardShortcutReplay(
                 shortcutResolution.replayTransitions,
                 currentState: physicalState,
                 slot: slot,
                 now: now,
-                excludedButtons: preservesLocalGestures
-                    ? overlayButtonMask
-                    : 0
+                excludedButtons: excludedButtons,
+                heldButtons: releasedTargets
             )
             if ControllerKeyboardShortcutOverlayPolicy.shouldReplayDeferredTap(
                 resolution: shortcutResolution,
@@ -1186,6 +1208,14 @@ final nonisolated class InputSender: @unchecked Sendable {
             } else {
                 steamHoldTicks[slot] = nil
                 steamTriggeredSlots.remove(slot)
+            }
+        }
+
+        if let hold = replayedTapHolds[slot] {
+            if now < hold.until {
+                state.buttons |= hold.mask
+            } else {
+                replayedTapHolds[slot] = nil
             }
         }
 
@@ -1312,7 +1342,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         )
         overlayReplaySlots.insert(slot)
         sendGamepadSnapshot(down, slot: slot, force: true)
-        inputQueue.asyncAfter(deadline: .now() + .milliseconds(17)) { [weak self, weak controller] in
+        inputQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.replayedTapHold))) { [weak self, weak controller] in
             guard let self,
                   let controller,
                   overlayReplaySlots.remove(slot) != nil,
@@ -1366,7 +1396,8 @@ final nonisolated class InputSender: @unchecked Sendable {
         ),
         slot: Int,
         now: UInt64,
-        excludedButtons: UInt16
+        excludedButtons: UInt16,
+        heldButtons: UInt16
     ) {
         // Replay against the last state the remote actually received. Using the
         // current physical state here would collapse a newly pressed unrelated
@@ -1375,10 +1406,18 @@ final nonisolated class InputSender: @unchecked Sendable {
             onto: (lastSnapshots[slot]?.buttons ?? 0) & ~textInputTriggerMask,
             excluding: excludedButtons
         )
+        // Once a held button's down edge is replayed, its replayed up edge is skipped;
+        // the minimum hold in sendGamepadState releases it a few frames later.
+        var latchedButtons: UInt16 = 0
+        var lastSentButtons: UInt16?
         for index in 0 ..< replayButtons.count {
+            latchedButtons |= replayButtons[index] & heldButtons
+            let buttons = replayButtons[index] | latchedButtons
+            guard buttons != lastSentButtons else { continue }
+            lastSentButtons = buttons
             sendGamepadSnapshot(
                 GamepadSnapshot(
-                    buttons: replayButtons[index],
+                    buttons: buttons,
                     leftTrigger: currentState.leftTrigger,
                     rightTrigger: currentState.rightTrigger,
                     leftStickX: currentState.lx,

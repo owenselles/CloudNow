@@ -99,6 +99,23 @@ nonisolated enum ControllerKeyboardShortcutOverlayPolicy {
             && physicalButtons & overlayButtonMask == 0
             && resolution.replayTransitions.contains(buttonMask: overlayButtonMask)
     }
+
+    /// Target buttons that a failed candidate replays as pressed even though they are
+    /// already physically released. Without a minimum hold, the remote receives their
+    /// down and up edges in the same sample, and a game that polls once per frame
+    /// never sees the press.
+    static func releasedReplayTargets(
+        resolution: ControllerKeyboardShortcutResolution,
+        targetMask: UInt16,
+        excludedButtons: UInt16,
+        physicalButtons: UInt16
+    ) -> UInt16 {
+        var replayed: UInt16 = 0
+        for index in 0 ..< resolution.replayTransitions.count {
+            replayed |= resolution.replayTransitions[index]
+        }
+        return replayed & targetMask & ~excludedButtons & ~physicalButtons
+    }
 }
 
 /// Resolves a controller chord without allocating in the 120 Hz sampling path.

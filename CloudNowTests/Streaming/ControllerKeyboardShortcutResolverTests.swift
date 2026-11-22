@@ -132,6 +132,58 @@ struct ControllerKeyboardShortcutResolverTests {
         ))
     }
 
+    @Test("A quick tap of one chord button is reported for a minimum remote hold")
+    func quickTapReportsReleasedReplayTarget() {
+        var resolver = makeResolver()
+
+        _ = resolver.resolve(buttons: secondButton, now: 0)
+        let failed = resolver.resolve(buttons: 0, now: 10_000_000)
+
+        // The replayed down and up edges land in the same sample.
+        #expect(failed.replayTransitions.values == [secondButton, 0])
+        #expect(failed.forwardedButtons == 0)
+        #expect(ControllerKeyboardShortcutOverlayPolicy.releasedReplayTargets(
+            resolution: failed,
+            targetMask: firstButton | secondButton,
+            excludedButtons: 0,
+            physicalButtons: 0
+        ) == secondButton)
+    }
+
+    @Test("A chord button still held when the candidate times out needs no extra hold")
+    func heldButtonNeedsNoReplayHold() {
+        var resolver = makeResolver()
+
+        _ = resolver.resolve(buttons: secondButton, now: 0)
+        let timedOut = resolver.resolve(
+            buttons: secondButton,
+            now: ControllerKeyboardShortcutResolver.assemblyWindowNanoseconds
+        )
+
+        #expect(timedOut.replayTransitions.values == [secondButton])
+        #expect(ControllerKeyboardShortcutOverlayPolicy.releasedReplayTargets(
+            resolution: timedOut,
+            targetMask: firstButton | secondButton,
+            excludedButtons: 0,
+            physicalButtons: secondButton
+        ) == 0)
+    }
+
+    @Test("Locally handled overlay edges are excluded from the minimum remote hold")
+    func overlayEdgesExcludedFromReplayHold() {
+        var resolver = makeResolver()
+
+        _ = resolver.resolve(buttons: firstButton, now: 0)
+        let failed = resolver.resolve(buttons: 0, now: 10_000_000)
+
+        #expect(ControllerKeyboardShortcutOverlayPolicy.releasedReplayTargets(
+            resolution: failed,
+            targetMask: firstButton | secondButton,
+            excludedButtons: firstButton,
+            physicalButtons: 0
+        ) == 0)
+    }
+
     @Test("An unrelated button fails the candidate without swallowing input")
     func unrelatedButtonFailsCandidate() {
         var resolver = makeResolver()
