@@ -210,6 +210,8 @@ enum L10nEN {
         "controller_rumble_intensity_description": "Boosts vibration strength. Don't set it too high — very strong sustained rumble can wear out or damage a controller's motors. Applies to the next session.",
         "overlay_button": "Overlay Button",
         "overlay_button_description": "Long-press this button during play to open the app overlay. Switch if it conflicts with an in-game action.",
+        "controller_type": "Controller Type",
+        "controller_type_description": "How games see a DualSense or DualShock controller. Automatic uses PlayStation when the game supports it. PlayStation needs session support and otherwise falls back to Xbox. Applies to the next session.",
         "text_input_buttons": "Text Input Buttons",
         "text_input_buttons_description": "Choose the controller button chord that opens the Apple TV keyboard during streaming.",
         "text_input_hold_delay": "Text Input Hold Delay",
