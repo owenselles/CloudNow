@@ -66,8 +66,9 @@ final class GamePreferencesUITests: XCTestCase {
         XCUIRemote.shared.press(.select)
         let preferences = app.buttons["game.preferences.open"]
         XCTAssertTrue(preferences.waitForExistence(timeout: 5))
-        select(app.buttons["Play"], directions: [.left, .up, .down], activate: false)
-        select(preferences, directions: [.right])
+        // The preference action has its own identifier. Do not route through
+        // the composite Play label, whose focus owner differs by button style.
+        select(preferences, directions: [.right, .left, .up, .down])
         XCTAssertTrue(app.buttons["game.preferences.launch"].waitForExistence(timeout: 5))
     }
 
