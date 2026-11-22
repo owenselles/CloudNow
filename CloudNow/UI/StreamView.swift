@@ -176,6 +176,9 @@ struct StreamView: View {
         .onChange(of: streamController.menuPressCount) { _, _ in
             togglePauseMenu()
         }
+        .onChange(of: streamController.overlayDismissRequestCount) { _, _ in
+            closeOverlay()
+        }
         .onChange(of: streamController.textEntryRequestCount) { _, _ in
             presentControllerTextEntry()
         }

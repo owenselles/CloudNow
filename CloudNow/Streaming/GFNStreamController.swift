@@ -338,6 +338,7 @@ final class GFNStreamController: NSObject {
     /// Incremented each time the user presses Menu while VideoSurfaceView is first responder.
     /// SwiftUI observes this via .onChange to toggle the HUD overlay.
     private(set) var menuPressCount: Int = 0
+    private(set) var overlayDismissRequestCount: Int = 0
     /// Incremented when the controller keyboard shortcut requests local text entry.
     private(set) var textEntryRequestCount: Int = 0
 
@@ -514,6 +515,9 @@ final class GFNStreamController: NSObject {
     /// Stores a reference so the inputHandler can be wired up when InputSender starts.
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
+        view.prefersHardwareKeyboardPresses = true
+        view.hardwareEscapeHandler = { [weak self] in self?.handleHardwareEscape() }
+        view.hardwareKeyboardOverlayActive = overlayInputPaused || controllerTextEntryReplayLifecycle.controllerTextEntryActive
         view.setAdaptiveFramePacing(settings.adaptiveFramePacing, frameRate: settings.fps)
         view.setDiagnosticsEnabled(diagnosticsEnabled)
         view.onDecodedVideoFormatChanged = { [weak self] format in
@@ -622,6 +626,14 @@ final class GFNStreamController: NSObject {
     /// on the tvOS focus engine (which is suppressed when UIKit holds first responder).
     func handleMenuPress() {
         menuPressCount += 1
+    }
+
+    /// Physical Escape dismisses local UI; it never toggles a new pause menu open.
+    func handleHardwareEscape() {
+        cancelControllerTextEntry()
+        overlayInputPaused = false
+        syncInputPauseState()
+        overlayDismissRequestCount += 1
     }
 
     // MARK: Input Control
@@ -797,10 +809,12 @@ final class GFNStreamController: NSObject {
         lastZoneRttFeedbackAt = nil
         videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
+        videoView?.hardwareEscapeHandler = nil
         videoView?.onDecodedVideoFormatChanged = nil
         videoView = nil
         remoteMode = .gamepad
         menuPressCount = 0
+        overlayDismissRequestCount = 0
         textEntryRequestCount = 0
         timeWarning = nil
         videoDiagnostics = VideoPipelineSnapshot()
@@ -2481,6 +2495,7 @@ private extension GFNStreamController {
     }
 
     func syncInputPauseState() {
+        videoView?.hardwareKeyboardOverlayActive = overlayInputPaused || controllerTextEntryReplayLifecycle.controllerTextEntryActive
         inputSender?.setPaused(
             controllerTextEntryReplayLifecycle.inputPaused(overlayPaused: overlayInputPaused)
         )

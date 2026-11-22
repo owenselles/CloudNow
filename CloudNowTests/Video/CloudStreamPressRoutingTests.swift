@@ -8,7 +8,7 @@ struct CloudStreamPressRoutingTests {
     func escapeOwnership() {
         #expect(route(.menu, key: .keyboardEscape) == .keyboard)
         #expect(route(.menu, key: nil) == .overlay)
-        #expect(route(.menu, key: .keyboardEscape, overlay: true) == .overlay)
+        #expect(route(.menu, key: .keyboardEscape, overlay: true) == .dismissOverlay)
     }
 
     @Test("Hardware Enter and Space are not mistaken for remote click or Play/Pause")
