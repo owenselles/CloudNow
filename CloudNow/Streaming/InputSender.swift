@@ -746,11 +746,9 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var heldMouseButtons = Set<UInt8>()
 
     private var overlayPresses: [Int: OverlayPressState] = [:]
-    private var overlayReplaySlots = Set<Int>()
-    /// Buttons whose press was withheld and replayed after the physical release.
-    /// They stay down on the remote side for `replayedTapHold` so the game's
-    /// once-per-frame poll can see them.
-    private var replayedTapHolds: [Int: (mask: UInt16, until: UInt64)] = [:]
+    /// Presses withheld for a local gesture and forwarded late. Composed into every
+    /// gamepad snapshot so each one stays down long enough for a game to see it.
+    private var replayedTaps = ReplayedTapSlots()
     private var keyboardShortcutResolvers: [Int: ControllerKeyboardShortcutResolver] = [:]
     private var steamHoldTicks: [Int: Int] = [:]
     private var steamTriggeredSlots = Set<Int>()
@@ -760,10 +758,6 @@ final nonisolated class InputSender: @unchecked Sendable {
     private static let gamepadKeepAlive = UInt64(33_333_333)
     private static let heartbeatInterval = UInt64(2_000_000_000)
     private static let overlayLongPressThreshold = 216
-    /// Minimum time a replayed tap stays pressed on the remote. 17 ms (or 0 ms for
-    /// a failed shortcut chord) is shorter than one frame at 60 fps, so games that
-    /// poll XInput once per frame often miss the press entirely.
-    private static let replayedTapHold = UInt64(80_000_000)
     private static let steamLongPressThreshold = 120
     private static let microGamepadSuppressionWindow = UInt64(100_000_000)
     private static let replayEventIntervalMs: Int = 18
@@ -828,6 +822,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             sonyAttachTokens.removeAll()
             gamepadBitmap = 0
             lastSnapshots.removeAll()
+            replayedTaps.removeAll()
             lastSnapshotSend.removeAll()
         }
     }
@@ -882,8 +877,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             suppressingMicroButtonA = false
             if paused {
                 overlayPresses.removeAll()
-                overlayReplaySlots.removeAll()
-                replayedTapHolds.removeAll()
+                replayedTaps.removeAll()
                 keyboardShortcutResolvers.removeAll()
                 steamHoldTicks.removeAll()
                 steamTriggeredSlots.removeAll()
@@ -929,8 +923,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         suppressingMicroButtonA = false
         releaseHeldMouseButtons()
         overlayPresses.removeAll()
-        overlayReplaySlots.removeAll()
-        replayedTapHolds.removeAll()
+        replayedTaps.removeAll()
         keyboardShortcutResolvers.removeAll()
         cancelKeyboardReplay()
         steamHoldTicks.removeAll()
@@ -1105,26 +1098,28 @@ final nonisolated class InputSender: @unchecked Sendable {
         guard !isPaused,
               let slot = controllerSlots[ObjectIdentifier(controller)] else { return }
 
+        let now = DispatchTime.now().uptimeNanoseconds
         let buttons = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
         let previousButtons = lastButtons[slot] ?? buttons
         let changed = previousButtons ^ buttons
         lastButtons[slot] = buttons
 
+        var beganOverlayTap = false
         if changed & overlayButtonMask != 0 {
             if buttons & overlayButtonMask != 0 {
                 overlayPresses[slot] = OverlayPressState()
             } else if ControllerKeyboardShortcutOverlayPolicy.shouldFinishPressOnRelease(
                 resolverOwnsGesture: keyboardShortcutResolvers[slot]?.ownsCandidateGesture == true
             ) {
-                finishOverlayPress(for: controller, slot: slot)
+                beganOverlayTap = finishOverlayPress(slot: slot, now: now)
             }
         }
 
-        guard changed & ~overlayButtonMask != 0 else { return }
+        guard beganOverlayTap || changed & ~overlayButtonMask != 0 else { return }
         sendGamepadState(
             for: controller,
             sampleOverlay: false,
-            now: DispatchTime.now().uptimeNanoseconds
+            now: now
         )
     }
 
@@ -1142,26 +1137,14 @@ final nonisolated class InputSender: @unchecked Sendable {
         state.buttons = shortcutResolution.forwardedButtons
         if shortcutResolution.replayTransitions.count > 0 {
             let preservesLocalGestures = !shortcutResolution.bypassesLocalGestureHandling
-            let excludedButtons = preservesLocalGestures ? overlayButtonMask : 0
-            // A quick tap of a chord button (e.g. Y with the default View+Y text-input
-            // shortcut) fails the chord on release, so its down and up edges would both
-            // be replayed in this sample. Keep it down for a few frames instead.
-            let releasedTargets = ControllerKeyboardShortcutOverlayPolicy.releasedReplayTargets(
-                resolution: shortcutResolution,
-                targetMask: textInputTriggerMask,
-                excludedButtons: excludedButtons,
-                physicalButtons: physicalState.buttons
-            )
-            if releasedTargets != 0 {
-                replayedTapHolds[slot] = (releasedTargets, now &+ Self.replayedTapHold)
-            }
             sendKeyboardShortcutReplay(
                 shortcutResolution.replayTransitions,
                 currentState: physicalState,
                 slot: slot,
                 now: now,
-                excludedButtons: excludedButtons,
-                heldButtons: releasedTargets
+                excludedButtons: preservesLocalGestures
+                    ? overlayButtonMask
+                    : 0
             )
             if ControllerKeyboardShortcutOverlayPolicy.shouldReplayDeferredTap(
                 resolution: shortcutResolution,
@@ -1170,7 +1153,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                 hasPendingPress: overlayPresses[slot] != nil
             ) {
                 overlayPresses[slot] = nil
-                sendOverlayTap(for: controller, slot: slot)
+                beginOverlayTap(slot: slot, now: now)
             }
         }
         if shortcutResolution.bypassesLocalGestureHandling {
@@ -1191,7 +1174,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                 }
                 overlayPresses[slot] = press
             } else if overlayPresses[slot] != nil {
-                finishOverlayPress(for: controller, slot: slot)
+                finishOverlayPress(slot: slot, now: now)
             }
 
             if shortcutResolution.suppressesSteamGestures {
@@ -1211,26 +1194,17 @@ final nonisolated class InputSender: @unchecked Sendable {
             }
         }
 
-        if let hold = replayedTapHolds[slot] {
-            if now < hold.until {
-                state.buttons |= hold.mask
-            } else {
-                replayedTapHolds[slot] = nil
-            }
-        }
-
         // The trigger is withheld for the entire gesture. A short press is replayed
-        // as down/up on release; a long press is consumed by the local overlay.
+        // on release through `replayedTaps`; a long press is consumed by the local overlay.
         if !shortcutResolution.bypassesLocalGestureHandling {
             if overlayPresses[slot] != nil || isOverlayButtonHeld(on: controller) {
                 state.buttons &= ~overlayButtonMask
-            } else if overlayReplaySlots.contains(slot) {
-                state.buttons |= overlayButtonMask
             }
             if steamTriggeredSlots.contains(slot) {
                 state.buttons &= ~steamButtonMask
             }
         }
+        state.buttons = replayedTaps.compose(forwarded: state.buttons, slot: slot, now: now)
         sendGamepadSnapshot(
             GamepadSnapshot(
                 buttons: state.buttons,
@@ -1310,59 +1284,19 @@ final nonisolated class InputSender: @unchecked Sendable {
             || snapshot.rightStickY != 0
     }
 
-    private func finishOverlayPress(for controller: GCController, slot: Int) {
-        guard let press = overlayPresses.removeValue(forKey: slot) else { return }
-        if !press.triggered {
-            sendOverlayTap(for: controller, slot: slot)
-        }
+    @discardableResult
+    private func finishOverlayPress(slot: Int, now: UInt64) -> Bool {
+        guard let press = overlayPresses.removeValue(forKey: slot) else { return false }
+        guard !press.triggered else { return false }
+        beginOverlayTap(slot: slot, now: now)
+        return true
     }
 
-    private func sendOverlayTap(for controller: GCController, slot: Int) {
-        let state = mapGCControllerToXInput(controller, deadzone: deadzone)
-        let baseButtons = state.buttons & ~overlayButtonMask
-        let base = GamepadSnapshot(
-            buttons: baseButtons,
-            leftTrigger: state.leftTrigger,
-            rightTrigger: state.rightTrigger,
-            leftStickX: state.lx,
-            leftStickY: state.ly,
-            rightStickX: state.rx,
-            rightStickY: state.ry,
-            bitmap: gamepadBitmap
-        )
-        let down = GamepadSnapshot(
-            buttons: base.buttons | overlayButtonMask,
-            leftTrigger: base.leftTrigger,
-            rightTrigger: base.rightTrigger,
-            leftStickX: base.leftStickX,
-            leftStickY: base.leftStickY,
-            rightStickX: base.rightStickX,
-            rightStickY: base.rightStickY,
-            bitmap: base.bitmap
-        )
-        overlayReplaySlots.insert(slot)
-        sendGamepadSnapshot(down, slot: slot, force: true)
-        inputQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.replayedTapHold))) { [weak self, weak controller] in
-            guard let self,
-                  let controller,
-                  overlayReplaySlots.remove(slot) != nil,
-                  controllerSlots[ObjectIdentifier(controller)] == slot else { return }
-            let current = mapGCControllerToXInput(controller, deadzone: deadzone)
-            sendGamepadSnapshot(
-                GamepadSnapshot(
-                    buttons: current.buttons & ~overlayButtonMask,
-                    leftTrigger: current.leftTrigger,
-                    rightTrigger: current.rightTrigger,
-                    leftStickX: current.lx,
-                    leftStickY: current.ly,
-                    rightStickX: current.rx,
-                    rightStickY: current.ry,
-                    bitmap: gamepadBitmap
-                ),
-                slot: slot,
-                force: true
-            )
-        }
+    /// Replays a short overlay-button press that was withheld for the long-press
+    /// gesture. The next composed snapshot carries its down edge, and the sampler
+    /// releases it after the minimum hold.
+    private func beginOverlayTap(slot: Int, now: UInt64) {
+        replayedTaps.beginReplayedPress(overlayButtonMask, slot: slot, now: now)
     }
 
     private func applyKeyboardShortcutState(
@@ -1396,23 +1330,27 @@ final nonisolated class InputSender: @unchecked Sendable {
         ),
         slot: Int,
         now: UInt64,
-        excludedButtons: UInt16,
-        heldButtons: UInt16
+        excludedButtons: UInt16
     ) {
         // Replay against the last state the remote actually received. Using the
         // current physical state here would collapse a newly pressed unrelated
         // button into the older buffered target edge.
+        let baseButtons = (lastSnapshots[slot]?.buttons ?? 0) & ~textInputTriggerMask
         let replayButtons = transitions.projected(
-            onto: (lastSnapshots[slot]?.buttons ?? 0) & ~textInputTriggerMask,
+            onto: baseButtons,
             excluding: excludedButtons
         )
-        // Once a held button's down edge is replayed, its replayed up edge is skipped;
-        // the minimum hold in sendGamepadState releases it a few frames later.
-        var latchedButtons: UInt16 = 0
-        var lastSentButtons: UInt16?
+        // Only down edges are replayed, in their original order. The scheduler keeps
+        // each replayed press down for its minimum hold, so a buffered release in this
+        // same sample cannot collapse it, and repeated presses of one button stay distinct.
+        var previousButtons = baseButtons
+        var lastSentButtons = lastSnapshots[slot]?.buttons
         for index in 0 ..< replayButtons.count {
-            latchedButtons |= replayButtons[index] & heldButtons
-            let buttons = replayButtons[index] | latchedButtons
+            let pressedButtons = replayButtons[index] & ~previousButtons
+            previousButtons = replayButtons[index]
+            guard pressedButtons != 0 else { continue }
+            replayedTaps.beginReplayedPress(pressedButtons, slot: slot, now: now)
+            let buttons = replayedTaps.overlay(onto: baseButtons, slot: slot)
             guard buttons != lastSentButtons else { continue }
             lastSentButtons = buttons
             sendGamepadSnapshot(
@@ -2028,6 +1966,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             } else {
                 gamepadBitmap |= Self.extendedGamepadBitmapMask(for: slot)
             }
+            replayedTaps.releaseSlot(slot)
             lastButtons[slot] = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
             pad.valueChangedHandler = { [weak self, weak controller] _, _ in
                 guard let controller else { return }
@@ -2076,7 +2015,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             lastSnapshots[slot] = nil
             lastSnapshotSend[slot] = nil
             overlayPresses[slot] = nil
-            overlayReplaySlots.remove(slot)
+            replayedTaps.releaseSlot(slot)
             keyboardShortcutResolvers[slot] = nil
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
