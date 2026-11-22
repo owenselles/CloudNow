@@ -68,7 +68,11 @@ final class GamePreferencesUITests: XCTestCase {
         XCTAssertTrue(preferences.waitForExistence(timeout: 5))
         // The preference action has its own identifier. Do not route through
         // the composite Play label, whose focus owner differs by button style.
-        select(preferences, directions: [.right, .left, .up, .down])
+        let availability = app.buttons["Check availability"]
+        if availability.exists, availability.hasFocus {
+            XCUIRemote.shared.press(.down)
+        }
+        select(preferences, directions: [.right, .left])
         XCTAssertTrue(app.buttons["game.preferences.launch"].waitForExistence(timeout: 5))
     }
 
