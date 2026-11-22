@@ -195,6 +195,8 @@ enum L10nID {
         "controller_rumble_intensity_description": "Meningkatkan kekuatan getaran. Jangan atur terlalu tinggi—getaran berkelanjutan yang sangat kuat dapat membuat motor kontroler aus atau rusak. Berlaku pada sesi berikutnya.",
         "overlay_button": "Tombol overlay",
         "overlay_button_description": "Tekan lama tombol ini saat bermain untuk membuka overlay aplikasi. Ubah jika bertabrakan dengan aksi dalam game.",
+        "controller_type": "Jenis kontroler",
+        "controller_type_description": "Cara game mengenali kontroler DualSense atau DualShock. Otomatis menggunakan PlayStation jika game mendukungnya. PlayStation memerlukan dukungan sesi; jika tidak, kembali ke Xbox. Berlaku pada sesi berikutnya.",
         "text_input_buttons": "Tombol Input Teks",
         "text_input_buttons_description": "Pilih kombinasi tombol kontroler yang membuka keyboard Apple TV selama streaming.",
         "text_input_hold_delay": "Durasi Tekan Input Teks",

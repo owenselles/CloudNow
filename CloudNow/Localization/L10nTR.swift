@@ -221,6 +221,8 @@ enum L10nTR {
         "controller_rumble_intensity_description": "Titreşim gücünü artırır. Çok yüksek ayarlamayın — çok güçlü ve sürekli titreşim kumanda motorlarını yıpratabilir veya bozabilir. Sonraki oturumda uygulanır.",
         "overlay_button": "Kaplama düğmesi",
         "overlay_button_description": "Uygulama kaplamasını açmak için oyun sırasında bu düğmeyi uzun basın. Oyun içi bir eylemle çakışıyorsa değiştirin.",
+        "controller_type": "Kumanda türü",
+        "controller_type_description": "Oyunların DualSense veya DualShock kumandayı nasıl gördüğü. Otomatik, oyun destekliyorsa PlayStation kullanır. PlayStation oturum desteği gerektirir, aksi halde Xbox'a geri döner. Bir sonraki oturumda geçerli olur.",
         "text_input_buttons": "Metin girişi düğmeleri",
         "text_input_buttons_description": "Yayın sırasında Apple TV klavyesini açan kumanda düğmesi kombinasyonunu seçin.",
         "text_input_hold_delay": "Metin girişi bekleme süresi",

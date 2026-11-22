@@ -221,6 +221,8 @@ enum L10nSK {
         "controller_rumble_intensity_description": "Zvyšuje silu vibrácií. Nenastavujte príliš vysokú hodnotu — veľmi silné nepretržité vibrácie môžu opotrebovať alebo poškodiť motory ovládača. Platí od nasledujúcej relácie.",
         "overlay_button": "Tlačidlo prekrytia",
         "overlay_button_description": "Dlho stlačte toto tlačidlo počas hry, aby ste otvorili prekrytie aplikácie. Zmeňte, ak koliduje s akciou v hre.",
+        "controller_type": "Typ ovládača",
+        "controller_type_description": "Ako hry vidia ovládač DualSense alebo DualShock. Automaticky použije PlayStation, ak to hra podporuje. PlayStation vyžaduje podporu relácie, inak sa použije Xbox. Platí od ďalšej relácie.",
         "text_input_buttons": "Tlačidlá na zadávanie textu",
         "text_input_buttons_description": "Vyberte kombináciu tlačidiel ovládača, ktorá počas streamovania otvorí klávesnicu Apple TV.",
         "text_input_hold_delay": "Oneskorenie zadávania textu",

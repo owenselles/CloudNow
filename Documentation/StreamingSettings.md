@@ -59,6 +59,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Controller rumble | On | On |
 | Rumble intensity | 1.00x | 100% |
 | Controller deadzone | 15% | 15% |
+| Controller type | Automatic | Not exposed |
 | Statistics display | Off | Off |
 
 ## Capability summary
@@ -79,7 +80,7 @@ preferences, so a newly changed default does not overwrite a previous choice.
 | Game language | Selectable | Selectable |
 | Game launch mode | Default or Big Picture | Not exposed |
 | Microphone | Supported when the route and permission allow it | Supported when the Xbox capability is available |
-| Controller tuning | Rumble, intensity, deadzone, overlay, text-entry shortcut, input mode | Rumble, intensity, deadzone |
+| Controller tuning | Rumble, intensity, deadzone, overlay, controller type, text-entry shortcut, input mode | Rumble, intensity, deadzone |
 | Save in-game settings | Plan dependent | Not exposed |
 | Xbox accessibility preferences | Not exposed | Text to speech, magnifier, high contrast |
 
@@ -220,6 +221,7 @@ can become unavailable, add latency, or have different queue conditions.
 | Rumble Intensity | 1.00x | Shown only while rumble is on. Range 0.00x to 2.00x in 0.05x steps. | Scales haptic power. Values above 1.00x increase motor load. |
 | Deadzone | 15% | Always shown. Range 0% to 30% in 1% steps. | Increases the radial analog-stick deadzone to reduce drift. |
 | Overlay Button | Start | Start or Options/Back | Long-pressing the selected button opens the CloudNow stream overlay. |
+| Controller Type | Automatic | Automatic, Xbox, or PlayStation. Applies to DualSense and DualShock controllers. | Chooses the controller type the game sees at the next session. Automatic presents a PlayStation controller when the game's catalog entry lists gamepad support and the session offers DS4 input. Xbox always sends Xbox input. PlayStation also needs the session to offer DS4 input and protocol version 3; otherwise the session falls back to Xbox input while the setting still shows PlayStation. |
 | Text Input Buttons | Options/View (⊟) + Y | A captured combination of one to four supported buttons. A single button that conflicts with the app or enabled Steam overlay control is rejected. | Opens local Apple TV text entry during a GFN stream. See [Using CloudNow](UsingCloudNow.md#controller-text-entry-during-gfn-streams). |
 | Text Input Hold Delay | 150 ms | 50 to 1,500 ms in 50 ms steps | Sets how long the text-input combination must be held before the local keyboard opens. |
 | Steam Overlay Gesture | On | Always shown | Long-pressing the other menu button sends Shift+Tab to the session. |

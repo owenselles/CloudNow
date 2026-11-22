@@ -363,7 +363,7 @@ final class GFNStreamController: NSObject {
     private var videoReceiver: LKRTCRtpReceiver?
     private var protocolVersion = 2
     private var partialReliableThresholdMs = 300
-    private var gameSupportsDualShock = false
+    private var allowsSonyInput = false
     private var serverHidMask: UInt32 = 0
     private var sessionInfo: SessionInfo?
     private var membershipTier: String?
@@ -434,7 +434,10 @@ final class GFNStreamController: NSObject {
         sessionInfo = session
         self.membershipTier = membershipTier
         self.sessionStartedAt = sessionStartedAt
-        gameSupportsDualShock = GFNSonyGamepad.gameSupportsSonyInput(supportedControls)
+        allowsSonyInput = GFNSonyGamepad.allowsSonyInput(
+            preference: settings.controllerType,
+            supportedControls: supportedControls
+        )
         self.settings = settings
         videoView?.setAdaptiveFramePacing(settings.adaptiveFramePacing, frameRate: settings.fps)
         self.accountAllowsHDR = accountAllowsHDR
@@ -787,7 +790,7 @@ final class GFNStreamController: NSObject {
         membershipTier = nil
         signalingComplete = false
         inputReady = false
-        gameSupportsDualShock = false
+        allowsSonyInput = false
         previousVideoStats = nil
         statsTick = 0
         previousSelectedCandidatePairId = ""
@@ -1422,11 +1425,15 @@ final class GFNStreamController: NSObject {
                 "a=rtpmap:0 PCMU/8000",
             ]
         }
+        let hidDeviceMask = GFNSonyGamepad.answerHidMask(
+            allowsSonyInput: allowsSonyInput,
+            serverHidMask: serverHidMask
+        )
         lines += [
             "m=application 0 RTP/AVP",
             "a=msid:input_1",
             "a=ri.partialReliableThresholdMs:\(partialReliableThresholdMs)",
-            "a=ri.hidDeviceMask:\(gameSupportsDualShock ? serverHidMask & 4 : 0)",
+            "a=ri.hidDeviceMask:\(hidDeviceMask)",
             "a=ri.enablePartiallyReliableTransferGamepad:\(protocolVersion == 3 ? 65535 : 0)",
             "a=ri.enablePartiallyReliableTransferHid:0",
             "",
@@ -2403,7 +2410,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 rumbleIntensity: Float(settings.rumbleIntensity),
                 sonyGamepadEnabled: GFNSonyGamepad.isSupported(
                     protocolVersion: negotiatedVersion,
-                    gameSupportsDualShock: gameSupportsDualShock,
+                    gameSupportsDualShock: allowsSonyInput,
                     serverHidMask: serverHidMask
                 )
             )

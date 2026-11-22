@@ -191,6 +191,8 @@ enum L10nHE {
         "controller_rumble_intensity_description": "מגביר את עוצמת הרטט. אין להגדיר עוצמה גבוהה מדי — רטט חזק ומתמשך עלול לשחוק או לפגוע במנועי הבקר. יחול מהסשן הבא.",
         "overlay_button": "כפתור שכבת-על",
         "overlay_button_description": "לחץ לחיצה ארוכה על כפתור זה במהלך המשחק כדי לפתוח את שכבת-העל של האפליקציה. שנה אם יש התנגשות עם פעולה בתוך המשחק.",
+        "controller_type": "סוג בקר",
+        "controller_type_description": "איך משחקים מזהים בקר DualSense או DualShock. אוטומטי משתמש ב-PlayStation כשהמשחק תומך בכך. PlayStation דורש תמיכה של ההפעלה, אחרת יחזור ל-Xbox. יחול בהפעלה הבאה.",
         "text_input_buttons": "לחצני קלט טקסט",
         "text_input_buttons_description": "בחר את צירוף לחצני הבקר שפותח את המקלדת של Apple TV במהלך ההזרמה.",
         "text_input_hold_delay": "השהיית קלט טקסט",

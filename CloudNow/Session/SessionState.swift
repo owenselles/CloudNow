@@ -51,6 +51,9 @@ nonisolated struct StreamSettings: Codable, Equatable {
         didSet { normalizeTextInputTriggerSequence() }
     }
 
+    /// Which controller type the game sees for a DualSense or DualShock controller.
+    var controllerType: ControllerTypePreference = .automatic
+
     /// Button chord that opens the local text-input overlay during streaming.
     var textInputTriggerSequence: ControllerButtonSequence = Self.defaultTextInputTriggerSequence
     /// How long the text-input trigger chord must be held before opening the local keyboard.
@@ -161,6 +164,7 @@ extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorPreference, chromaFormat, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, rumbleEnabled, rumbleIntensity, controllerDeadzone, overlayTriggerButton
+        case controllerType
         case adaptiveFramePacing
         case textInputTriggerSequence, textInputTriggerDelayMs
         case defaultRemoteInputMode, preferredZoneUrl
@@ -216,6 +220,7 @@ extension StreamSettings {
             Self.maxControllerDeadzone
         )
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
+        controllerType = (try? c.decode(ControllerTypePreference.self, forKey: .controllerType)) ?? d.controllerType
         textInputTriggerSequence = (try? c.decode(
             ControllerButtonSequence.self,
             forKey: .textInputTriggerSequence
@@ -289,6 +294,7 @@ extension StreamSettings {
         try c.encode(rumbleIntensity, forKey: .rumbleIntensity)
         try c.encode(controllerDeadzone, forKey: .controllerDeadzone)
         try c.encode(overlayTriggerButton, forKey: .overlayTriggerButton)
+        try c.encode(controllerType, forKey: .controllerType)
         try c.encode(textInputTriggerSequence, forKey: .textInputTriggerSequence)
         try c.encode(textInputTriggerDelayMs, forKey: .textInputTriggerDelayMs)
         try c.encode(defaultRemoteInputMode, forKey: .defaultRemoteInputMode)
@@ -362,6 +368,18 @@ nonisolated enum OverlayTriggerButton: String, Codable, CaseIterable {
 
     @MainActor var label: String {
         L10n.overlayTriggerButtonLabel(self)
+    }
+}
+
+/// Automatic presents a PlayStation controller only when the game supports one. Some games
+/// bind buttons differently per controller type, so players can pin it.
+nonisolated enum ControllerTypePreference: String, Codable, CaseIterable {
+    case automatic
+    case xbox
+    case playStation
+
+    @MainActor var label: String {
+        L10n.controllerTypeLabel(self)
     }
 }
 

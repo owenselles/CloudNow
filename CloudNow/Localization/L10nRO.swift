@@ -221,6 +221,8 @@ enum L10nRO {
         "controller_rumble_intensity_description": "Mărește intensitatea vibrației. Nu o setați prea sus — vibrațiile continue foarte puternice pot uza sau deteriora motoarele controlerului. Se aplică din sesiunea următoare.",
         "overlay_button": "Buton overlay",
         "overlay_button_description": "Apăsați lung acest buton în timpul jocului pentru a deschide overlayul aplicației. Schimbați-l dacă intră în conflict cu o acțiune din joc.",
+        "controller_type": "Tip controler",
+        "controller_type_description": "Cum văd jocurile un controler DualSense sau DualShock. Automat folosește PlayStation când jocul îl acceptă. PlayStation necesită suport din partea sesiunii; altfel se revine la Xbox. Se aplică din sesiunea următoare.",
         "text_input_buttons": "Butoane pentru introducerea textului",
         "text_input_buttons_description": "Alegeți combinația de butoane a controlerului care deschide tastatura Apple TV în timpul redării în flux.",
         "text_input_hold_delay": "Întârziere la introducerea textului",

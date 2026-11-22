@@ -191,6 +191,8 @@ enum L10nHI {
         "controller_rumble_intensity_description": "कंपन की शक्ति बढ़ाता है। इसे बहुत अधिक न रखें—बहुत तेज़ लगातार कंपन कंट्रोलर की मोटर को घिस या नुकसान पहुंचा सकता है। यह अगले सेशन से लागू होगा।",
         "overlay_button": "ओवरले बटन",
         "overlay_button_description": "ऐप ओवरले खोलने के लिए खेल के दौरान इस बटन को लंबे समय तक दबाएं। अगर यह इन-गेम action से टकराता है तो बदलें।",
+        "controller_type": "कंट्रोलर प्रकार",
+        "controller_type_description": "गेम DualSense या DualShock कंट्रोलर को कैसे पहचानते हैं। स्वचालित मोड गेम के समर्थन करने पर PlayStation का उपयोग करता है। PlayStation के लिए सत्र का समर्थन ज़रूरी है, अन्यथा Xbox का उपयोग होता है। अगले सत्र से लागू होता है।",
         "text_input_buttons": "टेक्स्ट इनपुट बटन",
         "text_input_buttons_description": "वह कंट्रोलर बटन संयोजन चुनें जिससे स्ट्रीमिंग के दौरान Apple TV कीबोर्ड खुलेगा।",
         "text_input_hold_delay": "टेक्स्ट इनपुट दबाए रखने का समय",

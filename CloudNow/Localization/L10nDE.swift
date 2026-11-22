@@ -188,6 +188,8 @@ enum L10nDE {
         "controller_rumble_intensity_description": "Verstärkt die Vibration. Nicht zu hoch einstellen – eine dauerhaft sehr starke Vibration kann die Motoren des Controllers abnutzen oder beschädigen. Gilt ab der nächsten Sitzung.",
         "overlay_button": "Overlay-Taste",
         "overlay_button_description": "Lange drücken während des Spiels, um das App-Overlay zu öffnen. Ändern, wenn es mit einer In-Game-Aktion kollidiert.",
+        "controller_type": "Controller-Typ",
+        "controller_type_description": "Wie Spiele einen DualSense- oder DualShock-Controller erkennen. Automatisch verwendet PlayStation, wenn das Spiel es unterstützt. PlayStation setzt Unterstützung durch die Sitzung voraus und fällt sonst auf Xbox zurück. Gilt ab der nächsten Sitzung.",
         "text_input_buttons": "Tasten für Texteingabe",
         "text_input_buttons_description": "Wähle die Controller-Tastenkombination, die während des Streamings die Apple TV-Tastatur öffnet.",
         "text_input_hold_delay": "Halteverzögerung für Texteingabe",

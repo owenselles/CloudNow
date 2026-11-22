@@ -34,6 +34,7 @@ struct StreamSettingsTests {
         #expect(settings.rumbleIntensity == 1)
         #expect(settings.controllerDeadzone == 0.15)
         #expect(settings.overlayTriggerButton == .start)
+        #expect(settings.controllerType == .automatic)
         #expect(settings.textInputTriggerSequence == StreamSettings.defaultTextInputTriggerSequence)
         #expect(settings.textInputTriggerDelayMs == StreamSettings.defaultTextInputTriggerDelayMs)
         #expect(settings.enableSteamOverlayGesture)
@@ -125,6 +126,7 @@ struct StreamSettingsTests {
         expected.rumbleIntensity = 1.5
         expected.controllerDeadzone = 0.05
         expected.overlayTriggerButton = .options
+        expected.controllerType = .xbox
         expected.textInputTriggerSequence = ControllerButtonSequence(buttons: [.menu, .buttonX])
         expected.textInputTriggerDelayMs = 400
         expected.enableSteamOverlayGesture = false

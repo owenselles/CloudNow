@@ -188,6 +188,8 @@ enum L10nFR {
         "controller_rumble_intensity_description": "Augmente l’intensité des vibrations. Ne la réglez pas trop haut : des vibrations continues très fortes peuvent user ou endommager les moteurs de la manette. S’applique à la prochaine session.",
         "overlay_button": "Bouton de superposition",
         "overlay_button_description": "Appui long sur ce bouton pendant le jeu pour ouvrir la superposition de l'application. Modifiez-le s'il entre en conflit avec une action du jeu.",
+        "controller_type": "Type de manette",
+        "controller_type_description": "Comment les jeux voient une manette DualSense ou DualShock. Automatique utilise PlayStation si le jeu le prend en charge. PlayStation nécessite la prise en charge par la session, sinon Xbox est utilisé. S'applique à la prochaine session.",
         "text_input_buttons": "Boutons de saisie de texte",
         "text_input_buttons_description": "Choisissez la combinaison de boutons de la manette qui ouvre le clavier de l’Apple TV pendant le streaming.",
         "text_input_hold_delay": "Délai de saisie de texte",

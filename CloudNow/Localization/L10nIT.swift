@@ -192,6 +192,8 @@ enum L10nIT {
         "controller_rumble_intensity_description": "Aumenta l'intensità della vibrazione. Non impostarla troppo alta: una vibrazione continua molto forte può usurare o danneggiare i motori del controller. Si applica dalla sessione successiva.",
         "overlay_button": "Pulsante overlay",
         "overlay_button_description": "Tieni premuto questo pulsante durante il gioco per aprire l'overlay dell'app. Cambialo se entra in conflitto con un'azione di gioco.",
+        "controller_type": "Tipo di controller",
+        "controller_type_description": "Come i giochi vedono un controller DualSense o DualShock. Automatico usa PlayStation quando il gioco lo supporta. PlayStation richiede il supporto della sessione, altrimenti torna a Xbox. Si applica dalla sessione successiva.",
         "text_input_buttons": "Pulsanti di immissione testo",
         "text_input_buttons_description": "Scegli la combinazione di pulsanti del controller che apre la tastiera di Apple TV durante lo streaming.",
         "text_input_hold_delay": "Ritardo immissione testo",
