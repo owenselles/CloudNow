@@ -290,6 +290,24 @@ pointer input, controller-triggered Apple TV text entry, and independent rumble.
 Controller and media work stays outside SwiftUI observation; the HUD receives
 bounded snapshots.
 
+CloudNow withholds two kinds of controller press for local gestures: the overlay
+button, for its long press, and a text-input button pressed by itself, while the
+combination could still be forming. When a withheld press turns out to be an
+ordinary tap, it reaches the remote late, so CloudNow replays it with fixed
+limits:
+
+- A replayed press stays down for at least 80 ms, so a game that polls the
+  controller once per frame sees it.
+- Repeats of the same button are separated by a 50 ms release.
+- At most two repeats wait per button. Further taps of that button are dropped
+  until one of them has been sent.
+- Every other button is forwarded immediately. So is a text-input button pressed
+  while an unrelated button is held, which stays forwarded until it is released.
+
+Replay timing runs on the existing input queue and 120 Hz sampler. Replay state
+is cleared when a controller attaches or detaches, and on stop, pause, and
+remote-mode changes.
+
 Controller text entry captures a complete local string before converting it to
 ordered Windows virtual-key, scan-code, and modifier events. Planning finishes
 before replay starts, and a successful submission appends Enter. The verified
