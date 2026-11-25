@@ -166,7 +166,7 @@ final class VideoSurfaceView: UIView {
     private var notificationTokens: [NSObjectProtocol] = []
     private var activeRemoteTouch: UITouch?
     private var lastRemoteTouchLocation: CGPoint?
-    private var remoteSelectMouseDown = false
+    private let pressLifecycle = CloudStreamPressLifecycle()
 
     private static let remoteTouchSensitivity: CGFloat = 1.0
 
@@ -177,6 +177,10 @@ final class VideoSurfaceView: UIView {
     /// GFNStreamController sets this to toggle the overlay rather than letting
     /// the press bubble up to the system (which opens the Apple TV control center).
     var menuPressHandler: (() -> Void)?
+    /// Provider policy is bound before the input sender/handshake exists.
+    var prefersHardwareKeyboardPresses = false
+    var hardwareKeyboardOverlayActive = false
+    var hardwareEscapeHandler: (() -> Void)?
 
     var onDecodedVideoFormatChanged: (@Sendable (DecodedVideoFormat) -> Void)? {
         didSet {
@@ -247,8 +251,10 @@ final class VideoSurfaceView: UIView {
         renderer.teardown()
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
         notificationTokens.removeAll()
+        pressLifecycle.cancelAll()
         inputHandler = nil
         menuPressHandler = nil
+        hardwareEscapeHandler = nil
         onDecodedVideoFormatChanged = nil
     }
 
@@ -314,60 +320,38 @@ final class VideoSurfaceView: UIView {
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        var handled = false
-        for press in presses {
-            if press.type == .menu {
-                // Always consume .menu — never let it bubble to the system as a back/dismiss
-                // gesture. Use it as the universal overlay toggle so the user can both open
-                // and close the diagnostics overlay from Siri Remote or a controller.
+        let unhandled = presses.filter { press in
+            let action = pressLifecycle.begin(
+                id: ObjectIdentifier(press), type: press.type, key: press.key?.keyCode,
+                modifiers: press.key?.modifierFlags ?? [],
+                prefersHardwareKeyboard: prefersHardwareKeyboardPresses,
+                overlayVisible: overlayVisible || hardwareKeyboardOverlayActive,
+                remoteMouseEnabled: remoteMouseInputEnabled, handler: inputHandler
+            )
+            if action == .overlay {
                 menuPressHandler?()
-                handled = true
-            } else if press.type == .playPause {
-                // Play/Pause also toggles the overlay so Siri Remote users always have a
-                // direct way to open diagnostics, even when a controller is connected.
-                menuPressHandler?()
-                handled = true
-            } else if press.type == .select, remoteMouseInputEnabled {
-                inputHandler?.sendMouseButton(down: true, button: 1)
-                remoteSelectMouseDown = true
-                handled = true
-            } else if let key = press.key {
-                inputHandler?.sendKeyEvent(
-                    down: true,
-                    keyCode: key.keyCode,
-                    modifiers: key.modifierFlags
-                )
-                handled = true
+            } else if action == .dismissOverlay {
+                hardwareEscapeHandler?()
             }
+            return action == .unhandled
         }
-        if !handled {
-            super.pressesBegan(presses, with: event)
+        if !unhandled.isEmpty {
+            super.pressesBegan(Set(unhandled), with: event)
         }
     }
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        var handled = false
-        for press in presses {
-            if press.type == .select, remoteSelectMouseDown {
-                inputHandler?.sendMouseButton(down: false, button: 1)
-                remoteSelectMouseDown = false
-                handled = true
-            } else if let key = press.key {
-                inputHandler?.sendKeyEvent(
-                    down: false,
-                    keyCode: key.keyCode,
-                    modifiers: key.modifierFlags
-                )
-                handled = true
-            }
-        }
-        if !handled {
-            super.pressesEnded(presses, with: event)
+        let unhandled = presses.filter { !pressLifecycle.end(id: ObjectIdentifier($0)) }
+        if !unhandled.isEmpty {
+            super.pressesEnded(Set(unhandled), with: event)
         }
     }
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        pressesEnded(presses, with: event)
+        let unhandled = presses.filter { !pressLifecycle.end(id: ObjectIdentifier($0)) }
+        if !unhandled.isEmpty {
+            super.pressesCancelled(Set(unhandled), with: event)
+        }
     }
 
     // MARK: - Siri Remote Touch Surface
@@ -457,10 +441,7 @@ final class VideoSurfaceView: UIView {
 
     private func cancelRemoteMouseTracking() {
         clearRemoteTouchTracking()
-        if remoteSelectMouseDown {
-            inputHandler?.sendMouseButton(down: false, button: 1)
-            remoteSelectMouseDown = false
-        }
+        pressLifecycle.cancelRemoteMousePresses()
     }
 }
 
