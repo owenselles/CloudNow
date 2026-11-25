@@ -10,15 +10,12 @@ struct VideoSurfaceBindingTests {
     func bindsFormatCallbackSynchronously() async throws {
         let controller = GFNStreamController()
         let host = AppearanceHostingController(rootView: VideoSurfaceViewRepresentable(streamController: controller))
-        let previousKeyWindow = UIApplication.shared.connectedScenes
+        let foregroundScenes = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow)
-        let window = if let scene = previousKeyWindow?.windowScene {
-            UIWindow(windowScene: scene)
-        } else {
-            UIWindow(frame: .zero)
-        }
+            .filter { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }
+        let previousKeyWindow = foregroundScenes.compactMap(\.keyWindow).first
+        let scene = try #require(previousKeyWindow?.windowScene ?? foregroundScenes.first)
+        let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         window.rootViewController = host
         window.makeKeyAndVisible()

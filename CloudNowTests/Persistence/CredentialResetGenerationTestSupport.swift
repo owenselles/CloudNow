@@ -52,7 +52,7 @@ final nonisolated class CredentialResetTestPreferences: PreferencesStore, @unche
     }
 
     func removeObject(forKey key: String) {
-        lock.withLock { values.removeValue(forKey: key) }
+        lock.withLock { values[key] = nil }
     }
 
     func keys() -> [String] {

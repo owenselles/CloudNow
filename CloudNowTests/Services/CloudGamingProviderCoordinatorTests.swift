@@ -191,7 +191,7 @@ struct CloudGamingProviderCoordinatorTests {
 
     @MainActor
     @Test("Credential mutation invalidates a stale provider switch intent")
-    func credentialMutationInvalidatesStaleSwitch() async {
+    func credentialMutationInvalidatesStaleSwitch() async throws {
         let persistence = ProviderSelectionPersistence(
             selectedProvider: .geForceNow
         )
@@ -201,22 +201,18 @@ struct CloudGamingProviderCoordinatorTests {
             startsReady: true
         )
 
-        let intent = try? #require(
+        let intent = try #require(
             coordinator.beginProviderSwitch(to: .xboxCloudGaming)
         )
         #expect(coordinator.isProviderSwitchInProgress)
 
-        let mutation = try? #require(coordinator.beginCredentialMutation())
+        let mutation = try #require(coordinator.beginCredentialMutation())
         #expect(!coordinator.isProviderSwitchInProgress)
         #expect(coordinator.isCredentialMutationInProgress)
 
         coordinator.select(nil)
-        if let intent {
-            #expect(!coordinator.commitProviderSwitch(intent))
-        }
-        if let mutation {
-            coordinator.finishCredentialMutation(mutation)
-        }
+        #expect(!coordinator.commitProviderSwitch(intent))
+        coordinator.finishCredentialMutation(mutation)
         await persistence.waitForSaveCount(1)
 
         #expect(coordinator.selectedProvider == nil)

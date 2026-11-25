@@ -1510,7 +1510,7 @@ private final class CoordinatorImportRecorder {
 private nonisolated struct CoordinatorImportFailure: Error {}
 
 @MainActor
-private final class CoordinatorValidity {
+final class CoordinatorValidity {
     var isCurrent = true
 }
 
