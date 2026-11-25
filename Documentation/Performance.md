@@ -173,6 +173,14 @@ Concurrency ownership is explicit across session, catalog, diagnostics, persiste
 
 Warnings must not be silenced by weakening isolation. Resolve ownership, cancellation, and `Sendable` boundaries at the responsible layer.
 
+### 19. Replayed controller taps
+
+`CloudNow/Streaming/ReplayedTapScheduler.swift` times GFN controller presses that were withheld for a local gesture and forwarded late. It is composed into gamepad snapshots on the existing input queue and 120 Hz sampler, and it owns no timers.
+
+Replay work is bounded. Each managed button holds for 80 ms, releases for 50 ms before a repeat, and queues at most two repeats; further taps of that button are dropped. State is fixed-size per controller slot and is cleared on attach, detach, stop, pause, and remote-mode changes. Buttons that were never withheld are forwarded without added delay.
+
+Changes to these limits need a before-and-after comparison on a physical Apple TV, because simulator tests do not show whether a game registers a press.
+
 ## Xbox Cloud Gaming additions
 
 The Xbox Cloud Gaming implementation merged after the original issue 66 baseline and was reviewed against the same constraints.

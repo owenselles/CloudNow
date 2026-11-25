@@ -158,6 +158,36 @@ struct ControllerKeyboardShortcutResolverTests {
         ])
     }
 
+    @Test("A target forwarded beside an unrelated button stays forwarded until its own release")
+    func forwardedTargetIsNotWithheldWhenUnrelatedButtonLiftsFirst() {
+        var resolver = makeResolver()
+
+        let unrelatedOnly = resolver.resolve(buttons: unrelatedButton, now: 0)
+        #expect(unrelatedOnly.forwardedButtons == unrelatedButton)
+
+        let overlapped = resolver.resolve(
+            buttons: unrelatedButton | firstButton,
+            now: 10_000_000
+        )
+        #expect(overlapped.forwardedButtons == unrelatedButton | firstButton)
+        #expect(overlapped.replayTransitions.count == 0)
+        #expect(!resolver.ownsCandidateGesture)
+
+        let unrelatedLifted = resolver.resolve(buttons: firstButton, now: 20_000_000)
+        #expect(unrelatedLifted.forwardedButtons == firstButton)
+        #expect(unrelatedLifted.replayTransitions.count == 0)
+        #expect(!unrelatedLifted.bypassesLocalGestureHandling)
+        #expect(!resolver.ownsCandidateGesture)
+
+        let released = resolver.resolve(buttons: 0, now: 30_000_000)
+        #expect(released.forwardedButtons == 0)
+        #expect(released.replayTransitions.count == 0)
+
+        let nextPress = resolver.resolve(buttons: firstButton, now: 40_000_000)
+        #expect(nextPress.forwardedButtons == 0)
+        #expect(resolver.ownsCandidateGesture)
+    }
+
     @Test("Replay projection preserves an existing remote base and removes local overlay edges")
     func replayProjectionPreservesRemoteBase() {
         let existingRemoteButton: UInt16 = 1 << 3
