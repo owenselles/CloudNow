@@ -7,15 +7,24 @@ import SwiftUI
 struct CloudNetworkTestView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let resolveTarget: @Sendable () async -> CloudNetworkTestTarget
+    private let resolveTarget: @Sendable () async -> CloudNetworkTestTarget
+    private let probe: @Sendable (String) async -> Double?
 
     @State private var isRunning = true
-    @State private var routedTo: String?
-    @State private var pingMs: Double?
-    @State private var jitterMs: Double?
-    @State private var lossPercent: Double?
+    @State private var testTarget: CloudNetworkTestTarget?
+    @State private var responseTimeMs: Double?
+    @State private var responseVariationMs: Double?
+    @State private var failurePercent: Double?
 
     private static let sampleCount = 10
+
+    init(
+        probe: (@Sendable (String) async -> Double?)? = nil,
+        resolveTarget: @escaping @Sendable () async -> CloudNetworkTestTarget
+    ) {
+        self.resolveTarget = resolveTarget
+        self.probe = probe ?? Self.measureHTTPResponseTime
+    }
 
     var body: some View {
         NavigationStack {
@@ -29,27 +38,41 @@ struct CloudNetworkTestView: View {
 
                 List {
                     Section {
-                        if let routedTo {
-                            LabeledContent(L10n.text("routed_to"), value: routedTo)
+                        if let testTarget {
+                            let title = L10n.text("network_test_endpoint")
+                            let host = URL(string: testTarget.address)?.host ?? testTarget.address
+                            let name = testTarget.displayName ?? ""
+                            VStack(alignment: .trailing, spacing: 4) {
+                                LabeledContent(title, value: name)
+                                Text(verbatim: host)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.75)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(title)
+                            .accessibilityValue(name.isEmpty ? host : "\(name), \(host)")
+                            .accessibilityIdentifier("network-test.endpoint")
                         }
-                        LabeledContent(L10n.text("rtt")) {
-                            resultText(
-                                pingMs.map { String(format: "%.0f ms", $0) },
-                                color: pingMs.map(pingColor)
-                            )
-                        }
-                        LabeledContent(L10n.text("jitter")) {
-                            resultText(
-                                jitterMs.map { String(format: "%.1f ms", $0) },
-                                color: nil
-                            )
-                        }
-                        LabeledContent(L10n.text("loss")) {
-                            resultText(
-                                lossPercent.map { String(format: "%.0f %%", $0) },
-                                color: lossPercent.map { $0 > 0 ? .orange : .green }
-                            )
-                        }
+                        measurementRow(
+                            L10n.text("network_test_response_time"),
+                            value: responseTimeMs.map { String(format: "%.0f ms", $0) },
+                            color: responseTimeMs.map(responseTimeColor),
+                            identifier: "network-test.response-time"
+                        )
+                        measurementRow(
+                            L10n.text("network_test_response_variation"),
+                            value: responseVariationMs.map { String(format: "%.1f ms", $0) },
+                            identifier: "network-test.response-variation"
+                        )
+                        measurementRow(
+                            L10n.text("network_test_failed_requests"),
+                            value: failurePercent.map { String(format: "%.0f %%", $0) },
+                            color: failurePercent.map { $0 > 0 ? .orange : .green },
+                            identifier: "network-test.failed-requests"
+                        )
                     } footer: {
                         if isRunning {
                             Label(L10n.text("test_running"), systemImage: "wifi")
@@ -74,48 +97,52 @@ struct CloudNetworkTestView: View {
         .blocksGlobalControllerNavigation()
     }
 
-    @ViewBuilder
-    private func resultText(_ value: String?, color: Color?) -> some View {
-        if let value {
-            Text(value)
+    private func measurementRow(
+        _ title: String,
+        value: String?,
+        color: Color? = nil,
+        identifier: String
+    ) -> some View {
+        let text = value ?? (isRunning ? "…" : "–")
+        return LabeledContent(title) {
+            Text(text)
                 .monospacedDigit()
-                .foregroundStyle(color ?? .primary)
-        } else {
-            Text("…")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(value == nil ? Color.secondary : color ?? .primary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(text)
+        .accessibilityIdentifier(identifier)
     }
 
     private func run() async {
         let target = await resolveTarget()
         guard !Task.isCancelled else { return }
-        routedTo = target.displayName
+        testTarget = target
 
         _ = await probe(target.address)
 
         var samples: [Double] = []
         var failures = 0
-        for _ in 0 ..< Self.sampleCount {
+        for attempt in 1 ... Self.sampleCount {
             guard !Task.isCancelled else { return }
             if let ms = await probe(target.address) {
                 samples.append(ms)
-                pingMs = samples.reduce(0, +) / Double(samples.count)
+                responseTimeMs = samples.reduce(0, +) / Double(samples.count)
             } else {
                 failures += 1
             }
-            lossPercent = Double(failures) / Double(Self.sampleCount) * 100
+            failurePercent = Double(failures) / Double(attempt) * 100
         }
 
         if samples.count > 1 {
             let differences = zip(samples.dropFirst(), samples).map { abs($0 - $1) }
-            jitterMs = differences.reduce(0, +) / Double(differences.count)
-        } else if !samples.isEmpty {
-            jitterMs = 0
+            responseVariationMs = differences.reduce(0, +) / Double(differences.count)
         }
         isRunning = false
     }
 
-    private func probe(_ urlString: String) async -> Double? {
+    private nonisolated static func measureHTTPResponseTime(_ urlString: String) async -> Double? {
         guard let url = URL(string: urlString) else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
@@ -131,7 +158,7 @@ struct CloudNetworkTestView: View {
         }
     }
 
-    private func pingColor(_ milliseconds: Double) -> Color {
+    private func responseTimeColor(_ milliseconds: Double) -> Color {
         if milliseconds < 30 {
             return .green
         }

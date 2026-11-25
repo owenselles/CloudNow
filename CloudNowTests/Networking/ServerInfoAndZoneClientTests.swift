@@ -5,6 +5,37 @@ import Testing
 @Suite("Server-info HTTP client")
 @MainActor
 struct ServerInfoHTTPClientTests {
+    @Test("Network test labels the matched region's endpoint")
+    func networkTestUsesMatchedRegion() {
+        let region = GFNRegion(name: "EU Central", address: "https://eu.example.invalid/")
+        let serverInfo = GFNServerInfo(regions: [region], localRegionName: region.name, vpcId: nil)
+
+        let target = CloudNetworkTestTarget.geForceNowServiceEndpoint(
+            address: "https://stream.example.invalid/",
+            serverInfo: serverInfo
+        )
+
+        #expect(target.address == region.address)
+        #expect(target.displayName == region.name)
+    }
+
+    @Test("Network test labels the default endpoint when regional lookup fails")
+    func networkTestLabelsDefaultEndpointOnFallback() {
+        let address = "https://stream.example.invalid/"
+        let serverInfo = GFNServerInfo(
+            regions: [GFNRegion(name: "EU Central", address: "https://eu.example.invalid/")],
+            localRegionName: "South Central US",
+            vpcId: nil
+        )
+
+        let expected = CloudNetworkTestTarget(
+            address: address,
+            displayName: L10n.text("network_test_default_endpoint")
+        )
+        #expect(CloudNetworkTestTarget.geForceNowServiceEndpoint(address: address, serverInfo: serverInfo) == expected)
+        #expect(CloudNetworkTestTarget.geForceNowServiceEndpoint(address: address, serverInfo: nil) == expected)
+    }
+
     @Test("Fetch constructs identity headers, parses regions, and caches success")
     func fetchAndCache() async throws {
         let fixture = try NetworkingFixture.data("server-info-client.json")
