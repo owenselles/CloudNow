@@ -38,6 +38,14 @@ struct LocalizationIntegrityTests {
         "free_with_ads",
         "free_with_ads_session_description",
         "game_pass",
+        "game_preferences",
+        "game_preferences_launch_description",
+        "game_preferences_remote",
+        "game_preferences_remote_description",
+        "game_preferences_mixed_input",
+        "game_preferences_new_session",
+        "use_app_settings",
+        "launch_mode_desktop",
         "gameplay_time_exhausted",
         "gfn_frame_rate_display_and_membership_unavailable",
         "gfn_frame_rate_display_unavailable",
@@ -115,7 +123,7 @@ struct LocalizationIntegrityTests {
     /// These short UI nouns are valid identical cognates in the listed language.
     private static let englishCognateAllowlistByLanguage: [String: Set<String>] = [
         "da": ["input"],
-        "de": ["details", "info", "screenshots", "touch"],
+        "de": ["details", "info", "launch_mode_desktop", "screenshots", "touch"],
         "id": ["info", "input"],
         "ms": ["input"],
         "nl": ["details"],
@@ -142,7 +150,7 @@ struct LocalizationIntegrityTests {
 
     @Test("Every locale directly provides every branch-added cloud UI translation")
     func everyTableProvidesBranchAddedCloudUIKeys() {
-        #expect(Self.branchAddedCloudUIKeys.count == 97)
+        #expect(Self.branchAddedCloudUIKeys.count == 105)
         for (locale, table) in L10n.supportedTranslationTables.sorted(by: { $0.key < $1.key }) {
             let missing = Self.branchAddedCloudUIKeys.subtracting(table.keys)
             #expect(missing.isEmpty, "\(locale) is missing cloud UI keys: \(missing.sorted())")

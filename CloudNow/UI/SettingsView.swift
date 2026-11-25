@@ -636,7 +636,7 @@ private struct CloudNowSettingSelectionPage<Value: Hashable>: View {
     }
 }
 
-private struct CloudNowSettingsPageTitle: View {
+struct CloudNowSettingsPageTitle: View {
     let title: String
     let accessibilityIdentifier: String
 

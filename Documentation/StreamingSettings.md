@@ -123,9 +123,30 @@ and simulator tests alone cannot establish the benefit on a real display.
 | Low Latency Mode | On | Always shown | Requests L4S behavior. It is useful only with a compatible router and ISP. |
 | Adaptive Frame Pacing | Off | Always shown | Briefly holds decoded frames to smooth uneven arrival timing. Adds input latency. Applies to the next GFN session. See [Adaptive frame pacing](#adaptive-frame-pacing). |
 
+#### Per-game launch and remote preferences
+
+Open an owned game's details and choose **Game launch & remote**. Each field
+can inherit the app setting, so one game can use a desktop-style launcher while
+another uses Big Picture. The preferences are stored by GFN game ID and apply
+across that title's store variants. Launch presentation applies when creating a
+new cloud session; resuming a running session does not restart Steam.
+
+The Siri Remote choice controls only the remote and the controller touchpad.
+Physical keyboard, mouse, and extended-controller input remains available in
+all three modes, subject to each game's support. **Controller + Mouse (Siri
+Remote)** avoids advertising the idle remote as a fallback gamepad while retaining
+physical gamepads. Selecting a desktop launcher does not disable controllers.
+These preferences belong to GFN; Xbox settings and launch behavior are independent.
+
 #### Frame-rate eligibility
 
 GFN entitlement data records combinations of width, height, and frame rate.
+The frame-rate row displays the maximum reported by tvOS. A 60 fps entitlement
+alone does not make 60 fps selectable when the active screen reports a lower
+limit (for example, a 50 Hz output). Inspect **Apple TV Settings > Video and
+Audio > Format** before assuming that the television lacks 60 Hz support.
+CloudNow does not change the system output format or override this limit.
+
 CloudNow calculates frame-rate availability as follows:
 
 1. Read the maximum frame rate of the active Apple TV screen. If no screen is
@@ -355,3 +376,9 @@ This is expected. Provider settings are persisted and decoded with fallback
 values for newly added fields. Use the picker or toggle to change a saved value.
 Use **Reset All Data** only if you intend to remove the active provider's
 account, preferences, favorites, history, and cache.
+
+Per-game launcher preferences are resolved only for a new allocation. Resume and
+reconnect requests omit `appLaunchMode` so a preference changed while a session
+is parked cannot replace that allocation's launcher. The per-game Siri Remote
+preference is applied locally on connection. Unknown or malformed per-title
+values are decoded independently and do not discard other stream settings.

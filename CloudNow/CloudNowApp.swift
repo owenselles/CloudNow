@@ -380,6 +380,9 @@ private struct AuthRestorationView: View {
         private let showsServiceChooser: Bool
         private let showsLoginProviderPicker: Bool
         private let showsXboxQualityHUD: Bool
+        private let showsGamePreferences: Bool
+        private let gamePreferencesPersistence: AppPersistenceStore?
+        @State private var gamePreferencesLoaded = false
         private let xboxServiceConfiguration: XboxCloudServiceConfiguration?
         private let xboxStreamFixtureState: CloudStreamPresentationState?
         private let settingsServerLocationFixture: CloudNowServerLocationFixture
@@ -390,6 +393,19 @@ private struct AuthRestorationView: View {
             let arguments = ProcessInfo.processInfo.arguments
             self.xboxServiceConfiguration = xboxServiceConfiguration
             showsServiceChooser = arguments.contains("--cloudnow-ui-service-chooser")
+            showsGamePreferences = arguments.contains("--cloudnow-ui-game-preferences")
+            if arguments.contains("--cloudnow-ui-game-preferences-persistence"),
+               let defaults = UserDefaults(suiteName: "CloudNow.GamePreferencesUITests")
+            {
+                if arguments.contains("--cloudnow-ui-game-preferences-reset") {
+                    defaults.removePersistentDomain(forName: "CloudNow.GamePreferencesUITests")
+                }
+                gamePreferencesPersistence = AppPersistenceStore(
+                    preferences: UserDefaultsPreferencesStore(defaults: defaults), cacheDirectory: nil
+                )
+            } else {
+                gamePreferencesPersistence = nil
+            }
             showsLoginProviderPicker = arguments.contains(
                 "--cloudnow-ui-login-provider-picker"
             )
@@ -421,7 +437,8 @@ private struct AuthRestorationView: View {
                 mainGames: Self.fixtureGames + [Self.unownedStoreGame],
                 libraryGames: Self.fixtureGames,
                 favoriteIds: ["fixture-racer"],
-                persistenceEnabled: false,
+                persistenceEnabled: gamePreferencesPersistence != nil,
+                persistence: gamePreferencesPersistence ?? AppPersistenceStore.shared,
                 librarySyncClient: UITestLibrarySyncClient(mode: syncClientMode),
                 libraryRefreshScheduler: LibraryRefreshScheduler(
                     now: { 0 },
@@ -446,7 +463,11 @@ private struct AuthRestorationView: View {
 
         var body: some View {
             Group {
-                if showsLoginProviderPicker {
+                if gamePreferencesPersistence != nil, !gamePreferencesLoaded {
+                    ProgressView()
+                } else if showsGamePreferences {
+                    GamePreferencesUITestFixtureView().environment(viewModel)
+                } else if showsLoginProviderPicker {
                     LoginProviderPickerFixtureView()
                 } else if showsXboxQualityHUD {
                     CloudStreamQualityHUDFixtureView()
@@ -484,6 +505,12 @@ private struct AuthRestorationView: View {
                 \.cloudNowServerLocationFixture,
                 settingsServerLocationFixture
             )
+            .task {
+                guard let persistence = gamePreferencesPersistence else { return }
+                let snapshot = await persistence.loadGamesSnapshot(accountScope: nil)
+                viewModel.streamSettings = snapshot.streamSettings ?? StreamSettings()
+                gamePreferencesLoaded = true
+            }
             .task(id: providerCoordinator.selectedProvider) {
                 switch providerCoordinator.selectedProvider {
                 case .geForceNow:

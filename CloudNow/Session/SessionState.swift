@@ -95,6 +95,8 @@ nonisolated struct StreamSettings: Codable, Equatable {
     /// mode that NVIDIA's TV clients (e.g. Shield TV) use, opening launchers such as Steam
     /// in their TV interface — the natural default for a TV client.
     var appLaunchMode: AppLaunchMode = .bigPicture
+    /// Per-title launch presentation and Siri Remote behavior. Hardware input stays available.
+    var gamePreferences: [String: GFNGamePreferences] = [:]
     /// Persist in-game graphics settings across sessions on the cloud rig. A premium-tier
     /// (Performance/Ultimate) feature; the server ignores the flag for non-entitled accounts.
     var persistInGameSettings: Bool = true
@@ -169,7 +171,7 @@ extension StreamSettings {
         case serverRoutingMode, preferredRegionName, preferredRegionAddress
         case enableSteamOverlayGesture
         case statsMode, diagnosticsEnabled, enableRtcEventLog
-        case appLaunchMode
+        case appLaunchMode, gamePreferences
         case persistInGameSettings
         case sessionEndWarningMinutes
         case audioFormat
@@ -259,6 +261,7 @@ extension StreamSettings {
         diagnosticsEnabled = rawStatsMode == "diagnostic" || (storedDiagnostics ?? d.diagnosticsEnabled)
         enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
         appLaunchMode = try c.decodeIfPresent(AppLaunchMode.self, forKey: .appLaunchMode) ?? d.appLaunchMode
+        gamePreferences = GFNGamePreferences.decodeEntries(from: try? c.superDecoder(forKey: .gamePreferences))
         persistInGameSettings = try c.decodeIfPresent(Bool.self, forKey: .persistInGameSettings) ?? d.persistInGameSettings
         let storedSessionEndWarningMinutes = try c.decodeIfPresent(
             Int.self,
@@ -304,6 +307,7 @@ extension StreamSettings {
         try c.encode(diagnosticsEnabled, forKey: .diagnosticsEnabled)
         try c.encode(enableRtcEventLog, forKey: .enableRtcEventLog)
         try c.encode(appLaunchMode, forKey: .appLaunchMode)
+        try c.encode(gamePreferences, forKey: .gamePreferences)
         try c.encode(persistInGameSettings, forKey: .persistInGameSettings)
         try c.encode(sessionEndWarningMinutes, forKey: .sessionEndWarningMinutes)
         try c.encode(audioFormat, forKey: .audioFormat)

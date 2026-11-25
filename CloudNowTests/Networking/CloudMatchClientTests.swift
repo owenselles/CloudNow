@@ -663,6 +663,7 @@ struct CloudMatchClientTests {
         let fixture = try NetworkingFixture.data("cloudmatch-session.json")
         let transport = RecordingHTTPTransport { _, _ in StubbedHTTPResponse(data: fixture) }
         var settings = StreamSettings()
+        settings.appLaunchMode = .default
         settings.audioFormat = format
         settings.chromaFormat = .yuv444
         settings.keyboardLayout = "en-US"
@@ -687,6 +688,7 @@ struct CloudMatchClientTests {
         let resume = try #require(requests.last)
         let root = try jsonObject(from: resume)
         let requestData = try #require(root["sessionRequestData"] as? [String: Any])
+        #expect(requestData["appLaunchMode"] == nil)
         let metadata = try #require(requestData["metaData"] as? [[String: Any]])
 
         #expect(requests.count == 2)
