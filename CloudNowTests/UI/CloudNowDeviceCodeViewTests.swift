@@ -4,6 +4,7 @@ import Testing
 @Suite("Device-code QR rendering")
 struct CloudNowDeviceCodeViewTests {
     @Test("Changing the payload clears the old image and rejects stale completion")
+    @MainActor
     func payloadChangeClearsOldImage() {
         var state = QRCodeRenderState<Int>()
 
