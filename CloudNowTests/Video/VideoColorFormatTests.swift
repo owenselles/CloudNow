@@ -1,7 +1,9 @@
+import AVKit
 @testable import CloudNow
 import CoreVideo
 import Foundation
 import Testing
+import UIKit
 
 @Suite("Decoded video color-format inspection")
 struct VideoColorFormatTests {
@@ -130,6 +132,23 @@ struct VideoColorFormatTests {
         #expect(DecodedVideoFormatInspector.chromaFormat(for: pixelFormat) == nil)
     }
 
+    @Test("Bit depth comes from the registered pixel format", arguments: [
+        (kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange, 10 as Int?, DetectedColorMode.hdr10),
+        (OSType(0x7A34_3434), nil, .unknown), // Unregistered 'z444'.
+        (OSType(0x7034_3939), nil, .unknown), // Unregistered 'p499'.
+    ])
+    func registeredBitDepth(pixelFormat: OSType, expectedDepth: Int?, expectedMode: DetectedColorMode) {
+        let description = DecodedVideoFormatInspector.describe(
+            pixelFormat: pixelFormat,
+            transferFunction: String(describing: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ),
+            colorPrimaries: String(describing: kCVImageBufferColorPrimaries_ITU_R_2020),
+            verifyBitDepth: true
+        )
+
+        #expect(description.bitDepth == expectedDepth)
+        #expect(description.mode == expectedMode)
+    }
+
     @Test("All known SDR transfer functions classify by bit depth")
     func knownSDRTransfers() throws {
         let transfers: [CFTypeRef] = [
@@ -205,6 +224,57 @@ struct VideoColorFormatTests {
         #expect(inspect(tenBit).mode == .unknown10Bit)
         #expect(inspect(eightBit).colorPrimaries == nil)
         #expect(inspect(eightBit).yCbCrMatrix == nil)
+    }
+
+    @MainActor
+    @Test("Display matching requires GFN opt-in and releases the criteria for SDR and surface removal")
+    func matchesDecodedDisplayRange() throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let surface = VideoSurfaceView()
+        window.addSubview(surface)
+        let manager = window.avDisplayManager
+        let previousCriteria = manager.preferredDisplayCriteria
+        defer {
+            surface.removeFromSuperview()
+            manager.preferredDisplayCriteria = previousCriteria
+        }
+
+        let hdr = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_2020
+        )
+        let sdr = try colorBuffer(
+            pixelFormat: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+            transfer: kCVImageBufferTransferFunction_ITU_R_709_2,
+            primaries: kCVImageBufferColorPrimaries_ITU_R_709_2
+        )
+        var cache = DecodedVideoFormatInspectionCache()
+        _ = cache.resolve(pixelBuffer: hdr, decoderPath: .hardware)
+        // Xbox uses the shared surface without opting into display matching.
+        surface.applyDisplayCriteria(for: cache)
+        #expect(manager.preferredDisplayCriteria === previousCriteria)
+        let gfn = GFNStreamController()
+        gfn.bindVideoView(surface)
+        surface.applyDisplayCriteria(for: cache)
+        #expect(manager.preferredDisplayCriteria != nil)
+
+        _ = cache.resolve(pixelBuffer: sdr, decoderPath: .hardware)
+        surface.applyDisplayCriteria(for: cache)
+        #expect(manager.preferredDisplayCriteria == nil)
+
+        _ = cache.resolve(pixelBuffer: hdr, decoderPath: .hardware)
+        surface.applyDisplayCriteria(for: cache)
+        let nextSurface = VideoSurfaceView()
+        window.addSubview(nextSurface)
+        nextSurface.enableHDRDisplayMatching(frameRate: 30)
+        nextSurface.applyDisplayCriteria(for: cache)
+        let nextCriteria = try #require(manager.preferredDisplayCriteria)
+        surface.removeFromSuperview()
+        #expect(manager.preferredDisplayCriteria === nextCriteria)
+        nextSurface.removeFromSuperview()
+        #expect(manager.preferredDisplayCriteria == nil)
     }
 
     @Test("Only propagated color attachments participate in classification")

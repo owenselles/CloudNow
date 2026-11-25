@@ -137,6 +137,22 @@ struct CloudMatchClientTests {
         ))
     }
 
+    @Test("Auto requests HDR only for eligible memberships", arguments: [true, false, nil] as [Bool?])
+    func automaticHDRRequest(accountAllowsHDR: Bool?) async throws {
+        let fixture = try NetworkingFixture.data("cloudmatch-session.json")
+        let transport = RecordingHTTPTransport { request, _ in
+            let root = try jsonObject(from: request)
+            let session = try #require(root["sessionRequestData"] as? [String: Any])
+            let monitors = try #require(session["clientRequestMonitorSettings"] as? [[String: Any]])
+            let expected = accountAllowsHDR == true ? 1 : 0
+            #expect(session["sdrHdrMode"] as? Int == expected)
+            #expect(monitors.first?["sdrHdrMode"] as? Int == expected)
+            return StubbedHTTPResponse(data: fixture)
+        }
+        let client = CloudMatchClient(transport: transport)
+        _ = try await client.createSession(makeSessionRequest(colorPreference: .automatic, accountAllowsHDR: accountAllowsHDR))
+    }
+
     @Test("Failed preferred endpoint falls back to default routing endpoint")
     func createFallback() async throws {
         let fixture = try NetworkingFixture.data("cloudmatch-session.json")
@@ -747,6 +763,7 @@ struct CloudMatchClientTests {
         #expect(resume.value(forHTTPHeaderField: "nv-client-streamer") == "WEBRTC")
         #expect(resume.value(forHTTPHeaderField: "nv-client-type") == "NATIVE")
         #expect(requestData["sdrHdrMode"] as? Int == expectedMode)
+        #expect(session.colorRequest == .attachment(expectedMode))
         #expect(session.acceptedSdrHdrMode == (reportedMode == 99 ? nil : reportedMode))
         #expect(requestData["clientRequestMonitorSettings"] == nil)
         #expect(requestData["requestedStreamingFeatures"] == nil)
@@ -787,15 +804,9 @@ struct CloudMatchClientTests {
             default: throw TestTransportError.unexpectedRequest("Unexpected session request \(index)")
             }
         }
-        let client = CloudMatchClient(transport: transport)
-        let polled = try await client.pollSession(
-            sessionId: "fixture-session",
-            token: "token",
-            base: "https://region.example.invalid",
-            serverIp: "203.0.113.10",
-            clientId: "client",
-            deviceId: "device"
-        )
+        let originalClient = CloudMatchClient(transport: transport)
+        let created = try await originalClient.createSession(makeSessionRequest(colorPreference: .preferHDR))
+        let client = CloudMatchClient(resuming: created, transport: transport)
         var settings = StreamSettings()
         settings.colorPreference = .forceSDR8
         let resumed = try await client.claimSession(
@@ -819,8 +830,11 @@ struct CloudMatchClientTests {
             return try #require(body["sessionRequestData"] as? [String: Any])
         }
 
-        #expect(requests.map(\.httpMethod) == ["GET", "GET", "PUT", "GET", "PUT"])
-        #expect(polled.acceptedSdrHdrMode == 1)
+        #expect(requests.map(\.httpMethod) == ["POST", "GET", "PUT", "GET", "PUT"])
+        #expect(created.acceptedSdrHdrMode == 1)
+        #expect(created.colorRequest?.dynamicRange == .hdr)
+        #expect(resumed.colorRequest == created.colorRequest)
+        #expect(different.colorRequest == .attachment(0))
         #expect(resumed.acceptedSdrHdrMode == 1)
         #expect(different.acceptedSdrHdrMode == nil)
         try #require(resumes.count == 2)
@@ -901,7 +915,8 @@ struct CloudMatchClientTests {
         audioFormat: AudioFormatPreference = .stereo,
         codec: VideoCodec = .h265,
         colorPreference: ColorModePreference = .forceSDR8,
-        chromaFormat: ChromaFormat = .yuv444
+        chromaFormat: ChromaFormat = .yuv444,
+        accountAllowsHDR: Bool? = true
     ) -> SessionCreateRequest {
         var settings = StreamSettings()
         settings.resolution = "3840x2160"
@@ -933,7 +948,7 @@ struct CloudMatchClientTests {
             settings: settings,
             localVideoCapabilities: capabilities,
             accountLinked: true,
-            accountAllowsHDR: true,
+            accountAllowsHDR: accountAllowsHDR,
             skipNvidiaFallback: false
         )
     }

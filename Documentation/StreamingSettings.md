@@ -165,8 +165,10 @@ format. CloudNow resolves the request from the codec and local video pipeline:
 - The current pre-session HDR request uses the codec, local decoder, render and
   display capabilities, and account entitlement. Title and server support are
   not positively known at that point and can still produce an SDR fallback.
-- **Automatic** requires confirmed account entitlement and a qualifying local
-  pipeline. Otherwise it falls back to 10-bit SDR or 8-bit SDR.
+- **Automatic** requests HDR first with confirmed membership eligibility and a
+  compatible codec, decoder, and display. GFN can accept that request even when
+  title or server support is unknown before launch. If membership eligibility
+  is unknown or the request exceeds a known limit, Auto falls back to SDR.
 - **Prefer HDR** requires a qualifying local pipeline and an account not known
   to be ineligible, then falls back safely.
 - **Prefer 10-bit SDR** falls back to 8-bit SDR when 10-bit decode is not
@@ -317,10 +319,17 @@ to live conditions.
 
 ### HDR or 10-bit color is not delivered in GFN
 
-Use H265, confirm the Apple TV display path supports HDR, and check that the
-account and title support HDR. Automatic and Prefer HDR can safely fall back.
-The Standard statistics display reports negotiated and decoded results instead
-of treating the preference as proof.
+Open **Standard** statistics and compare the color CloudNow requested, the
+dynamic range GFN reported, and the format of the decoded frames. GFN can
+report SDR without specifying a bit depth. **Unknown 8-bit** means the decoder
+produced 8-bit frames with unrecognized or missing color metadata. The overlay
+shows a fallback reason when available. A session can deliver 8-bit video
+without identifying a title, server, or membership restriction.
+
+If the decoded format shows **HDR10** but the TV stays in SDR, enable
+**Settings > Video and Audio > Match Content > Match Dynamic Range** on Apple TV.
+CloudNow asks tvOS to match the display when decoded frames carry 10-bit
+BT.2020/PQ video and releases the request when HDR playback ends.
 
 ### Surround audio is not delivered in GFN
 

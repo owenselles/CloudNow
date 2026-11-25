@@ -318,14 +318,7 @@ final class GFNStreamController: NSObject {
     private(set) var sessionStartedAt: Date?
     /// Tier-based session deadline, resynchronized by authoritative server warnings.
     private(set) var sessionCountdown: GFNSessionCountdown?
-    private(set) var colorState = StreamColorState(
-        preference: .automatic,
-        requestedMode: .sdr8,
-        negotiatedMode: nil,
-        detectedMode: nil,
-        displayHDRSupport: .unknown,
-        fallbackReason: nil
-    )
+    private(set) var colorState = StreamColorState(preference: .automatic)
     private(set) var rtcEventLogURL: URL?
     private(set) var pingHistory: [Double] = []
     private(set) var fpsHistory: [Double] = []
@@ -368,8 +361,6 @@ final class GFNStreamController: NSObject {
     private var sessionInfo: SessionInfo?
     private var membershipTier: String?
     private var settings = StreamSettings()
-    /// Account HDR entitlement resolved from the subscription tier at connect time.
-    private var accountAllowsHDR: Bool?
     private var micAudioSource: LKRTCAudioSource?
     private var micAudioTrack: LKRTCAudioTrack?
     private let audioSessionCoordinator = CloudAudioSessionCoordinator()
@@ -439,15 +430,14 @@ final class GFNStreamController: NSObject {
             supportedControls: supportedControls
         )
         self.settings = settings
+        videoView?.enableHDRDisplayMatching(frameRate: settings.fps)
         videoView?.setAdaptiveFramePacing(settings.adaptiveFramePacing, frameRate: settings.fps)
-        self.accountAllowsHDR = accountAllowsHDR
         colorState = StreamColorState(
             preference: settings.colorPreference,
             requestedMode: colorRequest.mode,
-            negotiatedMode: nil,
-            detectedMode: nil,
             displayHDRSupport: localCapabilities.displaySupportsHDR ? .supported : .unsupported,
-            fallbackReason: nil
+            fallbackReason: colorRequest.fallbackReason,
+            gfn: session.colorNegotiation
         )
         setStatsMode(settings.statsMode)
         setDiagnosticsEnabled(settings.diagnosticsEnabled)
@@ -514,11 +504,15 @@ final class GFNStreamController: NSObject {
     /// Stores a reference so the inputHandler can be wired up when InputSender starts.
     func bindVideoView(_ view: VideoSurfaceView) {
         videoView = view
+        view.enableHDRDisplayMatching(frameRate: settings.fps)
         view.setAdaptiveFramePacing(settings.adaptiveFramePacing, frameRate: settings.fps)
         view.setDiagnosticsEnabled(diagnosticsEnabled)
-        view.onDecodedVideoFormatChanged = { [weak self] format in
-            Task { @MainActor [weak self] in
-                self?.applyDecodedVideoFormat(format)
+        view.onDecodedVideoFormatChanged = { [weak self, weak view] _ in
+            Task { @MainActor [weak self, weak view] in
+                guard let self, let view, videoView === view,
+                      let format = view.matchDisplayToCurrentFormat()
+                else { return }
+                applyDecodedVideoFormat(format)
             }
         }
         view.inputHandler = inputSender
@@ -804,14 +798,7 @@ final class GFNStreamController: NSObject {
         textEntryRequestCount = 0
         timeWarning = nil
         videoDiagnostics = VideoPipelineSnapshot()
-        colorState = StreamColorState(
-            preference: .automatic,
-            requestedMode: .sdr8,
-            negotiatedMode: nil,
-            detectedMode: nil,
-            displayHDRSupport: .unknown,
-            fallbackReason: nil
-        )
+        colorState = StreamColorState(preference: .automatic)
         overlayInputPaused = false
         controllerTextEntryReplayLifecycle.invalidate()
         pendingControllerTextEntryReplay = nil
@@ -877,6 +864,9 @@ final class GFNStreamController: NSObject {
 
             gfnLog.info("attemptReconnect: reclaimed session, reconnecting WebRTC")
             sessionInfo = session
+            colorState.gfn = session.colorNegotiation
+            colorState.detectedMode = nil
+            colorState.decodedChromaFormat = nil
             let signalingClient = setupSignaling(session: session)
             do {
                 try await signalingClient.connect()
@@ -1051,6 +1041,7 @@ final class GFNStreamController: NSObject {
         signalingClient: GFNSignalingClient
     ) async {
         guard signaling === signalingClient, let session = sessionInfo else { return }
+        let requestedColorMode = colorState.requestedMode
         #if DEBUG
             gfnLog.debug("[Stream] Offer SDP (\(sdp.count, privacy: .public) chars):\n\(sdp, privacy: .private)")
         #endif
@@ -1225,11 +1216,10 @@ final class GFNStreamController: NSObject {
             }
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
-            let answerColorRequest = settings.colorRequest(localCapabilities: .detect(codec: settings.codec.resolvedCodec), accountAllowsHDR: accountAllowsHDR)
             let codecFilteredSdp = SDPMunger.preferCodec(
                 answer.sdp,
                 codec: settings.codec.resolvedCodec,
-                preferTenBit: answerColorRequest.bitDepth >= 10
+                preferTenBit: requestedColorMode.bitDepth >= 10
             )
             // For H.265: rewrite tier-flag=1→0 and cap level-id to hardware-safe values.
             // Apple's decoder may reject High-tier or above-spec level-id advertisements.
@@ -1276,6 +1266,7 @@ final class GFNStreamController: NSObject {
                 sdp: mangledAnswerSdp,
                 nvstSdp: buildNvstSdp(
                     settings: settings,
+                    requestedColorMode: requestedColorMode,
                     iceUfrag: iceUfrag,
                     icePwd: icePwd,
                     dtlsFingerprint: dtlsFingerprint,
@@ -1368,6 +1359,7 @@ final class GFNStreamController: NSObject {
     /// GFN server can validate STUN MESSAGE-INTEGRITY on incoming binding requests.
     func buildNvstSdp(
         settings: StreamSettings,
+        requestedColorMode: StreamColorMode,
         iceUfrag: String,
         icePwd: String,
         dtlsFingerprint: String,
@@ -1378,10 +1370,6 @@ final class GFNStreamController: NSObject {
         let height = Int(resolutionParts.last ?? "1080") ?? 1080
         let minBitrateKbps = max(5000, settings.maxBitrateKbps * 35 / 100)
         let initialBitrateKbps = max(minBitrateKbps, settings.maxBitrateKbps * 70 / 100)
-        let colorRequest = settings.colorRequest(
-            localCapabilities: .detect(codec: settings.codec.resolvedCodec),
-            accountAllowsHDR: accountAllowsHDR
-        )
 
         var lines: [String] = [
             "v=0",
@@ -1412,9 +1400,9 @@ final class GFNStreamController: NSObject {
             "a=vqos.bw.maximumBitrateKbps:\(settings.maxBitrateKbps)",
             "a=vqos.bw.minimumBitrateKbps:\(minBitrateKbps)",
             "a=vqos.bw.peakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=video.bitDepth:\(colorRequest.bitDepth)",
+            "a=video.bitDepth:\(requestedColorMode.bitDepth)",
             // NVST defaults to 4:2:0 unless the final encoder request includes chroma sampling.
-            "a=video.chromaFormat:\(colorRequest.chromaFormat ?? 0)",
+            "a=video.chromaFormat:\(settings.effectiveChromaFormat.cloudMatchValue)",
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
         ]
@@ -1908,36 +1896,12 @@ final class GFNStreamController: NSObject {
         )
         colorState.detectedMode = format.mode
         colorState.decodedChromaFormat = format.chromaFormat
-        colorState.fallbackReason = fallbackReason(for: format)
+        colorState.gfn?.decoderPath = format.decoderPath
     }
 
     private func applyNegotiatedHDRMode(_ rawMode: Int) {
         videoColorLog.info("negotiated gameSessionHdrMode=\(rawMode)")
-        if rawMode == 0 {
-            if colorState.requestedMode != .hdr10 {
-                colorState.negotiatedMode = colorState.requestedMode
-            } else if colorState.fallbackReason == nil {
-                colorState.fallbackReason = .serverReturnedSDR
-            }
-        } else {
-            colorState.negotiatedMode = .hdr10
-        }
-    }
-
-    private func fallbackReason(for format: DecodedVideoFormat) -> ColorFallbackReason? {
-        if format.decoderPath == .softwareI420 {
-            return .softwareDecoder
-        }
-        switch (colorState.requestedMode, format.mode) {
-        case (.hdr10, .sdr10), (.hdr10, .sdr8):
-            return .serverReturnedSDR
-        case (.sdr10, .sdr8):
-            return .decoderReturned8Bit
-        case (_, .unknown10Bit), (_, .unknown8Bit):
-            return .missingColorMetadata
-        default:
-            return nil
-        }
+        colorState.gfn?.serverDynamicRange = GFNSessionDynamicRange(rawValue: rawMode)
     }
 
     /// Logs one compact AudioSync line per stats tick (diagnostic mode only), interval-averaged
@@ -2332,7 +2296,9 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             }
             if let json = try? JSONSerialization.jsonObject(with: buffer.data) as? [String: Any],
                let hdrMode = json["gameSessionHdrMode"] as? [String: Any],
-               let rawMode = hdrMode["hdrMode"] as? Int
+               let number = hdrMode["hdrMode"] as? NSNumber,
+               CFGetTypeID(number) != CFBooleanGetTypeID(),
+               let rawMode = Int(exactly: number.doubleValue)
             {
                 Task { @MainActor [weak self] in
                     guard let self, isCurrentControlChannel(dataChannel) else { return }

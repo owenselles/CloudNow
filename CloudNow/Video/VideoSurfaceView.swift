@@ -1,6 +1,7 @@
 // NOTE: Requires WebRTC SPM package (https://github.com/livekit/webrtc-xcframework)
 
 @preconcurrency import AVFoundation
+import AVKit
 @preconcurrency import CoreVideo
 @preconcurrency import LiveKitWebRTC
 import os
@@ -162,6 +163,8 @@ final class VideoSurfaceView: UIView {
 
     private let pipelineDiagnostics = VideoPipelineDiagnostics()
     private lazy var renderer = WebRTCFrameRenderer(diagnostics: pipelineDiagnostics)
+    private var hdrDisplayFrameRate: Int?
+    private var appliedDisplayCriteria: AVDisplayCriteria?
     private var currentTrack: LKRTCVideoTrack?
     private var notificationTokens: [NSObjectProtocol] = []
     private var activeRemoteTouch: UITouch?
@@ -219,6 +222,8 @@ final class VideoSurfaceView: UIView {
             if let track = videoTrack {
                 track.add(renderer)
                 videoLog.info("[VideoSurfaceView] Track attached")
+            } else {
+                clearDisplayCriteria()
             }
         }
     }
@@ -235,6 +240,42 @@ final class VideoSurfaceView: UIView {
 
     func setAdaptiveFramePacing(_ enabled: Bool, frameRate: Int) {
         renderer.setAdaptiveFramePacing(enabled, frameRate: frameRate)
+    }
+
+    func enableHDRDisplayMatching(frameRate: Int) {
+        guard hdrDisplayFrameRate != frameRate else { return }
+        hdrDisplayFrameRate = frameRate
+        applyDisplayCriteria(for: renderer.currentInspection)
+    }
+
+    func matchDisplayToCurrentFormat() -> DecodedVideoFormat? {
+        // A track can detach or change again before the main queue processes this notification.
+        guard currentTrack != nil else { return nil }
+        return applyDisplayCriteria(for: renderer.currentInspection)
+    }
+
+    @discardableResult
+    func applyDisplayCriteria(for inspection: DecodedVideoFormatInspectionCache) -> DecodedVideoFormat? {
+        guard let hdrDisplayFrameRate else { return nil }
+        let format = inspection.gfnDisplayFormat
+        guard format?.mode == .hdr10, let description = inspection.cachedFormatDescription, let window else {
+            clearDisplayCriteria()
+            return format
+        }
+        let manager = window.avDisplayManager
+        manager.preferredDisplayCriteria = AVDisplayCriteria(
+            refreshRate: Float(hdrDisplayFrameRate), formatDescription: description
+        )
+        appliedDisplayCriteria = manager.preferredDisplayCriteria
+        return format
+    }
+
+    private func clearDisplayCriteria() {
+        guard let appliedDisplayCriteria else { return }
+        if let manager = window?.avDisplayManager, manager.preferredDisplayCriteria === appliedDisplayCriteria {
+            manager.preferredDisplayCriteria = nil
+        }
+        self.appliedDisplayCriteria = nil
     }
 
     /// Clears renderer and input ownership when SwiftUI dismantles the representable. The stream
@@ -298,11 +339,21 @@ final class VideoSurfaceView: UIView {
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
     }
 
+    override func willMove(toWindow newWindow: UIWindow?) {
+        if window !== newWindow {
+            clearDisplayCriteria()
+        }
+        super.willMove(toWindow: newWindow)
+    }
+
     /// Become first responder as soon as the view enters a window so hardware
     /// keyboard events are directed here rather than the focus engine.
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
+            if hdrDisplayFrameRate != nil {
+                applyDisplayCriteria(for: renderer.currentInspection)
+            }
             becomeFirstResponder()
         }
     }
@@ -505,6 +556,10 @@ private final nonisolated class WebRTCFrameRenderer: NSObject, LKRTCVideoRendere
         label: "com.owenselles.CloudNow2.video-frame-renderer",
         qos: .userInteractive
     )
+
+    var currentInspection: DecodedVideoFormatInspectionCache {
+        state.withLock { $0.inspectionCache }
+    }
 
     init(diagnostics: VideoPipelineDiagnostics) {
         self.diagnostics = diagnostics

@@ -227,6 +227,16 @@ enum L10n {
         }
     }
 
+    static func requestedColorLabel(range: GFNSessionDynamicRange?, bitDepth: Int) -> String {
+        let depth = format("color_bit_depth", bitDepth)
+        switch range {
+        case .sdr: return "SDR · \(depth)"
+        case .hdr where bitDepth == 10: return text("hdr10")
+        case .hdr: return "HDR · \(depth)"
+        case nil: return depth
+        }
+    }
+
     static func detectedColorModeLabel(_ mode: DetectedColorMode) -> String {
         switch mode {
         case .sdr8: text("sdr_8_bit")
@@ -234,6 +244,7 @@ enum L10n {
         case .hdr10: text("hdr10")
         case .unknown8Bit: text("unknown_8_bit")
         case .unknown10Bit: text("unknown_10_bit")
+        case .unknown: text("unknown")
         }
     }
 
@@ -242,11 +253,14 @@ enum L10n {
         case .gameHDRUnknown: text("game_hdr_unknown")
         case .gameHDRUnsupported: text("game_hdr_unsupported")
         case .accountHDRUnavailable: text("account_hdr_unavailable")
+        case .accountHDRUnknown: text("account_hdr_unknown")
         case .serverHDRUnavailable: text("server_hdr_unavailable")
         case .displayHDRUnavailable: text("display_hdr_unavailable")
+        case .codec10BitUnavailable: text("codec_10_bit_unavailable")
         case .decoder10BitUnavailable: text("decoder_10_bit_unavailable")
         case .hdrRenderPipelineUnavailable: text("hdr_render_pipeline_unavailable")
         case .serverReturnedSDR: text("server_returned_sdr")
+        case .decodedSDR: text("decoded_sdr")
         case .decoderReturned8Bit: text("decoder_returned_8_bit")
         case .softwareDecoder: text("software_decoder")
         case .missingColorMetadata: text("missing_color_metadata")
