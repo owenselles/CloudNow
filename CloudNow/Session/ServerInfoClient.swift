@@ -65,6 +65,54 @@ final class ServerInfoClient {
             : nil
     }
 
+    /// Resolve Rain's regional creation route without replacing its service base.
+    func sessionCreationUrl(for provider: LoginProvider, token: String) async throws -> String {
+        guard !provider.isNvidiaDirect, provider.code.uppercased() == "RAN" else {
+            return provider.streamingServiceUrl
+        }
+        guard let serviceURL = URL(string: provider.streamingServiceUrl),
+              serviceURL.scheme?.lowercased() == "https",
+              let serviceHost = serviceURL.host?.lowercased(),
+              serviceHost.split(separator: ".").count >= 3,
+              serviceURL.user == nil,
+              serviceURL.password == nil,
+              serviceURL.port == nil,
+              serviceURL.path.isEmpty || serviceURL.path == "/",
+              serviceURL.query == nil,
+              serviceURL.fragment == nil
+        else { throw URLError(.badURL) }
+        let providerDomain = serviceHost.split(separator: ".").dropFirst().joined(separator: ".")
+
+        let info: GFNServerInfo
+        do {
+            info = try await fetch(baseUrl: provider.streamingServiceUrl, token: token)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch {
+            try Task.checkCancellation()
+            guard let cached = cachedForBase(provider.streamingServiceUrl) else { throw error }
+            info = cached
+        }
+        try Task.checkCancellation()
+        let region = info.regions.first { $0.name == info.localRegionName }
+            ?? (info.regions.count == 1 ? info.regions.first : nil)
+        guard let address = region?.address,
+              let url = URL(string: address),
+              url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              host == serviceHost || host.hasSuffix(".\(providerDomain)"),
+              url.port == nil,
+              url.user == nil,
+              url.password == nil,
+              url.path.isEmpty || url.path == "/",
+              url.query == nil,
+              url.fragment == nil
+        else { throw URLError(.badServerResponse) }
+        return address
+    }
+
     func fetch(baseUrl: String, token: String) async throws -> GFNServerInfo {
         let base = Self.normalizedBase(baseUrl)
 
