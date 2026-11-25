@@ -302,18 +302,17 @@ struct LibraryRefreshCoordinatorTests {
         let validity = CoordinatorValidity()
         var rejectedTokens: [String] = []
 
-        #expect(
-            coordinator.start(
-                userId: "user",
-                resolveToken: { rejectedToken in
-                    guard let rejectedToken else { return "old-token" }
-                    rejectedTokens.append(rejectedToken)
-                    return "refreshed-token"
-                },
-                userIsCurrent: { validity.isCurrent },
-                importLibrary: { importer.recordImport() }
-            )
+        let started = coordinator.start(
+            userId: "user",
+            resolveToken: { rejectedToken in
+                guard let rejectedToken else { return "old-token" }
+                rejectedTokens.append(rejectedToken)
+                return "refreshed-token"
+            },
+            userIsCurrent: { validity.isCurrent },
+            importLibrary: { importer.recordImport() }
         )
+        #expect(started)
         #expect(await eventually { coordinator.state.stage == .completed })
 
         #expect(rejectedTokens == ["old-token"])
@@ -340,18 +339,17 @@ struct LibraryRefreshCoordinatorTests {
         let validity = CoordinatorValidity()
         var rejectedTokens: [String] = []
 
-        #expect(
-            coordinator.start(
-                userId: "user",
-                resolveToken: { rejectedToken in
-                    guard let rejectedToken else { return "old-token" }
-                    rejectedTokens.append(rejectedToken)
-                    return "refreshed-token"
-                },
-                userIsCurrent: { validity.isCurrent },
-                importLibrary: { importer.recordImport() }
-            )
+        let started = coordinator.start(
+            userId: "user",
+            resolveToken: { rejectedToken in
+                guard let rejectedToken else { return "old-token" }
+                rejectedTokens.append(rejectedToken)
+                return "refreshed-token"
+            },
+            userIsCurrent: { validity.isCurrent },
+            importLibrary: { importer.recordImport() }
         )
+        #expect(started)
         #expect(await eventually { coordinator.state.stage == .partialFailure })
 
         #expect(rejectedTokens == ["old-token"])
@@ -660,19 +658,18 @@ struct LibraryRefreshCoordinatorTests {
         let importer = CoordinatorImportRecorder()
         let validity = CoordinatorValidity()
 
-        #expect(
-            coordinator.start(
-                userId: "user",
-                resolveToken: { rejectedToken in
-                    if rejectedToken != nil {
-                        try await ContinuousClock().sleep(for: .seconds(1))
-                    }
-                    return "token"
-                },
-                userIsCurrent: { validity.isCurrent },
-                importLibrary: { importer.recordImport() }
-            )
+        let started = coordinator.start(
+            userId: "user",
+            resolveToken: { rejectedToken in
+                if rejectedToken != nil {
+                    try await ContinuousClock().sleep(for: .seconds(1))
+                }
+                return "token"
+            },
+            userIsCurrent: { validity.isCurrent },
+            importLibrary: { importer.recordImport() }
         )
+        #expect(started)
         #expect(await eventually { coordinator.state.stage == .partialFailure })
 
         #expect(coordinator.state.providers.first?.phase == .timedOut)
@@ -1306,16 +1303,15 @@ struct LibraryRefreshCoordinatorTests {
         let successfulImporter = CoordinatorImportRecorder()
         let validity = CoordinatorValidity()
 
-        #expect(
-            coordinator.start(
-                userId: "user",
-                resolveToken: { _ in "token" },
-                userIsCurrent: { validity.isCurrent },
-                importLibrary: {
-                    try cancelledImporter.recordCancelledImport()
-                }
-            )
+        let started = coordinator.start(
+            userId: "user",
+            resolveToken: { _ in "token" },
+            userIsCurrent: { validity.isCurrent },
+            importLibrary: {
+                try cancelledImporter.recordCancelledImport()
+            }
         )
+        #expect(started)
         #expect(await eventually { coordinator.state.stage == .failed })
         #expect(!coordinator.state.isRunning)
         #expect(coordinator.state.finalPhase.isRetryable)
@@ -1360,16 +1356,15 @@ struct LibraryRefreshCoordinatorTests {
         let successfulImporter = CoordinatorImportRecorder()
         let validity = CoordinatorValidity()
 
-        #expect(
-            coordinator.start(
-                userId: "user",
-                resolveToken: { _ in "token" },
-                userIsCurrent: { validity.isCurrent },
-                importLibrary: {
-                    try failedImporter.recordFailedImport()
-                }
-            )
+        let started = coordinator.start(
+            userId: "user",
+            resolveToken: { _ in "token" },
+            userIsCurrent: { validity.isCurrent },
+            importLibrary: {
+                try failedImporter.recordFailedImport()
+            }
         )
+        #expect(started)
         #expect(await eventually { coordinator.state.stage == .failed })
         #expect(await client.requestedProviderCodes() == ["STEAM"])
         #expect(coordinator.state.providers.first?.phase == .succeeded(gameCount: 25))
@@ -1515,7 +1510,7 @@ private final class CoordinatorImportRecorder {
 private nonisolated struct CoordinatorImportFailure: Error {}
 
 @MainActor
-private final class CoordinatorValidity {
+final class CoordinatorValidity {
     var isCurrent = true
 }
 

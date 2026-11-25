@@ -2373,6 +2373,8 @@ private struct TextInputTriggerSequenceCaptureView: View {
     struct CloudNowServerLocationFixture {
         let serverInfo: GFNServerInfo
         let zones: [GFNZone]
+        let defaultServiceAddress = "https://default-service.gfn.example.invalid/"
+        let networkTestResponseTimeMs = 18.0
     }
 
     private struct CloudNowServerLocationFixtureKey: EnvironmentKey {
@@ -3068,18 +3070,26 @@ private struct RegionPickerView: View {
 private struct NetworkTestView: View {
     @Environment(GamesViewModel.self) private var viewModel
     @Environment(AuthManager.self) private var authManager
+    #if DEBUG
+        @Environment(\.cloudNowServerLocationFixture) private var fixture
+    #endif
 
     var body: some View {
-        CloudNetworkTestView {
-            let target = await resolveTarget()
-            return CloudNetworkTestTarget(
-                address: target.address,
-                displayName: target.name
-            )
+        CloudNetworkTestView(probe: fixtureProbe) {
+            await resolveTarget()
         }
     }
 
-    private func resolveTarget() async -> (address: String, name: String?) {
+    private var fixtureProbe: (@Sendable (String) async -> Double?)? {
+        #if DEBUG
+            if let responseTimeMs = fixture?.networkTestResponseTimeMs {
+                return { _ in responseTimeMs }
+            }
+        #endif
+        return nil
+    }
+
+    private func resolveTarget() async -> CloudNetworkTestTarget {
         let settings = viewModel.streamSettings
         // Routing-mode pins only apply to NVIDIA-direct sessions; partner providers
         // manage their own routing and do not expose zone/region selection.
@@ -3088,16 +3098,22 @@ private struct NetworkTestView: View {
             switch settings.serverRoutingMode {
             case .client:
                 if let address = settings.preferredZoneUrl {
-                    return (address, displayZone(address))
+                    return CloudNetworkTestTarget(address: address, displayName: displayZone(address))
                 }
             case .region:
                 if let address = settings.preferredRegionAddress {
-                    return (address, settings.preferredRegionName)
+                    return CloudNetworkTestTarget(address: address, displayName: settings.preferredRegionName)
                 }
             case .serverAuto:
                 break
             }
         }
+
+        #if DEBUG
+            if let fixture {
+                return .geForceNowServiceEndpoint(address: fixture.defaultServiceAddress, serverInfo: fixture.serverInfo)
+            }
+        #endif
 
         let base = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
         let cached = ServerInfoClient.shared.cachedForBase(base)
@@ -3106,16 +3122,23 @@ private struct NetworkTestView: View {
         } else {
             cached
         }
-        if let local = info?.localRegionName,
-           let region = info?.regions.first(where: { $0.name == local })
-        {
-            return (region.address, local)
-        }
-        return (base, info?.localRegionName)
+        return .geForceNowServiceEndpoint(address: base, serverInfo: info)
     }
 
     private func displayZone(_ url: String) -> String {
         let host = URL(string: url)?.host ?? url
         return host.components(separatedBy: ".").first?.uppercased() ?? url
+    }
+}
+
+extension CloudNetworkTestTarget {
+    @MainActor
+    static func geForceNowServiceEndpoint(address: String, serverInfo: GFNServerInfo?) -> Self {
+        if let localRegionName = serverInfo?.localRegionName,
+           let region = serverInfo?.regions.first(where: { $0.name == localRegionName })
+        {
+            return Self(address: region.address, displayName: region.name)
+        }
+        return Self(address: address, displayName: L10n.text("network_test_default_endpoint"))
     }
 }

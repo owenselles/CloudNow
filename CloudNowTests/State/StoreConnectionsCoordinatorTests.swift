@@ -192,17 +192,17 @@ struct StoreConnectionsCoordinatorTests {
         let client = StoreConnectionClientProbe(authorizationGate: gate)
         let clock = StoreConnectionClock()
         let coordinator = StoreConnectionsCoordinator(client: client, scheduler: clock.scheduler)
-        var current = true
+        let validity = CoordinatorValidity()
         var changed = false
         coordinator.connect(
             store: store(),
             userId: "old-user",
             resolveToken: { _ in "token" },
-            userIsCurrent: { current },
+            userIsCurrent: { validity.isCurrent },
             onChange: { _ in changed = true }
         )
         await gate.waitUntilEntered()
-        current = false
+        validity.isCurrent = false
         await gate.release()
         await coordinator.waitForOperation()
 

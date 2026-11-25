@@ -385,6 +385,7 @@ private struct AuthRestorationView: View {
         @State private var gamePreferencesLoaded = false
         private let xboxServiceConfiguration: XboxCloudServiceConfiguration?
         private let xboxStreamFixtureState: CloudStreamPresentationState?
+        private let settingsServerLocationFixture: CloudNowServerLocationFixture
 
         init(
             xboxServiceConfiguration: XboxCloudServiceConfiguration?
@@ -414,6 +415,9 @@ private struct AuthRestorationView: View {
             xboxStreamFixtureState = Self.xboxStreamFixtureState(
                 arguments: arguments
             )
+            settingsServerLocationFixture = arguments.contains("--cloudnow-ui-network-test-unmatched-region")
+                ? Self.unmatchedNetworkTestRegionFixture
+                : Self.serverLocationFixture
             let syncClientMode: UITestLibrarySyncClient.Mode =
                 arguments.contains("--cloudnow-ui-library-refresh-empty")
                     ? .empty
@@ -499,7 +503,7 @@ private struct AuthRestorationView: View {
             }
             .environment(
                 \.cloudNowServerLocationFixture,
-                Self.serverLocationFixture
+                settingsServerLocationFixture
             )
             .task {
                 guard let persistence = gamePreferencesPersistence else { return }
@@ -729,6 +733,15 @@ private struct AuthRestorationView: View {
                     isMeasuring: false
                 ),
             ]
+        )
+
+        private static let unmatchedNetworkTestRegionFixture = CloudNowServerLocationFixture(
+            serverInfo: GFNServerInfo(
+                regions: serverLocationFixture.serverInfo.regions,
+                localRegionName: "South Central US",
+                vpcId: serverLocationFixture.serverInfo.vpcId
+            ),
+            zones: serverLocationFixture.zones
         )
 
         private static let partialRefreshState = FullLibraryRefreshState(

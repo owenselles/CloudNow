@@ -1187,6 +1187,22 @@ final class CloudNowUITests: XCTestCase {
     }
 
     @MainActor
+    func testGFNNetworkTestShowsProbedEndpoint() {
+        assertGFNNetworkTest(
+            in: makeApp(),
+            endpointName: "Germany",
+            host: "fixture-de.example.com",
+            screenshotName: "GFN Test Network - detected region"
+        )
+        assertGFNNetworkTest(
+            in: makeApp(extraArguments: ["--cloudnow-ui-network-test-unmatched-region"]),
+            endpointName: "Default service endpoint",
+            host: "default-service.gfn.example.invalid",
+            screenshotName: "GFN Test Network - default endpoint"
+        )
+    }
+
+    @MainActor
     func testStoreConnectionsShowCapabilitiesAndCancelAuthorization() {
         let app = makeApp()
         app.launch()
@@ -2537,6 +2553,55 @@ final class CloudNowUITests: XCTestCase {
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 8))
         selectTab(settings, movingRight: 3)
+    }
+
+    @MainActor
+    private func assertGFNNetworkTest(
+        in app: XCUIApplication,
+        endpointName: String,
+        host: String,
+        screenshotName: String
+    ) {
+        app.launch()
+        defer { app.terminate() }
+
+        openSettings(in: app)
+        focusAndSelect(
+            labelContaining: "Test Network",
+            in: app,
+            directions: [.down],
+            pressesPerDirection: 40
+        )
+
+        let endpoint = element("network-test.endpoint", in: app)
+        XCTAssertTrue(endpoint.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitForAccessibilityText("Test endpoint", in: endpoint))
+        XCTAssertTrue(waitForAccessibilityText(endpointName, in: endpoint))
+        XCTAssertTrue(waitForAccessibilityText(host, in: endpoint))
+        XCTAssertFalse(endpoint.label.contains("South Central US"))
+        XCTAssertFalse(accessibilityValue(of: endpoint).contains("South Central US"))
+
+        let metrics = [
+            ("response-time", "HTTP response time", "18 ms"),
+            ("response-variation", "Response time variation", "0.0 ms"),
+            ("failed-requests", "Failed requests", "0 %"),
+        ]
+        for (identifier, label, value) in metrics {
+            let row = element("network-test.\(identifier)", in: app)
+            XCTAssertTrue(row.waitForExistence(timeout: 3))
+            XCTAssertTrue(waitForAccessibilityText(label, in: row))
+            XCTAssertTrue(waitForAccessibilityText(value, in: row))
+        }
+        attachScreenshot(of: app, named: screenshotName)
+
+        focusAndSelect(
+            labelContaining: "Close",
+            in: app,
+            directions: [.down, .up],
+            pressesPerDirection: 8
+        )
+        XCTAssertTrue(endpoint.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(element("settings-screen", in: app).exists)
     }
 
     @MainActor
