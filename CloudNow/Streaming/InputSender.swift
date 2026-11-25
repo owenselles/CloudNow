@@ -746,7 +746,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     private var heldMouseButtons = Set<UInt8>()
 
     private var overlayPresses: [Int: OverlayPressState] = [:]
-    private var overlayReplaySlots = Set<Int>()
+    private var replayedTaps = ReplayedTapSlots()
     private var keyboardShortcutResolvers: [Int: ControllerKeyboardShortcutResolver] = [:]
     private var steamHoldTicks: [Int: Int] = [:]
     private var steamTriggeredSlots = Set<Int>()
@@ -820,6 +820,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             sonyAttachTokens.removeAll()
             gamepadBitmap = 0
             lastSnapshots.removeAll()
+            replayedTaps.removeAll()
             lastSnapshotSend.removeAll()
         }
     }
@@ -874,7 +875,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             suppressingMicroButtonA = false
             if paused {
                 overlayPresses.removeAll()
-                overlayReplaySlots.removeAll()
+                replayedTaps.removeAll()
                 keyboardShortcutResolvers.removeAll()
                 steamHoldTicks.removeAll()
                 steamTriggeredSlots.removeAll()
@@ -920,7 +921,7 @@ final nonisolated class InputSender: @unchecked Sendable {
         suppressingMicroButtonA = false
         releaseHeldMouseButtons()
         overlayPresses.removeAll()
-        overlayReplaySlots.removeAll()
+        replayedTaps.removeAll()
         keyboardShortcutResolvers.removeAll()
         cancelKeyboardReplay()
         steamHoldTicks.removeAll()
@@ -1095,26 +1096,28 @@ final nonisolated class InputSender: @unchecked Sendable {
         guard !isPaused,
               let slot = controllerSlots[ObjectIdentifier(controller)] else { return }
 
+        let now = DispatchTime.now().uptimeNanoseconds
         let buttons = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
         let previousButtons = lastButtons[slot] ?? buttons
         let changed = previousButtons ^ buttons
         lastButtons[slot] = buttons
 
+        var beganOverlayTap = false
         if changed & overlayButtonMask != 0 {
             if buttons & overlayButtonMask != 0 {
                 overlayPresses[slot] = OverlayPressState()
             } else if ControllerKeyboardShortcutOverlayPolicy.shouldFinishPressOnRelease(
                 resolverOwnsGesture: keyboardShortcutResolvers[slot]?.ownsCandidateGesture == true
             ) {
-                finishOverlayPress(for: controller, slot: slot)
+                beganOverlayTap = finishOverlayPress(slot: slot, now: now)
             }
         }
 
-        guard changed & ~overlayButtonMask != 0 else { return }
+        guard beganOverlayTap || changed & ~overlayButtonMask != 0 else { return }
         sendGamepadState(
             for: controller,
             sampleOverlay: false,
-            now: DispatchTime.now().uptimeNanoseconds
+            now: now
         )
     }
 
@@ -1148,7 +1151,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                 hasPendingPress: overlayPresses[slot] != nil
             ) {
                 overlayPresses[slot] = nil
-                sendOverlayTap(for: controller, slot: slot)
+                beginOverlayTap(slot: slot, now: now)
             }
         }
         if shortcutResolution.bypassesLocalGestureHandling {
@@ -1169,7 +1172,7 @@ final nonisolated class InputSender: @unchecked Sendable {
                 }
                 overlayPresses[slot] = press
             } else if overlayPresses[slot] != nil {
-                finishOverlayPress(for: controller, slot: slot)
+                finishOverlayPress(slot: slot, now: now)
             }
 
             if shortcutResolution.suppressesSteamGestures {
@@ -1190,17 +1193,16 @@ final nonisolated class InputSender: @unchecked Sendable {
         }
 
         // The trigger is withheld for the entire gesture. A short press is replayed
-        // as down/up on release; a long press is consumed by the local overlay.
+        // on release through `replayedTaps`; a long press is consumed by the local overlay.
         if !shortcutResolution.bypassesLocalGestureHandling {
             if overlayPresses[slot] != nil || isOverlayButtonHeld(on: controller) {
                 state.buttons &= ~overlayButtonMask
-            } else if overlayReplaySlots.contains(slot) {
-                state.buttons |= overlayButtonMask
             }
             if steamTriggeredSlots.contains(slot) {
                 state.buttons &= ~steamButtonMask
             }
         }
+        state.buttons = replayedTaps.compose(forwarded: state.buttons, slot: slot, now: now)
         sendGamepadSnapshot(
             GamepadSnapshot(
                 buttons: state.buttons,
@@ -1280,59 +1282,16 @@ final nonisolated class InputSender: @unchecked Sendable {
             || snapshot.rightStickY != 0
     }
 
-    private func finishOverlayPress(for controller: GCController, slot: Int) {
-        guard let press = overlayPresses.removeValue(forKey: slot) else { return }
-        if !press.triggered {
-            sendOverlayTap(for: controller, slot: slot)
-        }
+    @discardableResult
+    private func finishOverlayPress(slot: Int, now: UInt64) -> Bool {
+        guard let press = overlayPresses.removeValue(forKey: slot) else { return false }
+        guard !press.triggered else { return false }
+        beginOverlayTap(slot: slot, now: now)
+        return true
     }
 
-    private func sendOverlayTap(for controller: GCController, slot: Int) {
-        let state = mapGCControllerToXInput(controller, deadzone: deadzone)
-        let baseButtons = state.buttons & ~overlayButtonMask
-        let base = GamepadSnapshot(
-            buttons: baseButtons,
-            leftTrigger: state.leftTrigger,
-            rightTrigger: state.rightTrigger,
-            leftStickX: state.lx,
-            leftStickY: state.ly,
-            rightStickX: state.rx,
-            rightStickY: state.ry,
-            bitmap: gamepadBitmap
-        )
-        let down = GamepadSnapshot(
-            buttons: base.buttons | overlayButtonMask,
-            leftTrigger: base.leftTrigger,
-            rightTrigger: base.rightTrigger,
-            leftStickX: base.leftStickX,
-            leftStickY: base.leftStickY,
-            rightStickX: base.rightStickX,
-            rightStickY: base.rightStickY,
-            bitmap: base.bitmap
-        )
-        overlayReplaySlots.insert(slot)
-        sendGamepadSnapshot(down, slot: slot, force: true)
-        inputQueue.asyncAfter(deadline: .now() + .milliseconds(17)) { [weak self, weak controller] in
-            guard let self,
-                  let controller,
-                  overlayReplaySlots.remove(slot) != nil,
-                  controllerSlots[ObjectIdentifier(controller)] == slot else { return }
-            let current = mapGCControllerToXInput(controller, deadzone: deadzone)
-            sendGamepadSnapshot(
-                GamepadSnapshot(
-                    buttons: current.buttons & ~overlayButtonMask,
-                    leftTrigger: current.leftTrigger,
-                    rightTrigger: current.rightTrigger,
-                    leftStickX: current.lx,
-                    leftStickY: current.ly,
-                    rightStickX: current.rx,
-                    rightStickY: current.ry,
-                    bitmap: gamepadBitmap
-                ),
-                slot: slot,
-                force: true
-            )
-        }
+    private func beginOverlayTap(slot: Int, now: UInt64) {
+        replayedTaps.beginReplayedPress(overlayButtonMask, slot: slot, now: now)
     }
 
     private func applyKeyboardShortcutState(
@@ -1371,14 +1330,26 @@ final nonisolated class InputSender: @unchecked Sendable {
         // Replay against the last state the remote actually received. Using the
         // current physical state here would collapse a newly pressed unrelated
         // button into the older buffered target edge.
+        let baseButtons = (lastSnapshots[slot]?.buttons ?? 0) & ~textInputTriggerMask
         let replayButtons = transitions.projected(
-            onto: (lastSnapshots[slot]?.buttons ?? 0) & ~textInputTriggerMask,
+            onto: baseButtons,
             excluding: excludedButtons
         )
+        // Only down edges are replayed, in order. The scheduler times each release, so a
+        // buffered release in this same sample cannot collapse the press.
+        var previousButtons = baseButtons
+        var lastSentButtons = lastSnapshots[slot]?.buttons
         for index in 0 ..< replayButtons.count {
+            let pressedButtons = replayButtons[index] & ~previousButtons
+            previousButtons = replayButtons[index]
+            guard pressedButtons != 0 else { continue }
+            replayedTaps.beginReplayedPress(pressedButtons, slot: slot, now: now)
+            let buttons = replayedTaps.overlay(onto: baseButtons, slot: slot)
+            guard buttons != lastSentButtons else { continue }
+            lastSentButtons = buttons
             sendGamepadSnapshot(
                 GamepadSnapshot(
-                    buttons: replayButtons[index],
+                    buttons: buttons,
                     leftTrigger: currentState.leftTrigger,
                     rightTrigger: currentState.rightTrigger,
                     leftStickX: currentState.lx,
@@ -1989,6 +1960,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             } else {
                 gamepadBitmap |= Self.extendedGamepadBitmapMask(for: slot)
             }
+            replayedTaps.releaseSlot(slot)
             lastButtons[slot] = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
             pad.valueChangedHandler = { [weak self, weak controller] _, _ in
                 guard let controller else { return }
@@ -2037,7 +2009,7 @@ final nonisolated class InputSender: @unchecked Sendable {
             lastSnapshots[slot] = nil
             lastSnapshotSend[slot] = nil
             overlayPresses[slot] = nil
-            overlayReplaySlots.remove(slot)
+            replayedTaps.releaseSlot(slot)
             keyboardShortcutResolvers[slot] = nil
             steamHoldTicks[slot] = nil
             steamTriggeredSlots.remove(slot)
