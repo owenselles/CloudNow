@@ -348,7 +348,10 @@ final class VideoSurfaceView: UIView {
     }
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        pressesEnded(presses, with: event)
+        let unhandled = presses.filter { !pressLifecycle.end(id: ObjectIdentifier($0)) }
+        if !unhandled.isEmpty {
+            super.pressesCancelled(Set(unhandled), with: event)
+        }
     }
 
     // MARK: - Siri Remote Touch Surface

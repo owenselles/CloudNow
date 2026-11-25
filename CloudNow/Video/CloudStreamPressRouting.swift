@@ -68,12 +68,14 @@ final class CloudStreamPressLifecycle {
         )
         guard action != .unhandled else { return action }
         let press = HeldPress(action: action, handler: handler, key: key, modifiers: modifiers)
-        let mouseAlreadyHeld = held.values.contains { $0.action == .remoteClick && !$0.released && $0.handler === handler }
         held[id] = press
         if action == .keyboard, let key {
             handler?.sendKeyEvent(down: true, keyCode: key, modifiers: modifiers)
-        } else if action == .remoteClick, !mouseAlreadyHeld {
-            handler?.sendMouseButton(down: true, button: 1)
+        } else if action == .remoteClick {
+            let anotherHeld = held.values.contains { $0 !== press && $0.action == .remoteClick && !$0.released && $0.handler === handler }
+            if !anotherHeld {
+                handler?.sendMouseButton(down: true, button: 1)
+            }
         }
         return action
     }

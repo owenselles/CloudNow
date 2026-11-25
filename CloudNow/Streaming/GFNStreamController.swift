@@ -53,6 +53,10 @@ nonisolated struct ControllerTextEntryReplayLifecycle: Sendable {
         overlayPaused || controllerTextEntryActive || replayInputPaused
     }
 
+    func shouldPresentTextEntry(requestIsCurrent: Bool, isStreaming: Bool, overlay: StreamOverlayState) -> Bool {
+        requestIsCurrent && controllerTextEntryActive && isStreaming && overlay == .none
+    }
+
     mutating func beginTextEntry() {
         controllerTextEntryActive = true
         replayInputPaused = false
@@ -655,6 +659,18 @@ final class GFNStreamController: NSObject {
         controllerTextEntryReplayLifecycle.beginTextEntry()
         syncInputPauseState()
         textEntryRequestCount += 1
+    }
+
+    /// Presentation may run after Escape has already invalidated the queued request.
+    func prepareControllerTextEntryPresentation(request: Int, overlay: StreamOverlayState) -> Bool {
+        guard request == textEntryRequestCount, controllerTextEntryReplayLifecycle.controllerTextEntryActive else { return false }
+        guard controllerTextEntryReplayLifecycle.shouldPresentTextEntry(
+            requestIsCurrent: true, isStreaming: state == .streaming, overlay: overlay
+        ) else {
+            cancelControllerTextEntry()
+            return false
+        }
+        return true
     }
 
     func cancelControllerTextEntry() {

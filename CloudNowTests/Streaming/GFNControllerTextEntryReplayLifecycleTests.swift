@@ -3,6 +3,35 @@ import Testing
 
 @Suite("GFN controller text-entry replay lifecycle")
 struct GFNTextReplayLifecycleTests {
+    @Test("Queued presentation cannot reopen text entry after dismissal in either callback order", arguments: [true, false])
+    func presentationAndDismissalOrder(dismissalFirst: Bool) {
+        var lifecycle = ControllerTextEntryReplayLifecycle()
+        var overlay = StreamOverlayState.none
+        lifecycle.beginTextEntry()
+        if dismissalFirst {
+            lifecycle.invalidate()
+        }
+        if lifecycle.shouldPresentTextEntry(requestIsCurrent: true, isStreaming: true, overlay: overlay) {
+            overlay = .textEntry
+        }
+        if !dismissalFirst {
+            lifecycle.invalidate(); overlay = .none
+        }
+        #expect(overlay == .none)
+        #expect(!lifecycle.inputPaused(overlayPaused: overlay != .none))
+    }
+
+    @Test("An active shortcut presents normally, while stale or blocked requests do not")
+    func activePresentation() {
+        var lifecycle = ControllerTextEntryReplayLifecycle()
+        lifecycle.beginTextEntry()
+        #expect(lifecycle.shouldPresentTextEntry(requestIsCurrent: true, isStreaming: true, overlay: .none))
+        #expect(lifecycle.inputPaused(overlayPaused: false))
+        #expect(!lifecycle.shouldPresentTextEntry(requestIsCurrent: false, isStreaming: true, overlay: .none))
+        #expect(!lifecycle.shouldPresentTextEntry(requestIsCurrent: true, isStreaming: false, overlay: .none))
+        #expect(!lifecycle.shouldPresentTextEntry(requestIsCurrent: true, isStreaming: true, overlay: .pauseMenu))
+    }
+
     @Test("Rejected replay keeps text entry active")
     func rejectedReplayKeepsTextEntryActive() throws {
         var lifecycle = ControllerTextEntryReplayLifecycle()

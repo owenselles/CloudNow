@@ -179,8 +179,8 @@ struct StreamView: View {
         .onChange(of: streamController.overlayDismissRequestCount) { _, _ in
             closeOverlay()
         }
-        .onChange(of: streamController.textEntryRequestCount) { _, _ in
-            presentControllerTextEntry()
+        .onChange(of: streamController.textEntryRequestCount) { _, request in
+            presentControllerTextEntry(request: request)
         }
         .onExitCommand {
             if overlayState == .textEntry {
@@ -1513,13 +1513,8 @@ struct StreamView: View {
         setOverlayState(.none)
     }
 
-    private func presentControllerTextEntry() {
-        guard streamController.state == .streaming, overlayState == .none else {
-            // Input is already paused for the accepted shortcut. Do not leave it paused when
-            // another overlay prevents the text-entry UI from being presented.
-            streamController.cancelControllerTextEntry()
-            return
-        }
+    private func presentControllerTextEntry(request: Int) {
+        guard streamController.prepareControllerTextEntryPresentation(request: request, overlay: overlayState) else { return }
         setOverlayState(.textEntry)
     }
 
