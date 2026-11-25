@@ -1816,6 +1816,12 @@ final nonisolated class InputSender: @unchecked Sendable {
 
     private func registerControllerNotifications() {
         let center = NotificationCenter.default
+        let attachMouse: @Sendable (Notification) -> Void = { [weak self] note in
+            guard let mouse = note.object as? GCMouse else { return }
+            self?.inputQueue.async { [weak self] in
+                self?.setupMouseHandlers(for: mouse)
+            }
+        }
         observations = [
             center.addObserver(forName: .GCControllerDidConnect, object: nil, queue: nil) { [weak self] note in
                 guard let controller = note.object as? GCController else { return }
@@ -1829,12 +1835,8 @@ final nonisolated class InputSender: @unchecked Sendable {
                     self?.detachController(controller)
                 }
             },
-            center.addObserver(forName: .GCMouseDidConnect, object: nil, queue: nil) { [weak self] note in
-                guard let mouse = note.object as? GCMouse else { return }
-                self?.inputQueue.async { [weak self] in
-                    self?.setupMouseHandlers(for: mouse)
-                }
-            },
+            center.addObserver(forName: .GCMouseDidConnect, object: nil, queue: nil, using: attachMouse),
+            center.addObserver(forName: .GCMouseDidBecomeCurrent, object: nil, queue: nil, using: attachMouse),
             center.addObserver(forName: .GCMouseDidDisconnect, object: nil, queue: nil) { [weak self] note in
                 guard let mouse = note.object as? GCMouse else { return }
                 self?.inputQueue.async { [weak self] in
@@ -1860,7 +1862,7 @@ final nonisolated class InputSender: @unchecked Sendable {
     }
 
     private func setupMouseHandlers(for mouse: GCMouse) {
-        guard let input = mouse.mouseInput else { return }
+        guard isRunning, let input = mouse.mouseInput else { return }
         mouse.handlerQueue = inputQueue
 
         input.mouseMovedHandler = { [weak self] _, deltaX, deltaY in

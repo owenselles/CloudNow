@@ -47,6 +47,24 @@ fails. Never capture or share provider access tokens, refresh tokens, device cod
 QR codes, session identifiers, SDP, ICE candidates, transfer tokens, or raw
 channel payloads.
 
+## GeForce NOW Bluetooth mouse retest
+
+1. Sign and sideload the PR beta IPA. Pair a Bluetooth mouse directly with Apple TV
+   before launching CloudNow. Use it as the only mouse.
+2. Start a mouse-compatible GFN game and dismiss the overlay. In a game menu,
+   move the pointer, click a control, and scroll a list. Record which actions
+   work in the game. Record any tvOS focus movement separately.
+3. Repeat after disconnecting and reconnecting the mouse during the stream,
+   then after returning CloudNow to the foreground. Include the mouse make and
+   model, beta tag, Apple TV model, tvOS version, game, and results for each run
+   in the issue report.
+
+For a developer retest, run a Debug build with an Xcode breakpoint in
+`InputSender.setupMouseHandlers(for:)`. Record whether setup runs for the mouse
+and whether `mouse.mouseInput` is present. Use auto-continuing breakpoints
+inside the movement, button, and scroll callbacks to record the change in hit
+counts for each run, including zero.
+
 ## Apple TV profile sign-in
 
 1. Install a build signed with User Management. Sign into both providers on
