@@ -16,6 +16,21 @@ final class GamePreferencesUITests: XCTestCase {
     }
 
     @MainActor
+    func testPreferencesInFrenchAppearance() {
+        exercisePreferences(appearance: "light", language: "fr")
+    }
+
+    @MainActor
+    func testPreferencesInArabicAppearance() {
+        exercisePreferences(appearance: "dark", language: "ar")
+    }
+
+    @MainActor
+    func testPreferencesInJapaneseAppearance() {
+        exercisePreferences(appearance: "dark", language: "ja")
+    }
+
+    @MainActor
     func testRealGameDetailPersistsPreferencesAcrossRelaunchAndRestoresFocus() {
         let app = XCUIApplication()
         app.launchArguments = ["--cloudnow-ui-testing", "--cloudnow-ui-game-preferences-persistence", "--cloudnow-ui-game-preferences-reset", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
@@ -78,11 +93,19 @@ final class GamePreferencesUITests: XCTestCase {
 
     @MainActor
     private func exercisePreferences(appearance: String, language: String) {
+        let expected: (desktop: String, remote: String, inherited: String) = switch language {
+        case "de": ("Standard (Desktop)", "Controller + Maus (Siri Remote)", "App-Einstellung übernehmen")
+        case "fr": ("Standard (bureau)", "Manette + Souris (Siri Remote)", "Utiliser les réglages de l’app")
+        case "ar": ("قياسي (سطح المكتب)", "وحدة التحكم + الفأرة (Siri Remote)", "استخدام إعدادات التطبيق")
+        case "ja": ("標準（デスクトップ）", "コントローラ + マウス (Siri Remote)", "アプリの設定を使う")
+        default: ("Standard (Desktop)", "Controller + Mouse (Siri Remote)", "Use app settings")
+        }
+        let locale = ["de": "de_DE", "fr": "fr_FR", "ar": "ar_SA", "ja": "ja_JP"][language] ?? "en_US"
         let app = XCUIApplication()
         app.launchArguments = [
             "--cloudnow-ui-testing", "--cloudnow-ui-game-preferences",
             "--cloudnow-ui-language", language, "--cloudnow-ui-color-scheme", appearance,
-            "-AppleLanguages", "(\(language))", "-AppleLocale", language == "de" ? "de_DE" : "en_US",
+            "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
         ]
         app.launchEnvironment = ["CLOUDNOW_DISABLE_LIVE_SERVICES": "1", "CLOUDNOW_TESTING": "1", "CLOUDNOW_UI_TESTING": "1"]
         app.launch()
@@ -93,13 +116,13 @@ final class GamePreferencesUITests: XCTestCase {
         XCTAssertTrue(launch.waitForExistence(timeout: 4))
         select(launch)
         select(app.buttons["game.preferences.launch.option.desktop"])
-        XCTAssertEqual(launch.value as? String, "Standard (Desktop)")
+        XCTAssertEqual(launch.value as? String, expected.desktop)
 
         let remote = app.buttons["game.preferences.remote"]
         select(remote)
         select(app.buttons["game.preferences.remote.option.mouse"])
-        XCTAssertEqual(launch.value as? String, "Standard (Desktop)")
-        let remoteValue = language == "de" ? "Controller + Maus (Siri Remote)" : "Controller + Mouse (Siri Remote)"
+        XCTAssertEqual(launch.value as? String, expected.desktop)
+        let remoteValue = expected.remote
         XCTAssertEqual(remote.value as? String, remoteValue)
         select(remote)
         XCTAssertTrue(app.buttons["game.preferences.remote.option.mouse"].isSelected)
@@ -110,13 +133,13 @@ final class GamePreferencesUITests: XCTestCase {
         XCTAssertTrue(waitForFocus(open))
 
         select(open)
-        XCTAssertEqual(launch.value as? String, "Standard (Desktop)")
+        XCTAssertEqual(launch.value as? String, expected.desktop)
         XCTAssertEqual(remote.value as? String, remoteValue)
         select(launch)
         select(app.buttons["game.preferences.launch.option.inherit"])
         select(remote)
         select(app.buttons["game.preferences.remote.option.inherit"])
-        let inherited = language == "de" ? "App-Einstellung übernehmen" : "Use app settings"
+        let inherited = expected.inherited
         XCTAssertEqual(launch.value as? String, inherited)
         XCTAssertEqual(remote.value as? String, inherited)
         attach(app, name: "Game preferences inherited \(appearance) \(language)")
