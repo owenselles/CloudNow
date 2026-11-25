@@ -104,7 +104,7 @@ struct StreamView: View {
         directSession: SessionInfo? = nil,
         onDismiss: @escaping () -> Void,
         onLeave: ((GameInfo, SessionInfo) -> Void)? = nil,
-        cloudMatchClient: CloudMatchClient = CloudMatchClient(),
+        cloudMatchClient: CloudMatchClient? = nil,
         orchestrationClient: (any SessionOrchestrationClient)? = nil,
         sessionScheduler: SessionOrchestrationScheduler = .continuous
     ) {
@@ -114,6 +114,7 @@ struct StreamView: View {
         self.directSession = directSession
         self.onDismiss = onDismiss
         self.onLeave = onLeave
+        let cloudMatchClient = cloudMatchClient ?? CloudMatchClient(resuming: directSession)
         self.cloudMatchClient = cloudMatchClient
         _sessionOrchestrator = State(initialValue: SessionOrchestrator(
             client: orchestrationClient ?? cloudMatchClient,

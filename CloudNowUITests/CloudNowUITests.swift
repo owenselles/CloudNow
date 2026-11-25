@@ -1931,6 +1931,17 @@ final class CloudNowUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(deliveredResolution.waitForExistence(timeout: 3))
         XCTAssertTrue(requestedResolution.waitForExistence(timeout: 3))
+        let videoFormat = app.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND value == %@",
+                "Format",
+                "H264 · SDR 8-bit"
+            ))
+            .firstMatch
+        XCTAssertTrue(videoFormat.exists)
+        for label in ["Requested color", "Server dynamic range", "Decoded format", "Fallback"] {
+            XCTAssertFalse(element(label, in: app).exists)
+        }
     }
 
     @MainActor

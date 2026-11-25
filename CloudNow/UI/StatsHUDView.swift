@@ -451,7 +451,23 @@ private struct CoreStatsColumn: View {
                     label: L10n.text("processing_delay"),
                     value: String(format: "%.2f ms", stats.processingDelayMs)
                 )
-                StatsRow(label: L10n.text("format"), value: videoFormatValue)
+                if let gfn = colorState.gfn {
+                    StatsRow(
+                        label: L10n.text("requested_color"),
+                        value: L10n.requestedColorLabel(range: gfn.sessionRequest?.dynamicRange, bitDepth: colorState.requestedMode.bitDepth)
+                    )
+                    StatsRow(label: L10n.text("server_dynamic_range"), value: serverDynamicRange)
+                    StatsRow(label: L10n.text("decoded_format"), value: videoFormatValue)
+                    if let fallback = colorState.gfnFallbackReason {
+                        StatsRow(
+                            label: L10n.text("fallback"),
+                            value: L10n.colorFallbackReasonLabel(fallback),
+                            warning: true
+                        )
+                    }
+                } else {
+                    StatsRow(label: L10n.text("format"), value: videoFormatValue)
+                }
             }
             Divider()
                 .overlay(StatsHUDPalette.divider, ignoresSafeAreaEdges: [])
@@ -501,6 +517,14 @@ private struct CoreStatsColumn: View {
             return L10n.detectedColorModeLabel(detected)
         }
         return L10n.text("unknown")
+    }
+
+    private var serverDynamicRange: String {
+        switch colorState.gfn?.serverDynamicRange {
+        case .hdr: "HDR"
+        case .sdr: "SDR"
+        case nil: L10n.text("unknown")
+        }
     }
 
     private var videoFormatValue: String {
@@ -594,7 +618,7 @@ private struct DebugStatsColumn: View {
                     value: "\(stats.localCandidateType) → \(stats.remoteCandidateType) (\(stats.selectedProtocol))"
                 )
             }
-            if let fallback = colorState.fallbackReason {
+            if colorState.gfn == nil, let fallback = colorState.fallbackReason {
                 StatsRow(
                     label: L10n.text("fallback"),
                     value: L10n.colorFallbackReasonLabel(fallback),

@@ -223,16 +223,13 @@ private nonisolated func cloudMatchSurroundAudioInfo(channels: Int) -> Int {
 
 private nonisolated func buildSessionRequestBody(
     _ input: SessionCreateRequest,
+    color: StreamColorRequest,
     deviceId: String,
     subSessionId: String,
     timezoneOffsetMilliseconds: Int
 ) -> [String: Any] {
     let (width, height) = resolutionPixels(for: input.settings)
     let audioChannels = input.settings.audioFormat.resolvedChannelCount
-    let color = input.settings.colorRequest(
-        localCapabilities: input.localVideoCapabilities,
-        accountAllowsHDR: input.accountAllowsHDR
-    )
 
     return [
         "sessionRequestData": [
@@ -455,8 +452,10 @@ actor CloudMatchClient {
     private let sleep: @Sendable (TimeInterval) async throws -> Void
     private var lastAcceptedSdrHdrSessionId: String?
     private var lastAcceptedSdrHdrMode: Int?
+    private var lastColorRequest: GFNSessionColorRequest?
 
     init(
+        resuming session: SessionInfo? = nil,
         transport: any HTTPTransport = URLSessionHTTPTransport(configuration: .ephemeral),
         uuid: @escaping @Sendable () -> UUID = UUID.init,
         deviceId: @escaping @Sendable () -> String = GFNDeviceIdentity.stableDeviceId,
@@ -474,6 +473,9 @@ actor CloudMatchClient {
         self.now = now
         self.timezoneOffsetMilliseconds = timezoneOffsetMilliseconds
         self.sleep = sleep
+        lastAcceptedSdrHdrSessionId = session?.sessionId
+        lastAcceptedSdrHdrMode = session?.acceptedSdrHdrMode
+        lastColorRequest = session?.colorRequest
     }
 
     private func validateHTTPStatus(_ response: URLResponse, data: Data, context: String) throws {
@@ -526,8 +528,13 @@ actor CloudMatchClient {
         let fallbackBase = Self.defaultBase
         let requestedRoutingZoneUrl = normalizedRoutingZoneUrl(input.routingZoneUrl)
 
+        let color = input.settings.colorRequest(
+            localCapabilities: input.localVideoCapabilities,
+            accountAllowsHDR: input.accountAllowsHDR
+        )
         let body = buildSessionRequestBody(
             input,
+            color: color,
             deviceId: deviceId,
             subSessionId: uuid().uuidString,
             timezoneOffsetMilliseconds: timezoneOffsetMilliseconds()
@@ -580,7 +587,8 @@ actor CloudMatchClient {
                     payload: payload,
                     rawData: data,
                     clientId: clientId,
-                    deviceId: deviceId
+                    deviceId: deviceId,
+                    colorRequest: .allocation(color)
                 )
             }
             let raw = redactedHTTPBody(data)
@@ -824,6 +832,7 @@ actor CloudMatchClient {
         ]
         cloudMatchLog.debug("[CloudMatch] claimSession languageCode=\(settings.effectiveGameLanguage, privacy: .public) keyboardLayout=\(settings.keyboardLayout, privacy: .public)")
         guard let url = comps.url else { throw CloudMatchError.sessionCreateFailed("Invalid resume URL") }
+        let resumeMode = preflight.acceptedSdrHdrMode ?? 0
         let body: [String: Any] = [
             "action": 2,
             "data": "RESUME",
@@ -833,7 +842,7 @@ actor CloudMatchClient {
                 deviceId: deviceId,
                 subSessionId: uuid().uuidString,
                 timezoneOffsetMilliseconds: timezoneOffsetMilliseconds(),
-                acceptedSdrHdrMode: preflight.acceptedSdrHdrMode ?? 0
+                acceptedSdrHdrMode: resumeMode
             ),
             "metaData": [],
         ]
@@ -853,7 +862,8 @@ actor CloudMatchClient {
             payload: payload,
             rawData: data,
             clientId: clientId,
-            deviceId: deviceId
+            deviceId: deviceId,
+            colorRequest: .attachment(resumeMode)
         )
     }
 
@@ -865,7 +875,8 @@ actor CloudMatchClient {
         payload: CloudMatchResponse,
         rawData: Data,
         clientId: String,
-        deviceId: String
+        deviceId: String,
+        colorRequest: GFNSessionColorRequest? = nil
     ) throws -> SessionInfo {
         guard let s = payload.session else {
             throw CloudMatchError.missingSession(context: "CloudMatch response")
@@ -874,8 +885,16 @@ actor CloudMatchClient {
         if lastAcceptedSdrHdrSessionId != s.sessionId {
             lastAcceptedSdrHdrSessionId = s.sessionId
             lastAcceptedSdrHdrMode = reportedMode
+            lastColorRequest = nil
         } else if let reportedMode {
             lastAcceptedSdrHdrMode = reportedMode
+        }
+        if let colorRequest {
+            // A subsequent attachment must not erase what was requested when we allocated this seat.
+            switch (lastColorRequest, colorRequest) {
+            case (.allocation, .attachment): break
+            default: lastColorRequest = colorRequest
+            }
         }
         let connections = s.connectionInfo ?? []
         if cloudMatchOSLog.isEnabled(type: .debug) {
@@ -942,7 +961,8 @@ actor CloudMatchClient {
             deviceId: deviceId,
             adState: adState,
             controlServerIp: normalizedControlServerIp(s.sessionControlInfo?.ip?.value),
-            acceptedSdrHdrMode: lastAcceptedSdrHdrMode
+            acceptedSdrHdrMode: lastAcceptedSdrHdrMode,
+            colorRequest: lastColorRequest
         )
     }
 

@@ -566,6 +566,7 @@ nonisolated enum DetectedColorMode: String, Codable, Equatable {
     case hdr10
     case unknown8Bit
     case unknown10Bit
+    case unknown
 
     @MainActor var diagnosticLabel: String {
         L10n.detectedColorModeLabel(self)
@@ -573,7 +574,7 @@ nonisolated enum DetectedColorMode: String, Codable, Equatable {
 
     var isUnknown: Bool {
         switch self {
-        case .unknown8Bit, .unknown10Bit:
+        case .unknown8Bit, .unknown10Bit, .unknown:
             true
         default:
             false
@@ -591,11 +592,14 @@ nonisolated enum ColorFallbackReason: String, Codable {
     case gameHDRUnknown
     case gameHDRUnsupported
     case accountHDRUnavailable
+    case accountHDRUnknown
     case serverHDRUnavailable
     case displayHDRUnavailable
+    case codec10BitUnavailable
     case decoder10BitUnavailable
     case hdrRenderPipelineUnavailable
     case serverReturnedSDR
+    case decodedSDR
     case decoderReturned8Bit
     case softwareDecoder
     case missingColorMetadata
@@ -626,20 +630,77 @@ nonisolated enum ChromaFormat: String, Codable, CaseIterable {
     }
 }
 
+/// GFN's session mode reports dynamic range without specifying an encoder bit depth.
+nonisolated enum GFNSessionDynamicRange: Int, Codable {
+    case sdr = 0
+    case hdr = 1
+}
+
+/// An attachment reuses the allocation and sends only its dynamic range to CloudMatch.
+nonisolated enum GFNSessionColorRequest: Codable, Equatable {
+    case allocation(StreamColorRequest)
+    case attachment(Int)
+
+    var dynamicRange: GFNSessionDynamicRange? {
+        switch self {
+        case let .allocation(request): request.hdrRequested ? .hdr : .sdr
+        case let .attachment(mode): GFNSessionDynamicRange(rawValue: mode)
+        }
+    }
+}
+
+nonisolated struct GFNColorNegotiation: Codable, Equatable {
+    var sessionRequest: GFNSessionColorRequest?
+    var serverDynamicRange: GFNSessionDynamicRange?
+    var decoderPath: VideoDecoderPath?
+}
+
 nonisolated struct StreamColorState: Codable, Equatable {
     let preference: ColorModePreference
-    var requestedMode: StreamColorMode
+    var requestedMode: StreamColorMode = .sdr8
     var negotiatedMode: StreamColorMode?
     var detectedMode: DetectedColorMode?
-    var displayHDRSupport: HDRSupport
+    var displayHDRSupport: HDRSupport = .unknown
     var fallbackReason: ColorFallbackReason?
-    var decodedChromaFormat: ChromaFormat? = nil
+    var decodedChromaFormat: ChromaFormat?
+    var gfn: GFNColorNegotiation?
+
+    var gfnFallbackReason: ColorFallbackReason? {
+        guard let gfn else { return nil }
+        if fallbackReason == .codec10BitUnavailable || fallbackReason == .decoder10BitUnavailable {
+            return fallbackReason
+        }
+        if case let .allocation(original) = gfn.sessionRequest, let reason = original.fallbackReason {
+            return reason
+        }
+        let requestedHDR = gfn.sessionRequest?.dynamicRange == .hdr
+        if requestedHDR, gfn.serverDynamicRange == .sdr, detectedMode != .hdr10 {
+            return .serverReturnedSDR
+        }
+        if gfn.decoderPath == .softwareI420 {
+            return .softwareDecoder
+        }
+        if requestedMode.bitDepth > 8, detectedMode == .sdr8 || detectedMode == .unknown8Bit {
+            return .decoderReturned8Bit
+        }
+        switch detectedMode {
+        case .sdr10 where requestedHDR:
+            return .decodedSDR
+        case .unknown8Bit, .unknown10Bit:
+            return .missingColorMetadata
+        case .unknown:
+            return .unsupportedPixelFormat
+        default:
+            return nil
+        }
+    }
 }
 
 nonisolated struct StreamColorCapabilities {
     let gameHDRSupport: HDRSupport
     let accountAllowsHDR: Bool?
     let serverAllowsHDR: Bool?
+    let codecSupports10Bit: Bool
     let decoderSupports10Bit: Bool
     let hdrRenderPipelineAvailable: Bool
     let displaySupportsHDR: Bool
@@ -665,56 +726,56 @@ nonisolated struct StreamColorRequest: Codable, Equatable {
     let hdrRequested: Bool
     let chromaFormat: Int?
     let displayCapabilities: HDRDisplayCapabilities?
+    let fallbackReason: ColorFallbackReason?
 
     static func resolve(
         preference: ColorModePreference,
         capabilities: StreamColorCapabilities,
         chromaFormat: ChromaFormat = .yuv420
     ) -> StreamColorRequest {
-        let mode = resolveColorMode(preference: preference, capabilities: capabilities)
+        let (mode, reason) = resolveColorMode(preference: preference, capabilities: capabilities)
         return StreamColorRequest(
             mode: mode,
             bitDepth: mode.bitDepth,
             hdrRequested: mode == .hdr10,
             chromaFormat: chromaFormat.cloudMatchValue,
-            displayCapabilities: mode == .hdr10 ? .conservativeHDR10 : nil
+            displayCapabilities: mode == .hdr10 ? .conservativeHDR10 : nil,
+            fallbackReason: reason
         )
     }
 
-    static func resolveColorMode(
+    private static func resolveColorMode(
         preference: ColorModePreference,
         capabilities: StreamColorCapabilities
-    ) -> StreamColorMode {
-        switch preference {
-        case .forceSDR8:
-            return .sdr8
-        case .preferSDR10:
-            return capabilities.decoderSupports10Bit ? .sdr10 : .sdr8
-        case .preferHDR:
-            if capabilities.decoderSupports10Bit,
-               capabilities.hdrRenderPipelineAvailable,
-               capabilities.displaySupportsHDR,
-               capabilities.accountAllowsHDR != false,
-               capabilities.serverAllowsHDR != false
-            {
-                return .hdr10
-            }
-            return capabilities.decoderSupports10Bit ? .sdr10 : .sdr8
-        case .automatic:
+    ) -> (StreamColorMode, ColorFallbackReason?) {
+        if preference == .forceSDR8 {
+            return (.sdr8, nil)
+        }
+        guard capabilities.codecSupports10Bit else { return (.sdr8, .codec10BitUnavailable) }
+        guard capabilities.decoderSupports10Bit else { return (.sdr8, .decoder10BitUnavailable) }
+        if preference == .preferSDR10 {
+            return (.sdr10, nil)
+        }
+        guard capabilities.displaySupportsHDR else { return (.sdr10, .displayHDRUnavailable) }
+        guard capabilities.hdrRenderPipelineAvailable else { return (.sdr10, .hdrRenderPipelineUnavailable) }
+        if capabilities.accountAllowsHDR == false {
+            return (.sdr10, .accountHDRUnavailable)
+        }
+        if capabilities.serverAllowsHDR == false {
+            return (.sdr10, .serverHDRUnavailable)
+        }
+        if preference == .automatic {
             // Game and server HDR support are permissive on unknown — GFN falls back to an
             // SDR encode inside an HDR-capable session when the title doesn't support HDR.
             // Account entitlement must be positively known so Free tiers don't request HDR.
-            if capabilities.gameHDRSupport != .unsupported,
-               capabilities.decoderSupports10Bit,
-               capabilities.hdrRenderPipelineAvailable,
-               capabilities.displaySupportsHDR,
-               capabilities.accountAllowsHDR == true,
-               capabilities.serverAllowsHDR != false
-            {
-                return .hdr10
+            if capabilities.gameHDRSupport == .unsupported {
+                return (.sdr10, .gameHDRUnsupported)
             }
-            return capabilities.decoderSupports10Bit ? .sdr10 : .sdr8
+            if capabilities.accountAllowsHDR == nil {
+                return (.sdr10, .accountHDRUnknown)
+            }
         }
+        return (.hdr10, nil)
     }
 }
 
@@ -731,7 +792,8 @@ extension StreamSettings {
             serverAllowsHDR: serverAllowsHDR,
             // 10-bit (sdr10/hdr10) requires H.265 — H.264 is 8-bit only and AV1 is excluded
             // from the 10-bit decode path, so either forces an 8-bit SDR downgrade.
-            decoderSupports10Bit: localCapabilities.supportsHardware10BitDecode && codec.resolvedCodec == .h265,
+            codecSupports10Bit: codec.resolvedCodec == .h265,
+            decoderSupports10Bit: localCapabilities.supportsHardware10BitDecode,
             hdrRenderPipelineAvailable: localCapabilities.supportsHDRRendering,
             displaySupportsHDR: localCapabilities.displaySupportsHDR
         )
@@ -826,6 +888,14 @@ nonisolated struct SessionInfo {
     var controlServerIp: String?
     /// Server-accepted dynamic range, preserved when attaching to an existing allocation.
     var acceptedSdrHdrMode: Int?
+    var colorRequest: GFNSessionColorRequest?
+
+    var colorNegotiation: GFNColorNegotiation {
+        GFNColorNegotiation(
+            sessionRequest: colorRequest,
+            serverDynamicRange: acceptedSdrHdrMode.flatMap(GFNSessionDynamicRange.init(rawValue:))
+        )
+    }
 
     /// True while the session is sitting in the GFN queue (no timeout applies).
     var isInQueue: Bool {

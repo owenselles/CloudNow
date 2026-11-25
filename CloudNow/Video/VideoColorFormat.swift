@@ -55,12 +55,12 @@ nonisolated enum VideoDecoderPath: String, Codable, Equatable {
 }
 
 nonisolated struct DecodedVideoFormat: Codable, Equatable {
-    let mode: DetectedColorMode
+    var mode: DetectedColorMode
     let width: Int
     let height: Int
     let pixelFormat: OSType
     let pixelFormatName: String
-    let bitDepth: Int?
+    var bitDepth: Int?
     let transferFunction: String?
     let colorPrimaries: String?
     let yCbCrMatrix: String?
@@ -109,8 +109,22 @@ nonisolated struct DecodedVideoFormatInspectionCache: @unchecked Sendable {
     }
 
     private var cachedFormat: DecodedVideoFormat?
-    private var cachedFormatDescription: CMVideoFormatDescription?
+    private(set) var cachedFormatDescription: CMVideoFormatDescription?
     private var cachedDecoderPath: VideoDecoderPath?
+
+    /// Verify the format once at a GFN display transition, outside the frame loop.
+    var gfnDisplayFormat: DecodedVideoFormat? {
+        guard var format = cachedFormat else { return nil }
+        let verified = DecodedVideoFormatInspector.describe(
+            pixelFormat: format.pixelFormat,
+            transferFunction: format.transferFunction,
+            colorPrimaries: format.colorPrimaries,
+            verifyBitDepth: true
+        )
+        format.bitDepth = verified.bitDepth
+        format.mode = format.decoderPath == .softwareI420 ? .sdr8 : verified.mode
+        return format
+    }
 
     mutating func resolve(
         pixelBuffer: CVPixelBuffer,
@@ -199,11 +213,12 @@ nonisolated enum DecodedVideoFormatInspector {
     static func describe(
         pixelFormat: OSType,
         transferFunction: String?,
-        colorPrimaries: String?
+        colorPrimaries: String?,
+        verifyBitDepth: Bool = false
     ) -> PixelFormatDescription {
-        let bitDepth = bitDepth(for: pixelFormat)
+        let bitDepth = bitDepth(for: pixelFormat, verifyBitDepth: verifyBitDepth)
         return PixelFormatDescription(
-            mode: classify(
+            mode: verifyBitDepth && bitDepth != 8 && bitDepth != 10 ? .unknown : classify(
                 bitDepth: bitDepth,
                 transferFunction: transferFunction,
                 colorPrimaries: colorPrimaries
@@ -328,7 +343,7 @@ nonisolated enum DecodedVideoFormatInspector {
         }
     }
 
-    private static func bitDepth(for pixelFormat: OSType) -> Int? {
+    private static func bitDepth(for pixelFormat: OSType, verifyBitDepth: Bool) -> Int? {
         switch pixelFormat {
         case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
@@ -345,6 +360,10 @@ nonisolated enum DecodedVideoFormatInspector {
              packed44410BitBiPlanarVideoRange:
             return 10
         default:
+            if verifyBitDepth {
+                let description = CVPixelFormatDescriptionCreateWithPixelFormatType(nil, pixelFormat) as? [CFString: Any]
+                return description?[kCVPixelFormatBitsPerComponent] as? Int
+            }
             let name = fourCC(pixelFormat).lowercased()
             // 'x420'-style 10-bit biplanar and 'p420'-style packed 10-bit families.
             if name.hasPrefix("x") || name.hasPrefix("p4") || name.contains("10") {
