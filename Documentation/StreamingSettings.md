@@ -186,7 +186,7 @@ delivered HDR.
 | Setting | Default | Availability | Effect |
 |---|---|---|---|
 | Server Location | Automatic | NVIDIA-direct accounts can choose Automatic, an official region, or a dedicated server. Partner-provider accounts see that server selection is managed by the named partner for that account. | Automatic delegates routing to NVIDIA. Region pins an official service region. Server selection pins a dedicated zone. |
-| Test Network | Action, no saved value | Always shown in the GFN Settings server section. | Measures the currently selected routing target where possible. A good test does not guarantee a title session will use the same live conditions. |
+| Test Network | Action, no saved value | Always shown in the GFN Settings server section. | Displays the test endpoint, HTTP response times, and failed requests. Automatic tests use the detected region's endpoint when available and label the default service endpoint on fallback. A live stream can use a different server. |
 
 Automatic routing is the safest default. A manually selected region or server
 can become unavailable, add latency, or have different queue conditions.
