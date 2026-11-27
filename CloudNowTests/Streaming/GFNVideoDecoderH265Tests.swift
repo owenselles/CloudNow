@@ -1,5 +1,6 @@
 @testable import CloudNow
 import CoreMedia
+import CoreVideo
 import Foundation
 import Testing
 
@@ -117,5 +118,135 @@ struct H265AnnexBConverterTests {
         }
         try #require(status == noErr)
         return result
+    }
+}
+
+struct CloudVideoDecoderH265PixelFormatTests {
+    struct PixelFormatSelectionCase: Sendable {
+        let chromaFormatIdc: UInt8
+        let bitDepthLumaMinus8: UInt8
+        let fullRange: Bool
+        let expected: [OSType?]
+    }
+
+    @Test(
+        "hvcC chroma, bit depth, and range select uncompressed pixel format candidates",
+        arguments: [
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 3,
+                bitDepthLumaMinus8: 2,
+                fullRange: false,
+                expected: [
+                    kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+                    kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                    nil,
+                ]
+            ),
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 3,
+                bitDepthLumaMinus8: 2,
+                fullRange: true,
+                expected: [
+                    kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+                    kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+                    nil,
+                ]
+            ),
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 3,
+                bitDepthLumaMinus8: 0,
+                fullRange: false,
+                expected: [
+                    kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+                    kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                    nil,
+                ]
+            ),
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 3,
+                bitDepthLumaMinus8: 0,
+                fullRange: true,
+                expected: [
+                    kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+                    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                    nil,
+                ]
+            ),
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 1,
+                bitDepthLumaMinus8: 2,
+                fullRange: false,
+                expected: [kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange, nil]
+            ),
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 1,
+                bitDepthLumaMinus8: 2,
+                fullRange: true,
+                expected: [kCVPixelFormatType_420YpCbCr10BiPlanarFullRange, nil]
+            ),
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 1,
+                bitDepthLumaMinus8: 0,
+                fullRange: false,
+                expected: [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil]
+            ),
+            PixelFormatSelectionCase(
+                chromaFormatIdc: 1,
+                bitDepthLumaMinus8: 0,
+                fullRange: true,
+                expected: [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, nil]
+            ),
+        ]
+    )
+    func selectsUncompressedCandidatesFromHVCC(testCase: PixelFormatSelectionCase) throws {
+        var hvcc = Data(repeating: 0, count: 23)
+        hvcc[0] = 1 // configurationVersion
+        hvcc[16] = 0xFC | (testCase.chromaFormatIdc & 0x03)
+        hvcc[17] = 0xF8 | (testCase.bitDepthLumaMinus8 & 0x07)
+        hvcc[18] = 0xF8 | (testCase.bitDepthLumaMinus8 & 0x07)
+
+        let format = try makeHEVCFormatDescription(extensions: [
+            kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms: ["hvcC": hvcc],
+            kCMFormatDescriptionExtension_FullRangeVideo: testCase.fullRange,
+        ])
+
+        #expect(CloudVideoDecoderH265.preferredPixelFormats(for: format) == testCase.expected)
+    }
+
+    @Test("Falls back to BitsPerComponent when hvcC atom is absent")
+    func fallsBackWithoutHVCC() throws {
+        let tenBit = try makeHEVCFormatDescription(extensions: [
+            kCMFormatDescriptionExtension_BitsPerComponent: 10,
+        ])
+        let defaultEightBit = try makeHEVCFormatDescription(extensions: nil)
+
+        #expect(
+            CloudVideoDecoderH265.preferredPixelFormats(for: tenBit) == [
+                kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                nil,
+            ]
+        )
+        #expect(
+            CloudVideoDecoderH265.preferredPixelFormats(for: defaultEightBit) == [
+                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                nil,
+            ]
+        )
+    }
+
+    private func makeHEVCFormatDescription(
+        extensions: [CFString: Any]?
+    ) throws -> CMVideoFormatDescription {
+        var format: CMVideoFormatDescription?
+        let status = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: kCMVideoCodecType_HEVC,
+            width: 1920,
+            height: 1080,
+            extensions: extensions as CFDictionary?,
+            formatDescriptionOut: &format
+        )
+        try #require(status == noErr)
+        return try #require(format)
     }
 }

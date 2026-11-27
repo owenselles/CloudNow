@@ -283,6 +283,11 @@ nonisolated enum DecodedVideoFormatInspector {
     /// CoreVideo's format description confirms full-resolution chroma; no public SDK constant exists.
     private static let packed44410BitBiPlanarVideoRange: OSType = 0x7034_3434
 
+    /// '&xv4' / '&xf4' — lossless-compressed packed 10-bit 4:4:4 bi-planar formats observed
+    /// from VideoToolbox on Apple Silicon (A15 / M2).
+    private static let lossless44410BitPackedBiPlanarVideoRange: OSType = 0x2678_7634
+    private static let lossless44410BitPackedBiPlanarFullRange: OSType = 0x2678_6634
+
     static func chromaFormat(for pixelFormat: OSType) -> ChromaFormat? {
         switch pixelFormat {
         case kCVPixelFormatType_420YpCbCr8Planar,
@@ -291,6 +296,10 @@ nonisolated enum DecodedVideoFormatInspector {
              kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarFullRange,
              packed10BitBiPlanarVideoRange:
             .yuv420
         case kCVPixelFormatType_444YpCbCr8,
@@ -299,7 +308,9 @@ nonisolated enum DecodedVideoFormatInspector {
              kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
              kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
-             packed44410BitBiPlanarVideoRange:
+             packed44410BitBiPlanarVideoRange,
+             lossless44410BitPackedBiPlanarVideoRange,
+             lossless44410BitPackedBiPlanarFullRange:
             .yuv444
         default:
             nil
@@ -311,17 +322,23 @@ nonisolated enum DecodedVideoFormatInspector {
         case kCVPixelFormatType_420YpCbCr8Planar,
              kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr8,
              kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
              packed10BitBiPlanarVideoRange,
-             packed44410BitBiPlanarVideoRange:
+             packed44410BitBiPlanarVideoRange,
+             lossless44410BitPackedBiPlanarVideoRange:
             "Video"
         case kCVPixelFormatType_420YpCbCr8PlanarFullRange,
              kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarFullRange,
              kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
-             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+             kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+             lossless44410BitPackedBiPlanarFullRange:
             "Full"
         default:
             nil
@@ -332,17 +349,23 @@ nonisolated enum DecodedVideoFormatInspector {
         switch pixelFormat {
         case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange,
              kCVPixelFormatType_444YpCbCr8,
              kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr8BiPlanarFullRange:
             return 8
         case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
              kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
+             kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarFullRange,
              kCVPixelFormatType_444YpCbCr10,
              kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
              kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
              packed10BitBiPlanarVideoRange,
-             packed44410BitBiPlanarVideoRange:
+             packed44410BitBiPlanarVideoRange,
+             lossless44410BitPackedBiPlanarVideoRange,
+             lossless44410BitPackedBiPlanarFullRange:
             return 10
         default:
             let name = fourCC(pixelFormat).lowercased()
