@@ -117,6 +117,94 @@ struct VideoColorFormatTests {
     }
 
     @Test(
+        "Lossless-compressed Apple Silicon 4:2:0 and 4:4:4 formats report chroma, bit depth, and range",
+        arguments: [
+            (
+                kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarVideoRange,
+                "&8v0",
+                8,
+                "Video",
+                DetectedColorMode.sdr8,
+                ChromaFormat.yuv420
+            ),
+            (
+                kCVPixelFormatType_Lossless_420YpCbCr8BiPlanarFullRange,
+                "&8f0",
+                8,
+                "Full",
+                DetectedColorMode.sdr8,
+                ChromaFormat.yuv420
+            ),
+            (
+                kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarVideoRange,
+                "&xv0",
+                10,
+                "Video",
+                DetectedColorMode.sdr10,
+                ChromaFormat.yuv420
+            ),
+            (
+                kCVPixelFormatType_Lossless_420YpCbCr10PackedBiPlanarFullRange,
+                "&xf0",
+                10,
+                "Full",
+                DetectedColorMode.sdr10,
+                ChromaFormat.yuv420
+            ),
+            (
+                OSType(0x2678_7634),
+                "&xv4",
+                10,
+                "Video",
+                DetectedColorMode.sdr10,
+                ChromaFormat.yuv444
+            ),
+            (
+                OSType(0x2678_6634),
+                "&xf4",
+                10,
+                "Full",
+                DetectedColorMode.sdr10,
+                ChromaFormat.yuv444
+            ),
+        ]
+    )
+    func losslessCompressedFourCC(
+        pixelFormat: OSType,
+        name: String,
+        bitDepth: Int,
+        range: String,
+        expectedMode: DetectedColorMode,
+        chromaFormat: ChromaFormat
+    ) {
+        let description = DecodedVideoFormatInspector.describe(
+            pixelFormat: pixelFormat,
+            transferFunction: String(describing: kCVImageBufferTransferFunction_ITU_R_709_2),
+            colorPrimaries: nil
+        )
+
+        #expect(description.pixelFormatName == name)
+        #expect(description.bitDepth == bitDepth)
+        #expect(description.colorRange == range)
+        #expect(description.mode == expectedMode)
+        #expect(DecodedVideoFormatInspector.chromaFormat(for: pixelFormat) == chromaFormat)
+    }
+
+    @Test("Lossless-compressed &xv4 with PQ and BT.2020 classifies as HDR10")
+    func lossless444HDRClassification() {
+        let description = DecodedVideoFormatInspector.describe(
+            pixelFormat: OSType(0x2678_7634),
+            transferFunction: String(describing: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ),
+            colorPrimaries: String(describing: kCVImageBufferColorPrimaries_ITU_R_2020)
+        )
+
+        #expect(description.pixelFormatName == "&xv4")
+        #expect(description.bitDepth == 10)
+        #expect(description.colorRange == "Video")
+        #expect(description.mode == .hdr10)
+    }
+
+    @Test(
         "RGB, 4:2:2 and unknown formats are not reported as 4:2:0 or 4:4:4",
         arguments: [
             kCVPixelFormatType_32BGRA,

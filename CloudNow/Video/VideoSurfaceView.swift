@@ -274,7 +274,9 @@ final class VideoSurfaceView: UIView {
                 forName: AVSampleBufferVideoRenderer.didFailToDecodeNotification,
                 object: sampleBufferRenderer,
                 queue: nil
-            ) { [weak renderer] _ in
+            ) { [weak renderer] notification in
+                let err = notification.userInfo?[AVSampleBufferVideoRenderer.didFailToDecodeNotificationErrorKey] as? NSError
+                videoLog.error("[VideoSurfaceView] didFailToDecode: \(err?.localizedDescription ?? "nil", privacy: .public) code=\(err?.code ?? 0, privacy: .public)")
                 renderer?.recoverAfterFailure()
             },
             NotificationCenter.default.addObserver(

@@ -277,26 +277,45 @@ final nonisolated class CloudVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unc
     // MARK: - VideoToolbox session
 
     private func createSession(format: CMVideoFormatDescription) -> Bool {
-        // No kCVPixelBufferPixelFormatTypeKey: VideoToolbox picks the native output format
-        // (420f for Main, x420 for Main10) and propagates VUI colorimetry attachments.
-        let attributes: [CFString: Any] = [
-            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
-            kCVPixelBufferMetalCompatibilityKey: true,
-        ]
+        // Explicit uncompressed pixel formats avoid Apple Silicon lossless-compressed
+        // IOSurface formats (e.g. '&xv4' for 10-bit 4:4:4 on A15/M2) that can render
+        // black in AVSampleBufferDisplayLayer, while still preserving native bit depth,
+        // chroma sampling, range, and VUI HDR colorimetry attachments.
+        let candidates = Self.preferredPixelFormats(for: format)
         var newSession: VTDecompressionSession?
-        let status = VTDecompressionSessionCreate(
-            allocator: kCFAllocatorDefault,
-            formatDescription: format,
-            decoderSpecification: nil,
-            imageBufferAttributes: attributes as CFDictionary,
-            outputCallback: nil,
-            decompressionSessionOut: &newSession
-        )
-        guard status == noErr, let newSession else {
-            h265Log.error("VTDecompressionSessionCreate failed: \(status)")
+        var chosenFormat: OSType?
+        var lastStatus: OSStatus = noErr
+
+        for pixelFormat in candidates {
+            var attributes: [CFString: Any] = [
+                kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+                kCVPixelBufferMetalCompatibilityKey: true,
+            ]
+            if let pixelFormat {
+                attributes[kCVPixelBufferPixelFormatTypeKey] = pixelFormat
+            }
+            let status = VTDecompressionSessionCreate(
+                allocator: kCFAllocatorDefault,
+                formatDescription: format,
+                decoderSpecification: nil,
+                imageBufferAttributes: attributes as CFDictionary,
+                outputCallback: nil,
+                decompressionSessionOut: &newSession
+            )
+            lastStatus = status
+            if status == noErr, newSession != nil {
+                chosenFormat = pixelFormat
+                break
+            }
+            newSession = nil
+        }
+        guard let newSession else {
+            h265Log.error("VTDecompressionSessionCreate failed: \(lastStatus)")
             return false
         }
         VTSessionSetProperty(newSession, key: kVTDecompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        let formatLabel = chosenFormat.map(Self.fourCC) ?? "auto"
+        h265Log.info("VTDecompressionSession created (requestedPixelFormat=\(formatLabel, privacy: .public))")
         session = newSession
         return true
     }
@@ -307,6 +326,82 @@ final nonisolated class CloudVideoDecoderH265: NSObject, LKRTCVideoDecoder, @unc
             VTDecompressionSessionInvalidate(session)
         }
         session = nil
+    }
+
+    static func preferredPixelFormats(for format: CMVideoFormatDescription) -> [OSType?] {
+        let fullRange = (CMFormatDescriptionGetExtension(
+            format,
+            extensionKey: kCMFormatDescriptionExtension_FullRangeVideo
+        ) as? Bool) ?? false
+
+        var is444 = false
+        var isTenBit = false
+        if let atoms = CMFormatDescriptionGetExtension(
+            format,
+            extensionKey: kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms
+        ) as? [String: Any],
+            let hvcc = atoms["hvcC"] as? Data,
+            hvcc.count >= 19
+        {
+            // ISO/IEC 14496-15 HEVCDecoderConfigurationRecord:
+            // byte 16 low 2 bits = chroma_format_idc (3 == 4:4:4),
+            // byte 17 low 3 bits = bit_depth_luma_minus8 (2 == 10-bit).
+            let chromaFormatIdc = hvcc[16] & 0x03
+            let bitDepthLumaMinus8 = hvcc[17] & 0x07
+            is444 = chromaFormatIdc == 3
+            isTenBit = bitDepthLumaMinus8 >= 2
+        } else if let bits = CMFormatDescriptionGetExtension(
+            format,
+            extensionKey: kCMFormatDescriptionExtension_BitsPerComponent
+        ) as? Int {
+            isTenBit = bits >= 10
+        }
+
+        switch (is444, isTenBit, fullRange) {
+        case (true, true, true):
+            return [
+                kCVPixelFormatType_444YpCbCr10BiPlanarFullRange,
+                kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+                nil,
+            ]
+        case (true, true, false):
+            return [
+                kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange,
+                kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                nil,
+            ]
+        case (true, false, true):
+            return [
+                kCVPixelFormatType_444YpCbCr8BiPlanarFullRange,
+                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                nil,
+            ]
+        case (true, false, false):
+            return [
+                kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange,
+                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                nil,
+            ]
+        case (false, true, true):
+            return [kCVPixelFormatType_420YpCbCr10BiPlanarFullRange, nil]
+        case (false, true, false):
+            return [kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange, nil]
+        case (false, false, true):
+            return [kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, nil]
+        case (false, false, false):
+            return [kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil]
+        }
+    }
+
+    private static func fourCC(_ value: OSType) -> String {
+        let scalars = [
+            UnicodeScalar((value >> 24) & 0xFF),
+            UnicodeScalar((value >> 16) & 0xFF),
+            UnicodeScalar((value >> 8) & 0xFF),
+            UnicodeScalar(value & 0xFF),
+        ]
+        let text = scalars.compactMap { $0 }.map(Character.init)
+        return text.count == 4 ? String(text) : "\(value)"
     }
 
     // MARK: - VideoToolbox buffers
